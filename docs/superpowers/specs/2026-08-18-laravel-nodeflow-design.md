@@ -66,12 +66,12 @@ abandoned; this is its successor. **The v2 API is pre-stable and lives under
 | D2 | Editor ships as **source** consumed by the host's Vite build, not a prebuilt bundle | Only way to inherit the host's React, Tailwind tokens, and dark mode |
 | D3 | Templates are **fork-on-install**, link severed | No sync engine, no drift diffing, no fleet-push blast radius |
 | D4 | **Cohort runs for fan-out triggers, per-user runs for individual triggers**, one node contract serving both | Six-figure audiences make per-user-everywhere untenable; per-user-nowhere breaks node ergonomics |
-| D5 | Waits are **cohort-relative**, not user-relative | Accepted semantic loss; see §7.3 |
+| D5 | Waits are **cohort-relative**, not user-relative | Accepted semantic loss, bounded by batch drain time at six figures; see §7.3 |
 | D6 | Node cardinality is opt-in: `forSubject()` default, `forAudience()` for natively-batching nodes | Preserves the one-hour node while allowing batch efficiency |
 | D7 | Per-subject branch returns are **automatically partitioned** into sub-audiences | The mechanic that makes cohort execution feel per-user to the node author |
 | D8 | Flow versions are **immutable**; runs pin `flow_version_id` at start | Requirement 7, without diffing or migration machinery |
 | D9 | Node bodies run in a generic activity, never in workflow code | Engine's boot-time guardrail scan rejects `DB::`/`Http::` in workflow code |
-| D10 | In **cohort** runs, signals are reserved for flow-level control and subject-exit is a DB write plus re-resolution at wake. **Per-user** runs use real signal waits. | Engine caps pending signals at 5,000 |
+| D10 | **One wait primitive for both strategies:** `awaitWithTimeout($duration, fn () => $this->audienceEmpty)`, signalled only when the remaining subject count hits zero | Engine caps pending signals at 5,000; audience-empty signalling is bounded at one per wait regardless of audience size |
 | D11 | `node_executions` logs one row per (run, node, output) with counts, not per subject | 18 rows vs 600,000 at 100k subjects |
 | D12 | Audience subject-ownership check against run tenant is **mandatory and non-disableable** | Cross-FSP leakage in regulated financial messaging is not a config flag |
 | D13 | Conditions are **curated only** in v1 — no expression language | Non-technical authors in scope; expression-over-host-data is an injection and isolation surface |
@@ -117,7 +117,7 @@ Hence D4.
 | Pending child workflows | 1,000 | Per-user runs must be **root** runs, never children |
 | Items per `all()` fan-out | 1,000 | Parallel branch cap; chunked dispatch |
 | Pending timers | 2,000 | Fine under cohort model |
-| Pending signals | 5,000 | Forces D10 |
+| Pending signals | 5,000 | Forces D10 — signal on audience-empty, never per subject |
 | Argument payload | 2 MiB | Audience passed by handle, never by value |
 | History events per workflow task | 5,000 | Bounded by cohort model |
 
@@ -231,6 +231,28 @@ host's service provider. No directory auto-discovery: it is magic, slow to boot,
 explicit registration gives a natural place to gate nodes by tenant plan or feature flag
 later.
 
+### Node type resolution across deploys
+
+Graph versions are immutable, but node **classes** are host code that ships independently.
+If a host renames or removes `SendYayaMessage` while runs sit mid-wait on a version
+referencing it, those runs would otherwise fail at resume with an unresolvable class and no
+defined behaviour.
+
+Policy:
+
+- **Boot-time check.** The registry verifies that every node type referenced by any flow
+  version with live runs still resolves. A missing type is a startup-visible error, not a
+  runtime surprise at 3am on day 12 of a wait.
+- **Publish-time check.** A version cannot be published referencing an unregistered type.
+- **Runtime fallback.** If a type is unresolvable at resume anyway, the run enters a
+  `blocked` state with a typed operator error naming the missing type and the affected
+  version — recoverable by re-registering the class, not a dead run.
+- **Renames** are handled by keeping `type()` stable and independent of the class name, and
+  by an explicit alias map in the registry for genuine renames.
+
+`type()` being a stable string rather than a class name is the load-bearing part; the
+registry maps string to class, so refactoring the PHP class is free.
+
 ### Known weakness
 
 `NodeResult` does double duty as branch selector and data passer, and the
@@ -298,20 +320,48 @@ children, because pending children cap at 1,000.
 
 ### 7.3 Waits (D5, D10)
 
-| Strategy | "Wait 1 day or until the user converts" |
-|---|---|
-| Per-user run | Literal `awaitWithTimeout('1 day', fn () => $this->converted)` — a real signal, exact semantics |
-| Cohort run | A timer. Conversion is recorded by a host event listener writing `exited_at` on `run_subjects`; at wake the interpreter re-resolves the audience and exited subjects are gone |
+**One primitive, both strategies.** Every wait compiles to:
 
-Functionally the cohort form **is** cancellation — the follow-up never sends to those
-subjects — it simply is not implemented as a signal, because 5,000 pending signals cannot
-absorb a six-figure conversion wave. Signals stay reserved for flow-level control (pause,
-resume, cancel), which is cardinality-1 by nature.
+```php
+yield awaitWithTimeout($duration, fn () => $this->audienceEmpty);
+```
+
+The signal that sets `audienceEmpty` fires only when the run's remaining subject count
+reaches zero. Subject exit itself is a plain DB write — a host event listener sets
+`exited_at` on `run_subjects` — and the interpreter re-resolves the remaining audience at
+wake. This yields:
+
+| Strategy | Behaviour |
+|---|---|
+| Per-user run (cohort of one) | The subject exiting *is* the audience emptying, so the signal fires and the wait wakes early. Exact per-user cancellation semantics. |
+| Cohort run | The signal fires at most once per wait — when the last subject exits. Otherwise the timer expires and the interpreter proceeds with whoever remains. |
+
+**Why not a signal per exit:** the engine caps pending signals at 5,000, which a six-figure
+conversion wave would blow straight through. Signalling only on audience-empty is bounded
+at one signal per wait regardless of audience size, so the cap is structurally unreachable.
+
+**Why this matters beyond elegance:** an earlier draft specified a real signal wait for
+per-user runs and a bare timer for cohort runs. That was two implementations of the same
+primitive, and it silently contradicted the rule in §7.2 that a per-user run is a cohort of
+one on the same code path. There is now one implementation. Flow-level control (pause,
+resume, cancel) uses separate signals and is cardinality-1 by nature.
+
+Functionally, subject exit **is** cancellation — the follow-up never sends to those
+subjects.
 
 **Accepted semantic loss:** cohort waits are relative to when the step ran for the cohort,
-not to each user's own message landing. For messaging journeys this is indistinguishable
-in practice. Genuinely per-user anchoring ("3 days after *this user's* disbursement") is an
-individually-triggered journey, which runs per-user and keeps exact timing.
+not to each user's own message landing. Genuinely per-user anchoring ("3 days after *this
+user's* disbursement") is an individually-triggered journey, which runs per-user and keeps
+exact timing.
+
+**Caveat on the size of that loss.** The original justification — that per-user and cohort
+anchoring differ "by seconds across a batch" — holds at low thousands and **fails at six
+figures**, where the divergence is bounded by Yaya's batch drain time, not by scheduling
+jitter. If a 100k batch takes 40 minutes to drain, the last user's "wait 5 minutes" step
+fires roughly 45 minutes after the first user's, and may precede their own alert if
+ordering is not guaranteed. Two consequences for implementation: confirm Yaya's drain
+throughput and ordering guarantees before relying on short cohort waits, and treat any wait
+shorter than the expected drain time as a design smell in the editor (warn at publish).
 
 **Contract for host implementors:** re-resolution at wake is a filter over the materialized
 `run_subjects` set, not a fresh query against host data. Audience resolution must be cheap
@@ -486,6 +536,9 @@ waste.
 | **Two execution strategies drift apart** | Per-user run is a cohort of one on the same code path. Enforced by tests that run the same graph both ways. |
 | **Cohort re-resolution cost at wake** | Re-resolution filters the materialized `run_subjects` set, never re-queries host data. Stated as a loud contract for host implementors. |
 | **Node authors misunderstand audience partitioning** | Validate by writing three real domain nodes early; docs lead with the mechanic. |
+| **Host deletes or renames a node class with runs in flight** | Stable `type()` strings, registry alias map, boot-time and publish-time resolution checks, recoverable `blocked` state at runtime (§5). |
+| **Cohort wait shorter than batch drain time** | Confirm Yaya drain throughput and ordering; warn at publish when a wait is shorter than expected drain (§7.3). |
+| **A host node ignores test mode and sends real messages during a test run** | `$c->isTest()` is part of the node contract; package nodes honour it; covered by the node authoring checklist and review. |
 
 ---
 
@@ -502,6 +555,9 @@ In scope:
 - Interpreter with both execution strategies
 - Node contract: `forSubject()` / `forAudience()`, automatic branch partitioning, field schema
 - Package-supplied domain-free nodes: Wait, Condition, Split, Start Flow, Exit
+- **Test mode** — run a published or draft version against an operator-chosen subject, or
+  against a recording sink that captures what *would* have been sent without dispatching
+  (see below)
 - Triggers: event, manual, sub-flow, scheduled
 - Editor: canvas, palette, config panel, publish validation
 - Run view: canvas overlays, subject drill-down
@@ -514,16 +570,25 @@ Explicitly out of v1:
 
 - Expression language / freely authored conditions
 - Webhook triggers
-- Dry-run simulation
+- Full dry-run simulation of an entire audience (test mode covers the single-subject case)
 - A/B split, throttle, rate-limit nodes
 - Template drift tracking and browsing UX
 - Conversion analytics
 
+**On test mode being in v1.** It was initially deferred to phase 2 alongside full dry-run
+simulation. That was wrong: with test mode deferred, the only way an author validates a
+journey is a manual trigger against a real audience, which dispatches real SMS to real
+customers. The target author is explicitly non-technical and the domain is regulated
+financial messaging. A minimal test mode — one chosen subject, or a sink that records
+intended sends — is a fraction of the cost of full simulation and removes a live hazard.
+Node authors opt in by honouring `$c->isTest()`; the package-supplied nodes honour it, and
+a host node that ignores it is a reviewable bug.
+
 ### Phase 2
 
-Dry-run simulation — the single biggest UX lever for non-technical authors, and the natural
-head of phase 2 because it needs the node contract stable first. Plus richer nodes, the
-curated template library and its browsing UX.
+Full dry-run simulation across a whole audience, with projected counts per branch — the
+natural head of phase 2 because it needs the node contract stable first. Plus richer nodes,
+the curated template library and its browsing UX.
 
 ### Phase 3
 
