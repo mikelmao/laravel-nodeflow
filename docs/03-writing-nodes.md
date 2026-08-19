@@ -22,7 +22,7 @@ node; if you find yourself creating a directory, something has gone wrong.
 |---|---|
 | `--type` | The stable identifier. Prompted when omitted **and the input is interactive**. Run it non-interactively (CI, `--no-interaction`) without `--type` and the command derives one from the class name instead and **warns** that it did — that derived value is permanent, since published flow versions resolve through it, so pass `--type` explicitly with your domain prefix |
 | `--cardinality` | `subject` (default), `audience`, or `both`. See [Cardinality and partitioning](#cardinality-and-partitioning) — the interface is what the runtime dispatches on, so the generator always writes it for you |
-| `--outputs` | Comma-separated output names, rendered into `definition()` and into the generated test |
+| `--outputs` | Comma-separated output names, rendered into `definition()` and into the generated test. Lowercase letters, digits and underscores — they are edge labels in a flow graph as well as PHP string literals — and each name may appear once |
 | `--group` | The palette group the editor shows the node under |
 | `--test` | Also generate a Pest test asserting the type, the outputs, the cardinality interface, that the registry accepts the class, and that a required field is enforced — plus a TODO reminding you to add a test per output. Leaves an existing test file untouched unless you also pass `--force` |
 
@@ -38,8 +38,14 @@ It refuses, rather than generating something broken, when the type doesn't match
 lowercase-letters/digits/dots/underscores format, uses the reserved `core.` prefix, or collides with a
 type already registered by another node — that last check resolves through registry aliases too, and
 names the class that already owns the type. It matters because the registry keys by type: two nodes
-sharing one would otherwise silently replace each other. `--force` overwrites an existing node class
-(and, combined with `--test`, an existing test file) instead of refusing.
+sharing one would otherwise silently replace each other. An output name outside the same lowercase
+format, or repeated, is refused for the same reason: both the node and the generated test would
+otherwise fail to parse, or declare an output twice.
+
+A type already owned by *the class being generated* is not a collision — regenerating a node whose
+provider has already registered it is the normal case, and telling you to change its type would be the
+one thing a live node's type must never do. `--force` overwrites an existing node class (and, combined
+with `--test`, an existing test file) instead of refusing.
 
 ## A complete node
 

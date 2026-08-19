@@ -252,6 +252,59 @@ it('renders the declared outputs and group into the definition', function () {
         ->toContain("NodeDefinition::make('Send Sms')");
 });
 
+it('refuses an output name that would not render as PHP', function () {
+    // The counterfactual: don't validate output names and this fails — the command
+    // renders `->outputs(['sent', 'it's failed'])` into both the node and the
+    // generated test, reports "created successfully" and exits 0, leaving two files
+    // that do not parse. Asserting the message as well as the code, because a
+    // malformed *type* would also exit 1 and this input has a valid type.
+    $this->artisan('nodeflow:make-node', [
+        'name' => 'SendSms',
+        '--type' => 'yaya.send_sms',
+        '--outputs' => "sent, it's failed",
+        '--test' => true,
+    ])
+        ->expectsOutputToContain('is not a valid output name')
+        ->assertExitCode(1);
+
+    expect($this->root.'/app/Nodeflow/Nodes/SendSms.php')->not->toBeFile();
+    expect($this->root.'/tests/Feature/Nodeflow/SendSmsNodeTest.php')->not->toBeFile();
+});
+
+it('refuses a duplicated output list', function () {
+    // The counterfactual: drop the duplicate check and this fails — `sent, sent`
+    // renders `->outputs(['sent', 'sent'])`, which parses, so nothing downstream
+    // objects: a flow edge is matched to an output by name, leaving two edges an
+    // author cannot tell apart.
+    $this->artisan('nodeflow:make-node', [
+        'name' => 'SendSms',
+        '--type' => 'yaya.send_sms',
+        '--outputs' => 'sent, sent',
+    ])
+        ->expectsOutputToContain('Duplicate output name [sent]')
+        ->assertExitCode(1);
+
+    expect($this->root.'/app/Nodeflow/Nodes/SendSms.php')->not->toBeFile();
+});
+
+it('renders a group containing a quote as valid PHP', function () {
+    // The counterfactual: render the group unescaped and this fails — `->group('O'Brien')`
+    // is a parse error, which the lint catches, while the command still exits 0.
+    // The group is escaped rather than refused because it is a human-facing palette
+    // label, so the assertion is that it renders correctly, not that it is rejected.
+    $this->artisan('nodeflow:make-node', [
+        'name' => 'SendSms',
+        '--type' => 'yaya.send_sms',
+        '--group' => "O'Brien",
+    ])->assertExitCode(0);
+
+    $path = $this->root.'/app/Nodeflow/Nodes/SendSms.php';
+
+    expectParseablePhp($path);
+
+    expect(file_get_contents($path))->toContain("->group('O\\'Brien')");
+});
+
 it('refuses a type using the reserved core prefix', function () {
     // Asserting the message, not just the exit code. `core.wait` is BOTH reserved
     // and already registered, so an exit-code-only assertion would pass even if
@@ -480,14 +533,7 @@ it('generates syntactically valid PHP for every cardinality', function (string $
     foreach ($paths as $path) {
         expect($path)->toBeFile();
 
-        // Reset on every iteration: exec() appends to $output rather than
-        // replacing it, so without this a failure on the second file's lint
-        // would print the first file's output mixed into the message.
-        $output = [];
-
-        exec('php -l '.escapeshellarg($path).' 2>&1', $output, $exitCode);
-
-        expect($exitCode)->toBe(0, "php -l failed for {$path}: ".implode(PHP_EOL, $output));
+        expectParseablePhp($path);
     }
 
     // No placeholder survived rendering in either file.

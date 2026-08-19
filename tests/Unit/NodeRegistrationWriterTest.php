@@ -40,22 +40,6 @@ afterEach(function () {
     }
 });
 
-/**
- * Asserts the file is still parseable PHP. The writer edits a file it did not
- * write, so "the entry is in there somewhere" is not the property that matters —
- * an entry spliced one character off lands outside the array and the host's
- * provider stops loading at all.
- */
-function expectParseablePhp(string $path): void
-{
-    // Reset per call: exec() appends to $output rather than replacing it.
-    $output = [];
-
-    exec('php -l '.escapeshellarg($path).' 2>&1', $output, $exitCode);
-
-    expect($exitCode)->toBe(0, "php -l failed for {$path}: ".implode(PHP_EOL, $output));
-}
-
 function providerWithAnchor(string $entries = '        //'): string
 {
     return writeProviderFixture(<<<PHP
@@ -122,6 +106,8 @@ it('leaves the edited provider as parseable PHP', function () {
     // package does not own, and nothing else in the suite checks the result still
     // parses. The counterfactual: drop `+ strlen(self::ANCHOR)` from the insertion
     // position and this fails, while every substring assertion in this file passes.
+    // An entry spliced one character off lands outside the array and the host's
+    // provider stops loading at all.
     $path = providerWithAnchor();
 
     $outcome = (new NodeRegistrationWriter(new Filesystem))

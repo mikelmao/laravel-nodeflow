@@ -21,11 +21,12 @@ class MakeNodeCommand extends GeneratorCommand
 
     public function handle(): int
     {
-        // Both are resolved before parent::handle() writes anything, so a usage
-        // error never leaves a half-generated file behind.
+        // All three are resolved before parent::handle() writes anything, so a
+        // usage error never leaves a half-generated file behind.
         try {
             $this->cardinality();
             $this->nodeType();
+            $this->outputNames();
         } catch (\InvalidArgumentException $e) {
             $this->components->error($e->getMessage());
 
@@ -217,7 +218,7 @@ class MakeNodeCommand extends GeneratorCommand
             [
                 $this->nodeType(),
                 Str::headline(class_basename($this->getNameInput())),
-                (string) $this->option('group'),
+                $this->paletteGroup(),
                 implode(', ', array_map(fn (string $o) => "'{$o}'", $outputs)),
                 $outputs[0],
             ],
@@ -230,6 +231,13 @@ class MakeNodeCommand extends GeneratorCommand
 
     /** Lowercase segments joined by dots or underscores: yaya.send_message, rada.read_severity. */
     private const TYPE_PATTERN = '/^[a-z0-9]+(?:[._][a-z0-9]+)*$/';
+
+    /**
+     * Lowercase segments joined by underscores: sent, failed, delivery_failed.
+     * Narrower than TYPE_PATTERN by leaving out the dot — an output is a label on
+     * an edge, not a namespaced identifier.
+     */
+    private const OUTPUT_PATTERN = '/^[a-z0-9]+(?:_[a-z0-9]+)*$/';
 
     protected function nodeType(): string
     {
@@ -320,7 +328,16 @@ class MakeNodeCommand extends GeneratorCommand
         return $type;
     }
 
-    /** @return string[] */
+    /**
+     * Output names are rendered into two PHP files and are the edge labels a flow
+     * graph routes on, so they are validated at least as tightly as the type: an
+     * unescaped apostrophe used to render `->outputs(['it's'])` — a parse error in
+     * both files — while the command reported success and exited 0.
+     *
+     * @return string[]
+     *
+     * @throws \InvalidArgumentException
+     */
     protected function outputNames(): array
     {
         $outputs = array_values(array_filter(array_map(
@@ -328,7 +345,45 @@ class MakeNodeCommand extends GeneratorCommand
             explode(',', (string) $this->option('outputs')),
         ), fn (string $o) => $o !== ''));
 
-        return $outputs === [] ? ['default'] : $outputs;
+        if ($outputs === []) {
+            return ['default'];
+        }
+
+        foreach ($outputs as $output) {
+            if (preg_match(self::OUTPUT_PATTERN, $output) !== 1) {
+                throw new \InvalidArgumentException(
+                    "[{$output}] is not a valid output name. Use lowercase letters, digits and ".
+                    'underscores, e.g. sent or delivery_failed. An output name is rendered into '.
+                    'PHP and used as an edge label in a flow graph, so it stays conservative.'
+                );
+            }
+        }
+
+        // GraphValidator matches an edge to an output by name, and NodeDefinition
+        // keys nothing by it, so a repeat is not caught downstream: it renders a
+        // duplicated outputs() list and two edges no author can tell apart.
+        $repeated = array_keys(array_filter(array_count_values($outputs), fn (int $n) => $n > 1));
+
+        if ($repeated !== []) {
+            throw new \InvalidArgumentException(
+                'Duplicate output name ['.implode(', ', $repeated).']. Declare each output once — '.
+                'a flow edge is matched to an output by name, so a repeat gives two edges the '.
+                'same label.'
+            );
+        }
+
+        return $outputs;
+    }
+
+    /**
+     * Escaped rather than rejected, unlike the type and the output names: the group
+     * is a human-facing palette label, and "Client's Tools" is a fair thing to call
+     * one. It is rendered inside a single-quoted PHP string, where a backslash and
+     * a single quote are the only two characters that can end it early.
+     */
+    protected function paletteGroup(): string
+    {
+        return addcslashes((string) $this->option('group'), '\\\'');
     }
 
     protected function getOptions(): array
