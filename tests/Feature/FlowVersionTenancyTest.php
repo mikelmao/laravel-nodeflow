@@ -111,3 +111,71 @@ it('checks node types across every tenant, not just the ambient one', function (
 
     expect($missing)->toHaveCount(2);
 });
+
+it('continues a flows own version sequence instead of restarting it under a different ambient tenant', function () {
+    // Counterfactual: remove withoutGlobalScope('nodeflow_tenant') from
+    // Flow::versions(). The second publish below then computes
+    // $flow->versions()->max('version') scoped to 'org-2' — which sees none of
+    // this flow's rows, all of them tagged 'org-1' — so max() returns null,
+    // (int) null + 1 is 1, and the insert collides with the version already at
+    // (flow_id, 1).
+    $flow = Flow::create(['tenant_id' => 'org-1', 'name' => 'A', 'trigger_type' => 'manual', 'status' => 'draft']);
+
+    $graph = [
+        'start' => 'n1',
+        'nodes' => [['id' => 'n1', 'type' => 'core.exit', 'config' => []]],
+        'edges' => [],
+    ];
+
+    app(\Nodeflow\Publishing\PublishFlow::class)->publish($flow, $graph);
+
+    $this->tenant = 'org-2';
+
+    // Suspended because this test isolates Flow::versions()'s read scope, not
+    // PublishFlow's own tenant_id contradiction guard — the next test covers
+    // that guard on its own.
+    $second = \Nodeflow\Models\Concerns\TenancyGuardSuspension::run(
+        fn () => app(\Nodeflow\Publishing\PublishFlow::class)->publish($flow->fresh(), $graph)
+    );
+
+    expect($second->version)->toBe(2);
+});
+
+it('resolves a runs flow version across tenants, lazily and eagerly', function () {
+    // Counterfactual: remove withoutGlobalScope('nodeflow_tenant') from
+    // Run::flowVersion(). Both assertions below then fail, because the
+    // relation's own query reapplies FlowVersion's tenant scope against the
+    // ambient tenant at the time it runs — the same trap that broke
+    // StartRun's currentVersion() lookup, but on the run-to-version edge
+    // instead of the flow-to-version one. This feeds LoadGraphActivity and
+    // RunNodeActivity, the durable resume path.
+    $version = seedVersionWithLiveRun('org-1', 'core.exit');
+    $run = Run::withoutTenancy()->where('flow_version_id', $version->id)->firstOrFail();
+
+    $this->tenant = 'org-2';
+
+    expect($run->flowVersion)->not->toBeNull()
+        ->and($run->flowVersion->id)->toBe($version->id);
+
+    $reloaded = Run::withoutTenancy()->with('flowVersion')->find($run->id);
+
+    expect($reloaded->flowVersion)->not->toBeNull()
+        ->and($reloaded->flowVersion->id)->toBe($version->id);
+});
+
+it('throws instead of mislabelling a version when the ambient tenant differs from the flows own', function () {
+    // Counterfactual: drop 'tenant_id' => $flow->tenant_id from PublishFlow's
+    // create() call. BelongsToTenant's own ??= would then silently stamp the
+    // version with the ambient tenant ('org-2') instead of the flow's real one
+    // ('org-1') — mislabelling it rather than refusing the write. The explicit
+    // stamp turns that silent mislabel into a loud CrossTenantWriteException.
+    $flow = Flow::create(['tenant_id' => 'org-1', 'name' => 'A', 'trigger_type' => 'manual', 'status' => 'draft']);
+
+    $this->tenant = 'org-2';
+
+    expect(fn () => app(\Nodeflow\Publishing\PublishFlow::class)->publish($flow->fresh(), [
+        'start' => 'n1',
+        'nodes' => [['id' => 'n1', 'type' => 'core.exit', 'config' => []]],
+        'edges' => [],
+    ]))->toThrow(\Nodeflow\Models\CrossTenantWriteException::class);
+});
