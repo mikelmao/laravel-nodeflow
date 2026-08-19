@@ -1,0 +1,57 @@
+<?php
+
+namespace {{ namespace }};
+
+use Nodeflow\Execution\NodeResult;
+use Nodeflow\Execution\SubjectContext;
+use Nodeflow\Nodes\HandlesSubject;
+use Nodeflow\Nodes\Node;
+use Nodeflow\Schema\Field;
+use Nodeflow\Schema\NodeDefinition;
+
+class {{ class }} extends Node implements HandlesSubject
+{
+    /**
+     * The stable identifier for this node type.
+     *
+     * Published graph versions are immutable and runs sitting mid-wait resolve
+     * through this string, so changing it orphans every version that references
+     * it. Never derive it from the class name — renaming the class must be free.
+     */
+    public static function type(): string
+    {
+        return '{{ type }}';
+    }
+
+    public function definition(): NodeDefinition
+    {
+        return NodeDefinition::make('{{ label }}')
+            ->group('{{ group }}')
+            ->description('TODO: describe this node for the person authoring a flow.')
+            ->outputs([{{ outputs }}])
+            ->fields([
+                Field::text('example')
+                    ->label('Example')
+                    ->help('TODO: replace this with the fields this node actually needs.')
+                    ->required(),
+            ]);
+    }
+
+    /**
+     * Runs once per subject. The runtime chunks the audience, iterates it, and
+     * isolates per-subject failures, so write single-subject code here.
+     */
+    public function forSubject(SubjectContext $context): NodeResult
+    {
+        if ($context->isTest()) {
+            // Test mode must cause no externally visible side effect. A node that
+            // ignores this is a reviewable bug, not a style preference.
+            return $context->continue('{{ firstOutput }}');
+        }
+
+        // TODO: do the work. Return $context->continue('<output>') to route this
+        // subject down an output, or $context->fail('why') to record a failure
+        // against this subject alone without stopping the rest of the audience.
+        return $context->continue('{{ firstOutput }}');
+    }
+}
