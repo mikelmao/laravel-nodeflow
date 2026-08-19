@@ -46,10 +46,14 @@ class {{ class }} extends Node implements HandlesSubject, HandlesAudience
     public function forSubject(SubjectContext $context): NodeResult
     {
         if ($context->isTest()) {
+            // Test mode must cause no externally visible side effect. A node that
+            // ignores this is a reviewable bug, not a style preference.
             return $context->continue('{{ firstOutput }}');
         }
 
-        // TODO: the single-subject implementation.
+        // TODO: the single-subject implementation. Nothing dedupes a second run of
+        // this body, so make any send idempotent by construction —
+        // docs/03-writing-nodes.md, "Retries and idempotency".
         return $context->continue('{{ firstOutput }}');
     }
 
@@ -62,10 +66,16 @@ class {{ class }} extends Node implements HandlesSubject, HandlesAudience
     public function forAudience(AudienceContext $context): NodeResult
     {
         if ($context->isTest()) {
+            // Test mode must cause no externally visible side effect. A node that
+            // ignores this is a reviewable bug, not a style preference. It matters
+            // most here: a subject/audience divergence is invisible until scale
+            // changes which path the runtime picks.
             return $context->all('{{ firstOutput }}');
         }
 
-        // TODO: the batched implementation.
+        // TODO: the batched implementation. Nothing dedupes a second run of this
+        // body, so make any send idempotent by construction —
+        // docs/03-writing-nodes.md, "Retries and idempotency".
         return $context->all('{{ firstOutput }}');
     }
 }

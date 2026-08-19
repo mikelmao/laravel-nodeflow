@@ -52,6 +52,8 @@ class {{ class }} extends Node implements HandlesSubject
         // TODO: do the work. Return $context->continue('<output>') to route this
         // subject down an output, or $context->fail('why') to record a failure
         // against this subject alone without stopping the rest of the audience.
+        // Nothing dedupes a second run of this body, so make any send idempotent by
+        // construction — docs/03-writing-nodes.md, "Retries and idempotency".
         return $context->continue('{{ firstOutput }}');
     }
 }
