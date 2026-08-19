@@ -70,3 +70,52 @@ it('is idempotent for a repeated trigger identity', function () {
     expect($second->id)->toBe($first->id)
         ->and(\Nodeflow\Models\Run::count())->toBe(1);
 });
+
+it('creates a run for a different tenant than the ambient one via the internal guard suspension', function () {
+    // This file's beforeEach binds the ambient tenant to 'org-1'. Build the
+    // org-2 flow with the ambient tenant switched to null just for this setup
+    // step, so the fixture itself isn't blocked by the very guard being
+    // tested — that guard only fires when the ambient tenant is non-null.
+    app()->bind(TenantResolver::class, fn () => new class implements TenantResolver {
+        public function currentTenantId(): ?string { return null; }
+        public function ownsSubject(string $t, string $ty, string $i): bool { return true; }
+    });
+
+    $otherTenantFlow = Flow::create(['tenant_id' => 'org-2', 'name' => 'Other', 'trigger_type' => 'manual', 'status' => 'draft']);
+
+    app(PublishFlow::class)->publish($otherTenantFlow, [
+        'start' => 'o1',
+        'nodes' => [['id' => 'o1', 'type' => 'core.exit', 'config' => []]],
+        'edges' => [],
+    ]);
+
+    // Switch back to a concrete, non-null ambient tenant — 'org-1' — that
+    // differs from the flow's own tenant_id. Outside StartRun's internal
+    // guard suspension this contradiction would throw CrossTenantWriteException
+    // (see the next test); through StartRun it must succeed, because the run's
+    // tenant_id comes from the trusted $flow->tenant_id, not from ambient or
+    // request state, and StartRun is reacting to a system event with no
+    // ambient tenant of its own.
+    app()->bind(TenantResolver::class, fn () => new class implements TenantResolver {
+        public function currentTenantId(): ?string { return 'org-1'; }
+        public function ownsSubject(string $t, string $ty, string $i): bool { return true; }
+    });
+
+    $run = app(StartRun::class)->forFlow($otherTenantFlow->fresh(), 'user', ['1']);
+
+    expect($run->tenant_id)->toBe('org-2')
+        ->and($run->subjects()->count())->toBe(1);
+});
+
+it('still throws for a genuine contradicting write outside the guard suspension', function () {
+    // Same ambient tenant ('org-1', from this file's beforeEach) as the test
+    // above, but this is an ordinary, unsuspended model write directly — the
+    // guard must still block it. This is what proves the suspension is scoped
+    // to StartRun's own insert and does not leak into surrounding code.
+    expect(fn () => Flow::create([
+        'tenant_id' => 'org-2',
+        'name' => 'Bad',
+        'trigger_type' => 'manual',
+        'status' => 'draft',
+    ]))->toThrow(\Nodeflow\Models\CrossTenantWriteException::class);
+});

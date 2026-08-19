@@ -27,7 +27,10 @@ trait BelongsToTenant
         static::creating(function ($model) {
             $currentTenantId = app(TenantResolver::class)->currentTenantId();
 
-            if ($currentTenantId !== null && $model->tenant_id !== null && (string)$model->tenant_id !== $currentTenantId) {
+            if (! TenancyGuardSuspension::isActive()
+                && $currentTenantId !== null
+                && $model->tenant_id !== null
+                && (string)$model->tenant_id !== $currentTenantId) {
                 throw new CrossTenantWriteException(
                     $model::class,
                     $currentTenantId,

@@ -195,15 +195,25 @@ it('starts one run per tenant when one event matches flows in different tenants'
         ->and($runs['org-2']->subjects()->pluck('subject_id')->all())->toBe(['3']);
 });
 
-it('investigates what happens to the fan-out when the ambient tenant is non-null', function () {
-    // Every other test in this file binds an ambient tenant of null, which is
-    // why fan-out across org-1 and org-2 works: BelongsToTenant's creating
-    // guard only throws when the ambient tenant is non-null AND contradicts an
-    // explicit tenant_id. A real deployment is not guaranteed to run the
-    // listener with a null ambient tenant — a queued job carrying tenant
-    // context, or a listener invoked synchronously mid-request, could easily
-    // resolve a concrete tenant. This test pins down what actually happens in
-    // that case rather than assuming the null-tenant tests generalise.
+it('fans out to every tenant even when the ambient tenant is non-null', function () {
+    // Every other test in this file binds an ambient tenant of null. This one
+    // proves the fan-out also works when the listener runs with a concrete,
+    // resolved ambient tenant — e.g. a queued job carrying tenant context, or
+    // a listener invoked synchronously mid-request — which is the realistic
+    // case, not the exception.
+    //
+    // History: this test used to document a real conflict between Task 3's
+    // BelongsToTenant creating guard and this fan-out — with a non-null
+    // ambient tenant, org-1's run would be created (matching the ambient
+    // tenant) and then org-2's Run::create would throw
+    // CrossTenantWriteException, aborting the loop and leaving org-2's alert
+    // never started. The fix: StartRun now creates its Run row inside
+    // TenancyGuardSuspension::run(), which suspends only the creating()
+    // contradiction check — not the read scope, not materialise() — because
+    // that run's tenant_id is $flow->tenant_id, already read from a trusted
+    // row, not attacker-supplied input, and the run is being created in
+    // response to a system event with no ambient tenant of its own. Both
+    // tenants' runs are now created regardless of the ambient tenant.
     app(TriggerRegistry::class)->register(FakeMultiTenantAlertTrigger::class);
 
     $flowOrg1 = Flow::create(['tenant_id' => 'org-1', 'name' => 'F1', 'trigger_type' => 'test.multi_alert', 'status' => 'draft']);
@@ -227,34 +237,84 @@ it('investigates what happens to the fan-out when the ambient tenant is non-null
         public function ownsSubject(string $t, string $ty, string $i): bool { return true; }
     });
 
-    $thrown = null;
+    app(\Nodeflow\Triggers\EventTriggerListener::class)->handle(new FakeMultiTenantAlertEvent([
+        'org-1' => ['1', '2'],
+        'org-2' => ['3'],
+    ]));
 
-    try {
-        app(\Nodeflow\Triggers\EventTriggerListener::class)->handle(new FakeMultiTenantAlertEvent([
-            'org-1' => ['1', '2'],
-            'org-2' => ['3'],
-        ]));
-    } catch (\Throwable $e) {
-        $thrown = $e;
-    }
+    $runs = Run::withoutTenancy()->get()->keyBy('tenant_id');
 
-    // FINDING: this throws Nodeflow\Models\CrossTenantWriteException. The org-1
-    // run (matching the ambient tenant) is created and its workflow started
-    // before the org-2 iteration is reached; org-2's Run::create then fails
-    // the BelongsToTenant creating guard (ambient 'org-1' contradicts explicit
-    // tenant_id 'org-2'), and that exception is not a QueryException, so
-    // StartRun's idempotency-recovery catch does not intercept it — it
-    // propagates straight out of EventTriggerListener::handle(), aborting the
-    // loop. Net effect: one run exists (org-1's), org-2's alert is silently
-    // never started, and the caller sees a thrown exception instead of a
-    // clean per-tenant failure. This is a genuine conflict between the Task 3
-    // mass-assignment guard and the multi-tenant fan-out this task exists
-    // for: any deployment where the event listener runs with a resolved
-    // ambient tenant cannot fan out to any tenant other than the ambient one.
-    expect($thrown)->toBeInstanceOf(\Nodeflow\Models\CrossTenantWriteException::class);
+    expect($runs)->toHaveCount(2)
+        ->and($runs['org-1']->subjects()->count())->toBe(2)
+        ->and($runs['org-2']->subjects()->count())->toBe(1);
+});
 
-    $runs = Run::withoutTenancy()->get();
+it('does not let one tenant\'s failure strand another tenant\'s alert', function () {
+    // org-1's subject '666' is not owned by any tenant here (simulating a bad
+    // subject id in the alert payload), so materialising org-1's audience
+    // throws CrossTenantSubjectException. org-2's subject '3' is fine. That
+    // failure must not prevent org-2's run from starting — the same principle
+    // NodeRunner already applies per subject: a fan-out must not let one
+    // participant's failure strand the others. A stranded participant here is
+    // a bank whose customers never receive a flood warning.
+    app()->bind(TenantResolver::class, fn () => new class implements TenantResolver {
+        public function currentTenantId(): ?string { return null; }
+        public function ownsSubject(string $t, string $ty, string $i): bool { return $i !== '666'; }
+    });
+
+    // Capture reports rather than letting them hit the real handler, so this
+    // test can assert EventTriggerListener actually reports the failure
+    // (via the global report() helper) instead of merely swallowing it.
+    $reported = [];
+    app()->instance(\Illuminate\Contracts\Debug\ExceptionHandler::class, new class($reported) implements \Illuminate\Contracts\Debug\ExceptionHandler {
+        public function __construct(private array &$reported) {}
+
+        public function report(\Throwable $e) {
+            $this->reported[] = $e;
+        }
+
+        public function shouldReport(\Throwable $e)
+        {
+            return true;
+        }
+
+        public function render($request, \Throwable $e)
+        {
+            throw $e;
+        }
+
+        public function renderForConsole($output, \Throwable $e): void
+        {
+        }
+    });
+
+    app(TriggerRegistry::class)->register(FakeMultiTenantAlertTrigger::class);
+
+    $flowOrg1 = Flow::create(['tenant_id' => 'org-1', 'name' => 'F1', 'trigger_type' => 'test.multi_alert', 'status' => 'draft']);
+    app(PublishFlow::class)->publish($flowOrg1, [
+        'start' => 'n1',
+        'nodes' => [['id' => 'n1', 'type' => 'core.exit', 'config' => []]],
+        'edges' => [],
+    ]);
+
+    $flowOrg2 = Flow::create(['tenant_id' => 'org-2', 'name' => 'F2', 'trigger_type' => 'test.multi_alert', 'status' => 'draft']);
+    app(PublishFlow::class)->publish($flowOrg2, [
+        'start' => 'n1',
+        'nodes' => [['id' => 'n1', 'type' => 'core.exit', 'config' => []]],
+        'edges' => [],
+    ]);
+
+    // Must not throw out of handle(): org-1's failure is caught and reported.
+    app(\Nodeflow\Triggers\EventTriggerListener::class)->handle(new FakeMultiTenantAlertEvent([
+        'org-1' => ['666'],
+        'org-2' => ['3'],
+    ]));
+
+    $runs = Run::withoutTenancy()->get()->keyBy('tenant_id');
 
     expect($runs)->toHaveCount(1)
-        ->and($runs->first()->tenant_id)->toBe('org-1');
+        ->and($runs->has('org-1'))->toBeFalse()
+        ->and($runs['org-2']->subjects()->count())->toBe(1)
+        ->and($reported)->toHaveCount(1)
+        ->and($reported[0])->toBeInstanceOf(\Nodeflow\Execution\CrossTenantSubjectException::class);
 });

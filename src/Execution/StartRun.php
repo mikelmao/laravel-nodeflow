@@ -6,6 +6,7 @@ use Illuminate\Database\QueryException;
 use Illuminate\Support\Facades\DB;
 use Nodeflow\Engine\WorkflowEngine;
 use Nodeflow\Graph\Graph;
+use Nodeflow\Models\Concerns\TenancyGuardSuspension;
 use Nodeflow\Models\Flow;
 use Nodeflow\Models\Run;
 use Nodeflow\Workflows\FlowInterpreter;
@@ -44,7 +45,17 @@ class StartRun
 
         try {
             $run = DB::transaction(function () use ($flow, $version, $options, $key, $subjectType, $ids, $startNodeId) {
-                $run = Run::create([
+                // The tenant_id here is $flow->tenant_id: already read from a
+                // trusted row, not attacker-supplied input, and this run is being
+                // created in response to a system event (a trigger firing, or a
+                // sub-flow start) that has no ambient tenant of its own — that is
+                // exactly the case TenancyGuardSuspension exists for. Only the
+                // insert itself is suspended, not materialise(): the audience
+                // materialiser doesn't write through BelongsToTenant at all, and
+                // narrowing the suspension to the single call it's needed for
+                // keeps every other write in this transaction subject to the
+                // ordinary guard.
+                $run = TenancyGuardSuspension::run(fn () => Run::create([
                     'flow_version_id' => $version->id,
                     'tenant_id' => $flow->tenant_id,
                     'correlation_id' => $options['correlation_id'] ?? null,
@@ -52,7 +63,7 @@ class StartRun
                     'status' => 'pending',
                     'is_test' => (bool) ($options['is_test'] ?? false),
                     'idempotency_key' => $key,
-                ]);
+                ]));
 
                 $this->materialiser->materialise($run, $subjectType, $ids, $startNodeId);
 

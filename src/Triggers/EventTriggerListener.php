@@ -30,12 +30,22 @@ class EventTriggerListener
                         continue;
                     }
 
-                    $this->startRun->forFlow(
-                        $flow,
-                        $audience['subject_type'],
-                        $audience['subject_ids'],
-                        ['idempotency_key' => $trigger->idempotencyKey($event)],
-                    );
+                    // One flow's (or tenant's) failure must not strand every other
+                    // matching tenant's alert — the same principle NodeRunner
+                    // applies per subject. A stranded participant here is a bank
+                    // whose customers never receive a flood warning. Report the
+                    // failure through the host's error handler rather than
+                    // swallowing it, and keep going.
+                    try {
+                        $this->startRun->forFlow(
+                            $flow,
+                            $audience['subject_type'],
+                            $audience['subject_ids'],
+                            ['idempotency_key' => $trigger->idempotencyKey($event)],
+                        );
+                    } catch (\Throwable $e) {
+                        report($e);
+                    }
                 }
             }
         }
