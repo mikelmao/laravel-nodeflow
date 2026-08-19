@@ -320,6 +320,11 @@ it('generates syntactically valid PHP for every cardinality', function (string $
     foreach ($paths as $path) {
         expect($path)->toBeFile();
 
+        // Reset on every iteration: exec() appends to $output rather than
+        // replacing it, so without this a failure on the second file's lint
+        // would print the first file's output mixed into the message.
+        $output = [];
+
         exec('php -l '.escapeshellarg($path).' 2>&1', $output, $exitCode);
 
         expect($exitCode)->toBe(0, "php -l failed for {$path}: ".implode(PHP_EOL, $output));
@@ -330,3 +335,47 @@ it('generates syntactically valid PHP for every cardinality', function (string $
         expect(file_get_contents($path))->not->toContain('{{');
     }
 })->with(['subject', 'audience', 'both']);
+
+it('does not clobber a hand-edited test file on regeneration without --force', function () {
+    // Finding: writeTest() skips an existing test file unless --force, warning as
+    // it does so — but nothing in the suite exercised that branch. It matters more
+    // than a typical uncovered branch because the stub it renders ends with
+    // `// TODO: add a test per output`, i.e. it explicitly tells the author to
+    // hand-edit this file. A silent overwrite destroys real work, not boilerplate.
+    //
+    // Reaching writeTest()'s own guard — rather than the unrelated "already
+    // exists" guard GeneratorCommand::handle() runs first, which refuses the
+    // whole command before writeTest() is ever reached — requires the class file
+    // to be absent while the test file survives. Re-running with the class file
+    // still present was tried and confirmed (by temporarily disabling this exact
+    // guard) to pass regardless of whether the guard exists at all: the outer
+    // "Node already exists." refusal intercepts first and writeTest() never runs,
+    // so a test built that way could not have detected the regression it exists
+    // to catch. Deleting the class file — standing in for an author who moved or
+    // rewrote it while keeping their edited test — is what lets this test reach
+    // the code the finding is actually about.
+    $this->artisan('nodeflow:make-node', [
+        'name' => 'SendSms',
+        '--type' => 'yaya.send_sms',
+        '--test' => true,
+    ])->assertExitCode(0);
+
+    $testPath = $this->root.'/tests/Feature/Nodeflow/SendSmsNodeTest.php';
+    $handEdited = "<?php\n\n// hand-edited by the author — must survive regeneration\n";
+    file_put_contents($testPath, $handEdited);
+
+    unlink($this->root.'/app/Nodeflow/Nodes/SendSms.php');
+
+    $this->artisan('nodeflow:make-node', [
+        'name' => 'SendSms',
+        '--type' => 'yaya.send_sms',
+        '--test' => true,
+    ])
+        ->expectsOutputToContain('Test already exists at')
+        ->assertExitCode(0);
+
+    // Asserting on the exact content, not just that the file exists — a
+    // file-exists check passes even with the guard deleted, since writeTest()
+    // would just re-render the same path with fresh (non-hand-edited) content.
+    expect(file_get_contents($testPath))->toBe($handEdited);
+});
