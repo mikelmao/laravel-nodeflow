@@ -95,7 +95,7 @@ class NodeRunner
             $merged = NodeResult::merge($merged, ...$chunkResults);
         });
 
-        return $this->advance($run, $graph, $nodeId, $merged, $subjectType, array_keys($seen), (int) ((microtime(true) - $startedAt) * 1000));
+        return $this->advance($run, $graph, $nodeId, $merged, $subjectType, array_map('strval', array_keys($seen)), (int) ((microtime(true) - $startedAt) * 1000));
     }
 
     /**
@@ -187,7 +187,13 @@ class NodeRunner
             return;
         }
 
-        $departed = array_values(array_diff($seen, array_keys($accountedFor)));
+        // strval throughout: PHP silently turns a numeric-string array key back into
+        // an int, and binding an int against a varchar subject_id column is an error
+        // on Postgres even though SQLite and MySQL coerce it.
+        $departed = array_values(array_map(
+            'strval',
+            array_diff($seen, array_map('strval', array_keys($accountedFor))),
+        ));
 
         foreach (array_chunk($departed, 1000) as $chunk) {
             RunSubject::where('run_id', $run->id)
