@@ -1,0 +1,68 @@
+<?php
+
+use Nodeflow\Contracts\TenantResolver;
+use Nodeflow\Models\Flow;
+use Nodeflow\Models\Run;
+use Nodeflow\Nodeflow;
+use Nodeflow\Publishing\GraphInvalidException;
+use Nodeflow\Publishing\PublishFlow;
+use Tests\Support\FakeSendNode;
+
+beforeEach(function () {
+    app()->bind(TenantResolver::class, fn () => new class implements TenantResolver {
+        public function currentTenantId(): ?string { return 'org-1'; }
+        public function ownsSubject(string $t, string $ty, string $i): bool { return true; }
+    });
+
+    Nodeflow::register([FakeSendNode::class]);
+
+    $this->flow = Flow::create(['name' => 'F', 'trigger_type' => 'manual', 'status' => 'draft']);
+
+    $this->validGraph = [
+        'start' => 'n1',
+        'nodes' => [
+            ['id' => 'n1', 'type' => 'test.send', 'config' => ['channel' => 'sms']],
+            ['id' => 'n2', 'type' => 'core.exit', 'config' => []],
+        ],
+        'edges' => [['from' => 'n1', 'output' => 'sent', 'to' => 'n2']],
+    ];
+});
+
+it('freezes version 1 and points the flow at it', function () {
+    $version = app(PublishFlow::class)->publish($this->flow, $this->validGraph, 'user-9');
+
+    expect($version->version)->toBe(1)
+        ->and($version->published_at)->not->toBeNull()
+        ->and($version->published_by)->toBe('user-9')
+        ->and($this->flow->fresh()->current_version_id)->toBe($version->id);
+});
+
+it('increments the version on each publish and leaves earlier versions untouched', function () {
+    $first = app(PublishFlow::class)->publish($this->flow, $this->validGraph);
+    $second = app(PublishFlow::class)->publish($this->flow, $this->validGraph);
+
+    expect($second->version)->toBe(2)
+        ->and($first->fresh()->graph)->toBe($this->validGraph);
+});
+
+it('refuses to publish an invalid graph', function () {
+    $invalid = $this->validGraph;
+    $invalid['nodes'][0]['config'] = ['channel' => 'pigeon'];
+
+    expect(fn () => app(PublishFlow::class)->publish($this->flow, $invalid))
+        ->toThrow(GraphInvalidException::class);
+});
+
+it('leaves runs on the previous version untouched when a new one is published', function () {
+    $v1 = app(PublishFlow::class)->publish($this->flow, $this->validGraph);
+
+    $run = Run::create([
+        'flow_version_id' => $v1->id, 'tenant_id' => 'org-1',
+        'strategy' => 'cohort', 'status' => 'waiting',
+    ]);
+
+    app(PublishFlow::class)->publish($this->flow, $this->validGraph);
+
+    expect($run->fresh()->flow_version_id)->toBe($v1->id)
+        ->and($v1->fresh()->hasLiveRuns())->toBeTrue();
+});
