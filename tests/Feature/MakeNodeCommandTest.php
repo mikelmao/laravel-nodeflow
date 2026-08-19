@@ -1,5 +1,9 @@
 <?php
 
+use Nodeflow\Execution\AudienceContext;
+use Nodeflow\Execution\SubjectContext;
+use Nodeflow\Models\Run;
+use Nodeflow\Nodes\HandlesAudience;
 use Nodeflow\Nodes\HandlesSubject;
 use Nodeflow\Nodes\NodeRegistry;
 use Tests\Support\FakeSendNode;
@@ -110,20 +114,78 @@ it('generates a subject node at the conventional path', function () {
         ->toContain('public function forSubject(SubjectContext $context): NodeResult');
 });
 
-it('produces a class the registry accepts and can resolve', function () {
-    // The counterfactual: drop `implements HandlesSubject` from the stub and this
-    // fails. NodeRegistry::register() rejects a node implementing neither
-    // cardinality interface, which is the whole reason the stub declares one.
-    $this->artisan('nodeflow:make-node', ['name' => 'SendSms', '--type' => 'yaya.send_sms'])
-        ->assertExitCode(0);
+it('produces a subject class the registry accepts and the runtime can execute', function () {
+    // Two counterfactuals. The registry half: drop `implements HandlesSubject`
+    // from the stub and this fails, because NodeRegistry::register() rejects a node
+    // implementing neither cardinality interface.
+    //
+    // The execution half exists because `php -l` resolves no symbols. Rename
+    // NodeDefinition::outputNames(), Field::help() or SubjectContext::continue()
+    // and every stub would keep passing the whole suite while emitting code that
+    // fatals in every host that generates a node. These are also exactly the calls
+    // the *generated test file* makes, and that file is never executed anywhere,
+    // so this is what stands in for running it.
+    $this->artisan('nodeflow:make-node', [
+        'name' => 'SendSms',
+        '--type' => 'yaya.send_sms',
+        '--outputs' => 'sent, failed',
+    ])->assertExitCode(0);
 
     require $this->root.'/app/Nodeflow/Nodes/SendSms.php';
 
     app(NodeRegistry::class)->register('App\Nodeflow\Nodes\SendSms');
 
     expect(app(NodeRegistry::class)->has('yaya.send_sms'))->toBeTrue();
-    expect(app(NodeRegistry::class)->resolve('yaya.send_sms'))
-        ->toBeInstanceOf(HandlesSubject::class);
+
+    $node = app(NodeRegistry::class)->resolve('yaya.send_sms');
+
+    expect($node)->toBeInstanceOf(HandlesSubject::class);
+
+    // definition() runs the whole Field::text()->label()->help()->required() chain
+    // as a side effect of being called at all.
+    expect($node->definition()->outputNames())->toBe(['sent', 'failed']);
+
+    // The scaffolded field is required, which is the assertion the generated test
+    // makes and the reason the stub ships a TODO next to the field name.
+    expect($node->validate([]))->toHaveKey('example');
+
+    // The isTest() branch must route the subject to the first declared output
+    // without doing anything else. Asserting the routing, not just that no error
+    // was thrown: a body returning NodeResult::empty() would pass the latter.
+    $result = $node->forSubject(new SubjectContext(
+        new Run(['is_test' => true]), 'n1', [], '42', null,
+    ));
+
+    expect($result->outputs())->toBe(['sent' => ['42']]);
+});
+
+it('produces an audience class the registry accepts and the runtime can execute', function () {
+    // The audience equivalent of the test above, and the only thing in the suite
+    // that calls AudienceContext::all() from generated code. It needs its own class
+    // name: `require`ing two generated classes that share an FQCN in one process
+    // fatals with "class already declared".
+    $this->artisan('nodeflow:make-node', [
+        'name' => 'SendBlast',
+        '--type' => 'yaya.send_blast',
+        '--cardinality' => 'audience',
+        '--outputs' => 'sent, failed',
+    ])->assertExitCode(0);
+
+    require $this->root.'/app/Nodeflow/Nodes/SendBlast.php';
+
+    app(NodeRegistry::class)->register('App\Nodeflow\Nodes\SendBlast');
+
+    $node = app(NodeRegistry::class)->resolve('yaya.send_blast');
+
+    expect($node)->toBeInstanceOf(HandlesAudience::class);
+    expect($node->definition()->outputNames())->toBe(['sent', 'failed']);
+    expect($node->validate([]))->toHaveKey('example');
+
+    $result = $node->forAudience(new AudienceContext(
+        new Run(['is_test' => true]), 'n1', [], 'user', ['7', '8'],
+    ));
+
+    expect($result->outputs())->toBe(['sent' => ['7', '8']]);
 });
 
 it('generates an audience node that does not also declare forSubject', function () {
