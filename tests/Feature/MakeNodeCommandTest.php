@@ -37,6 +37,62 @@ afterEach(function () {
     }
 });
 
+/**
+ * Writes a hand-written node class into the temp app root, loads it, and registers
+ * it — standing in for a host application whose providers booted before the command
+ * ran, which is the normal case and the one the temp-app-root harness otherwise
+ * cannot reproduce.
+ *
+ * $class must be unique across this file: `require`ing two classes that share an
+ * FQCN in one process fatals with "class already declared".
+ */
+function writeRegisteredNode(string $root, string $class, string $type, string $marker): void
+{
+    $directory = $root.'/app/Nodeflow/Nodes';
+
+    if (! is_dir($directory)) {
+        mkdir($directory, 0777, true);
+    }
+
+    $path = $directory.'/'.$class.'.php';
+
+    file_put_contents($path, <<<PHP
+    <?php
+
+    namespace App\Nodeflow\Nodes;
+
+    use Nodeflow\Execution\NodeResult;
+    use Nodeflow\Execution\SubjectContext;
+    use Nodeflow\Nodes\HandlesSubject;
+    use Nodeflow\Nodes\Node;
+    use Nodeflow\Schema\NodeDefinition;
+
+    class {$class} extends Node implements HandlesSubject
+    {
+        // {$marker}
+
+        public static function type(): string
+        {
+            return '{$type}';
+        }
+
+        public function definition(): NodeDefinition
+        {
+            return NodeDefinition::make('{$class}')->outputs(['default']);
+        }
+
+        public function forSubject(SubjectContext \$context): NodeResult
+        {
+            return \$context->continue('default');
+        }
+    }
+    PHP);
+
+    require $path;
+
+    app(NodeRegistry::class)->register('App\Nodeflow\Nodes\\'.$class);
+}
+
 it('generates a subject node at the conventional path', function () {
     $this->artisan('nodeflow:make-node', ['name' => 'SendSms', '--type' => 'yaya.send_sms'])
         ->assertExitCode(0);
@@ -196,6 +252,48 @@ it('refuses a type already registered through an alias, naming the real owner', 
         ->assertExitCode(1);
 
     expect($this->root.'/app/Nodeflow/Nodes/MyAliasedDuplicate.php')->not->toBeFile();
+});
+
+it('lets --force overwrite a node that already owns its registered type', function () {
+    // The counterfactual: delete the same-class exemption in validateType() and this
+    // fails — the command exits 1 with "is already registered by", because the class
+    // being regenerated has itself claimed the type. --force exists for exactly this
+    // case, so without the exemption the option cannot do the one job it has.
+    //
+    // Asserting on the absence of the collision message and on the rewritten body,
+    // not on the exit code alone: a command that refused for some other reason, or
+    // one that exited 0 having written nothing, would both pass a code-only check.
+    writeRegisteredNode($this->root, 'SendForce', 'yaya.send_force', 'hand-written marker');
+
+    $this->artisan('nodeflow:make-node', [
+        'name' => 'SendForce',
+        '--type' => 'yaya.send_force',
+        '--force' => true,
+    ])
+        ->doesntExpectOutputToContain('is already registered by')
+        ->assertExitCode(0);
+
+    expect(file_get_contents($this->root.'/app/Nodeflow/Nodes/SendForce.php'))
+        ->toContain("return 'yaya.send_force';")
+        ->toContain('TODO: describe this node')
+        ->not->toContain('hand-written marker');
+});
+
+it('refuses a registered node without --force as an existing file, not a type collision', function () {
+    // The same exemption, seen from the other side. Both refusals exit 1, so only
+    // the messages tell them apart: the counterfactual is deleting the exemption,
+    // after which this fails because the author is told to "choose another type" —
+    // the one action the node contract forbids for a node with published graph
+    // versions resolving through that string.
+    writeRegisteredNode($this->root, 'SendGuard', 'yaya.send_guard', 'hand-written marker');
+
+    $this->artisan('nodeflow:make-node', ['name' => 'SendGuard', '--type' => 'yaya.send_guard'])
+        ->expectsOutputToContain('Node already exists.')
+        ->doesntExpectOutputToContain('Choose another type.')
+        ->assertExitCode(1);
+
+    expect(file_get_contents($this->root.'/app/Nodeflow/Nodes/SendGuard.php'))
+        ->toContain('hand-written marker');
 });
 
 it('warns when deriving the type non-interactively because --type was omitted', function () {

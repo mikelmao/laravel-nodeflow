@@ -298,6 +298,19 @@ class MakeNodeCommand extends GeneratorCommand
             // the canonical type, not every name that resolves to it.
             $existing = $registry->resolve($type)::class;
 
+            // A node that is already registered owns its own type, so regenerating
+            // it is not a collision. This exemption is what makes --force usable at
+            // all: in a real host application providers boot before the command
+            // runs, so the class being regenerated has already claimed its type and
+            // every re-run would otherwise be refused — with advice ("choose
+            // another type") that the node contract forbids for a live node, since
+            // published graph versions and waiting runs resolve through that string
+            // forever. Whether an existing file may be overwritten is
+            // GeneratorCommand's already-exists guard's decision, not this rule's.
+            if ($existing === $this->qualifyClass($this->getNameInput())) {
+                return $type;
+            }
+
             throw new \InvalidArgumentException(
                 "Type [{$type}] is already registered by [{$existing}]. Two nodes sharing a ".
                 'type silently replace each other in the registry. Choose another type.'
