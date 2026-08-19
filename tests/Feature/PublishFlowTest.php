@@ -42,7 +42,9 @@ it('increments the version on each publish and leaves earlier versions untouched
     $second = app(PublishFlow::class)->publish($this->flow, $this->validGraph);
 
     expect($second->version)->toBe(2)
-        ->and($first->fresh()->graph)->toBe($this->validGraph);
+        ->and($first->fresh()->graph)->toBe($this->validGraph)
+        ->and($first->content_hash)->toMatch('/^[a-f0-9]{64}$/')
+        ->and($first->content_hash)->toBe($second->content_hash);
 });
 
 it('refuses to publish an invalid graph', function () {
@@ -65,4 +67,28 @@ it('leaves runs on the previous version untouched when a new one is published', 
 
     expect($run->fresh()->flow_version_id)->toBe($v1->id)
         ->and($v1->fresh()->hasLiveRuns())->toBeTrue();
+});
+
+it('publishes a graph with concurrent branch waits despite the warning', function () {
+    $graphWithConcurrentWaits = [
+        'start' => 'n1',
+        'nodes' => [
+            ['id' => 'n1', 'type' => 'test.send', 'config' => ['channel' => 'sms']],
+            ['id' => 'w1', 'type' => 'core.wait', 'config' => ['duration' => '1 day']],
+            ['id' => 'w2', 'type' => 'core.wait', 'config' => ['duration' => '2 days']],
+            ['id' => 'n2', 'type' => 'core.exit', 'config' => []],
+        ],
+        'edges' => [
+            ['from' => 'n1', 'output' => 'sent', 'to' => 'w1'],
+            ['from' => 'n1', 'output' => 'failed', 'to' => 'w2'],
+            ['from' => 'w1', 'output' => 'default', 'to' => 'n2'],
+            ['from' => 'w2', 'output' => 'default', 'to' => 'n2'],
+        ],
+    ];
+
+    $version = app(PublishFlow::class)->publish($this->flow, $graphWithConcurrentWaits);
+
+    expect($version->version)->toBe(1)
+        ->and($version->published_at)->not->toBeNull()
+        ->and($this->flow->fresh()->current_version_id)->toBe($version->id);
 });
