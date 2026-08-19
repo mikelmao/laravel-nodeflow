@@ -71,7 +71,7 @@ abandoned; this is its successor. **The v2 API is pre-stable and lives under
 | D7 | Per-subject branch returns are **automatically partitioned** into sub-audiences | The mechanic that makes cohort execution feel per-user to the node author |
 | D8 | Flow versions are **immutable**; runs pin `flow_version_id` at start | Requirement 7, without diffing or migration machinery |
 | D9 | Node bodies run in a generic activity, never in workflow code | Engine's boot-time guardrail scan rejects `DB::`/`Http::` in workflow code |
-| D10 | **One wait primitive for both strategies:** `awaitWithTimeout($duration, fn () => $this->audienceEmpty)`, signalled only when the remaining subject count hits zero | Engine caps pending signals at 5,000; audience-empty signalling is bounded at one per wait regardless of audience size |
+| D10 | **One wait primitive for both strategies:** `self::awaitWithTimeout($duration, 'audienceEmptied')`, signalled only when the remaining subject count hits zero (corrected form — see §18) | Engine caps pending signals at 5,000; audience-empty signalling is bounded at one per wait regardless of audience size |
 | D11 | `node_executions` logs one row per (run, node, output) with counts, not per subject | 18 rows vs 600,000 at 100k subjects |
 | D12 | Audience subject-ownership check against run tenant is **mandatory and non-disableable** | Cross-FSP leakage in regulated financial messaging is not a config flag |
 | D13 | Conditions are **curated only** in v1 — no expression language | Non-technical authors in scope; expression-over-host-data is an injection and isolation surface |
@@ -323,7 +323,8 @@ children, because pending children cap at 1,000.
 **One primitive, both strategies.** Every wait compiles to:
 
 ```php
-yield awaitWithTimeout($duration, fn () => $this->audienceEmpty);
+// Correct form for durable-workflow/workflow v2 — see §18.
+self::awaitWithTimeout($duration, 'audienceEmptied');
 ```
 
 The signal that sets `audienceEmpty` fires only when the run's remaining subject count
@@ -530,7 +531,7 @@ waste.
 
 | Risk | Mitigation |
 |---|---|
-| **Engine is pre-stable** — `2.0.0-rc.32`, four days old, API under `Workflow\V2\` | Every engine call goes through a thin package-internal facade (start, signal, cancel, timer, activity) so a breaking change is one file (D14). Also makes the interpreter testable without spinning the engine. |
+| **Engine is pre-stable** — `2.0.0-rc.32`, API under `Workflow\V2\` | Every engine call goes through a thin package-internal facade so a breaking change is one file (D14). **This risk materialised immediately: the API this spec was drafted against, from the published docs, was wrong in two separate ways — see §18.** The facade contained the blast radius to five files, which is the strongest available evidence that D14 was the right call. |
 | **Yaya's send API may be batch-oriented**; 100k independent single-sends would be far worse than one batch call | Solved by `forAudience()` on the send node (D6), not by changing the fan-out model. Yaya's actual send contract must be confirmed during implementation. |
 | **Durable-table growth** — the engine ships no end-to-end prune command; archive and prune are separate | Archive-then-prune job is **in v1 scope**, not deferred. Two retention clocks: package tables on a tenant-configurable window, engine tables on our own job. |
 | **Two execution strategies drift apart** | Per-user run is a cohort of one on the same code path. Enforced by tests that run the same graph both ways. |
@@ -636,3 +637,65 @@ a three-hour node.
 | 6. Multi-tenant | §9 — three layers, mandatory ownership check |
 | 7. Graph versioning | §6 (D8) — immutable versions, runs pin at start |
 | 8. Standalone and reusable | §4 — five extension points, realistically two classes plus nodes |
+
+
+---
+
+## 18. Engine API corrections established during implementation
+
+This spec and its implementation plan were drafted from `durable-workflow/workflow`'s
+published documentation. Reading the installed source of **2.0.0-rc.32** during
+implementation showed that documentation describes the v1 API, while the package ships two
+parallel APIs and only the v2 one has the capabilities this design needs. Both corrections
+below were verified against vendor source with file and line citations, then confirmed
+independently.
+
+### 18.1 The stub class (found building the engine facade)
+
+| | Drafted against (wrong) | Actually installed |
+|---|---|---|
+| Class | `Workflow\WorkflowStub` | `Workflow\V2\WorkflowStub` |
+| Cancel | assumed `cancel()` | v1 has **no `cancel()`** — only a magic `__call` |
+| Signal | `$stub->{$method}(...$args)` | `$stub->signal(string $name, ...$args)` |
+
+The v1 stub's `__call` silently no-ops for an unrecognised method. Had the drafted form
+shipped, `cancel()` would have compiled, run, and done nothing — and cancellation is one of
+this system's hard requirements. Real v2 signatures: `id(): string` (`V2/WorkflowStub.php:634`),
+`running(): bool` (`:724`), `start(...$arguments): StartResult` (`:890`),
+`cancel(?string $reason = null): CommandResult` (`:1233`),
+`signal(string $name, ...$arguments): CommandResult` (`:1248`).
+
+Its public `signal()`/`cancel()` check rejection internally and **throw** `LogicException`,
+so a signal that fails to land propagates rather than being swallowed.
+
+### 18.2 The workflow shape (found building the interpreter)
+
+This is the deeper correction: not a renamed symbol but a different execution model.
+
+| | Drafted against (wrong) | Actually installed |
+|---|---|---|
+| Workflow body | generator, `yield activity(...)` | **non-generator `handle(): mixed`**, run inside a Fiber |
+| Base classes | `Workflow\Workflow`, `Workflow\Activity` | `Workflow\V2\Workflow`, `Workflow\V2\Activity` (both `handle()`) |
+| Signals | `#[SignalMethod]` on a method | class-level `#[Workflow\V2\Attributes\Signal('name')]` — **no `SignalMethod` exists in v2** |
+| Wait | `yield awaitWithTimeout($d, fn () => $this->flag)` | `self::awaitWithTimeout($d, 'signalName')` — static; condition may be a signal-name string |
+
+`awaitWithTimeout`'s real signature (`V2/Workflow.php:413`) is
+`(int|string|CarbonInterval $timeout, callable|string $condition, ?string $conditionKey = null): mixed`.
+Note the argument order — timeout first, condition second. Both accept strings, so reversing
+them is syntactically valid and would produce a wait that never fires correctly.
+
+**Why this was dangerous rather than merely wrong.** Both `src/functions.php` and
+`src/V2/functions.php` exist in the package, as do v1 and v2 workflow classes. The wrong
+import resolves silently. Nothing fails at boot; the failure is a workflow that misbehaves
+at runtime, and no test in the foundation plan can catch it because these classes cannot be
+exercised without a real engine and queue.
+
+### 18.3 Consequences for later work
+
+- The interpreter is written to the fiber shape. **Any future workflow or activity class must
+  use `handle()`, not a generator.** Carry this into the Portia integration plan.
+- The docs-versus-source gap should be assumed to persist. Verify against
+  `vendor/durable-workflow/workflow/src/V2/` rather than the published examples.
+- An integration test using `Queue::fake()` plus the vendor's own migrations and a trivial
+  workflow class would catch a future rename that source-reading cannot. Deferred to the
+  integration plan, where a real queue is available.
