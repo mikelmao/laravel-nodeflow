@@ -79,7 +79,7 @@ class NodeflowServiceProvider extends ServiceProvider
         $this->checkNodeTypesOnBoot();
     }
 
-    private function checkNodeTypesOnBoot(): void
+    public function checkNodeTypesOnBoot(): void
     {
         if (self::$nodeTypeCheckRun || ! config('nodeflow.check_node_types_on_boot', false)) {
             return;
@@ -87,14 +87,30 @@ class NodeflowServiceProvider extends ServiceProvider
 
         self::$nodeTypeCheckRun = true;
 
-        $missing = \Nodeflow\Console\CheckNodeTypesResolver::findMissingTypes(
-            $this->app->make(NodeRegistry::class)
-        );
+        try {
+            $missing = \Nodeflow\Console\CheckNodeTypesResolver::findMissingTypes(
+                $this->app->make(NodeRegistry::class)
+            );
 
-        if ($missing !== []) {
-            foreach ($missing as $line) {
-                \Illuminate\Support\Facades\Log::error("Unresolvable nodeflow type: {$line}");
+            if ($missing !== []) {
+                foreach ($missing as $line) {
+                    \Illuminate\Support\Facades\Log::error("Unresolvable nodeflow type: {$line}");
+                }
             }
+        } catch (\Throwable $e) {
+            $message = $e->getMessage();
+            \Illuminate\Support\Facades\Log::warning(
+                "Could not verify nodeflow node types at boot: {$message}",
+                ['exception' => $e]
+            );
         }
+    }
+
+    /**
+     * @internal For testing only. Resets the once-per-process guard.
+     */
+    public static function resetNodeTypeCheckForTesting(): void
+    {
+        self::$nodeTypeCheckRun = false;
     }
 }
