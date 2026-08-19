@@ -55,7 +55,19 @@ class NodeRunner
             ? config('nodeflow.limits.audience_chunk', 5000)
             : config('nodeflow.limits.subject_chunk', 500);
 
-        $query->orderBy('id')->chunk($chunkSize, function ($rows) use (&$merged, &$subjectType, &$seen, $node, $run, $nodeId, $config) {
+        // chunkById, not orderBy('id')->chunk(): chunk() paginates with
+        // offset(($page - 1) * $count) over the live, filtered (status = 'active')
+        // query. If a node body removes a row from that filtered set mid-loop —
+        // e.g. SubjectExiter::exit(), the documented cancellation mechanism (spec
+        // §7.3) — every later page's offset is computed against a set that has
+        // already shrunk, silently skipping whichever subjects shifted into the
+        // gap. chunkById paginates on "id > last seen id" instead of an offset,
+        // so a departure cannot shift the window: a skipped subject stays active
+        // with a stale current_node_id, which starves activeSubjectCount() of
+        // zero and permanently disables the audienceEmptied wake-early signal
+        // for the rest of the run. See NodeRunnerTest for the probe that
+        // reproduces this against chunk() and confirms chunkById() fixes it.
+        $query->chunkById($chunkSize, function ($rows) use (&$merged, &$subjectType, &$seen, $node, $run, $nodeId, $config) {
             $subjectType = $rows->first()->subject_type;
             $ids = $rows->pluck('subject_id')->map('strval')->all();
 

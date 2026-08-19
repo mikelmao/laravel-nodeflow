@@ -9,6 +9,7 @@ use Nodeflow\Models\FlowVersion;
 use Nodeflow\Models\Run;
 use Nodeflow\Models\RunSubject;
 use Nodeflow\Nodeflow;
+use Tests\Support\FakeSelfExitingNode;
 use Tests\Support\FakeSendNode;
 use Tests\Support\FakeThrowingAudienceNode;
 use Tests\Support\FakeThrowingSubjectNode;
@@ -212,4 +213,36 @@ it('completes the subjects of a start_flow node that exits this flow', function 
 
     expect(RunSubject::where('run_id', $this->run->id)->where('status', 'active')->count())->toBe(0)
         ->and(RunSubject::where('run_id', $this->run->id)->where('status', 'completed')->count())->toBe(3);
+});
+
+it('does not strand a subject when the node exits another subject mid-chunk (chunkById, not offset chunk)', function () {
+    // Reproduces the reviewer's probe: 6 subjects, subject_chunk = 2, node body
+    // exits subject '1' mid-loop. Under offset-based chunk() over a query
+    // filtered on status='active', subject 1's departure shifts every later
+    // page's offset window and subject '3' is skipped entirely — never passed
+    // to the node, left status='active'/current_node_id='n1' on a run that
+    // otherwise finishes, which starves activeSubjectCount() of zero forever.
+    FakeSelfExitingNode::$seen = [];
+    FakeSelfExitingNode::$exitSubjectId = '1';
+
+    config()->set('nodeflow.limits.subject_chunk', 2);
+
+    Nodeflow::register([FakeSelfExitingNode::class]);
+
+    foreach (['4', '5', '6'] as $id) {
+        RunSubject::create(['run_id' => $this->run->id, 'subject_type' => 'user', 'subject_id' => $id, 'current_node_id' => 'n1', 'status' => 'active']);
+    }
+
+    $graph = Graph::fromArray([
+        'start' => 'n1',
+        'nodes' => [['id' => 'n1', 'type' => 'test.self-exiting', 'config' => []]],
+        'edges' => [],
+    ]);
+
+    app(NodeRunner::class)->run($this->run, $graph, 'n1');
+
+    expect(FakeSelfExitingNode::$seen)->toEqualCanonicalizing(['1', '2', '3', '4', '5', '6']);
+
+    expect(RunSubject::where('run_id', $this->run->id)->where('status', 'active')->whereNotNull('current_node_id')->count())
+        ->toBe(0);
 });
