@@ -59,7 +59,7 @@ it('resolves a renamed type through the alias map', function () {
         ->toBeInstanceOf(Tests\Support\RecordingSendNode::class);
 });
 
-it('boot check completes successfully when enabled with unresolvable types', function () {
+it('logs error when enabled with unresolvable types', function () {
     $flow = Flow::create(['tenant_id' => 'org-1', 'name' => 'F', 'trigger_type' => 'manual', 'status' => 'active']);
 
     $version = FlowVersion::create([
@@ -72,25 +72,38 @@ it('boot check completes successfully when enabled with unresolvable types', fun
     config(['nodeflow.check_node_types_on_boot' => true]);
     NodeflowServiceProvider::resetNodeTypeCheckForTesting();
 
-    // Should not throw, should handle the unresolvable type gracefully
+    Log::shouldReceive('error')
+        ->once()
+        ->withArgs(fn ($message) => str_contains($message, 'Unresolvable nodeflow type')
+            && str_contains($message, 'boot.unresolvable')
+            && str_contains($message, 'version 1'));
+
     $provider = new NodeflowServiceProvider(app());
     $provider->checkNodeTypesOnBoot();
-
-    expect(true)->toBeTrue();
 });
 
-it('boot check respects disabled config and returns early', function () {
+it('does not log error when boot check is disabled', function () {
+    $flow = Flow::create(['tenant_id' => 'org-1', 'name' => 'F', 'trigger_type' => 'manual', 'status' => 'active']);
+
+    $version = FlowVersion::create([
+        'flow_id' => $flow->id, 'version' => 1, 'content_hash' => 'h',
+        'graph' => ['start' => 'n1', 'nodes' => [['id' => 'n1', 'type' => 'boot.disabled.type', 'config' => []]], 'edges' => []],
+    ]);
+
+    Run::create(['flow_version_id' => $version->id, 'tenant_id' => 'org-1', 'strategy' => 'cohort', 'status' => 'waiting']);
+
     config(['nodeflow.check_node_types_on_boot' => false]);
     NodeflowServiceProvider::resetNodeTypeCheckForTesting();
 
-    // Should complete without querying the database
+    Log::spy();
+
     $provider = new NodeflowServiceProvider(app());
     $provider->checkNodeTypesOnBoot();
 
-    expect(true)->toBeTrue();
+    Log::shouldNotHaveReceived('error', fn ($message) => str_contains($message, 'Unresolvable nodeflow type'));
 });
 
-it('boot check handles exceptions gracefully instead of crashing', function () {
+it('logs warning when boot check encounters exception', function () {
     $flow = Flow::create(['tenant_id' => 'org-1', 'name' => 'F', 'trigger_type' => 'manual', 'status' => 'active']);
 
     $version = FlowVersion::create([
@@ -109,9 +122,10 @@ it('boot check handles exceptions gracefully instead of crashing', function () {
 
     app()->instance(NodeRegistry::class, $registry);
 
-    // Should not throw even with exception during resolution
+    Log::shouldReceive('warning')
+        ->once()
+        ->withArgs(fn ($message) => str_contains($message, 'Could not verify nodeflow node types at boot'));
+
     $provider = new NodeflowServiceProvider(app());
     $provider->checkNodeTypesOnBoot();
-
-    expect(true)->toBeTrue();
 });
