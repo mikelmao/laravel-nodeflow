@@ -1,0 +1,23 @@
+{
+    "name": "atram/laravel-nodeflow",
+    "description": "Visual workflow builder and durable execution engine for Laravel + Inertia + React apps",
+    "license": "MIT",
+    "require": {
+        "php": "^8.3",
+        "illuminate/support": "^12.0|^13.0",
+        "illuminate/database": "^12.0|^13.0",
+        "durable-workflow/workflow": "^2.0@rc"
+    },
+    "require-dev": {
+        "orchestra/testbench": "^10.0|^11.0",
+        "pestphp/pest": "^4.0"
+    },
+    "minimum-stability": "dev",
+    "prefer-stable": true,
+    "autoload": { "psr-4": { "Nodeflow\\": "src/" } },
+    "autoload-dev": { "psr-4": { "Tests\\": "tests/" } },
+    "extra": {
+        "laravel": { "providers": ["Nodeflow\\NodeflowServiceProvider"] }
+    },
+    "config": { "allow-plugins": { "pestphp/pest-plugin": true } }
+}
