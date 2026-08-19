@@ -56,7 +56,7 @@ it('reports without deleting on a dry run', function () {
     makeRun($this->version, 'completed', 120);
 
     $this->artisan('nodeflow:prune', ['--days' => 90, '--dry-run' => true])
-        ->expectsOutputToContain('1')
+        ->expectsOutputToContain('Would delete 1 runs older than 90 days.')
         ->assertExitCode(0);
 
     expect(Run::withoutTenancy()->count())->toBe(1);

@@ -13,6 +13,18 @@ class PruneCommand extends Command
 
     protected $description = 'Delete terminal nodeflow runs, subjects, and node executions past the retention window.';
 
+    /**
+     * Terminal statuses eligible for pruning. Deliberately excludes 'blocked': a
+     * blocked run is recoverable once the missing node type is re-registered, so
+     * pruning it would destroy state a fix could still resume. This also excludes
+     * 'pending', 'running', and 'waiting' for the same reason — a run is only safe
+     * to delete once it can no longer resume on its own or via operator action.
+     *
+     * Operational consequence: a run stuck in 'blocked' forever (e.g. the node
+     * type is never re-registered) is never pruned by this command at any age.
+     * Clearing permanently-abandoned blocked runs is a manual/operator decision,
+     * not something this command will do automatically.
+     */
     private const TERMINAL = ['completed', 'failed', 'cancelled'];
 
     public function handle(): int

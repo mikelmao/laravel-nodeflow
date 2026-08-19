@@ -16,7 +16,14 @@ it('confines the engine dependency to src/Engine and src/Workflows', function ()
             continue;
         }
 
-        if (preg_match('/\buse\s+(function\s+)?Workflow\\\\/', file_get_contents($file->getPathname()))) {
+        $contents = file_get_contents($file->getPathname());
+
+        // Catches both `use Workflow\...` / `use function Workflow\...` imports and an
+        // inline fully-qualified reference like `\Workflow\V2\WorkflowStub::make()` used
+        // without an import. Deliberately does not match `Nodeflow\Workflows\...` (the
+        // package's own sub-namespace): that requires "Workflow" to be followed
+        // immediately by a backslash, which "Workflows" (plural) never is.
+        if (preg_match('/\buse\s+(function\s+)?Workflow\\\\|\\\\Workflow\\\\/', $contents)) {
             $offenders[] = $path;
         }
     }
