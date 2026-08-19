@@ -40,7 +40,15 @@ it('materialises owned subjects into run_subjects', function () {
 
     expect($count)->toBe(2)
         ->and($this->run->subjects()->pluck('subject_id')->all())->toBe(['1', '2'])
-        ->and($this->run->subjects()->first()->status)->toBe('active');
+        ->and($this->run->subjects()->first()->status)->toBe('active')
+        ->and($this->run->subjects()->pluck('current_node_id')->unique()->all())->toBe([null]);
+});
+
+it('places subjects at the given start node', function () {
+    $count = app(AudienceMaterialiser::class)->materialise($this->run, 'user', ['1', '2'], 'node-start');
+
+    expect($count)->toBe(2)
+        ->and($this->run->subjects()->pluck('current_node_id')->unique()->all())->toBe(['node-start']);
 });
 
 it('refuses a subject the tenant does not own', function () {

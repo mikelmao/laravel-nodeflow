@@ -13,6 +13,7 @@ class AudienceMaterialiser
     public function materialise(Run $run, string $subjectType, iterable $subjectIds, ?string $startNodeId = null): int
     {
         $seen = [];
+        $rows = [];
 
         foreach ($subjectIds as $subjectId) {
             $subjectId = (string) $subjectId;
@@ -26,15 +27,15 @@ class AudienceMaterialiser
             }
 
             $seen[$subjectId] = true;
-        }
 
-        $rows = array_map(fn (string $id) => [
-            'run_id' => $run->id,
-            'subject_type' => $subjectType,
-            'subject_id' => $id,
-            'current_node_id' => $startNodeId,
-            'status' => 'active',
-        ], array_keys($seen));
+            $rows[] = [
+                'run_id' => $run->id,
+                'subject_type' => $subjectType,
+                'subject_id' => $subjectId,
+                'current_node_id' => $startNodeId,
+                'status' => 'active',
+            ];
+        }
 
         DB::transaction(function () use ($rows) {
             foreach (array_chunk($rows, 1000) as $chunk) {
