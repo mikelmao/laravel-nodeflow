@@ -24,6 +24,12 @@ class NodeRegistry
     public function register(string ...$classes): self
     {
         foreach ($classes as $class) {
+            // Checked before the cardinality rule so a typo'd or unloadable class
+            // name reports itself rather than being blamed for a missing interface.
+            if (! is_a($class, Node::class, true)) {
+                throw InvalidNodeException::notANode($class);
+            }
+
             if (! is_a($class, HandlesSubject::class, true) && ! is_a($class, HandlesAudience::class, true)) {
                 throw InvalidNodeException::noCardinality($class);
             }

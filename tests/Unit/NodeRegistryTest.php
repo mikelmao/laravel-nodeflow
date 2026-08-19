@@ -98,3 +98,21 @@ it('does not ship a core fan-out node', function () {
     expect(collect(app(NodeRegistry::class)->palette())->pluck('type')->all())
         ->not->toContain('core.split');
 });
+
+it('reports a class that is not a node as such, rather than blaming the interface', function () {
+    // A typo'd or unloadable class name must not be reported as "implements
+    // neither HandlesSubject nor HandlesAudience", which would send the author
+    // hunting the wrong thing.
+    $registry = new NodeRegistry;
+
+    try {
+        $registry->register('App\Nodeflow\TypoedNodeName');
+        $message = '';
+    } catch (Nodeflow\Nodes\InvalidNodeException $e) {
+        $message = $e->getMessage();
+    }
+
+    expect($message)->toContain('TypoedNodeName')
+        ->and($message)->toContain('not a class extending')
+        ->and($message)->not->toContain('HandlesSubject');
+});

@@ -12,6 +12,14 @@ use InvalidArgumentException;
  */
 class InvalidNodeException extends InvalidArgumentException
 {
+    public static function notANode(string $class): self
+    {
+        return new self(
+            "[{$class}] cannot be registered as a nodeflow node: it is not a class extending "
+            .Node::class.'. Check the class name and namespace.'
+        );
+    }
+
     public static function noCardinality(string $class): self
     {
         return new self(
