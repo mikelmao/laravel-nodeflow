@@ -64,3 +64,73 @@ it('exposes registered attributes as editor options', function () {
 
     expect(app(SubjectAttributeRegistry::class)->options())->toBe(['clicked' => 'Has clicked']);
 });
+
+it('condition node throws for unknown operator', function () {
+    app(SubjectAttributeRegistry::class)->register(
+        SubjectAttribute::make('field', 'Field', 'text', fn ($s) => 'value'),
+    );
+
+    $node = new ConditionNode;
+    $run = new Run(['is_test' => false]);
+    $context = new SubjectContext($run, 'c1', ['attribute' => 'field', 'operator' => 'unknown_op', 'value' => 'x'], '1', ['field' => 'value']);
+
+    expect(fn () => $node->forSubject($context))
+        ->toThrow(\RuntimeException::class, 'Unknown condition operator');
+});
+
+it('condition node rejects null actual on equals operator', function () {
+    app(SubjectAttributeRegistry::class)->register(
+        SubjectAttribute::make('field', 'Field', 'text', fn ($s) => null),
+    );
+
+    $node = new ConditionNode;
+    $run = new Run(['is_test' => false]);
+    $context = new SubjectContext($run, 'c1', ['attribute' => 'field', 'operator' => 'equals', 'value' => ''], '1', ['field' => null]);
+
+    expect($node->forSubject($context)->outputs())->toBe(['no' => ['1']]);
+});
+
+it('condition node handles boolean string values correctly', function () {
+    app(SubjectAttributeRegistry::class)->register(
+        SubjectAttribute::make('active', 'Active', 'boolean', fn ($s) => $s['active']),
+    );
+
+    $node = new ConditionNode;
+    $run = new Run(['is_test' => false]);
+
+    $falseSubject = new SubjectContext($run, 'c1', ['attribute' => 'active', 'operator' => 'equals', 'value' => 'false'], '1', ['active' => false]);
+
+    expect($node->forSubject($falseSubject)->outputs())->toBe(['yes' => ['1']]);
+});
+
+it('condition node supports in operator with comma-separated string', function () {
+    app(SubjectAttributeRegistry::class)->register(
+        SubjectAttribute::make('severity', 'Severity', 'text', fn ($s) => $s['severity']),
+    );
+
+    $node = new ConditionNode;
+    $run = new Run(['is_test' => false]);
+
+    // Test with comma-separated string (what the editor produces)
+    $context = new SubjectContext(
+        $run,
+        'c1',
+        ['attribute' => 'severity', 'operator' => 'in', 'value' => 'orange, red, yellow'],
+        '1',
+        ['severity' => 'orange']
+    );
+
+    expect($node->forSubject($context)->outputs())->toBe(['yes' => ['1']]);
+});
+
+it('condition node rejects null actual on in operator', function () {
+    app(SubjectAttributeRegistry::class)->register(
+        SubjectAttribute::make('field', 'Field', 'text', fn ($s) => null),
+    );
+
+    $node = new ConditionNode;
+    $run = new Run(['is_test' => false]);
+    $context = new SubjectContext($run, 'c1', ['attribute' => 'field', 'operator' => 'in', 'value' => 'a, b, c'], '1', ['field' => null]);
+
+    expect($node->forSubject($context)->outputs())->toBe(['no' => ['1']]);
+});

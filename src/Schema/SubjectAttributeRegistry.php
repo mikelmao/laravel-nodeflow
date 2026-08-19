@@ -36,4 +36,9 @@ class SubjectAttributeRegistry
 
         return $this->attributes[$key]->value($subject);
     }
+
+    public function get(string $key): ?SubjectAttribute
+    {
+        return $this->attributes[$key] ?? null;
+    }
 }
