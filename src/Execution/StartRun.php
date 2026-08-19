@@ -65,7 +65,7 @@ class StartRun
             // duplicate run; recover by returning the winner's row instead of a lock.
             // A null key is never part of this recovery: SQL treats NULLs as distinct,
             // so a keyless run's failure here is a genuine, unrelated error.
-            if ($key === null || ! $this->isUniqueConstraintViolation($e)) {
+            if ($key === null || ! UniqueConstraintViolation::matches($e)) {
                 throw $e;
             }
 
@@ -89,13 +89,5 @@ class StartRun
         $run->update(['engine_workflow_id' => $workflowId]);
 
         return $run->fresh();
-    }
-
-    private function isUniqueConstraintViolation(QueryException $e): bool
-    {
-        // SQLSTATE class 23 = integrity constraint violation, covering unique
-        // constraint violations across every driver this package supports
-        // (SQLite, MySQL, Postgres).
-        return str_starts_with((string) $e->getCode(), '23');
     }
 }
