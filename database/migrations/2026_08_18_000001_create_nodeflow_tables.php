@@ -23,6 +23,7 @@ return new class extends Migration
 
         Schema::create('nodeflow_flow_versions', function (Blueprint $t) {
             $t->id();
+            $t->string('tenant_id')->index();
             $t->foreignId('flow_id')->constrained('nodeflow_flows')->cascadeOnDelete();
             $t->unsignedInteger('version');
             $t->json('graph');

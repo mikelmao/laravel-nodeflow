@@ -23,6 +23,13 @@ class PublishFlow
         return DB::transaction(function () use ($flow, $graph, $publishedBy) {
             $version = FlowVersion::create([
                 'flow_id' => $flow->id,
+                // From the flow, never from the ambient tenant. The flow was
+                // reached through a scoped read, so it is the authority on which
+                // tenant this version belongs to — and a publish can legitimately
+                // happen in a console or queue context with no ambient tenant,
+                // where stamping ambient would write null and make the version
+                // invisible to every scoped read afterwards.
+                'tenant_id' => $flow->tenant_id,
                 'version' => ((int) $flow->versions()->max('version')) + 1,
                 'graph' => $graph,
                 'content_hash' => hash('sha256', json_encode($graph)),

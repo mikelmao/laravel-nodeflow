@@ -18,14 +18,20 @@ class Flow extends Model
 
     protected $casts = ['trigger_config' => 'array'];
 
+    // Unscoped: reaching this Flow already proved tenant entitlement, so its
+    // own versions are not a second authorization decision — and this must
+    // resolve with no ambient tenant at all (console, queue, fan-out).
     public function versions(): HasMany
     {
-        return $this->hasMany(FlowVersion::class);
+        return $this->hasMany(FlowVersion::class)->withoutGlobalScope('nodeflow_tenant');
     }
 
+    // Unscoped: reaching this Flow already proved tenant entitlement, so its
+    // own current version is not a second authorization decision — and this
+    // must resolve with no ambient tenant at all (console, queue, fan-out).
     public function currentVersion(): BelongsTo
     {
-        return $this->belongsTo(FlowVersion::class, 'current_version_id');
+        return $this->belongsTo(FlowVersion::class, 'current_version_id')->withoutGlobalScope('nodeflow_tenant');
     }
 
     public function runs(): HasManyThrough

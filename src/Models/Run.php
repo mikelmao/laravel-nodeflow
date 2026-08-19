@@ -21,9 +21,12 @@ class Run extends Model
         'ended_at' => 'datetime',
     ];
 
+    // Unscoped: reaching this Run already proved tenant entitlement, so its
+    // own version is not a second authorization decision — and this must
+    // resolve with no ambient tenant at all (console, queue, fan-out).
     public function flowVersion(): BelongsTo
     {
-        return $this->belongsTo(FlowVersion::class);
+        return $this->belongsTo(FlowVersion::class)->withoutGlobalScope('nodeflow_tenant');
     }
 
     public function subjects(): HasMany
