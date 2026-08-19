@@ -32,7 +32,13 @@ class NodeRunner
         $config = $definition['config'] ?? [];
         $startedAt = microtime(true);
 
-        $results = [];
+        // Folded incrementally per chunk rather than accumulated as one NodeResult per
+        // subject: at cohort scale (~100k subjects) holding every subject's individual
+        // result in memory and spreading them all as variadic arguments to merge() at
+        // the end does not scale. Each chunk is merged down to one NodeResult before
+        // moving to the next, so at most one chunk's worth of results is ever held.
+        $merged = NodeResult::empty();
+        $subjectType = null;
 
         $query = RunSubject::where('run_id', $run->id)
             ->where('current_node_id', $nodeId)
@@ -42,14 +48,16 @@ class NodeRunner
             ? config('nodeflow.limits.audience_chunk', 5000)
             : config('nodeflow.limits.subject_chunk', 500);
 
-        $query->orderBy('id')->chunk($chunkSize, function ($rows) use (&$results, $node, $run, $nodeId, $config) {
+        $query->orderBy('id')->chunk($chunkSize, function ($rows) use (&$merged, &$subjectType, $node, $run, $nodeId, $config) {
             $subjectType = $rows->first()->subject_type;
             $ids = $rows->pluck('subject_id')->map('strval')->all();
 
             if ($node instanceof HandlesAudience) {
-                $results[] = $node->forAudience(
+                $chunkResult = $node->forAudience(
                     new AudienceContext($run, $nodeId, $config, $subjectType, $ids)
                 );
+
+                $merged = NodeResult::merge($merged, $chunkResult);
 
                 return;
             }
@@ -61,24 +69,25 @@ class NodeRunner
             }
 
             $models = $this->subjects->resolve($subjectType, $ids);
+            $chunkResults = [];
 
             foreach ($ids as $id) {
                 try {
-                    $results[] = $node->forSubject(
+                    $chunkResults[] = $node->forSubject(
                         new SubjectContext($run, $nodeId, $config, $id, $models[$id] ?? null)
                     );
                 } catch (Throwable $e) {
-                    $results[] = NodeResult::failed($id, $e->getMessage());
+                    $chunkResults[] = NodeResult::failed($id, class_basename($e).': '.$e->getMessage());
                 }
             }
+
+            $merged = NodeResult::merge($merged, ...$chunkResults);
         });
 
-        $merged = $results === [] ? NodeResult::empty() : NodeResult::merge(...$results);
-
-        return $this->advance($run, $graph, $nodeId, $merged, (int) ((microtime(true) - $startedAt) * 1000));
+        return $this->advance($run, $graph, $nodeId, $merged, $subjectType, (int) ((microtime(true) - $startedAt) * 1000));
     }
 
-    private function advance(Run $run, Graph $graph, string $nodeId, NodeResult $result, int $durationMs): array
+    private function advance(Run $run, Graph $graph, string $nodeId, NodeResult $result, ?string $subjectType, int $durationMs): array
     {
         $next = [];
 
@@ -95,6 +104,7 @@ class NodeRunner
 
             foreach (array_chunk($subjectIds, 1000) as $chunk) {
                 RunSubject::where('run_id', $run->id)
+                    ->where('subject_type', $subjectType)
                     ->whereIn('subject_id', $chunk)
                     ->where('status', 'active')
                     ->update($target === null
@@ -118,7 +128,9 @@ class NodeRunner
 
             foreach ($result->failures() as $subjectId => $message) {
                 RunSubject::where('run_id', $run->id)
+                    ->where('subject_type', $subjectType)
                     ->where('subject_id', (string) $subjectId)
+                    ->where('status', 'active')
                     ->update(['status' => 'failed', 'last_error' => $message, 'current_node_id' => null]);
             }
         }

@@ -69,13 +69,26 @@ it('partitions subjects across outputs and advances each to its target node', fu
 });
 
 it('writes one node execution row per output with counts, not per subject', function () {
+    // Force at least three chunks over five subjects so this test can actually fail if
+    // node_executions rows were mistakenly written per chunk instead of once per output:
+    // with a single chunk (the previous version of this test), duplicated per-chunk rows
+    // would be indistinguishable from one row per output.
+    config()->set('nodeflow.limits.subject_chunk', 2);
+
+    foreach (['4', '5'] as $id) {
+        RunSubject::create(['run_id' => $this->run->id, 'subject_type' => 'user', 'subject_id' => $id, 'current_node_id' => 'n1', 'status' => 'active']);
+    }
+
     app(NodeRunner::class)->run($this->run, $this->graph, 'n1');
 
     $rows = $this->run->nodeExecutions()->get();
 
+    // 5 subjects at chunk size 2 forces chunks [1,2], [3,4], [5] — three chunk callbacks.
+    // Only subject '1' is clicked (per the fake SubjectResolver), so 'yes' must still tally
+    // to 1 and 'no' to 4 even though the matching subjects are split across chunk boundaries.
     expect($rows)->toHaveCount(2)
         ->and($rows->firstWhere('output', 'yes')->subject_count)->toBe(1)
-        ->and($rows->firstWhere('output', 'no')->subject_count)->toBe(2);
+        ->and($rows->firstWhere('output', 'no')->subject_count)->toBe(4);
 });
 
 it('completes subjects whose output has no outgoing edge', function () {
@@ -119,7 +132,8 @@ it('records a per-subject failure without aborting the rest of the chunk', funct
     $failed = RunSubject::where('run_id', $this->run->id)->where('subject_id', '2')->first();
 
     expect($failed->status)->toBe('failed')
-        ->and($failed->last_error)->toContain('boom for subject 2');
+        ->and($failed->last_error)->toContain('boom for subject 2')
+        ->and($failed->last_error)->toContain('RuntimeException');
 
     $atN2 = RunSubject::where('run_id', $this->run->id)->where('current_node_id', 'n2')->pluck('subject_id')->all();
 
