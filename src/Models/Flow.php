@@ -6,9 +6,12 @@ use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
 use Illuminate\Database\Eloquent\Relations\HasMany;
 use Illuminate\Database\Eloquent\Relations\HasManyThrough;
+use Nodeflow\Models\Concerns\BelongsToTenant;
 
 class Flow extends Model
 {
+    use BelongsToTenant;
+
     protected $table = 'nodeflow_flows';
 
     protected $guarded = [];

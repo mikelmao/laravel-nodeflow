@@ -5,9 +5,12 @@ namespace Nodeflow\Models;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
 use Illuminate\Database\Eloquent\Relations\HasMany;
+use Nodeflow\Models\Concerns\BelongsToTenant;
 
 class Run extends Model
 {
+    use BelongsToTenant;
+
     protected $table = 'nodeflow_runs';
 
     protected $guarded = [];
