@@ -1,6 +1,8 @@
 <?php
 
 use Nodeflow\Contracts\TenantResolver;
+use Nodeflow\Graph\Graph;
+use Nodeflow\Graph\GraphValidator;
 use Nodeflow\Models\Flow;
 use Nodeflow\Models\Run;
 use Nodeflow\Nodeflow;
@@ -86,6 +88,12 @@ it('publishes a graph with concurrent branch waits despite the warning', functio
         ],
     ];
 
+    // Assert that this graph genuinely emits a warning
+    $validationResult = app(GraphValidator::class)->validate(Graph::fromArray($graphWithConcurrentWaits));
+    expect($validationResult->passes())->toBeTrue()
+        ->and(implode(' ', $validationResult->warnings()))->toContain('sequentially');
+
+    // Assert that publishing succeeds despite the warning
     $version = app(PublishFlow::class)->publish($this->flow, $graphWithConcurrentWaits);
 
     expect($version->version)->toBe(1)
