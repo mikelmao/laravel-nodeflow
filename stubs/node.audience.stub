@@ -1,0 +1,58 @@
+<?php
+
+namespace {{ namespace }};
+
+use Nodeflow\Execution\AudienceContext;
+use Nodeflow\Execution\NodeResult;
+use Nodeflow\Nodes\HandlesAudience;
+use Nodeflow\Nodes\Node;
+use Nodeflow\Schema\Field;
+use Nodeflow\Schema\NodeDefinition;
+
+class {{ class }} extends Node implements HandlesAudience
+{
+    /**
+     * The stable identifier for this node type.
+     *
+     * Published graph versions are immutable and runs sitting mid-wait resolve
+     * through this string, so changing it orphans every version that references
+     * it. Never derive it from the class name — renaming the class must be free.
+     */
+    public static function type(): string
+    {
+        return '{{ type }}';
+    }
+
+    public function definition(): NodeDefinition
+    {
+        return NodeDefinition::make('{{ label }}')
+            ->group('{{ group }}')
+            ->description('TODO: describe this node for the person authoring a flow.')
+            ->outputs([{{ outputs }}])
+            ->fields([
+                Field::text('example')
+                    ->label('Example')
+                    ->help('TODO: replace this with the fields this node actually needs.')
+                    ->required(),
+            ]);
+    }
+
+    /**
+     * Receives the whole audience at once, for work that batches natively.
+     * $context->subjectIds() is the id list; $context->subjects() resolves them
+     * to models through the host's SubjectResolver.
+     */
+    public function forAudience(AudienceContext $context): NodeResult
+    {
+        if ($context->isTest()) {
+            // Test mode must cause no externally visible side effect. A node that
+            // ignores this is a reviewable bug, not a style preference.
+            return $context->all('{{ firstOutput }}');
+        }
+
+        // TODO: do the work. Return $context->all('<output>') to send everyone
+        // down one output, or $context->partition(['a' => [...], 'b' => [...]])
+        // to split the audience across several.
+        return $context->all('{{ firstOutput }}');
+    }
+}

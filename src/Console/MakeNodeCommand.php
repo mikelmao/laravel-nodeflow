@@ -14,9 +14,58 @@ class MakeNodeCommand extends GeneratorCommand
 
     protected $type = 'Node';
 
+    public function handle(): int
+    {
+        try {
+            $this->cardinality();
+        } catch (\InvalidArgumentException $e) {
+            $this->components->error($e->getMessage());
+
+            return self::FAILURE;
+        }
+
+        // GeneratorCommand::handle() returns false when it refused to write (the
+        // file already exists, the name is reserved) and null on success. Laravel
+        // casts the return to an exit code with (int), which turns false into 0 —
+        // a refusal would look like success to any caller. Map it explicitly
+        // rather than inherit that wart.
+        if (parent::handle() === false) {
+            return self::FAILURE;
+        }
+
+        return self::SUCCESS;
+    }
+
     protected function getStub(): string
     {
-        return $this->resolveStubPath('/stubs/node.stub');
+        return $this->resolveStubPath(match ($this->cardinality()) {
+            'audience' => '/stubs/node.audience.stub',
+            'both' => '/stubs/node.both.stub',
+            default => '/stubs/node.stub',
+        });
+    }
+
+    /**
+     * Validated here rather than by an InputOption suggestion list, because an
+     * unrecognised value would otherwise resolve a stub path that does not
+     * exist and surface as a file-not-found rather than as a usage error.
+     *
+     * @throws \InvalidArgumentException
+     */
+    protected function cardinality(): string
+    {
+        $cardinality = strtolower(trim((string) $this->option('cardinality')));
+
+        if (! in_array($cardinality, ['subject', 'audience', 'both'], true)) {
+            throw new \InvalidArgumentException(
+                "Unknown cardinality [{$cardinality}]. Use subject, audience, or both. ".
+                'A node must implement at least one cardinality interface: forSubject() lets '.
+                'the runtime chunk and iterate for you, forAudience() hands you the whole '.
+                'audience for work that batches natively.'
+            );
+        }
+
+        return $cardinality;
     }
 
     /**

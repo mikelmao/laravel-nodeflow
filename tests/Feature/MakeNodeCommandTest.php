@@ -68,3 +68,47 @@ it('produces a class the registry accepts and can resolve', function () {
     expect(app(NodeRegistry::class)->resolve('yaya.send_sms'))
         ->toBeInstanceOf(HandlesSubject::class);
 });
+
+it('generates an audience node that does not also declare forSubject', function () {
+    // The counterfactual: make getStub() ignore --cardinality and this fails on
+    // the forSubject assertion, because the subject stub would be rendered.
+    $this->artisan('nodeflow:make-node', [
+        'name' => 'SendBatch',
+        '--type' => 'yaya.send_batch',
+        '--cardinality' => 'audience',
+    ])->assertExitCode(0);
+
+    $contents = file_get_contents($this->root.'/app/Nodeflow/Nodes/SendBatch.php');
+
+    expect($contents)
+        ->toContain('class SendBatch extends Node implements HandlesAudience')
+        ->toContain('public function forAudience(AudienceContext $context): NodeResult')
+        ->not->toContain('forSubject');
+});
+
+it('generates a both-cardinality node declaring two interfaces and two methods', function () {
+    $this->artisan('nodeflow:make-node', [
+        'name' => 'SendEither',
+        '--type' => 'yaya.send_either',
+        '--cardinality' => 'both',
+    ])->assertExitCode(0);
+
+    $contents = file_get_contents($this->root.'/app/Nodeflow/Nodes/SendEither.php');
+
+    expect($contents)
+        ->toContain('implements HandlesSubject, HandlesAudience')
+        ->toContain('public function forSubject(SubjectContext $context): NodeResult')
+        ->toContain('public function forAudience(AudienceContext $context): NodeResult');
+});
+
+it('refuses an unknown cardinality without writing a file', function () {
+    // The counterfactual: accept any string and this fails, because getStub()
+    // would resolve a nonexistent stub path and throw instead of exiting 1.
+    $this->artisan('nodeflow:make-node', [
+        'name' => 'Broken',
+        '--type' => 'yaya.broken',
+        '--cardinality' => 'sideways',
+    ])->assertExitCode(1);
+
+    expect($this->root.'/app/Nodeflow/Nodes/Broken.php')->not->toBeFile();
+});

@@ -1,0 +1,71 @@
+<?php
+
+namespace {{ namespace }};
+
+use Nodeflow\Execution\AudienceContext;
+use Nodeflow\Execution\NodeResult;
+use Nodeflow\Execution\SubjectContext;
+use Nodeflow\Nodes\HandlesAudience;
+use Nodeflow\Nodes\HandlesSubject;
+use Nodeflow\Nodes\Node;
+use Nodeflow\Schema\Field;
+use Nodeflow\Schema\NodeDefinition;
+
+class {{ class }} extends Node implements HandlesSubject, HandlesAudience
+{
+    /**
+     * The stable identifier for this node type.
+     *
+     * Published graph versions are immutable and runs sitting mid-wait resolve
+     * through this string, so changing it orphans every version that references
+     * it. Never derive it from the class name — renaming the class must be free.
+     */
+    public static function type(): string
+    {
+        return '{{ type }}';
+    }
+
+    public function definition(): NodeDefinition
+    {
+        return NodeDefinition::make('{{ label }}')
+            ->group('{{ group }}')
+            ->description('TODO: describe this node for the person authoring a flow.')
+            ->outputs([{{ outputs }}])
+            ->fields([
+                Field::text('example')
+                    ->label('Example')
+                    ->help('TODO: replace this with the fields this node actually needs.')
+                    ->required(),
+            ]);
+    }
+
+    /**
+     * The correctness path, and what small runs use. Runs once per subject; the
+     * runtime chunks, iterates and isolates per-subject failures.
+     */
+    public function forSubject(SubjectContext $context): NodeResult
+    {
+        if ($context->isTest()) {
+            return $context->continue('{{ firstOutput }}');
+        }
+
+        // TODO: the single-subject implementation.
+        return $context->continue('{{ firstOutput }}');
+    }
+
+    /**
+     * The efficiency path, used when the runtime has a whole audience in hand.
+     * It must produce the same outcome as forSubject() for the same subjects —
+     * a divergence between the two is invisible until scale changes which one
+     * the runtime picks.
+     */
+    public function forAudience(AudienceContext $context): NodeResult
+    {
+        if ($context->isTest()) {
+            return $context->all('{{ firstOutput }}');
+        }
+
+        // TODO: the batched implementation.
+        return $context->all('{{ firstOutput }}');
+    }
+}
