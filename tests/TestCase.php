@@ -22,11 +22,8 @@ abstract class TestCase extends Orchestra
         ]);
     }
 
-    protected function setUp(): void
+    protected function defineDatabaseMigrations(): void
     {
-        parent::setUp();
-
         $this->loadMigrationsFrom(__DIR__.'/../database/migrations');
-        $this->artisan('migrate', ['--database' => 'testing'])->run();
     }
 }
