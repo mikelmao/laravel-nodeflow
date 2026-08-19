@@ -2,6 +2,7 @@
 
 namespace Nodeflow\Triggers;
 
+use Illuminate\Support\Facades\Event;
 use RuntimeException;
 
 class TriggerRegistry
@@ -9,10 +10,32 @@ class TriggerRegistry
     /** @var array<string, class-string<Trigger>> */
     private array $types = [];
 
+    /** @var array<string, true> event class => a listener has been attached */
+    private array $listenedEvents = [];
+
+    /**
+     * Registering a trigger attaches its event listener immediately, rather than
+     * waiting for NodeflowServiceProvider::boot(). Triggers are often registered
+     * from a host provider's own boot() method, which can run after this
+     * package's boot() — attaching lazily here means registration order between
+     * providers no longer matters. At most one listener is attached per distinct
+     * event class: EventTriggerListener::handle() already fans out to every
+     * trigger matching the fired event, so two triggers sharing an event() must
+     * not each get their own Event::listen — that would run handle() twice per
+     * firing and, combined with a null idempotency key, create duplicate runs.
+     */
     public function register(string ...$classes): self
     {
         foreach ($classes as $class) {
             $this->types[$class::type()] = $class;
+
+            $eventClass = $class::event();
+
+            if (! isset($this->listenedEvents[$eventClass])) {
+                $this->listenedEvents[$eventClass] = true;
+
+                Event::listen($eventClass, fn (object $event) => app(EventTriggerListener::class)->handle($event));
+            }
         }
 
         return $this;

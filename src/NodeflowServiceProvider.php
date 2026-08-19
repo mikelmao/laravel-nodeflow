@@ -2,7 +2,6 @@
 
 namespace Nodeflow;
 
-use Illuminate\Support\Facades\Event;
 use Illuminate\Support\ServiceProvider;
 use Nodeflow\Contracts\SubjectResolver;
 use Nodeflow\Contracts\TenantResolver;
@@ -15,7 +14,6 @@ use Nodeflow\Nodes\Core\StartFlowNode;
 use Nodeflow\Nodes\Core\WaitNode;
 use Nodeflow\Nodes\NodeRegistry;
 use Nodeflow\Schema\SubjectAttributeRegistry;
-use Nodeflow\Triggers\EventTriggerListener;
 use Nodeflow\Triggers\TriggerRegistry;
 
 class NodeflowServiceProvider extends ServiceProvider
@@ -71,9 +69,5 @@ class NodeflowServiceProvider extends ServiceProvider
             SplitNode::class,
             StartFlowNode::class,
         ]);
-
-        foreach (app(TriggerRegistry::class)->all() as $triggerClass) {
-            Event::listen($triggerClass::event(), fn ($event) => app(EventTriggerListener::class)->handle($event));
-        }
     }
 }

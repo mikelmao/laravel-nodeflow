@@ -59,7 +59,8 @@ it('refuses to start when a subject fails the tenant check and creates no run su
     expect(fn () => app(StartRun::class)->forFlow($this->flow->fresh(), 'user', ['1', '666']))
         ->toThrow(\Nodeflow\Execution\CrossTenantSubjectException::class);
 
-    expect(\Nodeflow\Models\RunSubject::count())->toBe(0);
+    expect(\Nodeflow\Models\RunSubject::count())->toBe(0)
+        ->and(\Nodeflow\Models\Run::withoutTenancy()->count())->toBe(0);
 });
 
 it('is idempotent for a repeated trigger identity', function () {

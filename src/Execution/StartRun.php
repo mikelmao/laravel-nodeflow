@@ -2,6 +2,7 @@
 
 namespace Nodeflow\Execution;
 
+use Illuminate\Database\QueryException;
 use Illuminate\Support\Facades\DB;
 use Nodeflow\Engine\WorkflowEngine;
 use Nodeflow\Graph\Graph;
@@ -41,21 +42,44 @@ class StartRun
         $version = $flow->currentVersion()->firstOrFail();
         $startNodeId = Graph::fromArray($version->graph)->startNodeId();
 
-        $run = DB::transaction(function () use ($flow, $version, $options, $key, $subjectType, $ids, $startNodeId) {
-            $run = Run::create([
-                'flow_version_id' => $version->id,
-                'tenant_id' => $flow->tenant_id,
-                'correlation_id' => $options['correlation_id'] ?? null,
-                'strategy' => $options['strategy'] ?? (count($ids) === 1 ? 'subject' : 'cohort'),
-                'status' => 'pending',
-                'is_test' => (bool) ($options['is_test'] ?? false),
-                'idempotency_key' => $key,
-            ]);
+        try {
+            $run = DB::transaction(function () use ($flow, $version, $options, $key, $subjectType, $ids, $startNodeId) {
+                $run = Run::create([
+                    'flow_version_id' => $version->id,
+                    'tenant_id' => $flow->tenant_id,
+                    'correlation_id' => $options['correlation_id'] ?? null,
+                    'strategy' => $options['strategy'] ?? (count($ids) === 1 ? 'subject' : 'cohort'),
+                    'status' => 'pending',
+                    'is_test' => (bool) ($options['is_test'] ?? false),
+                    'idempotency_key' => $key,
+                ]);
 
-            $this->materialiser->materialise($run, $subjectType, $ids, $startNodeId);
+                $this->materialiser->materialise($run, $subjectType, $ids, $startNodeId);
 
-            return $run;
-        });
+                return $run;
+            });
+        } catch (QueryException $e) {
+            // A redelivered event racing another request for the same (flow version,
+            // idempotency key) can both pass the pre-check above before either commits.
+            // The loser hits the unique constraint here rather than creating a
+            // duplicate run; recover by returning the winner's row instead of a lock.
+            // A null key is never part of this recovery: SQL treats NULLs as distinct,
+            // so a keyless run's failure here is a genuine, unrelated error.
+            if ($key === null || ! $this->isUniqueConstraintViolation($e)) {
+                throw $e;
+            }
+
+            $winner = Run::withoutTenancy()
+                ->where('flow_version_id', $version->id)
+                ->where('idempotency_key', $key)
+                ->first();
+
+            if ($winner === null) {
+                throw $e;
+            }
+
+            return $winner;
+        }
 
         $workflowId = $this->engine->start(FlowInterpreter::class, [
             'run_id' => $run->id,
@@ -65,5 +89,13 @@ class StartRun
         $run->update(['engine_workflow_id' => $workflowId]);
 
         return $run->fresh();
+    }
+
+    private function isUniqueConstraintViolation(QueryException $e): bool
+    {
+        // SQLSTATE class 23 = integrity constraint violation, covering unique
+        // constraint violations across every driver this package supports
+        // (SQLite, MySQL, Postgres).
+        return str_starts_with((string) $e->getCode(), '23');
     }
 }
