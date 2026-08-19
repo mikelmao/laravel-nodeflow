@@ -9,7 +9,6 @@ use Nodeflow\Engine\DurableWorkflowEngine;
 use Nodeflow\Engine\WorkflowEngine;
 use Nodeflow\Nodes\Core\ConditionNode;
 use Nodeflow\Nodes\Core\ExitNode;
-use Nodeflow\Nodes\Core\SplitNode;
 use Nodeflow\Nodes\Core\StartFlowNode;
 use Nodeflow\Nodes\Core\WaitNode;
 use Nodeflow\Nodes\NodeRegistry;
@@ -73,7 +72,6 @@ class NodeflowServiceProvider extends ServiceProvider
             ExitNode::class,
             WaitNode::class,
             ConditionNode::class,
-            SplitNode::class,
             StartFlowNode::class,
         ]);
 

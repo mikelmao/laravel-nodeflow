@@ -82,3 +82,19 @@ it('registers a node implementing only HandlesAudience', function () {
     expect($registry->has('core.exit'))->toBeTrue()
         ->and($registry->palette()[0]['cardinality'])->toBe(['audience']);
 });
+
+it('does not ship a core fan-out node', function () {
+    // core.split returned the same subject list under two outputs. advance() then
+    // issued two sequential UPDATEs keyed on (run_id, subject_type, subject_id,
+    // status='active') and the second overwrote the first: measured with three
+    // subjects, all three ended at branch 'b' and none at 'a', while
+    // node_executions recorded subject_count=3 for *both* outputs. It is not
+    // fixable in this schema — nodeflow_run_subjects has
+    // unique(run_id, subject_type, subject_id) and one current_node_id, so a
+    // subject cannot be in two places. Removed from v1 rather than shipped broken.
+    expect(app(NodeRegistry::class)->has('core.split'))->toBeFalse()
+        ->and(class_exists('Nodeflow\Nodes\Core\SplitNode'))->toBeFalse();
+
+    expect(collect(app(NodeRegistry::class)->palette())->pluck('type')->all())
+        ->not->toContain('core.split');
+});

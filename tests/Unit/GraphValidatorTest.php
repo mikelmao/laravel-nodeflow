@@ -94,7 +94,7 @@ it('rejects an edge on an output the node does not declare', function () {
         ->and(implode(' ', $result->errors()))->toContain('exploded');
 });
 
-it('warns when two branches of a split both contain waits', function () {
+it('warns when two branches of a branching node both contain waits', function () {
     $result = $this->validator->validate(Graph::fromArray([
         'start' => 'n1',
         'nodes' => [
