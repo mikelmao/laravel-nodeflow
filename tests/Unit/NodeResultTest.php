@@ -17,9 +17,9 @@ it('merges many single-subject results into a partition', function () {
 });
 
 it('accepts a bulk partition directly', function () {
-    $result = NodeResult::partition(['sent' => ['1', '2'], 'failed' => ['3']]);
+    $result = NodeResult::partition(['sent' => ['1', '2'], 'skipped' => ['3']]);
 
-    expect($result->outputs())->toBe(['sent' => ['1', '2'], 'failed' => ['3']])
+    expect($result->outputs())->toBe(['sent' => ['1', '2'], 'skipped' => ['3']])
         ->and($result->subjectCount())->toBe(3);
 });
 
@@ -38,4 +38,25 @@ it('merges failures alongside outputs', function () {
 
     expect($merged->outputs())->toBe(['sent' => ['1']])
         ->and($merged->failures())->toBe(['2' => 'no channel']);
+});
+
+it('keeps the first failure message when the same subject fails twice', function () {
+    $merged = NodeResult::merge(
+        NodeResult::failed('5', 'first error'),
+        NodeResult::failed('5', 'second error'),
+    );
+
+    expect($merged->failures())->toBe(['5' => 'first error']);
+});
+
+it('excludes failed subjects from subjectCount', function () {
+    $merged = NodeResult::merge(
+        NodeResult::forSubject('1', 'sent'),
+        NodeResult::forSubject('2', 'sent'),
+        NodeResult::failed('3', 'gateway timeout'),
+    );
+
+    expect($merged->subjectCount())->toBe(2)
+        ->and($merged->outputs())->toBe(['sent' => ['1', '2']])
+        ->and($merged->failures())->toBe(['3' => 'gateway timeout']);
 });

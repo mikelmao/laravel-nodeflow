@@ -22,6 +22,9 @@ class NodeResult
         ));
     }
 
+    /**
+     * @return array<array-key, string> subjectId => message
+     */
     public static function failed(string $subjectId, string $message): self
     {
         return new self([], [$subjectId => $message]);
@@ -54,7 +57,9 @@ class NodeResult
         return $this->outputs;
     }
 
-    /** @return array<string, string> */
+    /**
+     * @return array<array-key, string> subjectId => message; numeric subject IDs become integer keys
+     */
     public function failures(): array
     {
         return $this->failures;
