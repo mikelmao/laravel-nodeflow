@@ -63,6 +63,7 @@ class NodeflowServiceProvider extends ServiceProvider
 
             $this->commands([
                 \Nodeflow\Console\CheckNodeTypesCommand::class,
+                \Nodeflow\Console\PruneCommand::class,
             ]);
         }
 
