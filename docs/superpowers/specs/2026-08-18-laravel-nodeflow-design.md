@@ -178,7 +178,7 @@ tested rather than theoretical.
 A node is one class.
 
 ```php
-class SendYayaMessage extends Node
+class SendYayaMessage extends Node implements HandlesSubject
 {
     public static function type(): string { return 'yaya.send_message'; }
 
@@ -204,12 +204,32 @@ class SendYayaMessage extends Node
 }
 ```
 
-**Cardinality is opt-in (D6).** Implement `forSubject()` and the runtime handles chunking,
-iteration, and per-subject failure isolation — the author never sees a batch. Implement
-`forAudience()` and you receive the audience handle for nodes that batch natively. Send
-Yaya Message will likely implement both: `forSubject()` for correctness and small runs,
-`forAudience()` for the six-figure case. A node implementing only `forSubject()` still
-works at any scale; it is merely slower.
+**Cardinality is opt-in but not optional (D6).** A node MUST implement at least one
+cardinality interface: `HandlesSubject`, `HandlesAudience`, or both. Implement
+`HandlesSubject::forSubject()` and the runtime handles chunking, iteration, and per-subject
+failure isolation — the author never sees a batch. Implement
+`HandlesAudience::forAudience()` and you receive the audience handle for nodes that batch
+natively. Send Yaya Message will likely implement both: `forSubject()` for correctness and
+small runs, `forAudience()` for the six-figure case. A node implementing only
+`forSubject()` still works at any scale; it is merely slower.
+
+**The interface is load-bearing, not decorative.** `NodeRunner` dispatches on
+`instanceof HandlesAudience` / `instanceof HandlesSubject`, never on method names, so
+declaring `forSubject()` without `implements HandlesSubject` produces a node that is
+unexecutable. Both `NodeRegistry::register()` and `GraphValidator` reject such a class —
+registration throws `Nodeflow\Nodes\InvalidNodeException` naming the class and both
+interfaces, and a graph referencing the type cannot publish. This is enforced because an
+earlier draft of this very example omitted `implements HandlesSubject`: written verbatim it
+registered, validated, published and started a run, then threw the first time a real
+subject reached the node.
+
+`core.exit` is the degenerate case and shows the shape: it implements `HandlesAudience` and
+returns `NodeResult::empty()`, naming no subject in any output. Exit is an executed node,
+not a marker the interpreter skips — the cursor contains it like any other. A node that
+names a subject in neither an output nor a failure has released that subject from the flow,
+and the runtime reconciles it to `completed` with no cursor. That single rule is what makes
+`core.exit` and `core.start_flow`'s default `exit_this_flow` terminal rather than leaking
+subjects that stay `active` on a finished run.
 
 **Branching partitions the audience automatically (D7).** A condition node returns
 `$c->continue('yes')` or `$c->continue('no')` *per subject*; the runtime groups subjects by
@@ -303,11 +323,25 @@ its keep.
 
 One workflow class, control flow only: load graph, hold a cursor of (node, audience) pairs,
 and for each — if it is a wait, yield a timer; otherwise yield `RunNodeActivity`, then
-follow outgoing edges carrying the partitioned sub-audiences. Parallel branches use
-`all()`, capped at 1,000 per fan-out.
+follow outgoing edges carrying the partitioned sub-audiences. Branches advance sequentially
+in v1 — see the fan-out note below; the engine's `all()` fan-out (capped at 1,000) is the
+mechanism a later plan would use, and is not used yet.
 
 Graphs are validated acyclic at publish time and runs carry a max-step guard, so a
 malformed graph cannot spin forever.
+
+**No fan-out to parallel branches in v1 (removed, not merely unimplemented).** An output
+leads to exactly one node. There is deliberately no `core.split`: it was built, measured,
+and removed. `nodeflow_run_subjects` carries `unique(run_id, subject_type, subject_id)` and
+a single `current_node_id`, so **one subject cannot occupy two nodes**. A node returning the
+same subject under two outputs therefore compiles to two sequential `UPDATE`s on the same
+row and the second silently wins — measured with three subjects, all three landed on branch
+`b` and none on `a`, while `node_executions` recorded the full count for *both* outputs, so
+the run view would report subjects on a branch that received none. `GraphValidator` rejects
+a second edge from one output at publish time. Reintroducing fan-out requires a schema
+change (a subject's position becoming a set of cursors rather than one column) plus nested
+generators under the engine's `all()`/`parallel()`, and is deferred to a later plan. Do not
+add a split node without that schema change.
 
 ### 7.2 Two strategies, one code path
 
@@ -554,8 +588,10 @@ In scope:
 
 - Storage and immutable versioning
 - Interpreter with both execution strategies
-- Node contract: `forSubject()` / `forAudience()`, automatic branch partitioning, field schema
-- Package-supplied domain-free nodes: Wait, Condition, Split, Start Flow, Exit
+- Node contract: `HandlesSubject::forSubject()` / `HandlesAudience::forAudience()` (at least one
+  required), automatic branch partitioning, field schema
+- Package-supplied domain-free nodes: Wait, Condition, Start Flow, Exit
+  (Split was built, measured broken against the run-subject schema, and removed — see 7.1)
 - **Test mode** — run a published or draft version against an operator-chosen subject, or
   against a recording sink that captures what *would* have been sent without dispatching
   (see below)
