@@ -41,7 +41,52 @@ class MakeNodeCommand extends GeneratorCommand
             return self::FAILURE;
         }
 
+        $this->registerNode($this->qualifyClass($this->getNameInput()));
+
         return self::SUCCESS;
+    }
+
+    /**
+     * Registration is explicit in this package by design — there is no directory
+     * auto-discovery — so a generated node that nobody registers never reaches
+     * the palette. The writer edits the provider only when it can prove where
+     * the entry belongs; otherwise the author gets a line to paste, and is told
+     * why they got it rather than left to wonder.
+     */
+    private function registerNode(string $nodeClass): void
+    {
+        $outcome = $this->laravel->make(NodeRegistrationWriter::class)->register(
+            $this->laravel->basePath('app/Providers/NodeflowServiceProvider.php'),
+            $nodeClass,
+        );
+
+        match ($outcome) {
+            NodeRegistrationOutcome::Appended => $this->components->info(
+                'Registered in app/Providers/NodeflowServiceProvider.php.'
+            ),
+            NodeRegistrationOutcome::AlreadyPresent => $this->components->info(
+                'Already registered in app/Providers/NodeflowServiceProvider.php.'
+            ),
+            NodeRegistrationOutcome::ProviderMissing => $this->manualRegistration($nodeClass,
+                'No app/Providers/NodeflowServiceProvider.php found.'
+            ),
+            NodeRegistrationOutcome::AnchorMissing => $this->manualRegistration($nodeClass,
+                'app/Providers/NodeflowServiceProvider.php has no `'.NodeRegistrationWriter::ANCHOR.'` line.'
+            ),
+            NodeRegistrationOutcome::AnchorAmbiguous => $this->manualRegistration($nodeClass,
+                'app/Providers/NodeflowServiceProvider.php has more than one `'.NodeRegistrationWriter::ANCHOR.'` line.'
+            ),
+        };
+    }
+
+    private function manualRegistration(string $nodeClass, string $because): void
+    {
+        $this->components->warn($because.' Register the node yourself:');
+        $this->newLine();
+        $this->line('    Nodeflow::register([');
+        $this->line('        \\'.$nodeClass.'::class,');
+        $this->line('    ]);');
+        $this->newLine();
     }
 
     protected function getStub(): string

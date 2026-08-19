@@ -214,3 +214,38 @@ it('warns when deriving the type non-interactively because --type was omitted', 
 
     expect($this->root.'/app/Nodeflow/Nodes/SendReceipt.php')->toBeFile();
 });
+
+it('registers the generated node in the host provider when it can', function () {
+    mkdir($this->root.'/app/Providers', 0777, true);
+    file_put_contents($this->root.'/app/Providers/NodeflowServiceProvider.php', <<<'PHP'
+    <?php
+
+    namespace App\Providers;
+
+    use Illuminate\Support\ServiceProvider;
+
+    class NodeflowServiceProvider extends ServiceProvider
+    {
+        protected array $nodes = [
+            //
+        ];
+    }
+    PHP);
+
+    $this->artisan('nodeflow:make-node', ['name' => 'SendSms', '--type' => 'yaya.send_sms'])
+        ->assertExitCode(0);
+
+    expect(file_get_contents($this->root.'/app/Providers/NodeflowServiceProvider.php'))
+        ->toContain('\App\Nodeflow\Nodes\SendSms::class,');
+});
+
+it('prints the registration snippet when there is no provider to edit', function () {
+    // nodeflow:install lands in Plan 5, so through Plans 1-4 this is the normal
+    // path, not the edge case. The counterfactual: exit non-zero or say nothing
+    // when the provider is absent, and the author is left with an unregistered
+    // node that never appears in the palette.
+    $this->artisan('nodeflow:make-node', ['name' => 'SendSms', '--type' => 'yaya.send_sms'])
+        ->expectsOutputToContain('Nodeflow::register([')
+        ->expectsOutputToContain('\App\Nodeflow\Nodes\SendSms::class')
+        ->assertExitCode(0);
+});
