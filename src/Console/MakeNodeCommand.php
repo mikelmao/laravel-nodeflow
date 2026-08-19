@@ -138,9 +138,22 @@ class MakeNodeCommand extends GeneratorCommand
                 default: $suggested,
                 hint: 'Published flow versions resolve through this string forever. Prefix it with your domain.',
             ));
+        } elseif ($type === '') {
+            // Non-interactive with no --type (CI, --no-interaction): erroring
+            // here would break legitimate scripting, but the derived value is
+            // permanent and carries no domain prefix, silently violating the
+            // convention the interactive prompt's own hint teaches. The choice
+            // must be visible, so warn rather than stay silent.
+            $type = $suggested;
+
+            $this->components->warn(
+                "No --type given; derived [{$type}] from the class name. Published flow ".
+                'versions resolve through this string forever — pass --type explicitly '.
+                'with your domain prefix.'
+            );
         }
 
-        return $this->resolvedType = $this->validateType($type === '' ? $suggested : $type);
+        return $this->resolvedType = $this->validateType($type);
     }
 
     /** @throws \InvalidArgumentException */
@@ -163,8 +176,14 @@ class MakeNodeCommand extends GeneratorCommand
         // NodeRegistry keys by type, so registering a second node with an existing
         // type silently replaces the first in every palette and every graph that
         // resolves it. Refuse here rather than let that be discovered at runtime.
-        if ($this->laravel->make(NodeRegistry::class)->has($type)) {
-            $existing = $this->laravel->make(NodeRegistry::class)->all()[$type];
+        $registry = $this->laravel->make(NodeRegistry::class);
+
+        if ($registry->has($type)) {
+            // has() resolves through NodeRegistry's alias table, so the owner must
+            // be looked up the same way. Indexing all() by the raw $type here would
+            // miss any type reached only through an alias, since all() is keyed by
+            // the canonical type, not every name that resolves to it.
+            $existing = $registry->resolve($type)::class;
 
             throw new \InvalidArgumentException(
                 "Type [{$type}] is already registered by [{$existing}]. Two nodes sharing a ".

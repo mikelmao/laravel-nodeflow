@@ -177,3 +177,40 @@ it('refuses a malformed type', function () {
 
     expect($this->root.'/app/Nodeflow/Nodes/Shouty.php')->not->toBeFile();
 });
+
+it('refuses a type already registered through an alias, naming the real owner', function () {
+    // NodeRegistry::has() resolves through canonical(), which follows aliases,
+    // but the previous implementation looked the raw (unaliased) type up in
+    // all() to report the owner — an undefined array key for any aliased type,
+    // silently reporting no owner at all. Asserting on the class name (not just
+    // the exit code) is what catches that: an exit-code-only assertion would
+    // pass even with the bug present, because the duplicate is still refused.
+    app(NodeRegistry::class)->register(FakeSendNode::class);
+    app(NodeRegistry::class)->alias('test.old_send', 'test.send');
+
+    $this->artisan('nodeflow:make-node', [
+        'name' => 'MyAliasedDuplicate',
+        '--type' => 'test.old_send',
+    ])
+        ->expectsOutputToContain('is already registered by ['.FakeSendNode::class.']')
+        ->assertExitCode(1);
+
+    expect($this->root.'/app/Nodeflow/Nodes/MyAliasedDuplicate.php')->not->toBeFile();
+});
+
+it('warns when deriving the type non-interactively because --type was omitted', function () {
+    // Non-interactive derivation (CI, --no-interaction) must not error — that
+    // would break legitimate scripting — but the derived type is permanent and
+    // carries no domain prefix, so silence would violate the very convention
+    // the interactive prompt's own hint teaches. Asserting on the derived type
+    // string, not just that some warning fired, is what catches a deleted
+    // warning: a looser assertion would pass with the warning gone.
+    $this->artisan('nodeflow:make-node', [
+        'name' => 'SendReceipt',
+        '--no-interaction' => true,
+    ])
+        ->expectsOutputToContain('derived [send_receipt]')
+        ->assertExitCode(0);
+
+    expect($this->root.'/app/Nodeflow/Nodes/SendReceipt.php')->toBeFile();
+});
