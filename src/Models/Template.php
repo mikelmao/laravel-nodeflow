@@ -14,4 +14,9 @@ class Template extends Model
     protected $guarded = [];
 
     protected $casts = ['graph' => 'array'];
+
+    public function allowsGlobalTenantRows(): bool
+    {
+        return true;
+    }
 }
