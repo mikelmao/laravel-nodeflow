@@ -61,3 +61,25 @@ it('reports without deleting on a dry run', function () {
 
     expect(Run::withoutTenancy()->count())->toBe(1);
 });
+
+it('never prunes a blocked run at any age', function () {
+    // PruneCommand::TERMINAL carries a nine-line comment explaining why 'blocked'
+    // is excluded: a blocked run is recoverable once the missing node type is
+    // re-registered, so pruning it destroys state a fix could still resume. That
+    // reasoning had no test. Ten years old and still not pruned.
+    $blocked = makeRun($this->version, 'blocked', 3650);
+
+    $this->artisan('nodeflow:prune', ['--days' => 1])->assertExitCode(0);
+
+    expect(Run::withoutTenancy()->whereKey($blocked->id)->exists())->toBeTrue()
+        ->and(RunSubject::where('run_id', $blocked->id)->count())->toBe(1)
+        ->and(NodeExecution::where('run_id', $blocked->id)->count())->toBe(1);
+});
+
+it('reports a blocked run as not deletable on a dry run', function () {
+    makeRun($this->version, 'blocked', 3650);
+
+    $this->artisan('nodeflow:prune', ['--days' => 1, '--dry-run' => true])
+        ->expectsOutputToContain('Would delete 0 runs older than 1 days.')
+        ->assertExitCode(0);
+});

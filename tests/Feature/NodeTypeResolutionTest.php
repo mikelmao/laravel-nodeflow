@@ -62,8 +62,18 @@ it('resolves a renamed type through the alias map', function () {
 it('logs error when enabled with unresolvable types', function () {
     $flow = Flow::create(['tenant_id' => 'org-1', 'name' => 'F', 'trigger_type' => 'manual', 'status' => 'active']);
 
+    // Deliberately push the version under test off row 1. The old assertion
+    // matched the literal string 'version 1', which was only correct because the
+    // fixture happened to be the first row — it could not tell the reported id
+    // from a hardcoded one. With a decoy row ahead of it, the id is 2 and the
+    // assertion has to be about the real value.
+    FlowVersion::create([
+        'flow_id' => $flow->id, 'version' => 1, 'content_hash' => 'decoy',
+        'graph' => ['start' => 'n1', 'nodes' => [['id' => 'n1', 'type' => 'test.recording', 'config' => []]], 'edges' => []],
+    ]);
+
     $version = FlowVersion::create([
-        'flow_id' => $flow->id, 'version' => 1, 'content_hash' => 'h',
+        'flow_id' => $flow->id, 'version' => 2, 'content_hash' => 'h',
         'graph' => ['start' => 'n1', 'nodes' => [['id' => 'n1', 'type' => 'boot.unresolvable', 'config' => []]], 'edges' => []],
     ]);
 
@@ -72,11 +82,21 @@ it('logs error when enabled with unresolvable types', function () {
     config(['nodeflow.check_node_types_on_boot' => true]);
     NodeflowServiceProvider::resetNodeTypeCheckForTesting();
 
+    // Assert the flow version's actual id, not the literal 'version 1'. The
+    // resolver reports "version {id}", and matching 'version 1' was only correct
+    // because this fixture happens to be the first row in a fresh database — it
+    // would have passed against a resolver that hardcoded the string, and would
+    // silently start passing for the wrong reason on id 10, 100, 1000.
+    $versionId = $version->id;
+
+    expect($versionId)->toBeGreaterThan(1);
+
     Log::shouldReceive('error')
         ->once()
         ->withArgs(fn ($message) => str_contains($message, 'Unresolvable nodeflow type')
             && str_contains($message, 'boot.unresolvable')
-            && str_contains($message, 'version 1'));
+            && str_contains($message, "version {$versionId} ")
+            && ! str_contains($message, 'version 1 '));
 
     $provider = new NodeflowServiceProvider(app());
     $provider->checkNodeTypesOnBoot();

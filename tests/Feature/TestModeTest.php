@@ -48,3 +48,50 @@ it('propagates test mode into the node context so nodes can suppress side effect
     expect(\Tests\Support\RecordingSendNode::$sent)->toBe([])
         ->and(\Tests\Support\RecordingSendNode::$wouldHaveSent)->toBe(['1']);
 });
+
+it('records a real send for a run that is not a test', function () {
+    // The positive case above asserts only the is_test = true branch, so it would
+    // pass unchanged if isTest() were hardwired to return true. This is the case
+    // that fails if it ever is.
+    Nodeflow::register([\Tests\Support\RecordingSendNode::class]);
+
+    $flow = Flow::create(['name' => 'F', 'trigger_type' => 'manual', 'status' => 'draft']);
+
+    $graph = [
+        'start' => 'n1',
+        'nodes' => [['id' => 'n1', 'type' => 'test.recording', 'config' => []]],
+        'edges' => [],
+    ];
+
+    app(PublishFlow::class)->publish($flow, $graph);
+
+    $run = app(StartRun::class)->forFlow($flow->fresh(), 'user', ['1']);
+
+    expect($run->is_test)->toBeFalse();
+
+    app(NodeRunner::class)->run($run, Graph::fromArray($graph), 'n1');
+
+    expect(\Tests\Support\RecordingSendNode::$sent)->toBe(['1'])
+        ->and(\Tests\Support\RecordingSendNode::$wouldHaveSent)->toBe([]);
+});
+
+it('does not suppress sends merely because is_test was omitted from the options', function () {
+    // Guards the default: an absent is_test must mean "live", not "unknown".
+    Nodeflow::register([\Tests\Support\RecordingSendNode::class]);
+
+    $flow = Flow::create(['name' => 'F', 'trigger_type' => 'manual', 'status' => 'draft']);
+
+    $graph = [
+        'start' => 'n1',
+        'nodes' => [['id' => 'n1', 'type' => 'test.recording', 'config' => []]],
+        'edges' => [],
+    ];
+
+    app(PublishFlow::class)->publish($flow, $graph);
+
+    $run = app(StartRun::class)->forFlow($flow->fresh(), 'user', ['1'], ['is_test' => false]);
+
+    app(NodeRunner::class)->run($run, Graph::fromArray($graph), 'n1');
+
+    expect(\Tests\Support\RecordingSendNode::$sent)->toBe(['1']);
+});
