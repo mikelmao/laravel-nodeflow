@@ -2320,7 +2320,7 @@ use Tests\Support\FakeWaitNode;
 
 beforeEach(function () {
     $this->registry = new NodeRegistry;
-    $this->registry->register(FakeSendNode::class, Nodeflow\Nodes\Core\ExitNode::class, Nodeflow\Nodes\Core\WaitNode::class);
+    $this->registry->register(FakeSendNode::class, FakeExitNode::class, FakeWaitNode::class);
     $this->validator = new GraphValidator($this->registry);
 });
 
