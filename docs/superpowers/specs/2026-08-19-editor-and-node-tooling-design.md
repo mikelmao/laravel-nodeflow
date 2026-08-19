@@ -124,29 +124,39 @@ Four gaps verified against the source during this design, each of which blocks r
 
 ## 3. Decomposition and sequencing
 
-Five implementation plans, sequenced by dependency. One spec, because the field-control registry
+Six implementation plans, sequenced by dependency. One spec, because the field-control registry
 (E5) is the interface node packaging depends on and the generators emit what both define.
 
-| Plan | Contents | Depends on |
-|---|---|---|
-| **0 — Security floor** | Authorization gates; `FlowVersion` scoping; `nodeflow.tenancy`; the structural invariant for `RunSubject`/`NodeExecution` | — |
-| **1 — Editor** | `draft_graph`; `Nodeflow::routes()` and controllers; options endpoint; `Field::custom()`; `resources/js`; six field controls; dev `package.json` + Vitest | 0 |
-| **2 — Run view** | `FlowRun` component and routes; overlay queries; subject drill-down; polling | 1 |
-| **3 — Tooling** | `nodeflow:install`; `make-node` with `--test`; `make-trigger`; `make-subject-attribute` | 1 |
-| **4 — Packaging** | `make-node-package`; `extract-node` | 1, 3 |
+| Plan | Contents | Spec | Depends on |
+|---|---|---|---|
+| **1 — Node generator** | `nodeflow:make-node` with `--test` | §7.2 | — |
+| **2 — Security floor** | Authorization gates; `FlowVersion` scoping; `nodeflow.tenancy`; the structural invariant for `RunSubject`/`NodeExecution` | §4 | — |
+| **3 — Editor** | `draft_graph`; `Nodeflow::routes()` and controllers; options endpoint; `Field::custom()`; `resources/js`; six field controls; dev `package.json` + Vitest | §5 | 2 |
+| **4 — Run view** | `FlowRun` component and routes; overlay queries; subject drill-down; polling | §6 | 3 |
+| **5 — Remaining tooling** | `nodeflow:install`; `make-trigger`; `make-subject-attribute` | §7.1, §7.3 | 3 |
+| **6 — Packaging** | `make-node-package`; `extract-node` | §8 | 1, 5 |
 
-Plan 0 gates Plan 1 because routes are the leak. Plan 2 needs Plan 1's canvas primitives. Plan 4
-needs Plan 1's control registry and Plan 3's scaffolding, since extraction is scaffolding plus a
-move. Plan 3's install command has nothing to verify until Plan 1's wiring requirements exist.
+Plan 2 gates Plan 3 because routes are the leak. Plan 4 needs Plan 3's canvas primitives. Plan 5's
+install command has nothing to verify until Plan 3's wiring requirements exist. Plan 6 needs Plan
+1's node generator and Plan 5's scaffolding conventions, since extraction is scaffolding plus a move.
 
-**Ordering note.** The foundation spec §5's "Known weakness" requires the node contract to be
-validated by writing three real nodes early in implementation. `nodeflow:make-node` is cheap and
-independent of everything in Plan 1, so it can be pulled forward at no cost if real domain nodes
-are wanted while the editor is being built. It sits in Plan 3 because the editor does not need it.
+**Why the node generator comes first.** The foundation spec §5's "Known weakness" requires the node
+contract to be validated by writing three real nodes early in implementation, because
+`NodeResult` does double duty as branch selector and data passer and the audience-partitioning
+behaviour is subtle. Those three nodes are also what the editor's config panel is first tested
+against — if writing them surfaces a contract problem, it changes what §5.7's control set has to
+handle, and finding that out before the editor exists is the point. The generator depends on nothing:
+it touches no route and no tenancy surface.
+
+One consequence worth stating. §7.2's registration step appends to the `$nodes` array that
+`nodeflow:install` creates — but `install` lands in Plan 5, so for Plans 1 through 4 the generator
+always takes its documented fallback path and prints the `Nodeflow::register([...])` line instead.
+That is fine, and mildly useful: the fallback is exercised for real from the start rather than
+shipping as untested branch.
 
 ---
 
-## 4. Plan 0 — The security floor
+## 4. The security floor (Plan 2)
 
 ### 4.1 Authorization
 
@@ -184,7 +194,7 @@ The three unscoped models are treated differently, because they differ in cost a
 
 ---
 
-## 5. Plan 1 — The editor
+## 5. The editor (Plan 3)
 
 ### 5.1 Storage
 
@@ -202,7 +212,7 @@ Publish reads `draft_graph`, validates, freezes a version, and clears the draft.
 
 `Nodeflow::routes()`, called by the host inside its own group so prefix and middleware are the
 host's choice. The table is the complete route surface across both plans; the three `runs/*` routes
-land in Plan 2 (§6), the rest in Plan 1.
+land in Plan 4 (§6), the rest in Plan 3.
 
 | Method | URI | Gate |
 |---|---|---|
@@ -345,7 +355,7 @@ with the newer graph rather than discarding either side.
 
 ---
 
-## 6. Plan 2 — The run view
+## 6. The run view (Plan 4)
 
 `GET runs/{run}` renders a page carrying the run, **the graph from the run's pinned
 `flow_version`** — never `draft_graph` — and an overlay snapshot. `GET runs/{run}/overlay` returns
@@ -381,9 +391,9 @@ or publish path can reach this view.
 
 ---
 
-## 7. Plan 3 — Artisan commands
+## 7. Artisan commands (Plans 1 and 5)
 
-### 7.1 `nodeflow:install`
+### 7.1 `nodeflow:install` (Plan 5)
 
 Publishes config and migrations, creates `app/Providers/NodeflowServiceProvider.php` with an
 explicit `$nodes = []` array as a registration home, and wires the four client requirements of
@@ -395,7 +405,7 @@ non-zero if it could not wire something**, so CI catches a half-installed host. 
 second run reports "already wired" and never duplicates a line. Every edit asserts its anchor
 exists and is unique before writing (E11).
 
-### 7.2 `nodeflow:make-node {name}`
+### 7.2 `nodeflow:make-node {name}` (Plan 1)
 
 One file: `app/Nodeflow/Nodes/{Name}.php`. Flags with prompt fallback, Laravel-style: `--type=`,
 `--outputs=sent,failed`, `--cardinality=subject|audience|both`, `--group=`, `--test`.
@@ -413,7 +423,7 @@ One file per node is non-negotiable: the foundation spec's primary ergonomic goa
 node is one class plus one declarative definition, about an hour's work. Voodflow's three-file
 directory per node is the shape to avoid.
 
-### 7.3 `nodeflow:make-trigger` and `nodeflow:make-subject-attribute`
+### 7.3 `nodeflow:make-trigger` and `nodeflow:make-subject-attribute` (Plan 5)
 
 `make-trigger` (`--event=`, `--type=`) emits the four abstract methods plus `idempotencyKey()` and
 `matchesConfig()` as commented overrides. It earns its place because `event()` returning a host
@@ -430,7 +440,7 @@ ones and the control's shape should be proven in use first.
 
 ---
 
-## 8. Plan 4 — Packaging a node for sharing
+## 8. Packaging a node for sharing (Plan 6)
 
 ### 8.1 `nodeflow:make-node-package {vendor/name}`
 
@@ -523,7 +533,7 @@ as a pure function, and undetectable by any PHP test in this plan.
 
 ## 11. Scope
 
-### In scope — the five plans of §3
+### In scope — the six plans of §3
 
 Security floor; editor with draft autosave, palette, config panel, publish validation and the field
 control registry; run view with overlays and subject drill-down; four authoring commands; two
@@ -546,7 +556,7 @@ So the plans cannot drift into them:
 
 ### Carried-forward follow-ups, not addressed here
 
-From the foundation work, and none of them in the editor's path once Plan 0 lands:
+From the foundation work, and none of them in the editor's path once Plan 2 lands:
 
 - `runs.status` never reaching a failure state — noted in §6 as a polling caveat
 - A set-shaped `ownsSubject()` contract before six-figure use
