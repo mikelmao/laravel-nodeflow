@@ -58,3 +58,29 @@ it('leaves an optional duration alone when it is absent', function () {
 
     expect($errors)->toBe([]);
 });
+
+/**
+ * The empty-value gap: Laravel skips non-implicit rules outright when
+ * trim($value) === '' (Validator::presentOrRuleIsImplicit()), so ValidDuration
+ * never ran against '' or whitespace unless the field also happened to be
+ * required() — required()'s own implicit rule caught it instead, which is
+ * incidental, not ValidDuration doing its job. An optional duration field
+ * carrying '' would publish cleanly and then produce a zero-second wait.
+ * These cases use an optional (non-required) field so a passing test can only
+ * mean ValidDuration itself fired.
+ */
+function optionalDurationErrors(mixed $value): array
+{
+    return Validator::make(
+        ['delay' => $value],
+        Field::duration('delay')->rules(),
+    )->errors()->get('delay');
+}
+
+it('rejects an empty or whitespace-only duration even on an optional field', function (string $value) {
+    expect(optionalDurationErrors($value))->not->toBe([]);
+})->with(['', '   ']);
+
+it('leaves an absent optional duration field alone, distinct from an empty one', function () {
+    expect(Validator::make([], Field::duration('delay')->rules())->errors()->get('delay'))->toBe([]);
+});

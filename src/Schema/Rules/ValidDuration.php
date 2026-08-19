@@ -26,8 +26,33 @@ use Throwable;
  */
 class ValidDuration implements ValidationRule
 {
+    /**
+     * Laravel skips non-implicit rules entirely when trim($value) === '' (see
+     * Validator::presentOrRuleIsImplicit()), so without this an empty or
+     * whitespace-only duration would sail through unvalidated on any field
+     * that isn't also required() — required() happens to catch '' itself via
+     * its own implicit rule, which is the only reason WaitNode's duration was
+     * ever safe. Any future optional duration field needs this rule to fire
+     * on its own.
+     *
+     * Read by Illuminate\Validation\InvokableValidationRule::make(), which
+     * wraps this rule as implicit if this property is true. Being implicit
+     * also makes Laravel invoke validate() when the attribute is absent
+     * entirely (value is then null) — guarded below so an absent optional
+     * duration field still passes.
+     */
+    public bool $implicit = true;
+
     public function validate(string $attribute, mixed $value, Closure $fail): void
     {
+        // Absent (or explicitly null) is not this rule's concern: required()
+        // /nullable() already govern presence. Without this guard, making the
+        // rule implicit would fail every optional duration field simply for
+        // not being provided.
+        if ($value === null) {
+            return;
+        }
+
         if (! is_string($value) && ! is_numeric($value)) {
             $fail('The :attribute must be a relative duration such as "5 minutes", "1 day" or "2 weeks".');
 
