@@ -3,6 +3,7 @@
 namespace Nodeflow\Schema;
 
 use Illuminate\Support\Str;
+use Nodeflow\Schema\Rules\ValidDuration;
 
 class Field
 {
@@ -115,6 +116,14 @@ class Field
 
         if ($this->options !== [] && $this->optionsSource === null) {
             $rules[] = 'in:'.implode(',', array_keys($this->options));
+        }
+
+        // Attached here rather than on WaitNode so that every duration field ever
+        // declared inherits it. A duration reaches the engine verbatim, and Carbon
+        // resolves an unparseable one to zero seconds without complaint, so an
+        // unvalidated duration field is a zero-second wait waiting to happen.
+        if ($this->type === FieldType::Duration) {
+            $rules[] = new ValidDuration;
         }
 
         return [$this->key => $rules];

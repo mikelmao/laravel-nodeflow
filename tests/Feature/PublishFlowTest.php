@@ -100,3 +100,56 @@ it('publishes a graph with concurrent branch waits despite the warning', functio
         ->and($version->published_at)->not->toBeNull()
         ->and($this->flow->fresh()->current_version_id)->toBe($version->id);
 });
+
+it('refuses to publish a wait whose duration the engine cannot parse', function () {
+    // The error must reach the person who can fix it: the author at publish
+    // time, not a real customer at send time.
+    $graph = [
+        'start' => 'w1',
+        'nodes' => [
+            ['id' => 'w1', 'type' => 'core.wait', 'config' => ['duration' => '1 dya']],
+            ['id' => 'n2', 'type' => 'core.exit', 'config' => []],
+        ],
+        'edges' => [['from' => 'w1', 'output' => 'default', 'to' => 'n2']],
+    ];
+
+    expect(fn () => app(PublishFlow::class)->publish($this->flow, $graph))
+        ->toThrow(GraphInvalidException::class);
+
+    expect($this->flow->fresh()->current_version_id)->toBeNull();
+});
+
+it('refuses to publish a wait whose duration resolves to zero seconds', function () {
+    // "banana" parses without an exception and yields 0 seconds, which would make
+    // a day-2 message send immediately.
+    $graph = [
+        'start' => 'w1',
+        'nodes' => [
+            ['id' => 'w1', 'type' => 'core.wait', 'config' => ['duration' => 'banana']],
+            ['id' => 'n2', 'type' => 'core.exit', 'config' => []],
+        ],
+        'edges' => [['from' => 'w1', 'output' => 'default', 'to' => 'n2']],
+    ];
+
+    try {
+        app(PublishFlow::class)->publish($this->flow, $graph);
+        $errors = [];
+    } catch (GraphInvalidException $e) {
+        $errors = $e->errors();
+    }
+
+    expect(implode(' ', $errors))->toContain('duration');
+});
+
+it('publishes a wait with a duration the engine can parse', function () {
+    $graph = [
+        'start' => 'w1',
+        'nodes' => [
+            ['id' => 'w1', 'type' => 'core.wait', 'config' => ['duration' => '2 days']],
+            ['id' => 'n2', 'type' => 'core.exit', 'config' => []],
+        ],
+        'edges' => [['from' => 'w1', 'output' => 'default', 'to' => 'n2']],
+    ];
+
+    expect(app(PublishFlow::class)->publish($this->flow, $graph)->version)->toBe(1);
+});

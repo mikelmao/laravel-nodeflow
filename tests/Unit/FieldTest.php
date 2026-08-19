@@ -32,8 +32,15 @@ it('produces validation rules', function () {
     expect(Field::number('attempts')->rules())
         ->toBe(['attempts' => ['nullable', 'numeric']]);
 
-    expect(Field::duration('delay')->required()->rules())
-        ->toBe(['delay' => ['required', 'string']]);
+    // A duration field carries a parse check as well as the base string rule:
+    // Carbon resolves an unparseable duration to zero seconds without throwing,
+    // so ['required', 'string'] alone let a zero-second wait publish.
+    $duration = Field::duration('delay')->required()->rules()['delay'];
+
+    expect($duration[0])->toBe('required')
+        ->and($duration[1])->toBe('string')
+        ->and($duration[2])->toBeInstanceOf(Nodeflow\Schema\Rules\ValidDuration::class)
+        ->and($duration)->toHaveCount(3);
 });
 
 it('records a dynamic options source instead of inline options', function () {
