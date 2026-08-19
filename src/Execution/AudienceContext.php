@@ -15,9 +15,26 @@ class AudienceContext
         private array $subjectIds,
     ) {}
 
-    public function run(): Run
+    /**
+     * The run's identity, not the run itself. Node bodies get the id (for
+     * idempotency keys, logging, and correlating third-party calls), the
+     * correlation id, and isTest() — deliberately not the mutable Run model,
+     * which would make `$c->run()->delete()` inside a node body legal. Narrowing
+     * this later would be a breaking change for every host node written in the
+     * meantime, so it is narrow from the start.
+     */
+    public function runId(): int
     {
-        return $this->run;
+        return $this->run->id;
+    }
+
+    /**
+     * The host-supplied correlation id, e.g. the alert that triggered this
+     * journey. Also carries sub-flow lineage as a `>`-joined chain.
+     */
+    public function correlationId(): ?string
+    {
+        return $this->run->correlation_id;
     }
 
     public function nodeId(): string
