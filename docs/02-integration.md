@@ -185,8 +185,19 @@ php artisan nodeflow:check-node-types
 Exits 0 when every node type referenced by a flow version with live runs still resolves. Useful as a
 deploy gate — see [Operations](06-operations.md).
 
-There is no `nodeflow:install` command and no scaffolding generator. Four explicit steps beat a
-generator whose output you then have to understand.
+There is no `nodeflow:install` command. Nothing scaffolds the two contracts, the bindings or a
+`NodeflowServiceProvider` for you: the four steps above are the install, and four explicit steps beat
+a generator whose output you then have to understand.
+
+The one thing that *is* generated is the file you write over and over — a node class:
+
+```bash
+php artisan nodeflow:make-node SendSms --type=yaya.send_sms --outputs='sent, failed' --test
+```
+
+That writes a single class (optionally with a test), and appends it to
+`app/Providers/NodeflowServiceProvider.php` when you have one — otherwise it prints the
+`Nodeflow::register([...])` line for you to paste. See [Writing nodes](03-writing-nodes.md).
 
 ## What you have not wired yet
 
