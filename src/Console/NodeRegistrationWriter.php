@@ -29,7 +29,16 @@ class NodeRegistrationWriter
         $contents = $this->files->get($providerPath);
         $entry = '\\'.ltrim($nodeClass, '\\').'::class';
 
-        if (str_contains($contents, $entry)) {
+        // Searched without the leading backslash so a provider that lists the class
+        // as `App\Nodeflow\Nodes\SendSms::class` is recognised too — the backslash is
+        // optional in PHP and only the entries this writer wrote itself carry one.
+        // The `::class` suffix is what keeps this from matching a longer class name:
+        // `SendSms::class` cannot be a prefix of `SendSmsExtra::class`, because the
+        // needle requires `::` immediately after the name. A class imported and
+        // written as the bare `SendSms::class` is still not recognised — that needs
+        // the file's use statements resolved, which nothing here does — so the cost
+        // of missing it stays a duplicate entry under the same registry key.
+        if (str_contains($contents, ltrim($entry, '\\'))) {
             return NodeRegistrationOutcome::AlreadyPresent;
         }
 

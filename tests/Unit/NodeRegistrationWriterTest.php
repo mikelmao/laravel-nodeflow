@@ -142,6 +142,35 @@ it('does not add a second entry for a class already registered', function () {
     expect(substr_count(file_get_contents($path), 'SendSms::class'))->toBe(1);
 });
 
+it('recognises a class listed without a leading backslash', function () {
+    // The counterfactual: search for '\'.$class.'::class' (with the backslash, as
+    // this did) and this fails — the writer reports Appended and adds a second
+    // entry for a class already there. The leading backslash is optional in PHP,
+    // and only entries this writer wrote itself carry one; a hand-written provider,
+    // or one a future nodeflow:install generated, need not. Idempotency is the
+    // whole point of this check, so it cannot depend on who wrote the line.
+    $path = providerWithAnchor('        App\Nodeflow\Nodes\SendSms::class,');
+
+    $outcome = (new NodeRegistrationWriter(new Filesystem))
+        ->register($path, 'App\Nodeflow\Nodes\SendSms');
+
+    expect($outcome)->toBe(NodeRegistrationOutcome::AlreadyPresent);
+    expect(substr_count(file_get_contents($path), 'SendSms::class'))->toBe(1);
+});
+
+it('does not mistake a longer class name for one already registered', function () {
+    // The `::class` suffix is what makes the unprefixed needle safe. The
+    // counterfactual: search for the class name alone and this fails, because
+    // SendSms is a prefix of SendSmsExtra and the real node would never be added.
+    $path = providerWithAnchor('        \App\Nodeflow\Nodes\SendSmsExtra::class,');
+
+    $outcome = (new NodeRegistrationWriter(new Filesystem))
+        ->register($path, 'App\Nodeflow\Nodes\SendSms');
+
+    expect($outcome)->toBe(NodeRegistrationOutcome::Appended);
+    expect(file_get_contents($path))->toContain('\App\Nodeflow\Nodes\SendSms::class,');
+});
+
 it('reports a missing provider without creating one', function () {
     $path = sys_get_temp_dir().'/nodeflow-absent-'.bin2hex(random_bytes(6)).'.php';
 
