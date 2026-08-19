@@ -268,7 +268,7 @@ it('refuses an output name that would not render as PHP', function () {
         ->assertExitCode(1);
 
     expect($this->root.'/app/Nodeflow/Nodes/SendSms.php')->not->toBeFile();
-    expect($this->root.'/tests/Feature/Nodeflow/SendSmsNodeTest.php')->not->toBeFile();
+    expect($this->root.'/tests/Feature/Nodeflow/SendSmsTest.php')->not->toBeFile();
 });
 
 it('refuses a duplicated output list', function () {
@@ -467,7 +467,7 @@ it('generates no test unless asked', function () {
     $this->artisan('nodeflow:make-node', ['name' => 'SendSms', '--type' => 'yaya.send_sms'])
         ->assertExitCode(0);
 
-    expect($this->root.'/tests/Feature/Nodeflow/SendSmsNodeTest.php')->not->toBeFile();
+    expect($this->root.'/tests/Feature/Nodeflow/SendSmsTest.php')->not->toBeFile();
 });
 
 it('generates a test whose expectations match the node it generated', function () {
@@ -482,7 +482,7 @@ it('generates a test whose expectations match the node it generated', function (
         '--test' => true,
     ])->assertExitCode(0);
 
-    $test = file_get_contents($this->root.'/tests/Feature/Nodeflow/SendSmsNodeTest.php');
+    $test = file_get_contents($this->root.'/tests/Feature/Nodeflow/SendSmsTest.php');
     $node = file_get_contents($this->root.'/app/Nodeflow/Nodes/SendSms.php');
 
     expect($test)
@@ -504,7 +504,7 @@ it('asserts the audience interface for an audience node', function () {
         '--test' => true,
     ])->assertExitCode(0);
 
-    $test = file_get_contents($this->root.'/tests/Feature/Nodeflow/SendBatchNodeTest.php');
+    $test = file_get_contents($this->root.'/tests/Feature/Nodeflow/SendBatchTest.php');
 
     expect($test)
         ->toContain('HandlesAudience::class')
@@ -527,7 +527,7 @@ it('generates syntactically valid PHP for every cardinality', function (string $
 
     $paths = [
         $this->root.'/app/Nodeflow/Nodes/'.$class.'.php',
-        $this->root.'/tests/Feature/Nodeflow/'.$class.'NodeTest.php',
+        $this->root.'/tests/Feature/Nodeflow/'.$class.'Test.php',
     ];
 
     foreach ($paths as $path) {
@@ -566,7 +566,7 @@ it('does not clobber a hand-edited test file on regeneration without --force', f
         '--test' => true,
     ])->assertExitCode(0);
 
-    $testPath = $this->root.'/tests/Feature/Nodeflow/SendSmsNodeTest.php';
+    $testPath = $this->root.'/tests/Feature/Nodeflow/SendSmsTest.php';
     $handEdited = "<?php\n\n// hand-edited by the author — must survive regeneration\n";
     file_put_contents($testPath, $handEdited);
 

@@ -109,7 +109,11 @@ class MakeNodeCommand extends GeneratorCommand
         }
 
         $class = class_basename($nodeClass);
-        $path = $directory.'/'.$class.'NodeTest.php';
+
+        // {Class}Test, not {Class}NodeTest: the package's own nodes are WaitNode,
+        // ExitNode, ConditionNode, so a host following that convention would get
+        // SendSmsNodeNodeTest.php. This also matches Laravel's own generators.
+        $path = $directory.'/'.$class.'Test.php';
 
         if ($this->files->exists($path) && ! $this->option('force')) {
             $this->components->warn("Test already exists at {$path}; left untouched.");

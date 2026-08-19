@@ -15,7 +15,7 @@ php artisan nodeflow:make-node SendSms \
 ```
 
 That writes one file, `app/Nodeflow/Nodes/SendSms.php`, and — with `--test` —
-`tests/Feature/Nodeflow/SendSmsNodeTest.php`. One class plus one declarative definition is the whole
+`tests/Feature/Nodeflow/SendSmsTest.php`. One class plus one declarative definition is the whole
 node; if you find yourself creating a directory, something has gone wrong.
 
 | Option | Meaning |
