@@ -4,7 +4,10 @@ namespace Nodeflow\Console;
 
 use Illuminate\Console\GeneratorCommand;
 use Illuminate\Support\Str;
+use Nodeflow\Nodes\NodeRegistry;
 use Symfony\Component\Console\Input\InputOption;
+
+use function Laravel\Prompts\text;
 
 class MakeNodeCommand extends GeneratorCommand
 {
@@ -14,10 +17,15 @@ class MakeNodeCommand extends GeneratorCommand
 
     protected $type = 'Node';
 
+    private ?string $resolvedType = null;
+
     public function handle(): int
     {
+        // Both are resolved before parent::handle() writes anything, so a usage
+        // error never leaves a half-generated file behind.
         try {
             $this->cardinality();
+            $this->nodeType();
         } catch (\InvalidArgumentException $e) {
             $this->components->error($e->getMessage());
 
@@ -104,9 +112,67 @@ class MakeNodeCommand extends GeneratorCommand
         );
     }
 
+    /** Reserved for the package's own nodes: core.wait, core.condition, and so on. */
+    private const RESERVED_PREFIX = 'core.';
+
+    /** Lowercase segments joined by dots or underscores: yaya.send_message, rada.read_severity. */
+    private const TYPE_PATTERN = '/^[a-z0-9]+(?:[._][a-z0-9]+)*$/';
+
     protected function nodeType(): string
     {
-        return (string) ($this->option('type') ?: Str::snake(class_basename($this->getNameInput())));
+        if ($this->resolvedType !== null) {
+            return $this->resolvedType;
+        }
+
+        $suggested = Str::snake(class_basename($this->getNameInput()));
+
+        $type = trim((string) $this->option('type'));
+
+        // Guarded on isInteractive() rather than on the --no-interaction option:
+        // a Testbench PendingCommand does not necessarily pass that flag, and an
+        // unguarded prompt in a test suite hangs rather than fails.
+        if ($type === '' && $this->input->isInteractive()) {
+            $type = trim(text(
+                label: 'Stable type identifier for this node',
+                placeholder: 'yaya.send_message',
+                default: $suggested,
+                hint: 'Published flow versions resolve through this string forever. Prefix it with your domain.',
+            ));
+        }
+
+        return $this->resolvedType = $this->validateType($type === '' ? $suggested : $type);
+    }
+
+    /** @throws \InvalidArgumentException */
+    private function validateType(string $type): string
+    {
+        if (preg_match(self::TYPE_PATTERN, $type) !== 1) {
+            throw new \InvalidArgumentException(
+                "[{$type}] is not a valid node type. Use lowercase letters, digits, dots and ".
+                'underscores, e.g. yaya.send_message.'
+            );
+        }
+
+        if (str_starts_with($type, self::RESERVED_PREFIX)) {
+            throw new \InvalidArgumentException(
+                "[{$type}] uses the reserved [core.] prefix, which belongs to the nodes the ".
+                'package itself ships. Prefix your own types with your domain instead.'
+            );
+        }
+
+        // NodeRegistry keys by type, so registering a second node with an existing
+        // type silently replaces the first in every palette and every graph that
+        // resolves it. Refuse here rather than let that be discovered at runtime.
+        if ($this->laravel->make(NodeRegistry::class)->has($type)) {
+            $existing = $this->laravel->make(NodeRegistry::class)->all()[$type];
+
+            throw new \InvalidArgumentException(
+                "Type [{$type}] is already registered by [{$existing}]. Two nodes sharing a ".
+                'type silently replace each other in the registry. Choose another type.'
+            );
+        }
+
+        return $type;
     }
 
     /** @return string[] */

@@ -2,6 +2,7 @@
 
 use Nodeflow\Nodes\HandlesSubject;
 use Nodeflow\Nodes\NodeRegistry;
+use Tests\Support\FakeSendNode;
 
 beforeEach(function () {
     $this->root = sys_get_temp_dir().'/nodeflow-make-node-'.bin2hex(random_bytes(6));
@@ -111,4 +112,68 @@ it('refuses an unknown cardinality without writing a file', function () {
     ])->assertExitCode(1);
 
     expect($this->root.'/app/Nodeflow/Nodes/Broken.php')->not->toBeFile();
+});
+
+it('renders the declared outputs and group into the definition', function () {
+    // The counterfactual: hard-code ['default'] in the stub and this fails.
+    // Non-default values are used deliberately — asserting on 'default' would
+    // pass while --outputs was being ignored entirely.
+    $this->artisan('nodeflow:make-node', [
+        'name' => 'SendSms',
+        '--type' => 'yaya.send_sms',
+        '--outputs' => 'sent, failed',
+        '--group' => 'Messaging',
+    ])->assertExitCode(0);
+
+    $contents = file_get_contents($this->root.'/app/Nodeflow/Nodes/SendSms.php');
+
+    expect($contents)
+        ->toContain("->outputs(['sent', 'failed'])")
+        ->toContain("->group('Messaging')")
+        ->toContain("return \$context->continue('sent');")
+        ->toContain("NodeDefinition::make('Send Sms')");
+});
+
+it('refuses a type using the reserved core prefix', function () {
+    // Asserting the message, not just the exit code. `core.wait` is BOTH reserved
+    // and already registered, so an exit-code-only assertion would pass even if
+    // the reserved-prefix rule did not exist — the duplicate rule would catch it.
+    // Two rules that can both fire on one input need messages to tell apart.
+    $this->artisan('nodeflow:make-node', [
+        'name' => 'Sneaky',
+        '--type' => 'core.wait',
+    ])
+        ->expectsOutputToContain('reserved [core.] prefix')
+        ->assertExitCode(1);
+
+    expect($this->root.'/app/Nodeflow/Nodes/Sneaky.php')->not->toBeFile();
+});
+
+it('refuses a type already registered by another node', function () {
+    // NodeRegistry::register() assigns $types[$class::type()] = $class, so a
+    // duplicate type silently replaces the existing node in every palette and
+    // every graph that resolves it.
+    //
+    // `test.send` is used rather than a core.* type precisely because the
+    // reserved-prefix rule runs first: a core.* type would exit 1 for the wrong
+    // reason and this test would pass with the duplicate check deleted.
+    app(NodeRegistry::class)->register(FakeSendNode::class);
+
+    $this->artisan('nodeflow:make-node', [
+        'name' => 'MyDuplicate',
+        '--type' => 'test.send',
+    ])
+        ->expectsOutputToContain('is already registered by')
+        ->assertExitCode(1);
+
+    expect($this->root.'/app/Nodeflow/Nodes/MyDuplicate.php')->not->toBeFile();
+});
+
+it('refuses a malformed type', function () {
+    $this->artisan('nodeflow:make-node', [
+        'name' => 'Shouty',
+        '--type' => 'Yaya Send Message',
+    ])->assertExitCode(1);
+
+    expect($this->root.'/app/Nodeflow/Nodes/Shouty.php')->not->toBeFile();
 });
