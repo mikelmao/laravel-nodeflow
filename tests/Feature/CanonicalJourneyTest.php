@@ -141,11 +141,13 @@ it('drives the canonical journey end to end and leaves no subject active', funct
         ->pluck('status', 'subject_id')
         ->all();
 
+    ksort($statuses);
+
     expect($statuses)->toBe([
-        '1' => 'completed',
-        '2' => 'completed',
-        '3' => 'exited',
-        '4' => 'completed',
+        1 => 'completed',
+        2 => 'completed',
+        3 => 'exited',
+        4 => 'completed',
     ]);
 
     // 5. THE ASSERTION THAT CATCHES A STRANDED SUBJECT.

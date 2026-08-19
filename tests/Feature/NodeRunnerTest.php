@@ -152,3 +152,64 @@ it('lets a forAudience failure propagate out of NodeRunner::run', function () {
     expect(fn () => app(NodeRunner::class)->run($this->run, $graph, 'n1'))
         ->toThrow(RuntimeException::class, 'audience node exploded');
 });
+
+it('completes subjects a node named in no output, so NodeResult::empty() is terminal', function () {
+    // core.exit names nobody. Those subjects have left the flow; leaving them
+    // status='active' on a finished run is what stranded them before.
+    $graph = Graph::fromArray([
+        'start' => 'x1',
+        'nodes' => [['id' => 'x1', 'type' => 'core.exit', 'config' => []]],
+        'edges' => [],
+    ]);
+
+    RunSubject::where('run_id', $this->run->id)->update(['current_node_id' => 'x1']);
+
+    $next = app(NodeRunner::class)->run($this->run, $graph, 'x1');
+
+    expect($next)->toBe([])
+        ->and(RunSubject::where('run_id', $this->run->id)->where('status', 'completed')->count())->toBe(3)
+        ->and(RunSubject::where('run_id', $this->run->id)->where('status', 'active')->count())->toBe(0)
+        ->and(RunSubject::where('run_id', $this->run->id)->whereNotNull('current_node_id')->count())->toBe(0);
+});
+
+it('reconciles only the subjects that were at this node, never the rest of the run', function () {
+    // '3' is parked at an unrelated node in the same run. Sweeping departures at
+    // x1 must not touch it, or the sweep would silently terminate live subjects.
+    $graph = Graph::fromArray([
+        'start' => 'x1',
+        'nodes' => [
+            ['id' => 'x1', 'type' => 'core.exit', 'config' => []],
+            ['id' => 'elsewhere', 'type' => 'test.send', 'config' => ['channel' => 'sms']],
+        ],
+        'edges' => [],
+    ]);
+
+    RunSubject::where('run_id', $this->run->id)->whereIn('subject_id', ['1', '2'])->update(['current_node_id' => 'x1']);
+    RunSubject::where('run_id', $this->run->id)->where('subject_id', '3')->update(['current_node_id' => 'elsewhere']);
+
+    app(NodeRunner::class)->run($this->run, $graph, 'x1');
+
+    $elsewhere = RunSubject::where('run_id', $this->run->id)->where('subject_id', '3')->first();
+
+    expect($elsewhere->status)->toBe('active')
+        ->and($elsewhere->current_node_id)->toBe('elsewhere')
+        ->and(RunSubject::where('run_id', $this->run->id)->where('status', 'completed')->pluck('subject_id')->all())
+        ->toEqualCanonicalizing(['1', '2']);
+});
+
+it('completes the subjects of a start_flow node that exits this flow', function () {
+    // Fix 2's headline case: canonical step 4 hands the cohort to a sub-flow and
+    // the default exit_this_flow => true returns NodeResult::empty().
+    Nodeflow::register([\Tests\Support\FakeEmptyAudienceNode::class]);
+
+    $graph = Graph::fromArray([
+        'start' => 'n1',
+        'nodes' => [['id' => 'n1', 'type' => 'test.empty-audience', 'config' => []]],
+        'edges' => [],
+    ]);
+
+    app(NodeRunner::class)->run($this->run, $graph, 'n1');
+
+    expect(RunSubject::where('run_id', $this->run->id)->where('status', 'active')->count())->toBe(0)
+        ->and(RunSubject::where('run_id', $this->run->id)->where('status', 'completed')->count())->toBe(3);
+});

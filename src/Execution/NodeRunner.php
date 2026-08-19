@@ -40,6 +40,13 @@ class NodeRunner
         $merged = NodeResult::empty();
         $subjectType = null;
 
+        // The set the chunk loop actually iterated. advance() needs it to tell
+        // "this subject left the flow here" from "this subject is somewhere else
+        // in the run": a node that returns NodeResult::empty() names nobody, so
+        // without this set its subjects are indistinguishable from untouched
+        // rows and would be stranded active on a finished run.
+        $seen = [];
+
         $query = RunSubject::where('run_id', $run->id)
             ->where('current_node_id', $nodeId)
             ->where('status', 'active');
@@ -48,9 +55,13 @@ class NodeRunner
             ? config('nodeflow.limits.audience_chunk', 5000)
             : config('nodeflow.limits.subject_chunk', 500);
 
-        $query->orderBy('id')->chunk($chunkSize, function ($rows) use (&$merged, &$subjectType, $node, $run, $nodeId, $config) {
+        $query->orderBy('id')->chunk($chunkSize, function ($rows) use (&$merged, &$subjectType, &$seen, $node, $run, $nodeId, $config) {
             $subjectType = $rows->first()->subject_type;
             $ids = $rows->pluck('subject_id')->map('strval')->all();
+
+            foreach ($ids as $id) {
+                $seen[$id] = true;
+            }
 
             if ($node instanceof HandlesAudience) {
                 $chunkResult = $node->forAudience(
@@ -84,12 +95,16 @@ class NodeRunner
             $merged = NodeResult::merge($merged, ...$chunkResults);
         });
 
-        return $this->advance($run, $graph, $nodeId, $merged, $subjectType, (int) ((microtime(true) - $startedAt) * 1000));
+        return $this->advance($run, $graph, $nodeId, $merged, $subjectType, array_keys($seen), (int) ((microtime(true) - $startedAt) * 1000));
     }
 
-    private function advance(Run $run, Graph $graph, string $nodeId, NodeResult $result, ?string $subjectType, int $durationMs): array
+    /**
+     * @param  string[]  $seen  subject ids that were active at this node when it ran
+     */
+    private function advance(Run $run, Graph $graph, string $nodeId, NodeResult $result, ?string $subjectType, array $seen, int $durationMs): array
     {
         $next = [];
+        $accountedFor = [];
 
         foreach ($result->outputs() as $output => $subjectIds) {
             $targets = $graph->targetsFor($nodeId, $output);
@@ -101,6 +116,10 @@ class NodeRunner
                 'subject_count' => count($subjectIds),
                 'duration_ms' => $durationMs,
             ]);
+
+            foreach ($subjectIds as $subjectId) {
+                $accountedFor[(string) $subjectId] = true;
+            }
 
             foreach (array_chunk($subjectIds, 1000) as $chunk) {
                 RunSubject::where('run_id', $run->id)
@@ -127,6 +146,8 @@ class NodeRunner
             ]);
 
             foreach ($result->failures() as $subjectId => $message) {
+                $accountedFor[(string) $subjectId] = true;
+
                 RunSubject::where('run_id', $run->id)
                     ->where('subject_type', $subjectType)
                     ->where('subject_id', (string) $subjectId)
@@ -135,6 +156,46 @@ class NodeRunner
             }
         }
 
+        $this->reconcileDepartures($run, $nodeId, $subjectType, $seen, $accountedFor);
+
         return array_values(array_unique($next));
+    }
+
+    /**
+     * A node names, per subject, either an output or a failure. Any subject that
+     * was active at this node and appears in neither has left the flow — that is
+     * the whole meaning of NodeResult::empty(), and it is what makes core.exit a
+     * legitimate terminal node and core.start_flow's default exit_this_flow
+     * correct rather than a leak.
+     *
+     * Without this sweep those subjects keep status='active' and
+     * current_node_id=<finished node> forever, which breaks two documented
+     * behaviours: SubjectExiter never observes activeSubjectCount() === 0, so no
+     * later cohort wait wakes early on audience-empty (D10 / spec 7.3), and
+     * CompleteRunActivity marks the run completed while subjects read as active.
+     *
+     * Scoped deliberately narrowly: only ids the chunk loop actually iterated,
+     * and only rows still sitting at this node, so subjects elsewhere in the run
+     * are never touched.
+     *
+     * @param  string[]  $seen
+     * @param  array<string, true>  $accountedFor
+     */
+    private function reconcileDepartures(Run $run, string $nodeId, ?string $subjectType, array $seen, array $accountedFor): void
+    {
+        if ($subjectType === null) {
+            return;
+        }
+
+        $departed = array_values(array_diff($seen, array_keys($accountedFor)));
+
+        foreach (array_chunk($departed, 1000) as $chunk) {
+            RunSubject::where('run_id', $run->id)
+                ->where('subject_type', $subjectType)
+                ->whereIn('subject_id', $chunk)
+                ->where('current_node_id', $nodeId)
+                ->where('status', 'active')
+                ->update(['status' => 'completed', 'current_node_id' => null]);
+        }
     }
 }
