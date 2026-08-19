@@ -196,7 +196,7 @@ class MakeNodeCommand extends GeneratorCommand
 
     /**
      * Laravel's own generators let a host override a stub by placing a file of
-     * the same name under its base path. Following that convention costs six
+     * the same name under its base path. Following that convention costs three
      * lines and is what a Laravel developer will expect.
      */
     protected function resolveStubPath(string $stub): string
@@ -334,9 +334,10 @@ class MakeNodeCommand extends GeneratorCommand
 
     /**
      * Output names are rendered into two PHP files and are the edge labels a flow
-     * graph routes on, so they are validated at least as tightly as the type: an
-     * unescaped apostrophe used to render `->outputs(['it's'])` — a parse error in
-     * both files — while the command reported success and exited 0.
+     * graph routes on, so they are validated at least as tightly as the type.
+     * Before this, `--outputs="it's"` rendered `->outputs(['it's'])` into both the
+     * node and its test — a parse error in each — and the command still reported
+     * success and exited 0.
      *
      * @return string[]
      *
@@ -398,7 +399,7 @@ class MakeNodeCommand extends GeneratorCommand
             ['outputs', null, InputOption::VALUE_OPTIONAL, 'Comma-separated output names', 'default'],
             ['group', null, InputOption::VALUE_OPTIONAL, 'Palette group shown in the editor', 'General'],
             ['test', null, InputOption::VALUE_NONE, 'Also generate a Pest test for the node'],
-            ['force', 'f', InputOption::VALUE_NONE, 'Overwrite the node if it already exists'],
+            ['force', 'f', InputOption::VALUE_NONE, 'Overwrite the node, and the generated test, if they already exist'],
         ];
     }
 }

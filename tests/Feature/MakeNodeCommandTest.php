@@ -457,10 +457,79 @@ it('prints the registration snippet when there is no provider to edit', function
     // path, not the edge case. The counterfactual: exit non-zero or say nothing
     // when the provider is absent, and the author is left with an unregistered
     // node that never appears in the palette.
+    //
+    // The reason it also asserts the reason, and not just the snippet: three of
+    // registerNode()'s match arms print the same snippet and differ only in the
+    // sentence above it, so swapping two of those strings would pass a
+    // snippet-only assertion in all three.
     $this->artisan('nodeflow:make-node', ['name' => 'SendSms', '--type' => 'yaya.send_sms'])
+        ->expectsOutputToContain('No app/Providers/NodeflowServiceProvider.php found.')
         ->expectsOutputToContain('Nodeflow::register([')
         ->expectsOutputToContain('\App\Nodeflow\Nodes\SendSms::class')
         ->assertExitCode(0);
+});
+
+it('says the anchor is missing when the provider has no nodes array', function () {
+    // The distinguishing half of the message is "has no": the ambiguous case says
+    // "has more than one" about the same file and the same anchor. The
+    // counterfactual is swapping those two strings, which nothing else notices.
+    mkdir($this->root.'/app/Providers', 0777, true);
+    file_put_contents($this->root.'/app/Providers/NodeflowServiceProvider.php', <<<'PHP'
+    <?php
+
+    namespace App\Providers;
+
+    use Illuminate\Support\ServiceProvider;
+
+    class NodeflowServiceProvider extends ServiceProvider
+    {
+        public function boot(): void
+        {
+            //
+        }
+    }
+    PHP);
+
+    $before = file_get_contents($this->root.'/app/Providers/NodeflowServiceProvider.php');
+
+    $this->artisan('nodeflow:make-node', ['name' => 'SendSms', '--type' => 'yaya.send_sms'])
+        ->expectsOutputToContain('has no `protected array $nodes = [` line')
+        ->expectsOutputToContain('Nodeflow::register([')
+        ->assertExitCode(0);
+
+    // The provider is left exactly as it was: refusing to guess is the point.
+    expect(file_get_contents($this->root.'/app/Providers/NodeflowServiceProvider.php'))->toBe($before);
+});
+
+it('says the anchor is ambiguous when the provider has two nodes arrays', function () {
+    mkdir($this->root.'/app/Providers', 0777, true);
+    file_put_contents($this->root.'/app/Providers/NodeflowServiceProvider.php', <<<'PHP'
+    <?php
+
+    namespace App\Providers;
+
+    use Illuminate\Support\ServiceProvider;
+
+    class NodeflowServiceProvider extends ServiceProvider
+    {
+        protected array $nodes = [
+            //
+        ];
+
+        protected array $nodes = [
+            //
+        ];
+    }
+    PHP);
+
+    $before = file_get_contents($this->root.'/app/Providers/NodeflowServiceProvider.php');
+
+    $this->artisan('nodeflow:make-node', ['name' => 'SendSms', '--type' => 'yaya.send_sms'])
+        ->expectsOutputToContain('has more than one `protected array $nodes = [` line')
+        ->expectsOutputToContain('Nodeflow::register([')
+        ->assertExitCode(0);
+
+    expect(file_get_contents($this->root.'/app/Providers/NodeflowServiceProvider.php'))->toBe($before);
 });
 
 it('generates no test unless asked', function () {

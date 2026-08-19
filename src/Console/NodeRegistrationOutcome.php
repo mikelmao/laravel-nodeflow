@@ -14,12 +14,4 @@ enum NodeRegistrationOutcome
     case ProviderMissing;
     case AnchorMissing;
     case AnchorAmbiguous;
-
-    public function needsManualRegistration(): bool
-    {
-        return match ($this) {
-            self::Appended, self::AlreadyPresent => false,
-            default => true,
-        };
-    }
 }
