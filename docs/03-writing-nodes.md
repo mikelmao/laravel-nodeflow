@@ -3,6 +3,44 @@
 A node is one class. This is the surface the whole package exists to make pleasant, so if something
 here feels awkward, it is a bug worth reporting.
 
+## Start from the generator
+
+```bash
+php artisan nodeflow:make-node SendSms \
+    --type=yaya.send_sms \
+    --cardinality=subject \
+    --outputs='sent, failed' \
+    --group=Messaging \
+    --test
+```
+
+That writes one file, `app/Nodeflow/Nodes/SendSms.php`, and — with `--test` —
+`tests/Feature/Nodeflow/SendSmsNodeTest.php`. One class plus one declarative definition is the whole
+node; if you find yourself creating a directory, something has gone wrong.
+
+| Option | Meaning |
+|---|---|
+| `--type` | The stable identifier. Prompted when omitted **and the input is interactive**. Run it non-interactively (CI, `--no-interaction`) without `--type` and the command derives one from the class name instead and **warns** that it did — that derived value is permanent, since published flow versions resolve through it, so pass `--type` explicitly with your domain prefix |
+| `--cardinality` | `subject` (default), `audience`, or `both`. See [Cardinality and partitioning](#cardinality-and-partitioning) — the interface is what the runtime dispatches on, so the generator always writes it for you |
+| `--outputs` | Comma-separated output names, rendered into `definition()` and into the generated test |
+| `--group` | The palette group the editor shows the node under |
+| `--test` | Also generate a Pest test asserting the type, the outputs, the cardinality interface, that the registry accepts the class, and that a required field is enforced — plus a TODO reminding you to add a test per output. Leaves an existing test file untouched unless you also pass `--force` |
+
+Registration is explicit, never automatic discovery. The command looks for
+`app/Providers/NodeflowServiceProvider.php` containing the line `protected array $nodes = [`
+**exactly once**, and appends the new class there when it finds it. There is no `nodeflow:install`
+command yet to have created that provider for you, so on a fresh install — or whenever the anchor is
+missing or appears more than once — the command instead prints a `Nodeflow::register([...])` snippet
+for you to paste in, and says which of those reasons applied. Today, hitting the snippet is the normal
+case, not the exception.
+
+It refuses, rather than generating something broken, when the type doesn't match the expected
+lowercase-letters/digits/dots/underscores format, uses the reserved `core.` prefix, or collides with a
+type already registered by another node — that last check resolves through registry aliases too, and
+names the class that already owns the type. It matters because the registry keys by type: two nodes
+sharing one would otherwise silently replace each other. `--force` overwrites an existing node class
+(and, combined with `--test`, an existing test file) instead of refusing.
+
 ## A complete node
 
 ```php
