@@ -38,3 +38,21 @@ it('resolves edge targets by output name', function () {
 it('round trips through toArray', function () {
     expect(Graph::fromArray(sampleGraph())->toArray())->toBe(sampleGraph());
 });
+
+it('round trips a node position and unrecognised extra keys through toArray', function () {
+    $graph = [
+        'start' => 'n1',
+        'nodes' => [
+            [
+                'id' => 'n1',
+                'type' => 'test.send',
+                'config' => ['channel' => 'sms'],
+                'position' => ['x' => 120, 'y' => 40],
+                'label' => 'Send the SMS',
+            ],
+        ],
+        'edges' => [],
+    ];
+
+    expect(Graph::fromArray($graph)->toArray())->toBe($graph);
+});

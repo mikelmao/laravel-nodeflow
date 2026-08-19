@@ -13,8 +13,16 @@ class GraphValidator
         $errors = [];
         $warnings = [];
 
-        if ($graph->startNodeId() === '' || $graph->node($graph->startNodeId()) === null) {
-            $errors[] = 'The flow has no valid start node.';
+        if ($graph->startNodeId() === '') {
+            $errors[] = 'The flow has no start node set. Choose a starting node before publishing.';
+        } elseif ($graph->node($graph->startNodeId()) === null) {
+            $errors[] = "The start node [{$graph->startNodeId()}] does not exist in this flow. ".
+                'Set the start to one of the flow\'s existing nodes.';
+        }
+
+        foreach ($graph->duplicateNodeIds() as $id) {
+            $errors[] = "Node id [{$id}] is used by more than one node. Node ids must be unique — ".
+                'rename or remove the duplicate so each node keeps its own id.';
         }
 
         foreach ($graph->nodeIds() as $id) {
@@ -50,8 +58,9 @@ class GraphValidator
             }
         }
 
-        if ($this->hasCycle($graph)) {
-            $errors[] = 'The flow contains a cycle. Flows must be acyclic.';
+        if (($cycle = $this->findCycle($graph)) !== null) {
+            $path = implode(' -> ', $cycle);
+            $errors[] = "The flow contains a cycle: {$path}. Flows must be acyclic.";
         }
 
         if ($this->hasConcurrentWaits($graph)) {
@@ -62,39 +71,62 @@ class GraphValidator
         return new GraphValidationResult($errors, $warnings);
     }
 
-    private function hasCycle(Graph $graph): bool
+    /**
+     * Depth-first search that reports the node ids forming a cycle, not just whether one exists.
+     * Returns null when the graph is acyclic. Recursion is bounded by the node count: each node
+     * moves from 'new' to 'visiting' to 'done' at most once, and edges to ids absent from the
+     * graph are never followed (the missing-target rule reports those separately).
+     *
+     * @return string[]|null
+     */
+    private function findCycle(Graph $graph): ?array
     {
         $state = [];
+        $path = [];
 
-        $visit = function (string $id) use (&$visit, &$state, $graph): bool {
+        $visit = function (string $id) use (&$visit, &$state, &$path, $graph): ?array {
             if (($state[$id] ?? 'new') === 'visiting') {
-                return true;
+                $start = array_search($id, $path, true);
+                $cycle = array_slice($path, $start);
+                $cycle[] = $id;
+
+                return $cycle;
             }
 
             if (($state[$id] ?? 'new') === 'done') {
-                return false;
+                return null;
             }
 
             $state[$id] = 'visiting';
+            $path[] = $id;
 
             foreach ($graph->edges() as $edge) {
-                if ($edge['from'] === $id && $graph->node($edge['to']) !== null && $visit($edge['to'])) {
-                    return true;
+                if ($edge['from'] === $id && $graph->node($edge['to']) !== null) {
+                    $found = $visit($edge['to']);
+
+                    if ($found !== null) {
+                        return $found;
+                    }
                 }
             }
 
+            array_pop($path);
             $state[$id] = 'done';
 
-            return false;
+            return null;
         };
 
         foreach ($graph->nodeIds() as $id) {
-            if ($visit($id)) {
-                return true;
+            if (($state[$id] ?? 'new') === 'new') {
+                $found = $visit($id);
+
+                if ($found !== null) {
+                    return $found;
+                }
             }
         }
 
-        return false;
+        return null;
     }
 
     private function hasConcurrentWaits(Graph $graph): bool

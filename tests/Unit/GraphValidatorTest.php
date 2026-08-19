@@ -50,8 +50,12 @@ it('rejects a cycle', function () {
         ],
     ]));
 
+    $errors = implode(' ', $result->errors());
+
     expect($result->passes())->toBeFalse()
-        ->and(implode(' ', $result->errors()))->toContain('cycle');
+        ->and($errors)->toContain('cycle')
+        ->and($errors)->toContain('n1')
+        ->and($errors)->toContain('n2');
 });
 
 it('rejects invalid node config', function () {
@@ -106,4 +110,67 @@ it('warns when two branches of a split both contain waits', function () {
 
     expect($result->passes())->toBeTrue()
         ->and(implode(' ', $result->warnings()))->toContain('sequentially');
+});
+
+it('rejects a graph with no start node set', function () {
+    $result = $this->validator->validate(Graph::fromArray([
+        'start' => '',
+        'nodes' => [['id' => 'n1', 'type' => 'core.exit', 'config' => []]],
+        'edges' => [],
+    ]));
+
+    expect($result->passes())->toBeFalse()
+        ->and(implode(' ', $result->errors()))->toContain('start');
+});
+
+it('rejects a graph whose start node does not exist', function () {
+    $result = $this->validator->validate(Graph::fromArray([
+        'start' => 'ghost',
+        'nodes' => [['id' => 'n1', 'type' => 'core.exit', 'config' => []]],
+        'edges' => [],
+    ]));
+
+    expect($result->passes())->toBeFalse()
+        ->and(implode(' ', $result->errors()))->toContain('ghost');
+});
+
+it('rejects duplicate node ids', function () {
+    $result = $this->validator->validate(Graph::fromArray([
+        'start' => 'n1',
+        'nodes' => [
+            ['id' => 'n1', 'type' => 'test.send', 'config' => ['channel' => 'sms']],
+            ['id' => 'n1', 'type' => 'core.exit', 'config' => []],
+        ],
+        'edges' => [],
+    ]));
+
+    $errors = implode(' ', $result->errors());
+
+    expect($result->passes())->toBeFalse()
+        ->and($errors)->toContain('n1')
+        ->and($errors)->toContain('unique');
+});
+
+it('reports every problem in a graph with several simultaneous issues', function () {
+    $result = $this->validator->validate(Graph::fromArray([
+        'start' => 'n1',
+        'nodes' => [
+            ['id' => 'n1', 'type' => 'nope.missing', 'config' => []],
+            ['id' => 'n2', 'type' => 'test.send', 'config' => ['channel' => 'sms']],
+        ],
+        'edges' => [
+            ['from' => 'n1', 'output' => 'sent', 'to' => 'n2'],
+            ['from' => 'n2', 'output' => 'sent', 'to' => 'n1'],
+            ['from' => 'n1', 'output' => 'sent', 'to' => 'ghost'],
+        ],
+    ]));
+
+    expect($result->passes())->toBeFalse();
+    expect(count($result->errors()))->toBeGreaterThanOrEqual(3);
+
+    $errors = implode(' ', $result->errors());
+
+    expect($errors)->toContain('nope.missing')
+        ->and($errors)->toContain('cycle')
+        ->and($errors)->toContain('ghost');
 });

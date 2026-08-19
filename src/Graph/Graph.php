@@ -8,17 +8,27 @@ class Graph
         private string $start,
         private array $nodes,
         private array $edges,
+        private array $duplicateIds = [],
     ) {}
 
     public static function fromArray(array $graph): self
     {
         $nodes = [];
+        $seen = [];
+        $duplicates = [];
 
         foreach ($graph['nodes'] ?? [] as $node) {
-            $nodes[$node['id']] = $node;
+            $id = $node['id'];
+
+            if (isset($seen[$id])) {
+                $duplicates[$id] = true;
+            }
+
+            $seen[$id] = true;
+            $nodes[$id] = $node;
         }
 
-        return new self($graph['start'] ?? '', $nodes, $graph['edges'] ?? []);
+        return new self($graph['start'] ?? '', $nodes, $graph['edges'] ?? [], array_keys($duplicates));
     }
 
     public function startNodeId(): string
@@ -39,6 +49,17 @@ class Graph
     public function edges(): array
     {
         return $this->edges;
+    }
+
+    /**
+     * Node ids that appeared more than once in the raw input. Because nodes are keyed by id
+     * internally, a duplicate silently collapses to "last one wins" unless callers check this.
+     *
+     * @return string[]
+     */
+    public function duplicateNodeIds(): array
+    {
+        return $this->duplicateIds;
     }
 
     /** @return string[] */
