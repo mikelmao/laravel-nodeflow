@@ -7,9 +7,10 @@ The package owns the mechanism — storage, versioning, the node contract, the d
 Your application owns the domain — what a "subject" is, who the tenants are, and what the nodes
 actually do.
 
-> **Status: foundation.** This is the headless engine. There is no UI yet; the React editor and any
-> domain-specific nodes are separate work. Everything documented here is implemented and tested
-> (166 tests), but the interpreter has not yet been exercised against a real queue worker. See
+> **Status: foundation.** This is the headless engine plus its node generator. There is no UI yet;
+> the React editor is separate work, and domain-specific nodes are yours to write. Everything
+> documented here is implemented and tested (203 tests), but the interpreter has not yet been
+> exercised against a real queue worker. See
 > [Known limitations](docs/05-execution-model.md#known-limitations) before you depend on it.
 
 ## What it gives you
@@ -20,8 +21,8 @@ actually do.
   expressed once and works. A converting subject stops receiving the rest of the journey.
 - **Fan-out at scale.** One event can produce a run per tenant, each over an audience of six figures,
   without one run per person.
-- **Domain nodes in about an hour.** A node is one class plus one declarative definition. You never
-  touch the interpreter.
+- **Domain nodes in about an hour.** A node is one class plus one declarative definition, and
+  `php artisan nodeflow:make-node` writes the first draft of it. You never touch the interpreter.
 - **Immutable versioning.** A customer editing a journey cannot disturb the runs currently sitting
   mid-24-hour wait on the previous version.
 - **Multi-tenancy that fails closed.** Tenant isolation is enforced in three layers, and the audience
@@ -41,6 +42,15 @@ Requires PHP 8.3+, Laravel 12 or 13, and a queue driver that is not `sync`
 Then implement two small contracts and register your nodes — see
 [Integration](docs/02-integration.md). Nothing works until you do; the shipped defaults deliberately
 fail closed rather than guess.
+
+There is no `nodeflow:install`, so those two contracts are hand-written. Your nodes are not:
+
+```bash
+php artisan nodeflow:make-node SendSms --type=yaya.send_sms --outputs='sent, failed' --test
+```
+
+That writes one class and one Pest test, and either registers the node for you or prints the exact
+line to paste. See [Writing nodes](docs/03-writing-nodes.md).
 
 ## Documentation
 

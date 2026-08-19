@@ -129,7 +129,7 @@ Six implementation plans, sequenced by dependency. One spec, because the field-c
 
 | Plan | Contents | Spec | Depends on |
 |---|---|---|---|
-| **1 — Node generator** | `nodeflow:make-node` with `--test` | §7.2 | — |
+| **1 — Node generator** ✅ **delivered** `4cadfb7..e22bd89` | `nodeflow:make-node` with `--test` | §7.2 | — |
 | **2 — Security floor** | Authorization gates; `FlowVersion` scoping; `nodeflow.tenancy`; the structural invariant for `RunSubject`/`NodeExecution` | §4 | — |
 | **3 — Editor** | `draft_graph`; `Nodeflow::routes()` and controllers; options endpoint; `Field::custom()`; `resources/js`; six field controls; dev `package.json` + Vitest | §5 | 2 |
 | **4 — Run view** | `FlowRun` component and routes; overlay queries; subject drill-down; polling | §6 | 3 |
@@ -405,7 +405,71 @@ non-zero if it could not wire something**, so CI catches a half-installed host. 
 second run reports "already wired" and never duplicates a line. Every edit asserts its anchor
 exists and is unique before writing (E11).
 
-### 7.2 `nodeflow:make-node {name}` (Plan 1)
+**Three constraints Plan 1 already fixed for you.** `nodeflow:make-node` shipped first and shares the
+mechanism, so `install` no longer has free choices here:
+
+1. **The anchor is a live constant.** `Nodeflow\Console\NodeRegistrationWriter::ANCHOR` is
+   `'protected array $nodes = ['`. The provider `install` generates must contain that line **exactly
+   once** or `make-node` cannot register into it. The writer refuses on zero matches and on more than
+   one, leaving the file byte-identical and printing the snippet instead — so a format drift degrades
+   safely, but it does degrade. Note a one-line `protected array $nodes = [];` matches and yields
+   valid-but-ugly output.
+2. **Reconcile the documented convention.** `docs/02-integration.md` teaches
+   `Nodeflow::register([...])` in *any* provider's `boot()`, which is not what the writer looks for. A
+   host who followed the docs today gets `ProviderMissing` and is told "No
+   app/Providers/NodeflowServiceProvider.php found" — accurate, but it reads as though they did
+   something wrong. `install` is where these two stories have to become one.
+3. **`install` must use `handle(): int`.** See §7.2's exit-code note: returning `false` from a
+   Laravel command's `handle()` exits **0**, which would silently defeat this section's own
+   "exits non-zero if it could not wire something" requirement.
+
+One known gap in the shared writer, documented in its source rather than implied closed: a provider
+that imports the class and lists it as a bare `SendSms::class` is not recognised as already present,
+so a duplicate entry is appended. Harmless at runtime — both entries name the same FQCN and
+`register()` is idempotent by type — but `install`'s own idempotency claim should not rest on it.
+
+### 7.2 `nodeflow:make-node {name}` (Plan 1) — ✅ delivered, `4cadfb7..e22bd89`
+
+**This section is now a description of shipped behaviour, not a proposal.** Everything below the
+"as built" block was written before implementation and is kept for its reasoning; where the two
+disagree, the "as built" block is the truth. Plan 1's own header records the defects found in it.
+
+> #### As built
+>
+> One file: `app/Nodeflow/Nodes/{Name}.php`, plus `tests/Feature/Nodeflow/{Class}Test.php` under
+> `--test`. Options: `--type`, `--cardinality=subject|audience|both`, `--outputs`, `--group`,
+> `--test`, `--force|-f`.
+>
+> **Exit codes are a contract, not Laravel's default.** `handle()` is declared `int` and maps
+> `parent::handle() === false` to `self::FAILURE`. Laravel's own generators return `false` from
+> `handle()`, which `Command::execute()` casts with `(int)` — so a *refusal exits 0*. We deliberately
+> diverge, because these commands get scripted. **§7.1's requirement that `nodeflow:install` exit
+> non-zero when it cannot wire something depends on this**; `install` must use the same `int` shape.
+>
+> **Three rules reject a type**, each with a distinct message so neither can be deleted undetected:
+> a lowercase format regex; the reserved `core.` prefix; and collision with an already-registered
+> type. The collision check resolves **through registry aliases** and names the owning class — and
+> exempts the class being generated, so `--force` can overwrite a node that is registered, which is
+> the only case `--force` exists for.
+>
+> **A derived type warns.** `--type` is prompted only when omitted *and* the input is interactive.
+> Omitted non-interactively, the type is derived from the class name and the command warns that it
+> did so — the value is permanent and carries no domain prefix, so silence would contradict the
+> convention the prompt's own hint teaches.
+>
+> **`--outputs` and `--group` are validated.** Output names must match a conservative lowercase
+> pattern (they double as graph edge labels) and duplicates are refused; `--group` is escaped before
+> rendering. Unvalidated, `--group="O'Brien"` produced an unparseable file and exit 0.
+>
+> **`--force` overwrites both** the node class and the generated test file. The generated stub invites
+> hand-editing (`// TODO: add a test per output`), so a separate `--force-test` is a live option for
+> a later plan; today the coupling is documented rather than split.
+>
+> **Two known residuals**, both proven and both cheap, inherited by whoever touches this next:
+> `--group='{{ outputs }}'` still renders an unparseable file with exit 0, because `buildClass()`
+> substitutes `{{ group }}` before `{{ outputs }}` and `str_replace` is sequential; and nothing but
+> `php -l` watches `stubs/node.both.stub`, so an API rename confined to that file leaves all 203
+> tests green while the stub fatals in every host.
 
 One file: `app/Nodeflow/Nodes/{Name}.php`. Flags with prompt fallback, Laravel-style: `--type=`,
 `--outputs=sent,failed`, `--cardinality=subject|audience|both`, `--group=`, `--test`.

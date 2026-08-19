@@ -1,5 +1,43 @@
 # Next session: ship the editor inside the package, plus node authoring tooling
 
+> ## ⚠️ SUPERSEDED — this brief has been actioned. Do not execute it again.
+>
+> Kept for the Voodflow research brief, the traps list, and the questions it posed — the answers are
+> attached below. **The live documents are:**
+>
+> - **Design:** `docs/superpowers/specs/2026-08-19-editor-and-node-tooling-design.md` — decisions
+>   E1–E12, six sequenced plans, and the four code-level gaps found while writing it (no
+>   authorization layer existed, no draft storage existed, three models were unscoped with no
+>   `tenant_id` to scope on, and a null current tenant was overloaded between "no tenancy" and
+>   "unresolved").
+> - **Plan 1 — delivered:** `docs/superpowers/plans/2026-08-19-nodeflow-make-node.md`,
+>   merged as `4cadfb7..e22bd89`. `nodeflow:make-node` ships. Read that plan's own header before
+>   copying code out of it; several of its snippets are known-defective.
+> - **Next up:** Plan 2, the security floor — authorization gates, `FlowVersion` scoping, and
+>   `nodeflow.tenancy`. It must land before the editor's first HTTP route exists, which is exactly
+>   the hazard this brief flagged as "directly in your path".
+>
+> ### The one thing this brief asked to verify, answered
+>
+> It suspected Voodflow has a build command turning a custom node into a shareable package, and noted
+> that a search of the plugin-integration page found none. **The suspicion was right; the search was
+> on the wrong page.** Both commands are documented under `advanced/custom-nodes`:
+> `voodflow:make-node` (an interactive wizard collecting type, tier FREE/PRO, author, licence,
+> repository — emitting a PHP class, a `.jsx` component and a `manifest.json` into three files) and
+> `voodflow:build-node` (esbuild, React externalised, output copied to `public/js/voodflow/nodes/`,
+> self-registering as `window.VoodflowNode_{Class}`).
+>
+> We borrowed the manifest-as-declaration idea and the scaffold-then-transform shape. We rejected the
+> artifact: a prebuilt bundle cannot participate in the host's Tailwind content scan, which is the
+> same reasoning as D2. See spec §1 "Prior art: Voodflow, verified".
+>
+> ### What this brief got wrong, worth knowing
+>
+> Its proposed fail-closed fix for a null current tenant was not the flip it describes. The package's
+> own default `TenantResolver` returns `null`, so failing closed on null would break the package out
+> of the box. `null` had to be disambiguated first — hence `nodeflow.tenancy` = `disabled` |
+> `resolver` (spec E2).
+
 ## What you are picking up
 
 `laravel-nodeflow` (`~/Projects/laravel-nodeflow`, branch `main`) is a Laravel package that lets a

@@ -1,5 +1,74 @@
 # `nodeflow:make-node` Implementation Plan (Plan 1 of 6)
 
+> ## ✅ EXECUTED — 2026-08-19/20, merged to `main` as `4cadfb7..e22bd89`
+>
+> Delivered in 18 commits. Suite 166 → **203 tests** (513 assertions). Executed with
+> `superpowers:subagent-driven-development`: one implementer per task, an independent review after
+> each, then a whole-branch review, one consolidated fix wave, and a scoped re-review.
+>
+> **Read the next two sections before copying anything out of this plan.** Parts of the task bodies
+> below are wrong, and were found to be wrong during execution. The task bodies are deliberately left
+> as written — they are the record of what was actually dispatched — so the corrections live here
+> instead.
+>
+> ### Four rulings superseded this plan's text
+>
+> | # | Ruling | Why |
+> |---|---|---|
+> | A | Each task imports only what it uses | The plan pre-declared an import first needed two tasks later, producing a committed unused import |
+> | B | **`handle()` returns `int`, not `bool|null`** | `Command::execute()` does `(int) $this->laravel->call(...)`, and `(int) false === 0`. The plan's own four `assertExitCode(1)` tests would have failed. Verified by running `make:event` twice |
+> | C | No same-namespace `use` statements | The plan hedged ("drop them if your linter complains"); a hedge is a decision nobody made |
+> | D | The `--type` prompt guards on `$this->input->isInteractive()` | An unguarded prompt under a mocked output throws `BadMethodCallException`, not a hang |
+>
+> ### Code in this plan that is known-defective — do not copy it
+>
+> - **Every `handle()` snippet** (Tasks 2, 3, 4, 5) declares `bool|null` and returns `false` for a
+>   usage error. That exits **0**. See Ruling B. The shipped form is `handle(): int` mapping
+>   `parent::handle() === false` to `self::FAILURE`.
+> - **Task 1 Step 1's import block** lists three imports where two are used. See Ruling A.
+> - **Task 4 Step 1's two writer tests** (`appends the node class inside the nodes array`, `appends
+>   after the anchor line`) assert with `toContain` and a `strpos` ordering check. Both pass while the
+>   insertion position is broken: removing `+ strlen(self::ANCHOR)` emits
+>   `\App\...\SendSms::class,protected array $nodes = [`, a parse error, and neither test notices.
+>   Mutation-proven. The shipped tests additionally lint the edited provider with `php -l` and assert
+>   the entry lands between the anchor and its closing `];`.
+> - **Task 4 Step 8's `registerNode()`** and **Task 5 Step 4's `writeTest()`** are correct as written,
+>   but the surrounding `handle()` is not — see above.
+> - **Task 5's generated test path** is `{Class}NodeTest.php`. Shipped as `{Class}Test.php`: the
+>   package's own nodes are `WaitNode`/`ExitNode`/`ConditionNode`, so a host following that convention
+>   got `SendSmsNodeNodeTest.php`.
+>
+> ### Six defects the plan did not anticipate, found by the whole-branch review and fixed
+>
+> `--force` could not overwrite any *registered* node — the only case it exists for — because
+> `validateType()` ran before `parent::handle()` and rejected the type owned by the class being
+> generated, advising a type change, which the foundation spec forbids for a live node
+> (`6f15566`). The insertion-position blindness above (`8d92932`). Stub API references were linted
+> but never executed, so renaming `NodeDefinition::outputNames()` would have left every stub green
+> while fataling in every host (`7239ea0`). `docs/02-integration.md` denied that a scaffolding
+> generator exists (`dec3fe6`). The already-present check required a leading backslash, so a
+> provider listing the class unprefixed got a duplicate entry (`7daa903`). `--outputs`/`--group`
+> rendered into PHP unescaped — `--group="O'Brien"` produced an unparseable file and exit 0
+> (`67f00aa`).
+>
+> ### Two residuals parked, not fixed
+>
+> 1. `--group='{{ outputs }}'` still yields an unparseable file with exit 0: `buildClass()`
+>    substitutes `{{ group }}` before `{{ outputs }}` and `str_replace` is sequential. Two-line fix.
+>    `paletteGroup()`'s docblock claims a backslash and a quote are the only dangerous characters,
+>    which is now false — fix the comment first.
+> 2. Nothing watches `stubs/node.both.stub` for API drift. Renaming `->help(` in that file alone
+>    leaves all 203 tests green while the stub fatals in every host. ~15 lines, mirroring the
+>    existing audience test under a fourth class name.
+>
+> ### The process lesson worth carrying into Plans 2–6
+>
+> Five of this branch's findings originated in **this plan's text**, not in execution — most
+> consequentially the two writer tests that could not detect the failure they named, in a plan whose
+> own Global Constraints require naming that failure. The pre-flight scan checked cross-task
+> interfaces but never turned the plan's own test-counterfactual rule on the plan's own test
+> snippets. Add that check; it is cheap and would have caught this before Task 4 ran.
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** Ship `php artisan nodeflow:make-node`, which generates a single-file Nodeflow node class — and optionally a Pest test for it — so a host application can start a domain node in one command.
