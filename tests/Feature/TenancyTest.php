@@ -4,6 +4,7 @@ use Nodeflow\Contracts\TenantResolver;
 use Nodeflow\Models\CrossTenantWriteException;
 use Nodeflow\Models\Flow;
 use Nodeflow\Models\Template;
+use Tests\Support\StrictlyScopedTemplate;
 
 beforeEach(function () {
     $this->tenant = 'org-1';
@@ -101,8 +102,8 @@ it('shows global templates to all tenants', function () {
     expect(Template::first()->name)->toBe('Global');
 });
 
-it('does not show null-tenant rows when model excludes global rows', function () {
-    // Create a null-tenant template via query builder
+it('excludes null-tenant rows when allowsGlobalTenantRows returns false', function () {
+    // Create a null-tenant row directly via query builder
     \DB::table('nodeflow_templates')->insert([
         'name' => 'Null',
         'scope' => 'global',
@@ -112,16 +113,17 @@ it('does not show null-tenant rows when model excludes global rows', function ()
         'updated_at' => now(),
     ]);
 
-    // Create an org-1 template normally
-    Template::create(['name' => 'Org1', 'scope' => 'tenant', 'graph' => ['x' => 2]]);
+    // Create an org-1 row via the model
+    StrictlyScopedTemplate::create(['name' => 'Org1', 'scope' => 'tenant', 'graph' => ['x' => 2]]);
 
-    // With resolver bound to org-1, Template.allowsGlobalTenantRows() = true, so it sees both
+    // With resolver bound to org-1 and allowsGlobalTenantRows() = false, only org-1 row is visible
     $this->tenant = 'org-1';
-    expect(Template::count())->toBe(2);
-    expect(Template::withoutTenancy()->count())->toBe(2);
+    expect(StrictlyScopedTemplate::count())->toBe(1);
+    expect(StrictlyScopedTemplate::first()->name)->toBe('Org1');
 
-    // Now verify the null-tenant template is visible when bypassing tenancy
-    expect(Template::withoutTenancy()->pluck('name')->sort()->values()->all())->toBe(['Null', 'Org1']);
+    // But the null-tenant row IS visible when bypassing tenancy
+    expect(StrictlyScopedTemplate::withoutTenancy()->count())->toBe(2);
+    expect(StrictlyScopedTemplate::withoutTenancy()->pluck('name')->sort()->values()->all())->toBe(['Null', 'Org1']);
 });
 
 it('accepts integer tenant_id equal to string resolver', function () {
