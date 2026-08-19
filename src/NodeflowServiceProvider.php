@@ -58,6 +58,10 @@ class NodeflowServiceProvider extends ServiceProvider
             $this->publishes([
                 __DIR__.'/../database/migrations' => database_path('migrations'),
             ], 'nodeflow-migrations');
+
+            $this->commands([
+                \Nodeflow\Console\CheckNodeTypesCommand::class,
+            ]);
         }
 
         $this->loadMigrationsFrom(__DIR__.'/../database/migrations');
