@@ -20,6 +20,8 @@ abstract class TestCase extends Orchestra
             'database' => ':memory:',
             'prefix' => '',
         ]);
+
+        $app->singleton(\Nodeflow\Engine\WorkflowEngine::class, \Nodeflow\Engine\FakeWorkflowEngine::class);
     }
 
     protected function defineDatabaseMigrations(): void

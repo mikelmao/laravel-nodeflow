@@ -5,6 +5,8 @@ namespace Nodeflow;
 use Illuminate\Support\ServiceProvider;
 use Nodeflow\Contracts\SubjectResolver;
 use Nodeflow\Contracts\TenantResolver;
+use Nodeflow\Engine\DurableWorkflowEngine;
+use Nodeflow\Engine\WorkflowEngine;
 use Nodeflow\Nodes\NodeRegistry;
 
 class NodeflowServiceProvider extends ServiceProvider
@@ -14,6 +16,8 @@ class NodeflowServiceProvider extends ServiceProvider
         $this->mergeConfigFrom(__DIR__.'/../config/nodeflow.php', 'nodeflow');
 
         $this->app->singleton(NodeRegistry::class);
+
+        $this->app->bind(WorkflowEngine::class, DurableWorkflowEngine::class);
 
         $this->app->bindIf(TenantResolver::class, fn () => new class implements TenantResolver {
             public function currentTenantId(): ?string
