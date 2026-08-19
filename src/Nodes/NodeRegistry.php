@@ -10,9 +10,24 @@ class NodeRegistry
     /** @var array<string, string> */
     private array $aliases = [];
 
+    /**
+     * Registration is the contract's enforcement point. A node implementing
+     * neither cardinality interface is unexecutable — NodeRunner dispatches on
+     * `instanceof HandlesAudience` / `instanceof HandlesSubject`, not on method
+     * names — so it is rejected here rather than being allowed to register,
+     * validate, publish and start a run before failing on the first subject that
+     * reaches it. GraphValidator repeats the check for graphs whose types
+     * arrived by some path that bypasses this one.
+     *
+     * @throws InvalidNodeException
+     */
     public function register(string ...$classes): self
     {
         foreach ($classes as $class) {
+            if (! is_a($class, HandlesSubject::class, true) && ! is_a($class, HandlesAudience::class, true)) {
+                throw InvalidNodeException::noCardinality($class);
+            }
+
             $this->types[$class::type()] = $class;
         }
 

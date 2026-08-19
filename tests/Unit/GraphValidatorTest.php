@@ -192,3 +192,27 @@ it('reports every problem in a graph with several simultaneous issues', function
         ->and($errors)->toContain('cycle')
         ->and($errors)->toContain('ghost');
 });
+
+it('rejects a graph referencing a node type that implements neither cardinality interface', function () {
+    // Belt and braces for the NodeRegistry::register() guard: a node reaching the
+    // registry by some path that bypasses that check still cannot be published.
+    $registry = new NodeRegistry;
+
+    // Bypass register() deliberately - this is the situation the rule exists for.
+    (function () {
+        $this->types['test.no-cardinality'] = Tests\Support\FakeNoCardinalityNode::class;
+    })->call($registry);
+
+    $result = (new GraphValidator($registry))->validate(Graph::fromArray([
+        'start' => 'n1',
+        'nodes' => [['id' => 'n1', 'type' => 'test.no-cardinality', 'config' => []]],
+        'edges' => [],
+    ]));
+
+    $errors = implode(' ', $result->errors());
+
+    expect($result->passes())->toBeFalse()
+        ->and($errors)->toContain('n1')
+        ->and($errors)->toContain('HandlesSubject')
+        ->and($errors)->toContain('HandlesAudience');
+});

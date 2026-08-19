@@ -44,3 +44,41 @@ it('builds a palette grouped for the editor', function () {
         ->and($palette[0]['type'])->toBe('test.send')
         ->and($palette[0]['cardinality'])->toBe(['subject']);
 });
+
+it('refuses to register a node implementing neither cardinality interface', function () {
+    // Spec section 5's example, written verbatim, used to register, validate,
+    // publish, start a run and only then throw at NodeRunner.php:66 the first
+    // time a subject reached it. Failing here puts the error in front of the
+    // author who can fix it.
+    $registry = new NodeRegistry;
+
+    expect(fn () => $registry->register(Tests\Support\FakeNoCardinalityNode::class))
+        ->toThrow(
+            Nodeflow\Nodes\InvalidNodeException::class,
+            Tests\Support\FakeNoCardinalityNode::class,
+        );
+
+    expect($registry->has('test.no-cardinality'))->toBeFalse();
+});
+
+it('names both interfaces in the registration error so the author knows the fix', function () {
+    $registry = new NodeRegistry;
+
+    try {
+        $registry->register(Tests\Support\FakeNoCardinalityNode::class);
+        $message = '';
+    } catch (Nodeflow\Nodes\InvalidNodeException $e) {
+        $message = $e->getMessage();
+    }
+
+    expect($message)->toContain('HandlesSubject')
+        ->and($message)->toContain('HandlesAudience');
+});
+
+it('registers a node implementing only HandlesAudience', function () {
+    $registry = new NodeRegistry;
+    $registry->register(Nodeflow\Nodes\Core\ExitNode::class);
+
+    expect($registry->has('core.exit'))->toBeTrue()
+        ->and($registry->palette()[0]['cardinality'])->toBe(['audience']);
+});

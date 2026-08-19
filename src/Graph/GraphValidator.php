@@ -2,6 +2,8 @@
 
 namespace Nodeflow\Graph;
 
+use Nodeflow\Nodes\HandlesAudience;
+use Nodeflow\Nodes\HandlesSubject;
 use Nodeflow\Nodes\NodeRegistry;
 
 class GraphValidator
@@ -36,6 +38,12 @@ class GraphValidator
             }
 
             $instance = $this->registry->resolve($type);
+
+            if (! $instance instanceof HandlesSubject && ! $instance instanceof HandlesAudience) {
+                $errors[] = "Node [{$id}] uses type [{$type}], whose class ".$instance::class.' implements '
+                    .'neither HandlesSubject nor HandlesAudience and therefore cannot be executed. '
+                    .'The node class must implement at least one cardinality interface.';
+            }
 
             foreach ($instance->validate($node['config'] ?? []) as $field => $messages) {
                 $errors[] = "Node [{$id}] field [{$field}]: ".implode(' ', $messages);
