@@ -7,7 +7,12 @@ use Nodeflow\Contracts\SubjectResolver;
 use Nodeflow\Contracts\TenantResolver;
 use Nodeflow\Engine\DurableWorkflowEngine;
 use Nodeflow\Engine\WorkflowEngine;
+use Nodeflow\Nodes\Core\ConditionNode;
+use Nodeflow\Nodes\Core\ExitNode;
+use Nodeflow\Nodes\Core\SplitNode;
+use Nodeflow\Nodes\Core\WaitNode;
 use Nodeflow\Nodes\NodeRegistry;
+use Nodeflow\Schema\SubjectAttributeRegistry;
 
 class NodeflowServiceProvider extends ServiceProvider
 {
@@ -16,6 +21,7 @@ class NodeflowServiceProvider extends ServiceProvider
         $this->mergeConfigFrom(__DIR__.'/../config/nodeflow.php', 'nodeflow');
 
         $this->app->singleton(NodeRegistry::class);
+        $this->app->singleton(SubjectAttributeRegistry::class);
 
         $this->app->bind(WorkflowEngine::class, DurableWorkflowEngine::class);
 
@@ -52,5 +58,12 @@ class NodeflowServiceProvider extends ServiceProvider
         }
 
         $this->loadMigrationsFrom(__DIR__.'/../database/migrations');
+
+        Nodeflow::register([
+            ExitNode::class,
+            WaitNode::class,
+            ConditionNode::class,
+            SplitNode::class,
+        ]);
     }
 }
