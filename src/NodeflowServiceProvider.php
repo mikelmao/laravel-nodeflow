@@ -18,6 +18,8 @@ use Nodeflow\Triggers\TriggerRegistry;
 
 class NodeflowServiceProvider extends ServiceProvider
 {
+    private static bool $nodeTypeCheckRun = false;
+
     public function register(): void
     {
         $this->mergeConfigFrom(__DIR__.'/../config/nodeflow.php', 'nodeflow');
@@ -73,5 +75,26 @@ class NodeflowServiceProvider extends ServiceProvider
             SplitNode::class,
             StartFlowNode::class,
         ]);
+
+        $this->checkNodeTypesOnBoot();
+    }
+
+    private function checkNodeTypesOnBoot(): void
+    {
+        if (self::$nodeTypeCheckRun || ! config('nodeflow.check_node_types_on_boot', false)) {
+            return;
+        }
+
+        self::$nodeTypeCheckRun = true;
+
+        $missing = \Nodeflow\Console\CheckNodeTypesResolver::findMissingTypes(
+            $this->app->make(NodeRegistry::class)
+        );
+
+        if ($missing !== []) {
+            foreach ($missing as $line) {
+                \Illuminate\Support\Facades\Log::error("Unresolvable nodeflow type: {$line}");
+            }
+        }
     }
 }

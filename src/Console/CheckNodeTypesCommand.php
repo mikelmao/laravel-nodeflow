@@ -3,8 +3,6 @@
 namespace Nodeflow\Console;
 
 use Illuminate\Console\Command;
-use Nodeflow\Graph\Graph;
-use Nodeflow\Models\FlowVersion;
 use Nodeflow\Nodes\NodeRegistry;
 
 class CheckNodeTypesCommand extends Command
@@ -15,23 +13,7 @@ class CheckNodeTypesCommand extends Command
 
     public function handle(NodeRegistry $registry): int
     {
-        $missing = [];
-
-        FlowVersion::query()->with('flow')->chunk(100, function ($versions) use ($registry, &$missing) {
-            foreach ($versions as $version) {
-                if (! $version->hasLiveRuns()) {
-                    continue;
-                }
-
-                foreach (Graph::fromArray($version->graph)->nodeIds() as $nodeId) {
-                    $type = Graph::fromArray($version->graph)->node($nodeId)['type'] ?? '';
-
-                    if (! $registry->has($type)) {
-                        $missing[] = "version {$version->id} node {$nodeId} type {$type}";
-                    }
-                }
-            }
-        });
+        $missing = CheckNodeTypesResolver::findMissingTypes($registry);
 
         if ($missing !== []) {
             foreach ($missing as $line) {
