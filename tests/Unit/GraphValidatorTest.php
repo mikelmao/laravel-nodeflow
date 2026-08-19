@@ -151,6 +151,24 @@ it('rejects duplicate node ids', function () {
         ->and($errors)->toContain('unique');
 });
 
+it('rejects two edges from the same output', function () {
+    $result = $this->validator->validate(Graph::fromArray([
+        'start' => 'n1',
+        'nodes' => [
+            ['id' => 'n1', 'type' => 'test.send', 'config' => ['channel' => 'sms']],
+            ['id' => 'n2', 'type' => 'core.exit', 'config' => []],
+            ['id' => 'n3', 'type' => 'core.exit', 'config' => []],
+        ],
+        'edges' => [
+            ['from' => 'n1', 'output' => 'sent', 'to' => 'n2'],
+            ['from' => 'n1', 'output' => 'sent', 'to' => 'n3'],
+        ],
+    ]));
+
+    expect($result->passes())->toBeFalse()
+        ->and(implode(' ', $result->errors()))->toContain('more than one outgoing edge');
+});
+
 it('reports every problem in a graph with several simultaneous issues', function () {
     $result = $this->validator->validate(Graph::fromArray([
         'start' => 'n1',

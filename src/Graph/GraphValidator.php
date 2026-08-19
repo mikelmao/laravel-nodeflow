@@ -42,6 +42,8 @@ class GraphValidator
             }
         }
 
+        $seenOutputs = [];
+
         foreach ($graph->edges() as $edge) {
             if ($graph->node($edge['to']) === null) {
                 $errors[] = "Edge from [{$edge['from']}] points at missing node [{$edge['to']}].";
@@ -56,6 +58,15 @@ class GraphValidator
                     $errors[] = "Node [{$edge['from']}] has no output [{$edge['output']}].";
                 }
             }
+
+            $key = $edge['from'].':'.$edge['output'];
+
+            if (isset($seenOutputs[$key])) {
+                $errors[] = "Node [{$edge['from']}] output [{$edge['output']}] has more than one outgoing edge. ".
+                    'Use a Split node to send subjects down multiple branches.';
+            }
+
+            $seenOutputs[$key] = true;
         }
 
         if (($cycle = $this->findCycle($graph)) !== null) {
