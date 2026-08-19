@@ -43,6 +43,10 @@ class MakeNodeCommand extends GeneratorCommand
 
         $this->registerNode($this->qualifyClass($this->getNameInput()));
 
+        if ($this->option('test')) {
+            $this->writeTest($this->qualifyClass($this->getNameInput()));
+        }
+
         return self::SUCCESS;
     }
 
@@ -87,6 +91,70 @@ class MakeNodeCommand extends GeneratorCommand
         $this->line('        \\'.$nodeClass.'::class,');
         $this->line('    ]);');
         $this->newLine();
+    }
+
+    /**
+     * The generated test asserts only what needs no database, because it lands in
+     * the host's suite where the base TestCase is theirs. The four properties it
+     * does assert are the ones that break silently: the type string, the declared
+     * outputs, the cardinality interface, and that the registry accepts the class.
+     */
+    private function writeTest(string $nodeClass): void
+    {
+        $directory = $this->laravel->basePath('tests/Feature/Nodeflow');
+
+        if (! $this->files->isDirectory($directory)) {
+            $this->files->makeDirectory($directory, 0777, true, true);
+        }
+
+        $class = class_basename($nodeClass);
+        $path = $directory.'/'.$class.'NodeTest.php';
+
+        if ($this->files->exists($path) && ! $this->option('force')) {
+            $this->components->warn("Test already exists at {$path}; left untouched.");
+
+            return;
+        }
+
+        $outputs = $this->outputNames();
+
+        [$imports, $expectations] = match ($this->cardinality()) {
+            'audience' => [
+                'use Nodeflow\Nodes\HandlesAudience;',
+                '    expect(new '.$class.')->toBeInstanceOf(HandlesAudience::class);',
+            ],
+            'both' => [
+                "use Nodeflow\Nodes\HandlesAudience;\nuse Nodeflow\Nodes\HandlesSubject;",
+                '    expect(new '.$class.')->toBeInstanceOf(HandlesSubject::class)'.PHP_EOL
+                    .'        ->toBeInstanceOf(HandlesAudience::class);',
+            ],
+            default => [
+                'use Nodeflow\Nodes\HandlesSubject;',
+                '    expect(new '.$class.')->toBeInstanceOf(HandlesSubject::class);',
+            ],
+        };
+
+        $this->files->put($path, str_replace(
+            [
+                '{{ namespacedClass }}',
+                '{{ cardinalityImports }}',
+                '{{ cardinalityExpectations }}',
+                '{{ class }}',
+                '{{ type }}',
+                '{{ outputs }}',
+            ],
+            [
+                $nodeClass,
+                $imports,
+                $expectations,
+                $class,
+                $this->nodeType(),
+                implode(', ', array_map(fn (string $o) => "'{$o}'", $outputs)),
+            ],
+            $this->files->get($this->resolveStubPath('/stubs/node.test.stub')),
+        ));
+
+        $this->components->info("Test [{$path}] created successfully.");
     }
 
     protected function getStub(): string

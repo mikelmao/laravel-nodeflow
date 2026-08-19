@@ -1,0 +1,38 @@
+<?php
+
+use {{ namespacedClass }};
+use Nodeflow\Nodes\NodeRegistry;
+{{ cardinalityImports }}
+
+it('keeps its type stable', function () {
+    // Published flow versions are immutable and runs sitting mid-wait resolve
+    // through this string. If this test ever fails because someone changed
+    // type(), the fix is to change it back and add a NodeRegistry::alias().
+    expect({{ class }}::type())->toBe('{{ type }}');
+});
+
+it('declares the outputs its flow edges can use', function () {
+    // GraphValidator rejects an edge naming an output the node does not declare,
+    // so removing one here breaks every published flow that routed through it.
+    expect((new {{ class }})->definition()->outputNames())->toBe([{{ outputs }}]);
+});
+
+it('is executable by the runtime', function () {
+    // NodeRunner dispatches on the interface, never on the method name. A node
+    // with the method but not the interface registers, validates, publishes and
+    // starts a run — then throws on the first subject that reaches it.
+{{ cardinalityExpectations }}
+
+    app(NodeRegistry::class)->register({{ class }}::class);
+
+    expect(app(NodeRegistry::class)->has('{{ type }}'))->toBeTrue();
+});
+
+it('rejects a config missing a required field', function () {
+    // TODO: update the key when you replace the scaffolded 'example' field.
+    expect((new {{ class }})->validate([]))->toHaveKey('example');
+});
+
+// TODO: add a test per output. Build the context your cardinality receives,
+// invoke the node, and assert which output the subject or audience landed in —
+// that is the behaviour the four tests above deliberately do not cover.

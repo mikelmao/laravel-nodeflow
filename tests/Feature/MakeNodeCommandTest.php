@@ -249,3 +249,84 @@ it('prints the registration snippet when there is no provider to edit', function
         ->expectsOutputToContain('\App\Nodeflow\Nodes\SendSms::class')
         ->assertExitCode(0);
 });
+
+it('generates no test unless asked', function () {
+    $this->artisan('nodeflow:make-node', ['name' => 'SendSms', '--type' => 'yaya.send_sms'])
+        ->assertExitCode(0);
+
+    expect($this->root.'/tests/Feature/Nodeflow/SendSmsNodeTest.php')->not->toBeFile();
+});
+
+it('generates a test whose expectations match the node it generated', function () {
+    // The counterfactual, and the reason this assertion is shaped this way: a
+    // test stub that hard-codes ['default'] passes a "file exists" check while
+    // asserting the wrong outputs. Non-default outputs are used so drift
+    // between the two stubs is detectable at all.
+    $this->artisan('nodeflow:make-node', [
+        'name' => 'SendSms',
+        '--type' => 'yaya.send_sms',
+        '--outputs' => 'sent, failed',
+        '--test' => true,
+    ])->assertExitCode(0);
+
+    $test = file_get_contents($this->root.'/tests/Feature/Nodeflow/SendSmsNodeTest.php');
+    $node = file_get_contents($this->root.'/app/Nodeflow/Nodes/SendSms.php');
+
+    expect($test)
+        ->toContain('use App\Nodeflow\Nodes\SendSms;')
+        ->toContain("expect(SendSms::type())->toBe('yaya.send_sms');")
+        ->toContain("->toBe(['sent', 'failed'])")
+        ->toContain('HandlesSubject::class');
+
+    // Both files must name the same output list, or the generated test asserts
+    // something the generated node does not do.
+    expect($node)->toContain("['sent', 'failed']");
+});
+
+it('asserts the audience interface for an audience node', function () {
+    $this->artisan('nodeflow:make-node', [
+        'name' => 'SendBatch',
+        '--type' => 'yaya.send_batch',
+        '--cardinality' => 'audience',
+        '--test' => true,
+    ])->assertExitCode(0);
+
+    $test = file_get_contents($this->root.'/tests/Feature/Nodeflow/SendBatchNodeTest.php');
+
+    expect($test)
+        ->toContain('HandlesAudience::class')
+        ->not->toContain('HandlesSubject');
+});
+
+it('generates syntactically valid PHP for every cardinality', function (string $cardinality) {
+    // The counterfactual: leave an unbalanced brace or a stray {{ placeholder }}
+    // in any stub and this fails, while every substring assertion above still
+    // passes. Four stubs render PHP; nothing else verifies that it parses.
+    $class = 'Send'.ucfirst($cardinality);
+
+    $this->artisan('nodeflow:make-node', [
+        'name' => $class,
+        '--type' => 'yaya.send_'.$cardinality,
+        '--cardinality' => $cardinality,
+        '--outputs' => 'sent, failed',
+        '--test' => true,
+    ])->assertExitCode(0);
+
+    $paths = [
+        $this->root.'/app/Nodeflow/Nodes/'.$class.'.php',
+        $this->root.'/tests/Feature/Nodeflow/'.$class.'NodeTest.php',
+    ];
+
+    foreach ($paths as $path) {
+        expect($path)->toBeFile();
+
+        exec('php -l '.escapeshellarg($path).' 2>&1', $output, $exitCode);
+
+        expect($exitCode)->toBe(0, "php -l failed for {$path}: ".implode(PHP_EOL, $output));
+    }
+
+    // No placeholder survived rendering in either file.
+    foreach ($paths as $path) {
+        expect(file_get_contents($path))->not->toContain('{{');
+    }
+})->with(['subject', 'audience', 'both']);
