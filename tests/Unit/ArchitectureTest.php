@@ -53,7 +53,17 @@ it('keeps RunSubject and NodeExecution out of everything but the execution inter
 
     $violations = Tests\Support\RequestContextScanner::violations(
         $src,
-        ['/src/Execution/', '/src/Console/PruneCommand.php'],
+        [
+            '/src/Execution/',
+            '/src/Console/PruneCommand.php',
+            // E18's bright-line rule matches a table name anywhere in code, and
+            // these two files legitimately declare `protected $table` for the
+            // very models the rule protects. Allowlisting the files is not a
+            // hole: a scope method added to either still has to be *called*
+            // somewhere, and the `Model::` rule catches that call site.
+            '/src/Models/RunSubject.php',
+            '/src/Models/NodeExecution.php',
+        ],
     );
 
     expect($violations)->toBe([]);
