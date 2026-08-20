@@ -109,13 +109,51 @@ it('refuses a null last-seen once a draft exists', function () {
 it('clears the draft when the flow publishes', function () {
     // Counterfactual: leave the draft behind and the editor reopens showing an
     // already-published graph as unsaved work.
+    //
+    // draft_revision is deliberately left where it was, not rewound to 0: it is a
+    // monotonic token, and the two tests below are what a rewind breaks.
     app(SaveDraft::class)->save($this->flow, graphWith('n1'), null);
 
     app(\Nodeflow\Publishing\PublishFlow::class)->publish($this->flow, graphWith('n1'));
 
     expect($this->flow->fresh()->draft_graph)->toBeNull()
         ->and($this->flow->fresh()->draft_updated_at)->toBeNull()
-        ->and($this->flow->fresh()->draft_revision)->toBe(0);
+        ->and($this->flow->fresh()->draft_revision)->toBe(1);
+});
+
+it('keeps saving for the author who publishes and carries on editing', function () {
+    // One author, no race at all. Counterfactual: reset draft_revision to 0 in
+    // PublishFlow and this throws — the client's token is 1, the server holds 0,
+    // and the sole author editing the flow is told they lost a race, against an
+    // empty graph.
+    $first = app(SaveDraft::class)->save($this->flow, graphWith('n1'), null);
+
+    app(\Nodeflow\Publishing\PublishFlow::class)->publish($this->flow, graphWith('n1'));
+
+    $next = app(SaveDraft::class)->save(Flow::find($this->flow->id), graphWith('n2'), $first);
+
+    expect($next)->toBe($first + 1);
+});
+
+it('refuses a token minted before a publish against a draft saved after it', function () {
+    // The ABA sequence. A saves (revision 1). B publishes. B starts a new draft,
+    // which becomes revision 2. A's autosave is still in flight carrying token 1.
+    //
+    // Counterfactual: reset draft_revision to 0 in PublishFlow and B's new draft
+    // is revision 1 again — the same number A is holding from a different draft
+    // entirely — so A's stale write is accepted and B's work is destroyed with no
+    // conflict reported to anyone.
+    $aToken = app(SaveDraft::class)->save($this->flow, graphWith('a1'), null);
+
+    app(\Nodeflow\Publishing\PublishFlow::class)->publish($this->flow, graphWith('a1'));
+
+    $bFlow = Flow::find($this->flow->id);
+    app(SaveDraft::class)->save($bFlow, graphWith('b1'), (int) $bFlow->draft_revision);
+
+    expect(fn () => app(SaveDraft::class)->save(Flow::find($this->flow->id), graphWith('a2'), $aToken))
+        ->toThrow(StaleDraftException::class);
+
+    expect(Flow::find($this->flow->id)->draft_graph)->toBe(graphWith('b1'));
 });
 
 it('treats a revision read back from the database as current, not stale', function () {

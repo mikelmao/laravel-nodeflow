@@ -134,6 +134,34 @@ it('publishes a valid graph and freezes a version', function () {
     expect($this->flow->fresh()->current_version_id)->not->toBeNull();
 });
 
+it('returns the current draft revision alongside the published version', function () {
+    // A client that stays open across a publish has to keep echoing the draft
+    // token on its next autosave, and publish is where the server's view of it
+    // last changed hands. Counterfactual: return only {version} and the client
+    // has no authoritative token after publishing — the exact position that made
+    // the old draft_revision reset produce a spurious 409.
+    allowEverything();
+
+    $this->actingAs($this->user)
+        ->putJson("/nodeflow/flows/{$this->flow->id}/draft", ['graph' => exitGraph(), 'draft_revision' => null])
+        ->assertOk();
+
+    $response = $this->actingAs($this->user)
+        ->postJson("/nodeflow/flows/{$this->flow->id}/publish", ['graph' => exitGraph()])
+        ->assertOk();
+
+    expect($response->json('draft_revision'))->toBe(1);
+
+    // And the token it hands back is the one the next autosave must send.
+    $this->actingAs($this->user)
+        ->putJson("/nodeflow/flows/{$this->flow->id}/draft", [
+            'graph' => exitGraph(),
+            'draft_revision' => $response->json('draft_revision'),
+        ])
+        ->assertOk()
+        ->assertJsonPath('draft_revision', 2);
+});
+
 it('returns per-node errors when publish is rejected', function () {
     // The payoff of Task 3, over HTTP. Counterfactual: return only the flat
     // strings and the editor has to parse prose to find the node.

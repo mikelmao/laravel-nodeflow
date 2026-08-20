@@ -109,6 +109,13 @@ class FlowEditorController extends Controller
             ], 422);
         }
 
-        return response()->json(['version' => $version->version]);
+        // draft_revision travels back with the version because publishing does not
+        // reset it (see PublishFlow) and clients stay open across a publish: the
+        // editor must keep echoing the current token on its next autosave, and
+        // this is the only response that would otherwise leave it guessing.
+        return response()->json([
+            'version' => $version->version,
+            'draft_revision' => (int) ($flow->draft_revision ?? 0),
+        ]);
     }
 }

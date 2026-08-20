@@ -47,16 +47,27 @@ class PublishFlow
 
             // The draft became this version, so it is no longer pending work. Left
             // behind, the editor reopens showing an already-published graph as
-            // unsaved changes. draft_revision resets to 0 alongside it: the next
-            // draft save after a publish has nothing to be stale against, so it
-            // must be able to pass a null last-seen, exactly like a flow's first
-            // ever draft.
+            // unsaved changes.
+            //
+            // draft_revision is deliberately NOT reset. It is a monotonic
+            // concurrency token, and rewinding it to 0 broke that in two ways at
+            // once. An author who saved (revision 1) and then published would see
+            // their next autosave — still carrying token 1 — refused as stale
+            // against a server holding 0, offering an empty graph as the winner to
+            // the only person editing. And worse, a rewound counter re-mints
+            // numbers: a pre-publish token 1 matches the post-publish revision 1
+            // of somebody else's brand new draft, so a stale write sails through
+            // and destroys it. Monotonicity is the whole property the counter
+            // exists to have.
+            //
+            // Nothing needs the reset. A freshly loaded client already knows the
+            // current revision because edit() ships draft_revision in its props,
+            // and publish() echoes it back for a client that stays open.
             $flow->update([
                 'current_version_id' => $version->id,
                 'status' => 'active',
                 'draft_graph' => null,
                 'draft_updated_at' => null,
-                'draft_revision' => 0,
             ]);
 
             return $version;
