@@ -1,4 +1,4 @@
-import { act, render, screen, waitFor } from '@testing-library/react'
+import { act, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { Graph, NodeTypePayload, RunSummary, RunUrls } from '../graph/types'
 import { FlowRun } from './FlowRun'
@@ -171,6 +171,57 @@ describe('FlowRun', () => {
         await act(async () => { screen.getByText('nobody').click() })
         await waitFor(() => expect(screen.getByText(/never reached/i)).toBeInTheDocument())
         expect(screen.queryByText(/already released everyone/i)).toBeNull()
+    })
+
+    it('does not let a slow first-page reply overwrite the panel of a node selected after it', async () => {
+        // Counterfactual: remove the per-request liveness guard in
+        // SubjectPanel.tsx (the `currentNodeId.current !== requestedFor`
+        // check inside load()'s .then) and this fails, because the stale
+        // 'sent' reply below then overwrites 'segment's rows once it
+        // resolves. This is the third response-outliving-its-context guard
+        // in this plan (after useOverlayPolling.ts's two), proved the same
+        // way: hold a request open, switch context out from under it, and
+        // show the late reply lose.
+        let resolveSent: (value: Response) => void = () => {}
+        const sentPromise = new Promise<Response>((resolve) => { resolveSent = resolve })
+
+        const fetchMock = vi.fn().mockImplementation((requested: string) => {
+            if (requested.includes('/nodes/sent/subjects')) {
+                return sentPromise
+            }
+            if (requested.includes('/nodes/segment/subjects')) {
+                return Promise.resolve(subjectsPage(['9'], null))
+            }
+            return Promise.resolve(Response.json(overlay()))
+        })
+        vi.stubGlobal('fetch', fetchMock)
+
+        const { container } = render(
+            <FlowRun run={run} graph={graph} palette={palette} overlay={overlay()} urls={urls} />,
+        )
+
+        // 'sent' is ambiguous by text (it also labels four output handles), so
+        // click the react-flow node wrapper directly by its data-id, the same
+        // way the canvas itself identifies nodes.
+        await act(async () => {
+            fireEvent.click(container.querySelector('.react-flow__node[data-id="sent"]')!)
+        })
+
+        // Switch to 'segment' before 'sent's request resolves.
+        await act(async () => {
+            fireEvent.click(container.querySelector('.react-flow__node[data-id="segment"]')!)
+        })
+        await waitFor(() => expect(screen.getByText('user #9')).toBeInTheDocument())
+
+        // Now let the stale 'sent' reply resolve, after 'segment' is selected.
+        await act(async () => {
+            resolveSent(subjectsPage(['999'], null))
+            await Promise.resolve()
+            await Promise.resolve()
+        })
+
+        expect(screen.getByText('user #9')).toBeInTheDocument()
+        expect(screen.queryByText('user #999')).toBeNull()
     })
 
     it('lets a host restyle a run card without losing its badges or errors', () => {
