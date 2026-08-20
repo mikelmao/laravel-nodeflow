@@ -99,9 +99,12 @@ function FlowEditorSession({
     const activePublish = useRef<number | null>(null)
     const optionsCache = useRef(new Map<string, Record<string, string>>())
 
-    useEffect(() => () => {
-        mounted.current = false
-        activePublish.current = null
+    useEffect(() => {
+        mounted.current = true
+        return () => {
+            mounted.current = false
+            activePublish.current = null
+        }
     }, [])
 
     const defs = useMemo(() => defsByType(palette), [palette])
@@ -161,20 +164,24 @@ function FlowEditorSession({
     }, [])
 
     const onConnect = useCallback((connection: Connection) => {
-        const sourceType = editorRef.current.nodes.find((node) => node.id === connection.source)?.data.type
-        if (!canConnect(sourceType, connection.sourceHandle, defs)) {
-            return
-        }
+        setEditor((current) => {
+            const source = current.nodes.find((node) => node.id === connection.source)
+            const target = current.nodes.find((node) => node.id === connection.target)
+            if (source === undefined || target === undefined
+                || !canConnect(source.data.type, connection.sourceHandle, defs)) {
+                return current
+            }
 
-        graphGeneration.current += 1
-        setEditor((current) => ({
-            ...current,
-            edges: addEdge<NodeflowEdge>({
-                ...connection,
-                label: connection.sourceHandle ?? undefined,
-            }, current.edges),
-            outcome: null,
-        }))
+            graphGeneration.current += 1
+            return {
+                ...current,
+                edges: addEdge<NodeflowEdge>({
+                    ...connection,
+                    label: connection.sourceHandle ?? undefined,
+                }, current.edges),
+                outcome: null,
+            }
+        })
     }, [defs])
 
     const addNode = useCallback((definition: NodeTypePayload) => {

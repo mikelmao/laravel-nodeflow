@@ -1,8 +1,24 @@
 import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
+import { StrictMode } from 'react'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
+import type { CanvasProps } from '../canvas/Canvas'
 import type { FieldControlProps } from '../controls/types'
 import type { Graph, NodeTypePayload } from '../graph/types'
 import { FlowEditor } from './FlowEditor'
+
+const canvasProbe = vi.hoisted(() => ({ current: null as CanvasProps | null }))
+
+vi.mock('../canvas/Canvas', async (importOriginal) => {
+    const actual = await importOriginal<typeof import('../canvas/Canvas')>()
+
+    return {
+        ...actual,
+        Canvas: (props: CanvasProps) => {
+            canvasProbe.current = props
+            return <actual.Canvas {...props} />
+        },
+    }
+})
 
 const flow = {
     id: 12,
@@ -117,6 +133,7 @@ function successfulFetch(publishRevision = 8) {
 }
 
 beforeEach(() => {
+    canvasProbe.current = null
     vi.stubGlobal('fetch', vi.fn().mockResolvedValue(Response.json({ draft_revision: 8 })))
 })
 
@@ -411,11 +428,24 @@ describe('FlowEditor', () => {
     it('publishes a configuration edit on the original node', async () => {
         const fetchMock = successfulFetch()
         vi.stubGlobal('fetch', fetchMock)
-        renderEditor()
+        render(
+            <StrictMode>
+                <FlowEditor
+                    flow={flow}
+                    graph={graph}
+                    palette={palette}
+                    triggers={triggers}
+                    urls={urls}
+                    autosaveDebounceMs={5}
+                />
+            </StrictMode>,
+        )
         fireEvent.click(canvasNode('send1'))
         fireEvent.change(screen.getByLabelText(/Template/), { target: { value: 'changed' } })
         fireEvent.click(screen.getByRole('button', { name: 'Publish' }))
-        await waitFor(() => expect(fetchMock.mock.calls.some(([url]) => url === urls.publish)).toBe(true))
+        await waitFor(() => expect(fetchMock.mock.calls.filter(([url]) => url === urls.publish)).toHaveLength(1))
+        expect(await screen.findByRole('status')).toHaveTextContent('Published v4')
+        expect(screen.getByRole('button', { name: 'Publish' })).toBeEnabled()
         expect(requestBody(fetchMock, urls.publish).graph).toMatchObject({
             nodes: expect.arrayContaining([
                 expect.objectContaining({ id: 'send1', config: { template: 'changed' } }),
@@ -443,9 +473,26 @@ describe('FlowEditor', () => {
     it('clears start and incident edges when React Flow deletes a selected node', async () => {
         const fetchMock = successfulFetch()
         vi.stubGlobal('fetch', fetchMock)
-        renderEditor()
+        const keyboard = renderEditor()
         fireEvent.click(canvasNode('send1'))
         fireEvent.keyDown(document, { key: 'Delete' })
+        await waitFor(() => expect(document.querySelector('.react-flow__node[data-id="send1"]')).toBeNull())
+        keyboard.unmount()
+
+        renderEditor()
+        const callbacks = canvasProbe.current
+        if (callbacks?.onNodesChange === undefined || callbacks.onConnect === undefined) {
+            throw new Error('Canvas did not expose its mutation callbacks.')
+        }
+        act(() => {
+            callbacks.onNodesChange?.([{ id: 'send1', type: 'remove' }])
+            callbacks.onConnect?.({
+                source: 'send1',
+                target: 'exit1',
+                sourceHandle: 'sent',
+                targetHandle: null,
+            })
+        })
         await waitFor(() => expect(document.querySelector('.react-flow__node[data-id="send1"]')).toBeNull())
         fireEvent.click(screen.getByRole('button', { name: 'Publish' }))
         await waitFor(() => expect(fetchMock.mock.calls.some(([url]) => url === urls.publish)).toBe(true))
@@ -454,6 +501,12 @@ describe('FlowEditor', () => {
             nodes: [{ id: 'exit1', type: 'core.exit', config: {}, position: { x: 300, y: 0 } }],
             edges: [],
         } })
+        for (const requestUrl of [urls.draft, urls.publish]) {
+            const calls = fetchMock.mock.calls.filter(([calledUrl]) => calledUrl === requestUrl)
+            calls.forEach((_, occurrence) => {
+                expect(requestBody(fetchMock, requestUrl, occurrence).graph).toMatchObject({ edges: [] })
+            })
+        }
     })
 
     // The first node makes an empty graph runnable; counterfactual leaving start blank creates needless invalid state.
