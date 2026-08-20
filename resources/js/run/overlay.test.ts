@@ -25,10 +25,23 @@ describe('normalizeOverlay', () => {
     // author can choose. Counterfactual: read with `snapshot.nodes[id]` and a
     // node genuinely named __proto__ silently reads the prototype instead.
     it('keeps a node genuinely named like a prototype key addressable', () => {
-        const result = snapshot({ __proto__: reachedZero, constructor: neverReached })
+        // Built from JSON text, not an object literal: `{ __proto__: x }` is
+        // special-cased by the language to set the prototype, whereas JSON.parse
+        // creates a genuine own enumerable property — and JSON.parse is how this
+        // payload actually arrives, via send() and response.json(). A literal
+        // fixture here would silently test nothing.
+        const result = normalizeOverlay(JSON.parse(
+            '{"status":"running","terminal":false,"nodes":{"__proto__":{"reached":true,"byOutput":{},"waiting":0,"failed":0,"error":null},"constructor":{"reached":false,"byOutput":{},"waiting":0,"failed":0,"error":null}}}',
+        ))
 
         expect(overlayFor(result, '__proto__')?.reached).toBe(true)
         expect(overlayFor(result, 'constructor')?.reached).toBe(false)
+
+        // Proves the module never wrote through `__proto__` as a live setter:
+        // if it had, this would have mutated Object.prototype itself, and any
+        // bare object literal elsewhere would sprout a `reached` property.
+        expect(Object.getPrototypeOf(result.nodes)).toBeNull()
+        expect(({} as Record<string, unknown>).reached).toBeUndefined()
     })
 
     // Counterfactual: trust the payload and a server change lands as

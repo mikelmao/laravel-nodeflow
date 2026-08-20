@@ -13,33 +13,14 @@ function finiteNumber(value: unknown): number {
 }
 
 /**
- * Own string keys of `source`, plus `__proto__` when object-literal syntax
- * routed a literal `__proto__: value` property into the object's prototype
- * instead of an enumerable own key. JSON.parse never does this — it always
- * produces a real own property named "__proto__" — but a hand-built JS object
- * does, so a node genuinely named "__proto__" must not silently vanish from
- * enumeration just because of how the source object was constructed.
+ * Own enumerable pairs only, into a null-prototype map. `Object.entries`
+ * reads via [[OwnPropertyKeys]], so it never consults the prototype for
+ * either the key list or the value — there is no `__proto__` special case to
+ * reason about, because the payload always arrives via `JSON.parse` (send()
+ * -> response.json()), which itself always creates a genuine own enumerable
+ * property named "__proto__" rather than special-casing it the way object
+ * literal syntax does.
  */
-function ownKeys(source: Record<string, unknown>): string[] {
-    const keys = Object.keys(source)
-    const proto = Object.getPrototypeOf(source)
-
-    if (proto !== null && proto !== Object.prototype && !keys.includes('__proto__')) {
-        keys.push('__proto__')
-    }
-
-    return keys
-}
-
-function ownValue(source: Record<string, unknown>, key: string): unknown {
-    if (key === '__proto__' && !Object.prototype.hasOwnProperty.call(source, '__proto__')) {
-        return Object.getPrototypeOf(source)
-    }
-
-    return source[key]
-}
-
-/** Own keys only, into a null-prototype map. Both halves matter. */
 function numberMap(raw: unknown): Record<string, number> {
     const counts: Record<string, number> = Object.create(null)
 
@@ -47,8 +28,8 @@ function numberMap(raw: unknown): Record<string, number> {
         return counts
     }
 
-    for (const key of ownKeys(raw)) {
-        counts[key] = finiteNumber(ownValue(raw, key))
+    for (const [key, value] of Object.entries(raw)) {
+        counts[key] = finiteNumber(value)
     }
 
     return counts
@@ -81,10 +62,9 @@ export function normalizeOverlay(raw: unknown): OverlaySnapshot {
     }
 
     const nodes: Record<string, NodeOverlay> = Object.create(null)
-    const source = raw.nodes
 
-    for (const key of ownKeys(source)) {
-        nodes[key] = nodeOverlay(ownValue(source, key))
+    for (const [key, value] of Object.entries(raw.nodes)) {
+        nodes[key] = nodeOverlay(value)
     }
 
     return {
