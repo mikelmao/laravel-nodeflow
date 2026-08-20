@@ -26,9 +26,19 @@ export type {
     GraphNode,
     NodeCardData,
     NodeErrorEntry,
+    NodeOverlay,
     NodeTypePayload,
+    OverlaySnapshot,
     PublishErrorBody,
+    RunSubjectRow,
+    RunSummary,
+    RunUrls,
     TriggerPayload,
 } from './graph/types'
 
-// FlowRun and useOverlayPolling belong to Plan 4; do not stub or export them here.
+export type { NodeBadge, NodeDecoration, NodeDecorationMap } from './canvas/context'
+
+export { FlowRun } from './run/FlowRun'
+export type { FlowRunProps } from './run/FlowRun'
+export { decorationsFor, normalizeOverlay, overlayFor } from './run/overlay'
+export { useOverlayPolling } from './run/useOverlayPolling'
