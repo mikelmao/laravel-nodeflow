@@ -14,7 +14,14 @@ Last updated after Plan 2 merged (`62c9e66`), 259 tests passing.
 ## Decisions waiting on a human
 
 ### D-1 · `nodeflow.tenancy` default should probably be inferred, not asked
-**Status:** DECISION · **Raised by:** Plan 2 whole-branch review · **Deadline:** no later than Plan 3's first commit
+**Status:** ✅ **DECIDED 2026-08-20 — adopt inference.** Spec amended as **E2a**; implemented as Plan 3a's first task. Kept here for the reasoning. · **Raised by:** Plan 2 whole-branch review
+
+> **Outcome:** `auto` becomes the default and infers from whether the container holds the package's
+> own `NoTenancyResolver` or a host-bound one. `disabled` and `resolver` remain as explicit overrides.
+> Measured before adopting: with every null return throwing, the suite is **259/259** — no test does a
+> tenant-scoped read with a null tenant, so the change costs no test churn. Control-probed with a
+> bogus mode, which correctly fails 9 tests, confirming the probe was real rather than a config that
+> never took effect.
 
 Spec decision **E2** defaults the mode to `disabled`, so a multi-tenant host that binds a
 `TenantResolver` and never sets `resolver` keeps today's silent unscoped read whenever their resolver
