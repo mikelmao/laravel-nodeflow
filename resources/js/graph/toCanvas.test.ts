@@ -61,13 +61,16 @@ describe('toCanvas', () => {
   })
 
   it('assigns distinct ids to duplicate identical edges', () => {
-    // Counterfactual: content-only ids collide when a draft contains parallel identical edges.
-    const canvas = toCanvas({
+    // Counterfactual: content-only ids collide, while random ids make the same draft unstable across conversions.
+    const duplicateGraph: Graph = {
       ...baseGraph,
       edges: [baseGraph.edges?.[0] ?? { from: 'n1', to: 'n2' }, baseGraph.edges?.[0] ?? { from: 'n1', to: 'n2' }],
-    })
+    }
+    const first = toCanvas(duplicateGraph)
+    const second = toCanvas(duplicateGraph)
 
-    expect(canvas.edges[0]?.id).not.toBe(canvas.edges[1]?.id)
+    expect(first.edges[0]?.id).not.toBe(first.edges[1]?.id)
+    expect(first.edges.map((edge) => edge.id)).toEqual(second.edges.map((edge) => edge.id))
   })
 
   it('keeps an explicit null output as a null source handle', () => {
