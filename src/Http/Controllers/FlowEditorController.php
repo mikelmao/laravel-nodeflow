@@ -18,9 +18,10 @@ use Nodeflow\Triggers\TriggerRegistry;
 /**
  * The editor's server half.
  *
- * Three deliberate shapes here. The draft endpoint does not validate, because a
- * graph mid-edit is allowed to be broken and refusing to store it would make
- * autosave useless. Publish returns per-node errors so the canvas can render each
+ * Three deliberate shapes here. The draft endpoint checks a graph's structure but
+ * never its meaning, because a graph mid-edit is allowed to be broken and refusing
+ * to store it would make autosave useless — see graphRules() for exactly where
+ * that line falls. Publish returns per-node errors so the canvas can render each
  * beside its node. And nothing reads a foreign key out of the request: open issue
  * G-3 records that Flow::currentVersion() is deliberately unscoped, which is safe
  * only while current_version_id stays inside the tenant — so it is set from a

@@ -394,7 +394,14 @@ nothing yet to be stale against. Echo the value you were last given back on
 every save after that: if it does not match what the server holds, you get
 **409** with `{message, graph, draft_revision}` — the newer graph and its
 revision — so the editor can say "someone else edited this" rather than
-silently discarding a colleague's work.
+silently discarding a colleague's work. `graph` in a 409 is always graph-shaped:
+if there is no draft to hand back (the flow was published in between) it is the
+same `{"start": "", "nodes": [], "edges": []}` skeleton the edit page falls back
+to, never `null` and never `[]`.
+
+The check is enforced in the UPDATE's WHERE clause, not merely compared before
+it, so two autosaves that overlap in flight cannot both succeed. The loser gets
+the 409.
 
 `draft_updated_at` still exists and is written on every save, but it never
 appears in this endpoint's response. It surfaces only in `flow.draft_updated_at`
@@ -405,13 +412,33 @@ to second precision, so two autosaves inside the same second minted an identical
 value and staleness detection silently stopped detecting. The integer counter
 replaced it for that reason.)
 
-**Draft saves are not validated.** A graph mid-edit is allowed to be broken — that
-is why a draft is not a version. Validation happens at publish.
+**Draft saves are not validated — beyond their structure.** A graph mid-edit is
+allowed to be broken: no start node, nodes wired to nothing, a type you have not
+registered, a half-filled config. That is why a draft is not a version, and
+publish is where meaning is checked. What both endpoints *do* enforce is shape,
+so a malformed payload is a **422** rather than a 500:
+
+| Key | Rule |
+|---|---|
+| `graph` | required, array |
+| `graph.start` | optional string (may be `""` — a draft need not start anywhere) |
+| `graph.nodes` | optional array |
+| `graph.nodes.*.id` | **required string** |
+| `graph.nodes.*.type` | **required string** |
+| `graph.nodes.*.config` | optional array |
+| `graph.edges` | optional array |
+| `graph.edges.*.from` | **required string** |
+| `graph.edges.*.to` | **required string** |
+| `graph.edges.*.output` | required string on publish, optional on draft |
+
+Node ids and edge endpoints must be **strings** — `"n1"`, not `1`. Any key not
+listed is left alone: a node's `position` round-trips untouched, as promised
+[below](#what-you-have-not-wired-yet).
 
 ### Publish
 
-`POST .../publish` takes `{graph}` and returns `{version}`. On rejection it returns
-**422** with `message` plus both shapes of the same failures:
+`POST .../publish` takes `{graph}` and returns `{version, draft_revision}`. On
+rejection it returns **422** with `message` plus both shapes of the same failures:
 
 - `errors` — flat strings, fine for a summary banner
 - `node_errors` — `[{node, field, message}]`, so each message can be rendered on its
@@ -423,7 +450,14 @@ One further wrinkle: for "the start node you set does not exist in this flow",
 the graph. A client cannot assume every `node_errors` entry maps to a rendered
 card; render what you can find and fall back to the banner for the rest.
 
-Publishing clears the draft, since the draft became the version.
+Publishing clears the draft, since the draft became the version — but **it does not
+reset `draft_revision`**, which is why the response carries it. The counter is
+monotonic for the life of the flow. A client that stays open across a publish keeps
+echoing the token it was just handed; a client that reloads gets it from the edit
+page's props. (An earlier version rewound the counter to 0 on publish. That gave the
+sole author of a flow a spurious 409 offering an empty graph on their very next
+autosave, and — worse — re-minted revision numbers, so a token from before a publish
+matched a different draft saved after it and the stale write was accepted.)
 
 ## Tenant-scoped field options
 
@@ -462,6 +496,16 @@ Two things worth knowing:
 - **A class that does not implement `OptionSource` is an error, not an empty list.**
   An empty select looks identical to a tenant that genuinely has no templates yet,
   which is the harder bug to find.
+
+The endpoint returns `{"options": {"value": "Label", ...}}`, always a JSON object,
+`{}` when there are none. The same is true of a field's inline `options` in the
+palette payload, so a client never has to handle two types for one key.
+
+The package's own `core.condition` node works this way: its `attribute` field's
+options are the [subject attributes you registered](#step-3--register-your-domain-surface),
+resolved through `SubjectAttributeRegistry`, which is itself an `OptionSource`. So
+an author building a condition sees exactly the attributes you chose to expose, and
+nothing else.
 
 ### Custom field types
 
