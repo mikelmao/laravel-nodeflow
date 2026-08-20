@@ -1,6 +1,7 @@
 <?php
 
 use Illuminate\Foundation\Auth\User;
+use Illuminate\Routing\RouteCollection;
 use Illuminate\Support\Facades\Gate;
 use Illuminate\Support\Facades\Route;
 use Nodeflow\Contracts\TenantResolver;
@@ -450,10 +451,12 @@ it('resolves its urls through the hosts own route name prefix', function () {
     // Route::name('admin.')->group(fn () => Nodeflow::routes()) is an ordinary
     // Laravel pattern — the demo app uses it for its own routes — and it renames
     // every route in this package. Counterfactual: call route('nodeflow.flows.draft')
-    // directly and this assertion sees the default /nodeflow URL (or, without an
-    // unprefixed registration, dies on RouteNotFoundException).
+    // directly and this test dies on RouteNotFoundException instead of asserting.
     allowEverything();
 
+    // Isolate the prefix contract from beforeEach's ordinary unprefixed routes:
+    // a bare sibling route name must not have a second collection to fall back to.
+    Route::setRoutes(new RouteCollection);
     Route::middleware('web')->prefix('admin')->name('admin.')->group(fn () => Nodeflow::routes());
 
     $response = $this->actingAs($this->user)
