@@ -7,6 +7,8 @@ use Nodeflow\Contracts\TenantResolver;
 use Nodeflow\Models\Flow;
 use Nodeflow\Nodeflow;
 use Nodeflow\Nodes\NodeRegistry;
+use Nodeflow\Schema\SubjectAttribute;
+use Nodeflow\Schema\SubjectAttributeRegistry;
 use Tests\Support\BadSourceNode;
 use Tests\Support\DynamicOptionNode;
 use Tests\Support\NotAnOptionSource;
@@ -55,6 +57,25 @@ it('ignores a class name smuggled in the query string', function () {
         ->assertOk()
         ->assertJsonPath('options.welcome', 'Welcome message')
         ->assertJsonMissingPath('options.sneaky');
+});
+
+it('resolves the attribute options of the packages own condition node', function () {
+    // The suite's other cases all use bespoke support nodes that implement
+    // OptionSource, so it structurally could not see a *core* node whose declared
+    // source does not. core.condition declares optionsFrom(SubjectAttributeRegistry)
+    // and every host has it registered, so this endpoint is what a Condition
+    // sidebar hits on first open.
+    //
+    // Counterfactual: drop `implements OptionSource` from SubjectAttributeRegistry
+    // and this is a 500, on a built-in node, for every host.
+    app(SubjectAttributeRegistry::class)->register(
+        SubjectAttribute::make('clicked', 'Has clicked', 'boolean', fn ($s) => true),
+    );
+
+    $this->actingAs($this->user)
+        ->getJson("/nodeflow/flows/{$this->flow->id}/nodes/core.condition/fields/attribute/options")
+        ->assertOk()
+        ->assertJsonPath('options.clicked', 'Has clicked');
 });
 
 it('four-oh-fours an unknown node type', function () {
