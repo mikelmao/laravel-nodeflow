@@ -7,11 +7,13 @@ most were proven by probe during a review rather than suspected.
 **Status key:** `DECISION` needs a human call · `DEFECT` is proven and unfixed · `GAP` is missing
 coverage or missing code · `DRIFT` is documentation disagreeing with code.
 
-Last updated after Plan 2 merged (`62c9e66`), 259 tests passing.
+Last updated 2026-08-20 after Plan 3 package acceptance (`c5684e4..d56cba5`) and
+demo acceptance (`549fe42`): 123 package Vitest tests, 325 package Pest tests and
+44 demo Pest tests passing.
 
 ---
 
-## Decisions waiting on a human
+## Decisions and scheduled follow-ups
 
 ### D-1 · `nodeflow.tenancy` default should probably be inferred, not asked
 **Status:** ✅ **DECIDED 2026-08-20 — adopt inference.** Spec amended as **E2a**; implemented as Plan 3a's first task. Kept here for the reasoning. · **Raised by:** Plan 2 whole-branch review
@@ -22,6 +24,11 @@ Last updated after Plan 2 merged (`62c9e66`), 259 tests passing.
 > tenant-scoped read with a null tenant, so the change costs no test churn. Control-probed with a
 > bogus mode, which correctly fails 9 tests, confirming the probe was real rather than a config that
 > never took effect.
+
+**Follow-up decision, 2026-08-20:** preserve the shipped `auto` inference and strengthen its
+observability: record or diagnose when the host's tenancy binding caused `auto` to choose resolver
+mode. The strengthening is decided in favour, unimplemented, and belongs with D-2 in a dedicated
+security-hardening plan after Plan 3b. E2a's `auto` inference itself already shipped in Plan 3a.
 
 Spec decision **E2** defaults the mode to `disabled`, so a multi-tenant host that binds a
 `TenantResolver` and never sets `resolver` keeps today's silent unscoped read whenever their resolver
@@ -39,7 +46,8 @@ Not taken unilaterally because E2 is an approved spec decision and this introduc
 and a new default. **Free now; a breaking change once hosts exist.**
 
 ### D-2 · Foundation spec §9 layer 2 does not exist in code
-**Status:** DECISION · **Raised by:** Plan 2 whole-branch review
+**Status:** ✅ **DECIDED 2026-08-20 — implement the assertion; unimplemented and assigned to the
+dedicated security-hardening plan after Plan 3b.** · **Raised by:** Plan 2 whole-branch review
 
 Foundation spec §9 claims runs denormalise `tenant_id` and that `RunNodeActivity` asserts it matches
 before executing. `src/Workflows/Activities/RunNodeActivity.php` contains no such assertion.
@@ -48,6 +56,20 @@ That layer is what would catch a mis-tenanted run at execution time, and Plan 2'
 ruling leans on the same edge (see G-3). Either implement it or correct the spec — a documented
 defence-in-depth layer that isn't there is worse than two honest layers. Implementing an assertion on
 the durable execution path deserves its own plan rather than a drive-by commit.
+
+---
+
+## Plan 3 acceptance evidence
+
+Both mandatory jsdom composition tests shipped: `Canvas` mounts `NodeCard`, and the assembled
+`FlowEditor` carries host renderers and package-owned option handling through that canvas. Task 10's
+real-browser acceptance then passed in the symlinked demo at `549fe42`: lazy options made exactly one
+request and returned four attributes; `wait1` was added, rewired and positioned; version 2 froze the
+graph with `1 minute`; clearing the duration left version 2 unchanged while the broken draft advanced
+to revision 4 with a null duration; and reload displayed that draft over the last successful version.
+The supporting gates were 123 package Vitest tests, 325 package Pest tests (5754 assertions), 44 demo
+Pest tests (171 assertions), silent package and demo `tsc`, a successful demo Vite build, and package
+Tailwind output containing `min-h-[32rem]`.
 
 ---
 
@@ -119,6 +141,15 @@ FK constraint and both models have `$guarded = []`.
 
 **Plan 3's controllers must never accept `current_version_id` or `flow_version_id` from request
 input.** That is the whole mitigation.
+
+### G-4 · Host wiring omits Vite dependency deduplication
+**Status:** GAP · **Raised by:** Plan 3 real-app acceptance, proven by the symlinked demo
+
+Spec §5.6 lists four host wiring requirements, but the accepted app proved there are five. Vite must
+set `resolve.dedupe` for `react`, `react-dom`, and `@xyflow/react`; otherwise a symlinked source
+package can load duplicate client runtimes and fail at runtime with an invalid hook call even while
+the build succeeds. Plan 5's `nodeflow:install` must verify this fifth requirement with the other
+four.
 
 ---
 

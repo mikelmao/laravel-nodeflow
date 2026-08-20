@@ -132,7 +132,7 @@ Six implementation plans, sequenced by dependency. One spec, because the field-c
 |---|---|---|---|
 | **1 — Node generator** ✅ **delivered** `4cadfb7..e22bd89` | `nodeflow:make-node` with `--test` | §7.2 | — |
 | **2 — Security floor** ✅ **delivered** `aa963ff..62c9e66` | Authorization gates; `FlowVersion` scoping; `nodeflow.tenancy`; the structural invariant for `RunSubject`/`NodeExecution` | §4 | — |
-| **3 — Editor** | `draft_graph`; `Nodeflow::routes()` and controllers; options endpoint; `Field::custom()`; `resources/js`; six field controls; dev `package.json` + Vitest | §5 | 2 |
+| **3 — Editor** ✅ **delivered** `c5684e4..d56cba5` (demo acceptance `549fe42`) | `draft_graph`; `Nodeflow::routes()` and controllers; options endpoint; `Field::custom()`; `resources/js`; six field controls; dev `package.json` + Vitest | §5 | 2 |
 | **4 — Run view** | `FlowRun` component and routes; overlay queries; subject drill-down; polling | §6 | 3 |
 | **5 — Remaining tooling** | `nodeflow:install`; `make-trigger`; `make-subject-attribute` | §7.1, §7.3 | 3 |
 | **6 — Packaging** | `make-node-package`; `extract-node` | §8 | 1, 5 |
@@ -166,12 +166,15 @@ its authority**, so read the block first.
 
 > #### As built
 >
-> **`nodeflow.tenancy`** is `disabled` (default) or `resolver`, and governs **only** what a `null`
-> return from `currentTenantId()` means. A non-null tenant scopes identically in both modes. Under
-> `resolver`, a null tenant makes a scoped read throw `TenancyUnresolvedException`, naming the model,
-> the config key and `withoutTenancy()`. **An unrecognised mode value throws** rather than degrading
-> to unscoped. See open issue **D-1**: the default is closed by documentation only, and should
-> probably be inferred from whether the host bound its own resolver.
+> **`nodeflow.tenancy`** is `auto` (default), `disabled` or `resolver`, and governs **only** what a
+> `null` return from `currentTenantId()` means. A non-null tenant scopes identically in all three
+> modes. `auto` infers disabled semantics when the container still holds the package's
+> `NoTenancyResolver`, and resolver semantics when the host has bound its own resolver. Under
+> resolver semantics, a null tenant makes a scoped read throw `TenancyUnresolvedException`, naming
+> the model, the config key and `withoutTenancy()`. **An unrecognised mode value throws** rather than
+> degrading to unscoped. E2a's inference shipped in Plan 3a. Open issue **D-1** now records only an
+> approved, unimplemented diagnostic follow-up: expose when a host binding caused `auto` to select
+> resolver mode, in the dedicated post-3b security-hardening plan with D-2.
 >
 > **`FlowVersion` is scoped** and carries `tenant_id` (`NOT NULL`). Its `booted()` hook is
 > authoritative: it always reads the flow unscoped, inherits the tenant when none is set, and throws
@@ -242,7 +245,48 @@ The three unscoped models are treated differently, because they differ in cost a
 
 ---
 
-## 5. The editor (Plan 3)
+## 5. The editor (Plan 3) — ✅ delivered, `c5684e4..d56cba5`
+
+**This section is now a description of shipped behaviour.** Everything below the "as built" block
+was written before implementation and is kept for its reasoning; where the two disagree, the "as
+built" block is the truth. The separate symlinked demo accepted this surface at `549fe42`.
+
+> #### As built
+>
+> `FlowEditor` receives a server-authored `urls` prop so it never reconstructs host-selected route
+> prefixes or names. Its option URL template contains both `__NODEFLOW_TYPE__` and
+> `__NODEFLOW_FIELD__`; the client URI-encodes and substitutes them, and fails by name if either
+> sentinel is absent. Route-name resolution is prefix-aware, so `Nodeflow::routes()` works inside a
+> host group whose name prefix is not the package default.
+>
+> `FieldControlProps` is exactly the specified six keys: `field`, `value`, `onChange`, `errors`,
+> `options`, and `optionsLoading`. An option-load failure is folded into `errors`; it is not a
+> seventh control prop. `NodeCard` owns every React Flow handle and the mandatory per-node error
+> list. A `nodeRenderers` override owns only the card body and therefore cannot remove either.
+>
+> An edge whose output handle cannot be resolved round-trips through a draft as `null`, and the
+> editor blocks publish client-side until the author chooses an output. It is never rewritten to
+> `'default'`. `gridPosition` lives in `canvas/layout.ts`, and `graph/toCanvas.ts` imports it. The
+> public `index.ts` honestly omits `FlowRun`, which belongs to Plan 4.
+>
+> Host wiring has **five** requirements, not the four listed in §5.6: Vite alias, tsconfig path,
+> Tailwind `@source`, host-installed `@xyflow/react`, and Vite `resolve.dedupe` for `react`,
+> `react-dom`, and `@xyflow/react`. The symlinked demo proved the fifth is necessary; Plan 5's
+> installer must verify it with the other four.
+>
+> Autosave defaults to a 1000 ms debounce. Accepted draft PUTs are ordered; a `409` exposes both
+> versions and halts the loop until the author explicitly chooses one. Publish waits for every
+> already-accepted draft PUT, holds a barrier across its POST, adopts the publish response's
+> `draft_revision`, and queues edits made during that POST as the next draft rather than losing or
+> prematurely saving them.
+>
+> Acceptance: **123 package Vitest tests**, silent package `tsc`, and **325 package Pest tests**
+> (5754 assertions). The demo at `549fe42` passes **44 Pest tests** (171 assertions), host `tsc`,
+> Vite build, and its Tailwind package-source check (`min-h-[32rem]`). Chrome acceptance passed all
+> eight real-app checks: lazy options made exactly one request and returned four attributes; the
+> added `wait1` node was rewired and positioned; version 2 froze the graph with `1 minute`; clearing
+> the duration left version 2 frozen while the broken draft advanced to revision 4 with a null
+> duration; reloading showed that draft over the last successful version.
 
 ### 5.1 Storage
 
