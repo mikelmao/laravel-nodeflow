@@ -1,6 +1,7 @@
 <?php
 
 use Illuminate\Support\Facades\Route;
+use Nodeflow\Http\Controllers\FieldOptionsController;
 use Nodeflow\Http\Controllers\FlowEditorController;
 
 /*
@@ -16,3 +17,11 @@ use Nodeflow\Http\Controllers\FlowEditorController;
 Route::get('flows/{flow}/edit', [FlowEditorController::class, 'edit'])->name('nodeflow.flows.edit');
 Route::put('flows/{flow}/draft', [FlowEditorController::class, 'draft'])->name('nodeflow.flows.draft');
 Route::post('flows/{flow}/publish', [FlowEditorController::class, 'publish'])->name('nodeflow.flows.publish');
+
+/*
+ * Keyed by node type and field key, never by a class name. The source is read from
+ * the node's own definition() — an endpoint that accepted the class from the client
+ * would be "instantiate any class in this application and call options() on it".
+ */
+Route::get('flows/{flow}/nodes/{type}/fields/{field}/options', FieldOptionsController::class)
+    ->name('nodeflow.fields.options');
