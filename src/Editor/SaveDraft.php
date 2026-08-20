@@ -95,8 +95,11 @@ class SaveDraft
             ->update([
                 // Encoded here, not left to the model's `array` cast: a
                 // query-builder update does not run casts, and handing the
-                // builder a PHP array binds it as one.
-                'draft_graph' => json_encode($graph),
+                // builder a PHP array binds it as one. Throwing on an
+                // unencodable graph matches the cast, which raises
+                // JsonEncodingException rather than writing json_encode()'s
+                // false as an empty column.
+                'draft_graph' => json_encode($graph, JSON_THROW_ON_ERROR),
                 'draft_updated_at' => $savedAt,
                 'draft_revision' => $next,
             ]);
@@ -118,11 +121,16 @@ class SaveDraft
         // instance across saves (a controller does not, but SaveDraft's own
         // contract does not say so), and leaving it on the old revision would make
         // the next save on the same instance wrongly refuse itself as stale.
+        //
+        // syncOriginalAttributes for these three keys only, not syncOriginal():
+        // marking the whole model clean would swallow an unrelated pending change
+        // a caller was holding — `$flow->name = 'x'` before an autosave would
+        // silently stop being dirty and never reach the database.
         $flow->forceFill([
             'draft_graph' => $graph,
             'draft_updated_at' => $savedAt,
             'draft_revision' => $next,
-        ])->syncOriginal();
+        ])->syncOriginalAttributes(['draft_graph', 'draft_updated_at', 'draft_revision']);
 
         return $next;
     }

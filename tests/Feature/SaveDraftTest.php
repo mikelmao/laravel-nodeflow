@@ -198,6 +198,21 @@ it('writes a graph the model can read back, without the array cast on the write 
         ->and(Flow::find($this->flow->getKey())->draft_updated_at)->not->toBeNull();
 });
 
+it('leaves a callers unrelated pending change on the model alone', function () {
+    // save() has to re-sync the three draft attributes on the passed model,
+    // because the conditional update bypasses Eloquent and the model would
+    // otherwise hold a revision the row no longer has. Counterfactual: re-sync
+    // with syncOriginal() instead of naming the three attributes and this fails —
+    // an unsaved change the caller was holding is marked clean and never written.
+    $this->flow->name = 'Renamed';
+
+    app(SaveDraft::class)->save($this->flow, graphWith('n1'), null);
+
+    $this->flow->save();
+
+    expect(Flow::find($this->flow->getKey())->name)->toBe('Renamed');
+});
+
 it('treats a revision read back from the database as current, not stale', function () {
     // Every other test in this file reuses the same in-memory $flow object
     // across saves, so draft_revision never actually leaves PHP and comes
