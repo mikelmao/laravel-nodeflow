@@ -154,6 +154,25 @@ describe('FlowRun', () => {
         await waitFor(() => expect(screen.getByText(/no subjects are here now/i)).toBeInTheDocument())
     })
 
+    it('says a node was never reached rather than implying it ran and emptied', async () => {
+        // The mirror image of the previous test, and the one my brief itself
+        // got wrong: a never-reached node must not tell the operator it
+        // "already released everyone" — that node never ran at all.
+        // Counterfactual: reuse the reached-then-emptied sentence for both
+        // states and this fails, because both branches would say the same
+        // (false, for 'nobody') thing.
+        const fetchMock = vi.fn().mockImplementation((requested: string) => requested.includes('/subjects')
+            ? Promise.resolve(subjectsPage([], null))
+            : Promise.resolve(Response.json(overlay())))
+        vi.stubGlobal('fetch', fetchMock)
+
+        render(<FlowRun run={run} graph={graph} palette={palette} overlay={overlay()} urls={urls} />)
+
+        await act(async () => { screen.getByText('nobody').click() })
+        await waitFor(() => expect(screen.getByText(/never reached/i)).toBeInTheDocument())
+        expect(screen.queryByText(/already released everyone/i)).toBeNull()
+    })
+
     it('lets a host restyle a run card without losing its badges or errors', () => {
         // The same guarantee the editor has: a renderer owns the body only.
         // Counterfactual: let the override replace the whole card and a themed

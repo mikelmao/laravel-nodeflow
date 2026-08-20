@@ -105,7 +105,18 @@ function FlowRunSession({
                     {run.error !== null && <p role="alert" className="text-[11px] text-destructive">{run.error}</p>}
                     {error !== null && <p role="alert" className="text-[11px] text-destructive">{error}</p>}
                 </div>
-                {selectedId !== null && <SubjectPanel template={urls.subjects} nodeId={selectedId} />}
+                {selectedId !== null && (
+                    <SubjectPanel
+                        template={urls.subjects}
+                        nodeId={selectedId}
+                        // The panel's empty-state wording depends on this: a
+                        // node the run reached and has since emptied reads
+                        // differently from one the run never touched at all,
+                        // and overlayFor is the same own-key-safe lookup the
+                        // badges and errors above already use for this snapshot.
+                        reached={overlayFor(snapshot, selectedId)?.reached === true}
+                    />
+                )}
             </aside>
         </div>
     )

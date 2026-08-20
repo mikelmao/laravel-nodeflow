@@ -1,8 +1,8 @@
-import { useCallback, useEffect, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import type { RunSubjectRow } from '../graph/types'
 import { send, subjectsUrl } from '../http'
 
-export type SubjectPanelProps = { template: string; nodeId: string }
+export type SubjectPanelProps = { template: string; nodeId: string; reached: boolean }
 
 type PanelState = {
     rows: RunSubjectRow[]
@@ -32,26 +32,51 @@ function rowsFrom(data: Record<string, unknown> | null): RunSubjectRow[] {
  *
  * "Right now" is the whole contract: the schema keeps no per-subject history
  * and nulls current_node_id on every terminal transition, so this can neither
- * list who passed through nor list a node's failures (spec E15). The empty
- * state therefore says "no subjects are here now" rather than showing a bare
- * empty list, because an operator reading nothing at all would take it for a
- * node the run never reached — a different fact entirely.
+ * list who passed through nor list a node's failures (spec E15). An empty
+ * result is ambiguous between two different facts unless `reached` disambiguates
+ * it in words: a node the run visited and has since released everyone, versus a
+ * node the run never touched at all. The canvas already tells the two apart
+ * visually (dimmed with no badge versus an explicit 0); this is the same
+ * distinction restated for the panel a user opens precisely to get the detail
+ * the canvas summarised away.
  */
-export function SubjectPanel({ template, nodeId }: SubjectPanelProps) {
+export function SubjectPanel({ template, nodeId, reached }: SubjectPanelProps) {
     const [state, setState] = useState<PanelState>(EMPTY)
 
+    // The freshest nodeId, read by an in-flight request's own resolution rather
+    // than by the render that started it. Assigning during render (not via an
+    // effect) keeps this correct even when a response for a previous node
+    // resolves after the next node has already been selected: by the time that
+    // response's .then runs, this ref already holds the new node, so the stale
+    // reply is recognised and dropped instead of overwriting the new panel. This
+    // is the same class of bug useOverlayPolling.ts guards against with its own
+    // in-flight/live checks — a response outliving the context that asked for it.
+    const currentNodeId = useRef(nodeId)
+    currentNodeId.current = nodeId
+
     const load = useCallback((cursor: string | null) => {
+        const requestedFor = nodeId
         let url: string
 
         try {
-            url = pageUrl(template, nodeId, cursor)
+            url = pageUrl(template, requestedFor, cursor)
         } catch (reason: unknown) {
+            if (currentNodeId.current !== requestedFor) {
+                return
+            }
+
             setState((previous) => ({ ...previous, loading: false, error: String(reason) }))
 
             return
         }
 
         void send('GET', url).then((result) => {
+            // Drop a reply for a node that is no longer selected rather than
+            // writing its rows into the panel now showing a different node.
+            if (currentNodeId.current !== requestedFor) {
+                return
+            }
+
             if (!result.ok) {
                 setState((previous) => ({
                     ...previous,
@@ -86,7 +111,9 @@ export function SubjectPanel({ template, nodeId }: SubjectPanelProps) {
             {state.loading && <p className="text-[11px] text-muted-foreground">Loading…</p>}
             {!state.loading && state.error === null && state.rows.length === 0 && (
                 <p className="text-[11px] text-muted-foreground">
-                    No subjects are here now. This node may have released everyone already.
+                    {reached
+                        ? 'No subjects are here now. This node ran and has already released everyone who passed through it.'
+                        : 'This node was never reached by this run, so no subject has ever been here.'}
                 </p>
             )}
             <ul className="space-y-1">
