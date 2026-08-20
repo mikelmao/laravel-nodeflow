@@ -14,15 +14,33 @@ use RecursiveIteratorIterator;
  * rather than enforced by a scope — query them directly from a request-context
  * class and there is nothing between the caller and every tenant's rows.
  *
- * Matching on `Model::` catches a static query entry point while ignoring an
- * import or a docblock mention, which are not queries. The negative lookahead
- * for `class` additionally excludes `Model::class` — a class-constant
- * reference (e.g. inside a `hasMany(RunSubject::class)` relation definition)
- * is a mention of the class, not a query against it.
+ * Two forms count as a query, because both are established idioms here:
+ *
+ * - `Model::` — a static query entry point. The negative lookahead for `class`
+ *   excludes `Model::class`, a class-constant reference (e.g. inside a
+ *   `hasMany(RunSubject::class)` relation definition), which is a mention of
+ *   the class rather than a query against it. An import or a docblock mention
+ *   is likewise not matched.
+ * - `DB::table('nodeflow_run_subjects')` and `->table('nodeflow_run_subjects')`
+ *   — the raw-table form. This is not hypothetical: AudienceMaterialiser
+ *   already writes `DB::table('nodeflow_run_subjects')->insert(...)` for the
+ *   bulk path, so it is the pattern a future author reaches for by copying
+ *   what is already here — and matching only `Model::` let a plausible
+ *   `DB::table("nodeflow_run_subjects")->where("run_id", 1)->get()` in a
+ *   controller through with the architecture test still green.
+ *
+ * The whole pattern is case-insensitive. PHP class and static-property lookups
+ * are case-insensitive too, so `runsubject::where(...)` is a working query that
+ * a case-sensitive pattern would miss — and `::CLASS` is a working
+ * class-constant reference that a case-sensitive lookahead would wrongly flag.
  */
 class RequestContextScanner
 {
-    public const FORBIDDEN = ['RunSubject', 'NodeExecution'];
+    /** Model name => the table it maps to. */
+    public const FORBIDDEN = [
+        'RunSubject' => 'nodeflow_run_subjects',
+        'NodeExecution' => 'nodeflow_node_executions',
+    ];
 
     /**
      * @param  string  $root  directory to scan
@@ -54,8 +72,11 @@ class RequestContextScanner
             $contents = file_get_contents($file->getPathname());
             $relative = ltrim(str_replace(str_replace('\\', '/', $root), '', $path), '/');
 
-            foreach (self::FORBIDDEN as $model) {
-                if (preg_match('/\b'.$model.'::(?!class\b)/', $contents) === 1) {
+            foreach (self::FORBIDDEN as $model => $table) {
+                $pattern = '/\b'.$model.'::(?!class\b)'
+                    .'|(?:DB::|->)table\(\s*[\'"]'.$table.'[\'"]/i';
+
+                if (preg_match($pattern, $contents) === 1) {
                     $violations[] = "{$relative}: {$model}";
                 }
             }

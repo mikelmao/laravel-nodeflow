@@ -39,10 +39,20 @@ it('keeps RunSubject and NodeExecution out of everything but the execution inter
     // query them today: the interpreter internals and the prune command, which
     // is explicitly a cross-tenant system operation.
     //
-    // Counterfactual: add `RunSubject::where(...)` to any file in src/ outside
-    // the allowlist and this fails, naming the file.
+    // Counterfactual: add `RunSubject::where(...)` or
+    // `DB::table('nodeflow_run_subjects')` to any file in src/ outside the
+    // allowlist and this fails, naming the file.
+    $src = __DIR__.'/../../src';
+
+    // violations() returns [] for a root that is not a directory, which is the
+    // right answer for a caller passing a temp dir it did not create — and a
+    // silent pass here if this path ever stops resolving (a move, a rename, a
+    // composer layout change). Asserted rather than assumed: an architecture
+    // guard that scans nothing is worse than no guard, because it reports green.
+    expect(is_dir($src))->toBeTrue("scanner root does not resolve to a directory: {$src}");
+
     $violations = Tests\Support\RequestContextScanner::violations(
-        __DIR__.'/../../src',
+        $src,
         ['/src/Execution/', '/src/Console/PruneCommand.php'],
     );
 
