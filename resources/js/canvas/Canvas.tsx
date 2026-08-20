@@ -1,6 +1,18 @@
-import { Background, Controls, ReactFlow, type Connection, type Edge, type Node, type NodeTypes, type OnEdgesChange, type OnNodesChange, type ReactFlowProps } from '@xyflow/react'
+import {
+    Background,
+    Controls,
+    ReactFlow,
+    type Connection,
+    type Edge,
+    type Node,
+    type NodeMouseHandler,
+    type NodeTypes,
+    type OnEdgesChange,
+    type OnNodesChange,
+    type ReactFlowProps,
+} from '@xyflow/react'
 import '@xyflow/react/dist/style.css'
-import { useMemo } from 'react'
+import { useCallback, useMemo } from 'react'
 import type { CanvasEdge, CanvasNode, NodeCardData, NodeTypePayload } from '../graph/types'
 import { CanvasContext, type NodeRendererMap } from './context'
 import { NodeCard } from './NodeCard'
@@ -27,26 +39,78 @@ export type CanvasProps = {
 
 // Keeping nodeTypes at module scope avoids React Flow remount warnings.
 const nodeTypes = { nodeflowNode: NodeCard } satisfies NodeTypes
+const EMPTY_RENDERERS: NodeRendererMap = Object.freeze({})
+const EMPTY_NODE_ERRORS: Record<string, string[]> = Object.freeze({})
 
-type InteractionProps = Pick<ReactFlowProps<NodeflowNode, NodeflowEdge>, 'nodesDraggable' | 'nodesConnectable' | 'nodesFocusable' | 'edgesFocusable' | 'elementsSelectable' | 'edgesReconnectable' | 'deleteKeyCode' | 'disableKeyboardA11y'>
+type InteractionProps = Pick<
+    ReactFlowProps<NodeflowNode, NodeflowEdge>,
+    | 'nodesDraggable'
+    | 'nodesConnectable'
+    | 'nodesFocusable'
+    | 'edgesFocusable'
+    | 'elementsSelectable'
+    | 'edgesReconnectable'
+    | 'deleteKeyCode'
+    | 'disableKeyboardA11y'
+>
 
 export function interactionProps(interactive: boolean): InteractionProps {
-    return { nodesDraggable: interactive, nodesConnectable: interactive, nodesFocusable: interactive, edgesFocusable: interactive, elementsSelectable: interactive, edgesReconnectable: interactive, deleteKeyCode: interactive ? ['Backspace', 'Delete'] : null, disableKeyboardA11y: !interactive }
+    return {
+        nodesDraggable: interactive,
+        nodesConnectable: interactive,
+        nodesFocusable: interactive,
+        edgesFocusable: interactive,
+        elementsSelectable: interactive,
+        edgesReconnectable: interactive,
+        deleteKeyCode: interactive ? ['Backspace', 'Delete'] : null,
+        disableKeyboardA11y: !interactive,
+    }
 }
 
 // Element flags override global React Flow flags, so read-only mode clears both.
 function readOnlyNodes(nodes: NodeflowNode[]): NodeflowNode[] {
-    return nodes.map(node => ({ ...node, draggable: false, selectable: false, deletable: false, focusable: false, connectable: false }))
+    return nodes.map((node) => ({
+        ...node,
+        selected: false,
+        dragging: false,
+        draggable: false,
+        selectable: false,
+        deletable: false,
+        focusable: false,
+        connectable: false,
+    }))
 }
 
 function readOnlyEdges(edges: NodeflowEdge[]): NodeflowEdge[] {
-    return edges.map(edge => ({ ...edge, selectable: false, deletable: false, focusable: false, reconnectable: false }))
+    return edges.map((edge) => ({
+        ...edge,
+        selected: false,
+        selectable: false,
+        deletable: false,
+        focusable: false,
+        reconnectable: false,
+    }))
 }
 
 type MutationCallbacks = Pick<CanvasProps, 'onNodesChange' | 'onEdgesChange' | 'onConnect'>
 
-export function canvasBehavior(interactive: boolean, nodes: NodeflowNode[], edges: NodeflowEdge[], callbacks: MutationCallbacks): { nodes: NodeflowNode[]; edges: NodeflowEdge[] } & MutationCallbacks {
-    return interactive ? { nodes, edges, ...callbacks } : { nodes: readOnlyNodes(nodes), edges: readOnlyEdges(edges), onNodesChange: undefined, onEdgesChange: undefined, onConnect: undefined }
+export function canvasBehavior(
+    interactive: boolean,
+    nodes: NodeflowNode[],
+    edges: NodeflowEdge[],
+    callbacks: MutationCallbacks,
+): { nodes: NodeflowNode[]; edges: NodeflowEdge[] } & MutationCallbacks {
+    if (interactive) {
+        return { nodes, edges, ...callbacks }
+    }
+
+    return {
+        nodes: readOnlyNodes(nodes),
+        edges: readOnlyEdges(edges),
+        onNodesChange: undefined,
+        onEdgesChange: undefined,
+        onConnect: undefined,
+    }
 }
 
 /**
@@ -54,14 +118,49 @@ export function canvasBehavior(interactive: boolean, nodes: NodeflowNode[], edge
  * The default class supplies a real parent height because xyflow cannot lay out
  * inside a heightless container. Its stylesheet is imported at this boundary.
  */
-export function Canvas({ nodes, edges, defs, renderers = {}, nodeErrors = {}, onNodesChange, onEdgesChange, onConnect, onNodeClick, interactive = true, className = 'h-full min-h-[32rem] w-full' }: CanvasProps) {
+export function Canvas({
+    nodes,
+    edges,
+    defs,
+    renderers = EMPTY_RENDERERS,
+    nodeErrors = EMPTY_NODE_ERRORS,
+    onNodesChange,
+    onEdgesChange,
+    onConnect,
+    onNodeClick,
+    interactive = true,
+    className = 'h-full min-h-[32rem] w-full',
+}: CanvasProps) {
     const context = useMemo(() => ({ defs, renderers, nodeErrors }), [defs, renderers, nodeErrors])
     const interactions = interactionProps(interactive)
-    const behavior = useMemo(() => canvasBehavior(interactive, nodes, edges, { onNodesChange, onEdgesChange, onConnect }), [interactive, nodes, edges, onNodesChange, onEdgesChange, onConnect])
+    const behavior = useMemo(
+        () => canvasBehavior(interactive, nodes, edges, { onNodesChange, onEdgesChange, onConnect }),
+        [interactive, nodes, edges, onNodesChange, onEdgesChange, onConnect],
+    )
+    const handleNodeClick = useCallback<NodeMouseHandler<NodeflowNode>>(
+        (_, node) => onNodeClick?.(node.id),
+        [onNodeClick],
+    )
 
-    return <CanvasContext.Provider value={context}><div className={className}><ReactFlow<NodeflowNode, NodeflowEdge>
-        nodes={behavior.nodes} edges={behavior.edges} nodeTypes={nodeTypes} onNodesChange={behavior.onNodesChange} onEdgesChange={behavior.onEdgesChange} onConnect={behavior.onConnect}
-        onNodeClick={(_, node) => onNodeClick?.(node.id)} {...interactions} fitView proOptions={{ hideAttribution: true }}>
-        <Background /><Controls showInteractive={false} />
-    </ReactFlow></div></CanvasContext.Provider>
+    return (
+        <CanvasContext.Provider value={context}>
+            <div className={className}>
+                <ReactFlow<NodeflowNode, NodeflowEdge>
+                    nodes={behavior.nodes}
+                    edges={behavior.edges}
+                    nodeTypes={nodeTypes}
+                    onNodesChange={behavior.onNodesChange}
+                    onEdgesChange={behavior.onEdgesChange}
+                    onConnect={behavior.onConnect}
+                    onNodeClick={handleNodeClick}
+                    {...interactions}
+                    fitView
+                    proOptions={{ hideAttribution: true }}
+                >
+                    <Background />
+                    <Controls showInteractive={false} />
+                </ReactFlow>
+            </div>
+        </CanvasContext.Provider>
+    )
 }

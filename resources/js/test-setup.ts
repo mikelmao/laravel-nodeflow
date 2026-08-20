@@ -17,10 +17,21 @@ class ResizeObserverStub implements ResizeObserver {
 }
 globalThis.ResizeObserver ??= ResizeObserverStub
 if (!('DOMMatrixReadOnly' in globalThis)) {
-    class DOMMatrixReadOnlyStub { m22 = 1; constructor(_transform?: string) {} }
+    class DOMMatrixReadOnlyStub {
+        m22 = 1
+
+        constructor(_transform?: string) {}
+    }
+
     Object.defineProperty(globalThis, 'DOMMatrixReadOnly', { value: DOMMatrixReadOnlyStub, writable: true })
 }
 Object.defineProperties(globalThis.HTMLElement.prototype, {
-    offsetHeight: { get: () => 40 },
-    offsetWidth: { get: () => 208 },
+    offsetHeight: {
+        configurable: true,
+        get: () => 40,
+    },
+    offsetWidth: {
+        configurable: true,
+        get: () => 208,
+    },
 })
