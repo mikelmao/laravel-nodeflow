@@ -133,4 +133,30 @@ describe('useOverlayPolling', () => {
         await waitFor(() => expect(result.current.snapshot.nodes.wait!.waiting).toBe(2))
         expect(result.current.error).toBeNull()
     })
+
+    it('does not stack requests when the server is slower than the interval', async () => {
+        // The inFlight guard, which no other test reaches: every other case's
+        // fetch mock resolves as an immediate microtask, so a tick never
+        // overlaps a still-pending request. Counterfactual: delete the
+        // `if (inFlight.current !== null) return` guard in tick() and a server
+        // slower than the interval accumulates one request per tick — against an
+        // endpoint that runs two grouped aggregates over six-figure tables.
+        let release: (value: Response) => void = () => undefined
+        const pending = new Promise<Response>((resolve) => { release = resolve })
+        const fetchMock = vi.fn().mockReturnValueOnce(pending).mockResolvedValue(Response.json(envelope(false, 1)))
+        vi.stubGlobal('fetch', fetchMock)
+
+        renderHook(() => useOverlayPolling(URL, normalizeOverlay(envelope(false, 9)), 1000))
+
+        // Three interval boundaries pass while the first request is still open.
+        await act(async () => { await vi.advanceTimersByTimeAsync(3000) })
+
+        expect(fetchMock).toHaveBeenCalledTimes(1)
+
+        // Once it settles, polling resumes normally.
+        await act(async () => { release(Response.json(envelope(false, 4))) })
+        await act(async () => { await vi.advanceTimersByTimeAsync(1000) })
+
+        expect(fetchMock).toHaveBeenCalledTimes(2)
+    })
 })
