@@ -83,6 +83,13 @@ for the second, so you declare which you mean:
 'tenancy' => 'resolver',   // or 'disabled'
 ```
 
+The config value is `env('NODEFLOW_TENANCY', 'disabled')`, so you do not have to
+publish the config file to set it:
+
+```dotenv
+NODEFLOW_TENANCY=resolver
+```
+
 - **`disabled`** (the default) — no tenancy. A null tenant reads unscoped. Correct
   for a single-tenant application that never binds a resolver.
 - **`resolver`** — you have tenancy, so a null tenant means it could not be
@@ -92,6 +99,13 @@ for the second, so you declare which you mean:
 
 **If you implement `TenantResolver`, set this to `resolver`.** A non-null tenant
 scopes identically in both modes; the setting governs only the null case.
+
+Those two strings are the only accepted values, matched exactly. Anything else —
+`Resolver`, `RESOLVER`, `true`, or a cached config from before the key existed —
+throws `InvalidArgumentException` on the next scoped read, naming the offending
+value. It deliberately does not fall back to `disabled`: a typo that silently
+read every tenant's rows would punish the reader of these docs and spare the
+person who never opened them.
 
 System operations that genuinely span tenants opt out explicitly with
 `Model::withoutTenancy()` — the package's own fan-out triggers and queue
@@ -209,6 +223,8 @@ The package makes no authorization decisions. It ships policies for `Flow` and
 does not exist** — so a fresh install refuses everything until you say otherwise,
 rather than shipping open and relying on you noticing.
 
+In a service provider's `boot()`:
+
 ```php
 use Illuminate\Support\Facades\Gate;
 
@@ -244,13 +260,38 @@ user — a guest denied without the closure running is the outcome you want here
 Only make the first argument nullable when you deliberately want the closure
 itself to decide the guest case, such as a public read.
 
-Tenant isolation is **not** your gate's job: the models are already scoped, so a
-cross-tenant id is a 404 before any gate runs. Gates answer "may this person do
-this", not "is this row theirs".
+**A `Gate::before` hook in your application overrides the default deny.** That
+is Laravel's own semantics rather than anything the package adds: a `before`
+callback returning a non-null value is answered before the policy is consulted
+at all, so `Gate::before(fn ($user) => $user->isSuperAdmin() ? true : null)`
+grants your super-admins every Nodeflow ability without a single
+`Gate::define`. Your choice, and a reasonable one — but worth knowing, because
+"deny when the gate does not exist" then no longer describes those users.
+Return `null` for the cases the hook does not decide; returning `false` denies
+outright and takes the decision away from the policies entirely.
 
 A host needing more than a gate can override the package's policy entirely by
 binding its own with `Gate::policy(Flow::class, YourPolicy::class)` in a
 provider that boots after this one.
+
+### Tenant isolation and your gate
+
+The tenant scope is the primary control, and it is a stronger one than a gate: a
+cross-tenant id never survives the scoped read, so it is a 404 before your gate
+is asked anything. But that holds only while a tenant actually resolves. Under
+the shipped default (`disabled`), or on any path where your resolver returns
+`null` — a queue-dispatched preview, an API token that has not selected an
+organisation yet, a console command — the read is **not** scoped and the row
+comes back.
+
+Which is why the `nodeflow.update` example above compares
+`$user->organization_id === $flow->tenant_id`. That is deliberate: it costs one
+comparison, it is defence in depth behind the scope, and on a path where the
+ambient tenant is null it is the only check still standing. Keep it, and prefer
+it in any gate that receives a `Flow` or a `Run`.
+
+So: the scope decides "is this row reachable at all", and your gate decides "may
+this person do this" — plus, cheaply, "is this row theirs".
 
 ## Verifying the install
 

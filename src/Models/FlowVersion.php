@@ -68,7 +68,7 @@ class FlowVersion extends Model
             if ((string) $version->tenant_id !== (string) $flowTenantId
                 && ! TenancyGuardSuspension::isActive()) {
                 throw CrossTenantWriteException::forParentMismatch(
-                    self::class,
+                    $version::class,
                     "flow [{$version->flow_id}]",
                     $flowTenantId,
                     $version->tenant_id,
