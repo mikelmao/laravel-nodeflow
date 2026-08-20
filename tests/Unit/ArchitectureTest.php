@@ -68,3 +68,17 @@ it('keeps RunSubject and NodeExecution out of everything but the execution inter
 
     expect($violations)->toBe([]);
 });
+
+it('never lets the request-context trees be exempted from the RunSubject rule', function () {
+    // The case above passes an allowlist, and an allowlist can grow. This one
+    // passes none, over exactly the two trees that must never query the
+    // untenanted tables however the global allowlist evolves. Counterfactual:
+    // write RunSubject::where(...) into src/Runs/RunOverlay.php and this fails,
+    // naming the file, even if someone allowlists it in the case above.
+    foreach (['/../../src/Http', '/../../src/Runs'] as $relative) {
+        $tree = __DIR__.$relative;
+
+        expect(is_dir($tree))->toBeTrue("scanner root does not resolve to a directory: {$tree}");
+        expect(Tests\Support\RequestContextScanner::violations($tree, []))->toBe([]);
+    }
+});
