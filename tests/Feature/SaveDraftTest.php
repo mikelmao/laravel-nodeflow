@@ -232,16 +232,21 @@ it('treats a revision read back from the database as current, not stale', functi
 });
 
 it('does not treat a driver-returned string revision as stale against the caller\'s int', function () {
-    // draft_revision carries no cast on the Flow model, so save() must not
-    // rely on the database driver handing back an int. SQLite (this suite's
-    // driver) always does, so this can't be reproduced through a real fetch
-    // here — it is forced directly onto the model to stand in for MySQL or
-    // Postgres, which commonly return an unsigned integer column as a numeric
-    // string. Counterfactual: drop the (int) cast on $flow->draft_revision in
-    // SaveDraft::save() and this fails, because '1' !== 1 under PHP's strict
-    // comparison — meaning every save after the first would be wrongly
-    // refused as stale on those drivers while this exact scenario kept
-    // passing on SQLite.
+    // save() must not rely on the database driver handing back an int. SQLite
+    // (this suite's driver) always does, so this can't be reproduced through a
+    // real fetch here — it is forced directly onto the model to stand in for
+    // MySQL or Postgres, which commonly return an unsigned integer column as a
+    // numeric string, where '1' !== 1 under PHP's strict comparison would refuse
+    // every save after the first as stale.
+    //
+    // NOTE on what this can and cannot detect. It was written when Flow carried
+    // no cast for draft_revision, and its stated counterfactual was "drop the
+    // (int) in SaveDraft::save()". Flow now casts draft_revision to integer, and
+    // a cast applies on attribute *read* regardless of setRawAttributes()
+    // bypassing it on write — so this scenario now survives either guard alone
+    // and no longer detects the inline cast being removed. It still detects the
+    // pair being removed, which is the failure that matters: it is the only test
+    // here that exercises a non-int revision at all.
     $first = app(SaveDraft::class)->save($this->flow, graphWith('n1'), null);
 
     $this->flow->setRawAttributes(

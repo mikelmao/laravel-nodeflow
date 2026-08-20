@@ -38,16 +38,16 @@ class SaveDraft
      */
     public function save(Flow $flow, array $graph, ?int $lastSeenRevision): int
     {
-        // Explicit (int) here, not just the `?? 0` fallback: draft_revision
-        // carries no cast on the Flow model, so what comes back is whatever the
-        // driver hands over. SQLite (this package's test driver) returns a
-        // native PHP int for an integer column, but MySQL and Postgres commonly
-        // return one as a numeric string — and a bare `!==` below would then
-        // compare a string against an int and always find them "different",
-        // rejecting every normal save as stale, including a flow's very first
-        // save after being loaded the ordinary way. Dropping this cast would
-        // not fail loudly; it would silently start refusing saves on those
-        // drivers while this suite kept passing on SQLite.
+        // Explicit (int) here, not just the `?? 0` fallback, and kept even though
+        // Flow now casts draft_revision to integer as well. MySQL and Postgres
+        // commonly hand an unsigned integer column back as a numeric string where
+        // SQLite (this package's test driver) hands back an int, and a bare `!==`
+        // below comparing '1' against 1 would find them "different" and reject
+        // every save after the first as stale. The model cast closes that, but the
+        // comparison lives here: a reader auditing this `!==` should not have to
+        // go and check another file's $casts array to know it is safe, and a cast
+        // removed there would fail silently on those drivers while this suite kept
+        // passing on SQLite. Belt and braces, deliberately.
         $current = (int) ($flow->draft_revision ?? 0);
 
         // A null last-seen means "I have never loaded a draft," which is
