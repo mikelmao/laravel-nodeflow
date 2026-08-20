@@ -15,12 +15,14 @@ namespace Nodeflow\Models\Concerns;
  * system event — such as a fan-out across tenants — that has no ambient
  * tenant of its own.
  *
- * This class suspends *only* that contradiction check, for the duration of a
- * closure, on every model using BelongsToTenant. It does not touch the read
- * scope: `withoutTenancy()` already exists for opting a query out of tenant
- * scoping, and this is not a second way to do that job. The stamping of
- * `tenant_id` on a model with none set is also unaffected — suspension only
- * disables the *throw*, not the default-assignment behaviour.
+ * This class suspends that contradiction check, for the duration of a
+ * closure, on every model using BelongsToTenant — both the `creating()` check
+ * above and the `updating()` guard that refuses a change to an existing row's
+ * `tenant_id`. It does not touch the read scope: `withoutTenancy()` already
+ * exists for opting a query out of tenant scoping, and this is not a second
+ * way to do that job. The stamping of `tenant_id` on a model with none set is
+ * also unaffected — suspension only disables the *throw*, not the
+ * default-assignment behaviour.
  *
  * Never call this to make a genuinely contradicting write "succeed" against
  * the ambient tenant on behalf of the host application. It exists solely for
