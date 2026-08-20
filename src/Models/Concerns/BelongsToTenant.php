@@ -82,8 +82,21 @@ trait BelongsToTenant
      * the package's own fallback binding) and "tenancy is unresolved right now"
      * (a queue worker, a console command, an unauthenticated request). Reading
      * unscoped is correct for the first and a cross-tenant leak for the second,
-     * and nothing in the null itself distinguishes them — so the host declares
-     * which it means via nodeflow.tenancy.
+     * and nothing in the null itself distinguishes them — so nodeflow.tenancy
+     * decides. It defaults to 'auto', which infers.
+     *
+     * KNOWN LIMIT of that inference, and the reason the docs now tell hosts to
+     * bind in a provider's register(): the question 'auto' actually asks is "is
+     * NoTenancyResolver the binding in the container at this instant", which is
+     * only the same question as "does this application have tenancy" while the
+     * host's binding is unconditionally in place. A host that binds its resolver
+     * in middleware — a normal enough Laravel pattern — gets the fallback in
+     * queue and console contexts, where 'auto' then concludes "no tenancy" and
+     * reads across every tenant. NODEFLOW_TENANCY=resolver is the escape hatch
+     * for such a host, and 'auto' is deliberately left as it is: a stronger fix
+     * (having the service provider record whether the host's binding won) changes
+     * an approved spec decision and is being decided separately. Do not "improve"
+     * the inference here without that decision.
      *
      * The mode is matched against a known set on every scoped read, in both
      * branches, rather than compared to 'resolver' alone. An unrecognised value

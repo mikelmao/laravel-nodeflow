@@ -101,10 +101,22 @@ NODEFLOW_TENANCY=disabled
   hatch if you bind a resolver and genuinely want that.
 - **`resolver`** — always treat null as unresolved and throw.
 
-**You should not normally need to set this.** `auto` is right for both the
+**You should not normally need to set this, but `auto` has one sharp edge — read
+the next paragraph before leaving it alone.** `auto` is right for both the
 single-tenant host and the multi-tenant one; the two explicit modes exist for the
 cases where inference is wrong. An unrecognised value throws rather than degrading
 to unscoped.
+
+> **`auto` infers from the container, so bind your resolver in a provider's
+> `register()`.** What it actually asks is "is the package's own fallback resolver
+> the thing bound *right now*", which is only the same question as "does this
+> application have tenancy" if your binding is always in place. Bind it in
+> middleware — a normal enough Laravel pattern — and a queue job or a console
+> command runs with the fallback bound, `auto` concludes "no tenancy", and a scoped
+> read returns **every tenant's rows** instead of throwing. Bind unconditionally,
+> in `register()`, never inside a conditional and never per request. If you must
+> bind per request, set `NODEFLOW_TENANCY=resolver` so a null tenant always throws
+> instead of being interpreted.
 
 Those three strings are the only accepted values, matched exactly. Anything else —
 `Auto`, `AUTO`, `true`, or a cached config from before the key existed — throws
@@ -165,6 +177,13 @@ public function register(): void
 ```
 
 The package uses `bindIf` for its own defaults, so your binding wins regardless of provider order.
+
+**In `register()`, unconditionally.** Not in middleware, not in a route callback, not
+behind an `if`. The default `nodeflow.tenancy = auto` decides what a null tenant means
+by asking which resolver is in the container, so a binding that only exists during a web
+request makes the same application look tenancy-free to a queue worker or an artisan
+command — see [Which kind of null you mean](#which-kind-of-null-you-mean). Your
+resolver may of course *return* null in those contexts; it just has to be the one asked.
 
 ## Step 3 — Register your domain surface
 
