@@ -178,6 +178,91 @@ it('returns per-node errors when publish is rejected', function () {
         ->assertJsonPath('node_errors.0.field', 'duration');
 });
 
+it('four-twenty-twos a published node with no id rather than exploding', function () {
+    // An ordinary client bug, and the most likely one: a node added to the canvas
+    // before its id is assigned. Counterfactual: validate only ['graph' =>
+    // ['required','array']] and Graph::fromArray() reads $node['id'] on an array
+    // that has none — a 500, on the endpoint whose entire new feature is
+    // structured, renderable errors, with a stack trace under APP_DEBUG.
+    allowEverything();
+
+    $this->actingAs($this->user)
+        ->postJson("/nodeflow/flows/{$this->flow->id}/publish", ['graph' => [
+            'start' => 'n1',
+            'nodes' => [['type' => 'core.exit', 'config' => []]],
+            'edges' => [],
+        ]])
+        ->assertStatus(422)
+        ->assertJsonValidationErrors('graph.nodes.0.id');
+});
+
+it('four-twenty-twos a published edge with no target rather than exploding', function () {
+    // Counterfactual: as above — GraphValidator reads $edge['to'] unconditionally,
+    // so an unterminated edge was a 500.
+    allowEverything();
+
+    $this->actingAs($this->user)
+        ->postJson("/nodeflow/flows/{$this->flow->id}/publish", ['graph' => [
+            'start' => 'e1',
+            'nodes' => [['id' => 'e1', 'type' => 'core.exit', 'config' => []]],
+            'edges' => [['from' => 'e1', 'output' => 'default']],
+        ]])
+        ->assertStatus(422)
+        ->assertJsonValidationErrors('graph.edges.0.to');
+});
+
+it('still reports a missing start node as a renderable publish error, not a field error', function () {
+    // The structural rules deliberately leave `start` nullable. Counterfactual:
+    // require it and the canvas loses the node_errors entry it renders in its
+    // banner, in exchange for a field-validation message about a key the author
+    // has no field for.
+    allowEverything();
+
+    $this->actingAs($this->user)
+        ->postJson("/nodeflow/flows/{$this->flow->id}/publish", ['graph' => [
+            'nodes' => [['id' => 'e1', 'type' => 'core.exit', 'config' => []]],
+            'edges' => [],
+        ]])
+        ->assertStatus(422)
+        ->assertJsonPath('node_errors.0.node', null)
+        ->assertJsonMissingPath('errors.graph\\.start');
+});
+
+it('four-twenty-twos a drafted node with no id, and still saves a half-connected graph', function () {
+    // The draft endpoint validates structure too — an arbitrary array becomes
+    // edit()'s graph prop — but only structure. Counterfactual on the first half:
+    // drop the rules and `nodes` can be the string "nope", which the editor then
+    // has to render. Counterfactual on the second: tighten them beyond structure
+    // (require a start, require edges to resolve) and a canvas mid-edit stops
+    // autosaving, which is the one thing a draft exists to do.
+    allowEverything();
+
+    $this->actingAs($this->user)
+        ->putJson("/nodeflow/flows/{$this->flow->id}/draft", [
+            'graph' => ['start' => 'n1', 'nodes' => [['type' => 'core.exit']], 'edges' => []],
+            'draft_revision' => null,
+        ])
+        ->assertStatus(422)
+        ->assertJsonValidationErrors('graph.nodes.0.id');
+
+    $this->actingAs($this->user)
+        ->putJson("/nodeflow/flows/{$this->flow->id}/draft", [
+            'graph' => [
+                'start' => '',
+                'nodes' => [
+                    ['id' => 'n1', 'type' => 'nope.unregistered', 'config' => []],
+                    ['id' => 'n2', 'type' => 'core.wait', 'position' => ['x' => 4, 'y' => 9]],
+                ],
+                'edges' => [['from' => 'n1', 'to' => 'n2']],
+            ],
+            'draft_revision' => null,
+        ])
+        ->assertOk();
+
+    // The position key a canvas carries survives the round trip untouched.
+    expect($this->flow->fresh()->draft_graph['nodes'][1]['position'])->toBe(['x' => 4, 'y' => 9]);
+});
+
 it('denies publishing to someone who may edit but not publish', function () {
     // The two gates are separate for a reason. Counterfactual: authorize publish
     // against nodeflow.update and this returns 200.

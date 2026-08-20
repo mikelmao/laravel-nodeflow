@@ -67,16 +67,27 @@ class FlowEditorController extends Controller
     {
         $this->authorize('update', $flow);
 
-        $validated = $request->validate([
-            'graph' => ['required', 'array'],
+        $request->validate(array_merge($this->graphRules(), [
+            // Lighter than publish's set by exactly one rule: an edge may arrive
+            // without an output, because a client dragging from a node's only
+            // handle has no output name to send. Everything else is identical —
+            // structural rules do not make a half-finished graph unsavable, and a
+            // node with no id is not half-finished, it is malformed.
+            'graph.edges.*.output' => ['nullable', 'string'],
             'draft_revision' => ['nullable', 'integer'],
-        ]);
+        ]));
 
         try {
             $revision = app(SaveDraft::class)->save(
                 $flow,
-                $validated['graph'],
-                $validated['draft_revision'] ?? null,
+                // The request's own input, not validate()'s return value: the
+                // validated array contains only keys that had rules, and a graph
+                // legitimately carries keys the package round-trips untouched —
+                // `position` on a node, which the integration docs promise. Taking
+                // the validated array here silently strips every node's canvas
+                // coordinates on save.
+                $request->input('graph'),
+                $request->input('draft_revision'),
             );
         } catch (StaleDraftException $e) {
             return response()->json([
@@ -93,12 +104,14 @@ class FlowEditorController extends Controller
     {
         $this->authorize('publish', $flow);
 
-        $validated = $request->validate(['graph' => ['required', 'array']]);
+        $request->validate($this->graphRules());
 
         try {
             $version = app(PublishFlow::class)->publish(
                 $flow,
-                $validated['graph'],
+                // See draft(): the raw input, so a node's `position` survives into
+                // the frozen version instead of being stripped by validated().
+                $request->input('graph'),
                 (string) ($request->user()?->getAuthIdentifier() ?? ''),
             );
         } catch (GraphInvalidException $e) {
@@ -117,5 +130,44 @@ class FlowEditorController extends Controller
             'version' => $version->version,
             'draft_revision' => (int) ($flow->draft_revision ?? 0),
         ]);
+    }
+
+    /**
+     * Structural rules for a graph payload.
+     *
+     * They live in the controller because they are the HTTP contract, not a
+     * property of a Graph: `['graph' => ['required','array']]` validated the
+     * container and nothing inside it, so ordinary client bugs — a node with no
+     * `id`, an edge with no `to` — reached Graph::fromArray() and came back as an
+     * unrenderable 500, with a stack trace and file paths under APP_DEBUG, from
+     * the one endpoint whose whole new feature is structured, renderable errors.
+     *
+     * Structure only. Nothing here judges whether the graph makes sense: that is
+     * GraphValidator's job at publish, and deliberately nobody's job for a draft.
+     * So `start` stays nullable even for publish — "the flow has no start node
+     * set" is a renderable node_errors entry the canvas can show, and demoting it
+     * to a field-validation 422 would lose that. Likewise nothing checks that a
+     * node's type is registered or that an edge points anywhere real.
+     *
+     * Unlisted keys are untouched, which matters: a node carries `position` for
+     * canvas coordinates and the package round-trips it verbatim.
+     */
+    private function graphRules(): array
+    {
+        return [
+            'graph' => ['required', 'array'],
+            'graph.start' => ['nullable', 'string'],
+            'graph.nodes' => ['nullable', 'array'],
+            'graph.nodes.*.id' => ['required', 'string'],
+            'graph.nodes.*.type' => ['required', 'string'],
+            'graph.nodes.*.config' => ['nullable', 'array'],
+            'graph.edges' => ['nullable', 'array'],
+            'graph.edges.*.from' => ['required', 'string'],
+            'graph.edges.*.to' => ['required', 'string'],
+            // GraphValidator and Graph::targetsFor() both read $edge['output']
+            // unconditionally, so an edge without one is a 500 rather than a
+            // validation failure. Publish requires it; draft does not (see there).
+            'graph.edges.*.output' => ['required', 'string'],
+        ];
     }
 }
