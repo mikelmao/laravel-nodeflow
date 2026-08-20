@@ -16,8 +16,11 @@ export const FieldOptionsContext = createContext<FieldOptionsSource | null>(null
 
 const EMPTY: Record<string, string> = {}
 const MISSING_PROVIDER = 'Could not load the choices for this field: no FieldOptionsContext provider is mounted.'
+const CACHE_TEMPLATE = Symbol('nodeflow.field-options.template')
 
-type LogicalSource = FieldOptionsSource
+type TemplateScopedCache = FieldOptionsSource['cache'] & {
+    [CACHE_TEMPLATE]?: string
+}
 type State = {
     key: string
     template: string | null
@@ -55,6 +58,16 @@ function validatedOptions(data: Record<string, unknown> | null): Record<string, 
     return options as Record<string, string>
 }
 
+/** Stamp template ownership on the per-editor cache without adding an entry. */
+function stampCacheTemplate(cache: FieldOptionsSource['cache'], template: string): void {
+    Object.defineProperty(cache, CACHE_TEMPLATE, {
+        configurable: true,
+        enumerable: false,
+        value: template,
+        writable: true,
+    })
+}
+
 /**
  * Fetch only when the field is dynamic. Return a named failure beside the
  * field rather than an empty success. Cache is per context/editor; stale
@@ -69,16 +82,16 @@ export function useFieldOptions(
     const cache = source?.cache ?? null
     const key = fieldOptionsKey(nodeType, field.key)
 
-    // A cache is scoped by its URL template as well as its object identity.
-    // Compare with the last committed source so both renders in Strict Mode
-    // distrust entries from an old template before the effect clears them.
-    const committedSource = useRef<LogicalSource | null>(null)
-    const previousSource = committedSource.current
+    // A cache is scoped by its URL template as well as its object identity. The
+    // marker lives on the per-editor Map, so ownership survives field unmounts.
+    // Render only inspects it: mismatched entries are distrusted synchronously.
+    const cacheTemplate = cache === null
+        ? undefined
+        : (cache as TemplateScopedCache)[CACHE_TEMPLATE]
     const templateChangedForCache = template !== null
         && cache !== null
-        && previousSource !== null
-        && previousSource.cache === cache
-        && previousSource.template !== template
+        && cacheTemplate !== undefined
+        && cacheTemplate !== template
     const cached = templateChangedForCache ? undefined : cache?.get(key)
 
     // Strict Mode replays an effect's setup/cleanup cycle. Keep the pending
@@ -94,14 +107,14 @@ export function useFieldOptions(
     }))
 
     useEffect(() => {
-        // Template replacement invalidates every entry in the retained cache.
-        // Clear before inspecting the pair and before starting the new GET.
-        if (templateChangedForCache && cache !== null) {
-            cache.clear()
+        if (template !== null && cache !== null) {
+            // Template replacement invalidates every entry in the retained
+            // cache. Clear and stamp before pair lookup or the new GET.
+            if (templateChangedForCache) {
+                cache.clear()
+            }
+            stampCacheTemplate(cache, template)
         }
-        committedSource.current = template !== null && cache !== null
-            ? { template, cache }
-            : null
 
         if (!field.dynamic_options) {
             return

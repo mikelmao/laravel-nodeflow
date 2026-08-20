@@ -108,10 +108,10 @@ describe('useFieldOptions', () => {
         expect(fetchMock).toHaveBeenCalledTimes(1)
     })
 
-    // The hook stays mounted across node and provider changes. Counterfactual:
-    // key state by pair alone and a same-pair tenant/cache replacement exposes
-    // the old editor's choices; trust a cache after its template changes and
-    // stale entries survive while the new endpoint is never requested.
+    // The hook stays mounted across node and provider changes, but an editor's
+    // cache also outlives individual field hooks. Counterfactual: keep template
+    // history on the hook and a remount after a no-hook template rotation trusts
+    // the retained cache as if its entries came from the new endpoint.
     it('keeps cached options scoped to the pair, cache, and template', async () => {
         let resolveFetch!: (response: Response) => void
         const pending = new Promise<Response>((resolve) => {
@@ -131,7 +131,7 @@ describe('useFieldOptions', () => {
             </FieldOptionsContext.Provider>
         )
         const renderedOptions: Array<Record<string, string>> = []
-        const { result, rerender } = renderHook(
+        const { result, rerender, unmount } = renderHook(
             ({ nodeType }) => {
                 const current = useFieldOptions(nodeType, field({ dynamic_options: true }))
                 renderedOptions.push(current.options)
@@ -164,12 +164,25 @@ describe('useFieldOptions', () => {
         expect(result.current.options).toEqual({ fresh: 'Fresh' })
         expect(fetchMock).not.toHaveBeenCalled()
 
+        unmount()
         source = { template: NEXT_TEMPLATE, cache: freshCache }
-        const templateChangeAt = renderedOptions.length
-        rerender({ nodeType: 'app.second' })
-        expect(result.current.options).toEqual({})
-        expect(renderedOptions.slice(templateChangeAt)).not.toContainEqual({ fresh: 'Fresh' })
-        expect(result.current.loading).toBe(true)
+        const remountedOptions: Array<Record<string, string>> = []
+        const remounted = renderHook(
+            () => {
+                const current = useFieldOptions(
+                    'app.second',
+                    field({ dynamic_options: true }),
+                )
+                remountedOptions.push(current.options)
+
+                return current
+            },
+            { wrapper: MutableSource },
+        )
+
+        expect(remounted.result.current.options).toEqual({})
+        expect(remountedOptions).not.toContainEqual({ fresh: 'Fresh' })
+        expect(remounted.result.current.loading).toBe(true)
         expect(freshCache.has(fieldOptionsKey('app.second', 'template'))).toBe(false)
         expect(fetchMock).toHaveBeenCalledWith(
             '/v2/flows/12/nodes/app.second/fields/template/options',
@@ -179,9 +192,9 @@ describe('useFieldOptions', () => {
         await act(async () => {
             resolveFetch(Response.json({ options: { newest: 'Newest' } }))
         })
-        await waitFor(() => expect(result.current.loading).toBe(false))
+        await waitFor(() => expect(remounted.result.current.loading).toBe(false))
 
-        expect(result.current.options).toEqual({ newest: 'Newest' })
+        expect(remounted.result.current.options).toEqual({ newest: 'Newest' })
         expect(freshCache.get(fieldOptionsKey('app.second', 'template'))).toEqual({ newest: 'Newest' })
         expect(fetchMock).toHaveBeenCalledTimes(1)
     })
