@@ -76,40 +76,46 @@ Never implement it as `return true`.
 `currentTenantId()` returning `null` is ambiguous, and the package cannot guess:
 it means either "this application has no tenancy" or "tenancy could not be
 resolved here". Reading unscoped is correct for the first and a cross-tenant leak
-for the second, so you declare which you mean:
+for the second, so `nodeflow.tenancy` declares which you mean — though, as below,
+you will usually leave it alone:
 
 ```php
 // config/nodeflow.php
-'tenancy' => 'resolver',   // or 'disabled'
+'tenancy' => 'auto',   // or 'disabled', or 'resolver'
 ```
 
-The config value is `env('NODEFLOW_TENANCY', 'disabled')`, so you do not have to
+The config value is `env('NODEFLOW_TENANCY', 'auto')`, so you do not have to
 publish the config file to set it:
 
 ```dotenv
-NODEFLOW_TENANCY=resolver
+NODEFLOW_TENANCY=disabled
 ```
 
-- **`disabled`** (the default) — no tenancy. A null tenant reads unscoped. Correct
-  for a single-tenant application that never binds a resolver.
-- **`resolver`** — you have tenancy, so a null tenant means it could not be
-  resolved: a queue worker, a console command, an unauthenticated request. Scoped
-  reads throw `Nodeflow\Models\TenancyUnresolvedException` instead of quietly
-  returning every tenant's rows.
+- **`auto`** (the default) — the package infers what a null tenant means. If you
+  never bound a `TenantResolver`, ours answers, and a null means "this application
+  has no tenancy": reads are unscoped. If you bound your own, a null means it could
+  not be resolved — a queue worker, a console command, an unauthenticated request —
+  and a scoped read throws `Nodeflow\Models\TenancyUnresolvedException` instead of
+  quietly returning every tenant's rows.
+- **`disabled`** — always treat null as "no tenancy" and read unscoped. The escape
+  hatch if you bind a resolver and genuinely want that.
+- **`resolver`** — always treat null as unresolved and throw.
 
-**If you implement `TenantResolver`, set this to `resolver`.** A non-null tenant
-scopes identically in both modes; the setting governs only the null case.
+**You should not normally need to set this.** `auto` is right for both the
+single-tenant host and the multi-tenant one; the two explicit modes exist for the
+cases where inference is wrong. An unrecognised value throws rather than degrading
+to unscoped.
 
-Those two strings are the only accepted values, matched exactly. Anything else —
-`Resolver`, `RESOLVER`, `true`, or a cached config from before the key existed —
-throws `InvalidArgumentException` on the next scoped read, naming the offending
-value. It deliberately does not fall back to `disabled`: a typo that silently
-read every tenant's rows would punish the reader of these docs and spare the
-person who never opened them.
+Those three strings are the only accepted values, matched exactly. Anything else —
+`Auto`, `AUTO`, `true`, or a cached config from before the key existed — throws
+`InvalidArgumentException` on the next scoped read, naming the offending value. It
+deliberately does not fall back to `disabled`: a typo that silently read every
+tenant's rows would punish the reader of these docs and spare the person who
+never opened them.
 
 System operations that genuinely span tenants opt out explicitly with
 `Model::withoutTenancy()` — the package's own fan-out triggers and queue
-activities all do, so `resolver` does not break them.
+activities all do, so none of the three modes break them.
 
 ### `SubjectResolver`
 
@@ -279,19 +285,142 @@ provider that boots after this one.
 The tenant scope is the primary control, and it is a stronger one than a gate: a
 cross-tenant id never survives the scoped read, so it is a 404 before your gate
 is asked anything. But that holds only while a tenant actually resolves. Under
-the shipped default (`disabled`), or on any path where your resolver returns
-`null` — a queue-dispatched preview, an API token that has not selected an
-organisation yet, a console command — the read is **not** scoped and the row
-comes back.
+the shipped default (`auto`), a null tenant is unscoped only if you never bound a
+`TenantResolver`; once you bind one, `auto` throws on a null instead of reading
+every tenant's rows. The gap opens only if you explicitly set `nodeflow.tenancy`
+to `disabled` while a resolver is bound — a queue-dispatched preview, an API
+token that has not selected an organisation yet, a console command — the read is
+**not** scoped and the row comes back.
 
 Which is why the `nodeflow.update` example above compares
 `$user->organization_id === $flow->tenant_id`. That is deliberate: it costs one
-comparison, it is defence in depth behind the scope, and on a path where the
-ambient tenant is null it is the only check still standing. Keep it, and prefer
-it in any gate that receives a `Flow` or a `Run`.
+comparison, it is defence in depth behind the scope, and on the one path where
+the ambient tenant can still go unscoped — `disabled` mode with a resolver bound
+— it is the only check still standing. Keep it, and prefer it in any gate that
+receives a `Flow` or a `Run`.
 
 So: the scope decides "is this row reachable at all", and your gate decides "may
 this person do this" — plus, cheaply, "is this row theirs".
+
+## The editor's routes
+
+The editor's server endpoints are **opt-in**. Register them inside your own group,
+so prefix, middleware and domain stay your decisions:
+
+```php
+// routes/web.php
+use Nodeflow\Nodeflow;
+
+Route::middleware(['web', 'auth'])->prefix('admin')->group(
+    fn () => Nodeflow::routes()
+);
+```
+
+| Method | URI | Name | Gate |
+|---|---|---|---|
+| `GET` | `flows/{flow}/edit` | `nodeflow.flows.edit` | `nodeflow.update` |
+| `PUT` | `flows/{flow}/draft` | `nodeflow.flows.draft` | `nodeflow.update` |
+| `POST` | `flows/{flow}/publish` | `nodeflow.flows.publish` | `nodeflow.publish` |
+| `GET` | `flows/{flow}/nodes/{type}/fields/{field}/options` | `nodeflow.fields.options` | `nodeflow.update` |
+
+`{flow}` binds through the tenant-scoped model, so another tenant's id is a **404**,
+not a 403 — a 403 would confirm the row exists.
+
+**If you never call `Nodeflow::routes()`, none of this loads.** That is the
+engine-only setup: run flows from triggers and code, with no editor and no Inertia
+dependency.
+
+**The editor page needs Inertia.** `inertiajs/inertia-laravel` is a *suggested*
+dependency, not a required one, precisely so the engine-only host does not carry it.
+Install it if you use these routes.
+
+### Drafts
+
+`PUT .../draft` takes `{graph, draft_revision}` and returns the new
+`{draft_revision}` — an integer counter, not a timestamp. Echo it back on the next
+save: if it does not match what the server holds, you get **409** with the newer
+`graph` and `draft_revision`, so the editor can say "someone else edited this"
+rather than silently discarding a colleague's work.
+
+`draft_updated_at` still exists and is written on every save, but it never
+appears in this endpoint's response. It surfaces only in `flow.draft_updated_at`
+on the edit page's initial payload, for display — "last saved 3 minutes ago" —
+and must not be used for staleness detection. (An earlier version of this
+contract used that timestamp as the token; Laravel's own timestamp columns store
+to second precision, so two autosaves inside the same second minted an identical
+value and staleness detection silently stopped detecting. The integer counter
+replaced it for that reason.)
+
+**Draft saves are not validated.** A graph mid-edit is allowed to be broken — that
+is why a draft is not a version. Validation happens at publish.
+
+### Publish
+
+`POST .../publish` takes `{graph}` and returns `{version}`. On rejection it returns
+**422** with both shapes of the same failures:
+
+- `errors` — flat strings, fine for a summary banner
+- `node_errors` — `[{node, field, message}]`, so each message can be rendered on its
+  own node. `node` is `null` for a graph-level problem such as a cycle, which belongs
+  to no single node.
+
+One further wrinkle: for "the start node you set does not exist in this flow",
+`node` is set to that missing start id — an id that has, by definition, no node in
+the graph. A client cannot assume every `node_errors` entry maps to a rendered
+card; render what you can find and fall back to the banner for the rest.
+
+Publishing clears the draft, since the draft became the version.
+
+## Tenant-scoped field options
+
+A field whose choices are your data — this organisation's message templates, its
+towns — cannot have them baked into the node class, because one class serves every
+tenant. Declare a source instead:
+
+```php
+Field::select('template')->optionsFrom(YayaTemplates::class)
+```
+
+and implement the contract:
+
+```php
+use Nodeflow\Schema\OptionSource;
+
+class YayaTemplates implements OptionSource
+{
+    public function options(): array
+    {
+        // Runs inside the request, with your tenancy resolver already in play.
+        return Template::pluck('name', 'id')->all();
+    }
+}
+```
+
+Options resolve **lazily**, when the editor renders that field, not when it builds
+the palette — otherwise every option source of every registered node would run on
+every page load, including nodes the author never places.
+
+Two things worth knowing:
+
+- **The endpoint is keyed by node type and field key, never by class name.** The
+  class comes from the node's own `definition()`. An endpoint that accepted it from
+  the client would instantiate arbitrary application classes.
+- **A class that does not implement `OptionSource` is an error, not an empty list.**
+  An empty select looks identical to a tenant that genuinely has no templates yet,
+  which is the harder bug to find.
+
+### Custom field types
+
+For a control the package does not ship — a town picker on a map — declare a custom
+type and give it a validation rule, since publish-time validation must work for a
+type the package has never seen:
+
+```php
+Field::custom('destination', 'town')            // validates as a string
+Field::custom('altitude', 'elevation', 'numeric')
+```
+
+The matching React control is registered in the editor; see the editor's own docs.
 
 ## Verifying the install
 
