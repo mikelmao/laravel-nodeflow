@@ -145,6 +145,32 @@ class Field
         ];
     }
 
+    /**
+     * The field as it goes over HTTP.
+     *
+     * One JSON type per key, for the client this payload is a contract for.
+     * `options` is a string-keyed PHP array, which json_encode turns into an
+     * object when it has entries and into `[]` when it does not — so a
+     * dynamic-option field, or any field with no inline options at all, handed the
+     * browser an array where every other field handed it a map, and a TypeScript
+     * client would have to write `Record<string, string> | []`. Casting to an
+     * object makes it `{}` when empty and leaves it untouched otherwise.
+     *
+     * Separate from toArray() rather than folded into it because the two have
+     * different jobs: toArray() is the PHP-side shape, where an array is the
+     * useful type for a host inspecting a definition, and this is the wire shape.
+     * NodeDefinition and TriggerDefinition — the only two paths onto the wire —
+     * both call this one.
+     */
+    public function toWireArray(): array
+    {
+        $field = $this->toArray();
+
+        $field['options'] = (object) $field['options'];
+
+        return $field;
+    }
+
     public function rules(): array
     {
         $rules = [$this->required ? 'required' : 'nullable', $this->customType !== null

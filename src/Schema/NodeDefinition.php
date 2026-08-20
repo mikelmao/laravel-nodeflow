@@ -77,7 +77,9 @@ class NodeDefinition
             'icon' => $this->icon,
             'description' => $this->description,
             'outputs' => $this->outputs,
-            'fields' => array_map(fn (Field $f) => $f->toArray(), $this->fields),
+            // toWireArray(), not toArray(): this array is serialised straight to
+            // the editor, and a field's options must be one JSON type either way.
+            'fields' => array_map(fn (Field $f) => $f->toWireArray(), $this->fields),
         ];
     }
 

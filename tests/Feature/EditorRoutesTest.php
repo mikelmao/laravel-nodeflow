@@ -156,6 +156,55 @@ it('shows the draft graph in preference to the published version', function () {
         ->assertJsonPath('props.flow.version', 1);
 });
 
+it('serialises a fields options as a JSON object even when there are none', function () {
+    // Type stability for the client, asserted on the raw JSON because
+    // json_decode(assoc: true) cannot tell {} from []. A string-keyed PHP array
+    // encodes as an object when it has entries and as `[]` when it does not, so a
+    // dynamic-option field handed the browser an array where a static-option field
+    // handed it a map. Counterfactual: drop the (object) cast in
+    // Field::toWireArray() and `attribute` below comes back as [], forcing a
+    // TypeScript client to write `Record<string, string> | []`.
+    allowEverything();
+
+    $decoded = json_decode(editPage($this, $this->flow->id)->assertOk()->getContent());
+
+    $condition = collect($decoded->props->palette)->firstWhere('type', 'core.condition');
+    $fields = collect($condition->fields);
+
+    expect($fields->firstWhere('key', 'attribute')->dynamic_options)->toBeTrue()
+        ->and($fields->firstWhere('key', 'attribute')->options)->toBeObject()
+        ->and($fields->firstWhere('key', 'value')->options)->toBeObject()
+        // And the case that already worked stays an object rather than becoming
+        // something else on the way through.
+        ->and($fields->firstWhere('key', 'operator')->options)->toBeObject()
+        ->and($fields->firstWhere('key', 'operator')->options->is_true)->toBe('is true');
+});
+
+it('returns a graph-shaped object in the 409 even when there is no draft left', function () {
+    // Reachable exactly because publishing no longer rewinds draft_revision: the
+    // draft is gone but the counter is not, so a client on an older token gets a
+    // 409 whose winning draft is null. Counterfactual: hand back $e->graph()
+    // directly and `graph` is `[]` here and an object everywhere else, which is
+    // the one endpoint a client cannot type.
+    allowEverything();
+
+    $this->actingAs($this->user)
+        ->putJson("/nodeflow/flows/{$this->flow->id}/draft", ['graph' => exitGraph(), 'draft_revision' => null])
+        ->assertOk();
+
+    $this->actingAs($this->user)
+        ->postJson("/nodeflow/flows/{$this->flow->id}/publish", ['graph' => exitGraph()])
+        ->assertOk();
+
+    $response = $this->actingAs($this->user)
+        ->putJson("/nodeflow/flows/{$this->flow->id}/draft", ['graph' => exitGraph(), 'draft_revision' => 0])
+        ->assertStatus(409)
+        ->assertJsonPath('graph', ['start' => '', 'nodes' => [], 'edges' => []])
+        ->assertJsonPath('draft_revision', 1);
+
+    expect(json_decode($response->getContent())->graph)->toBeObject();
+});
+
 it('saves a draft and returns the new revision', function () {
     allowEverything();
 

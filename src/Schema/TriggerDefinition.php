@@ -36,7 +36,8 @@ class TriggerDefinition
         return [
             'label' => $this->label,
             'description' => $this->description,
-            'fields' => array_map(fn (Field $f) => $f->toArray(), $this->fields),
+            // toWireArray(), not toArray(): see NodeDefinition::toArray().
+            'fields' => array_map(fn (Field $f) => $f->toWireArray(), $this->fields),
         ];
     }
 

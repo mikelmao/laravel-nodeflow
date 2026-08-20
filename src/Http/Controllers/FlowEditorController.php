@@ -92,7 +92,13 @@ class FlowEditorController extends Controller
         } catch (StaleDraftException $e) {
             return response()->json([
                 'message' => $e->getMessage(),
-                'graph' => $e->graph(),
+                // One JSON shape for `graph` on every endpoint that returns one.
+                // The winning draft is null when the flow was published between
+                // this client's last save and this one, and an empty PHP array
+                // encodes as `[]` — so the client would have to accept
+                // `Graph | []` from this endpoint alone. The same empty skeleton
+                // edit() falls back to keeps it a graph.
+                'graph' => $e->graph() ?: ['start' => '', 'nodes' => [], 'edges' => []],
                 'draft_revision' => $e->revision(),
             ], 409);
         }
