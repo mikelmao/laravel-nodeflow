@@ -4,6 +4,7 @@ import type { NodeErrorEntry } from '../graph/types'
 const INVALID_SUCCESS_MESSAGE = 'The publish response contained an invalid version or draft_revision.'
 const INVALID_NODE_ERRORS_MESSAGE = 'The publish response contained invalid node_errors.'
 const INVALID_STRUCTURAL_ERRORS_MESSAGE = 'The publish response contained invalid structural errors.'
+const INVALID_BANNER_ERRORS_MESSAGE = 'The publish response contained invalid banner errors.'
 
 export type PublishOutcome =
     | { kind: 'published'; version: number; revision: number }
@@ -74,6 +75,9 @@ export function interpretPublish(
 
     if (!Array.isArray(body.node_errors) || !body.node_errors.every(isNodeErrorEntry)) {
         return { kind: 'failed', message: INVALID_NODE_ERRORS_MESSAGE }
+    }
+    if (Array.isArray(body.errors) && !body.errors.every((message) => typeof message === 'string')) {
+        return { kind: 'failed', message: INVALID_BANNER_ERRORS_MESSAGE }
     }
 
     const nodeErrors = body.node_errors

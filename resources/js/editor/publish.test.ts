@@ -54,6 +54,14 @@ describe('interpretPublish', () => {
             unplaceable: [],
         })
 
+        expect(interpretPublish(result(422, {
+            errors: [1, { bad: true }],
+            node_errors: [],
+        }), known)).toEqual({
+            kind: 'failed',
+            message: 'The publish response contained invalid banner errors.',
+        })
+
         const malformedNodeErrors: unknown[] = [
             { unexpected: 'object' },
             [null],
