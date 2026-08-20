@@ -386,7 +386,16 @@ describe('useAutosave', () => {
         // Counterfactual: overlapping ownership lets the later prepare cross the first caller's still-active barrier.
         expect(fetchMock).toHaveBeenCalledTimes(1)
         const finishFirst = result.current.finishPublish
-        act(() => finishFirst(1))
+        const prepareFirst = result.current.preparePublish
+        let sameBatchPreparation!: Promise<boolean>
+        act(() => {
+            finishFirst(1)
+            sameBatchPreparation = prepareFirst()
+        })
+        // Counterfactual: React has not rerendered yet, so P1's prepare callback can try to reclaim its spent lease.
+        await act(async () => expect(sameBatchPreparation).resolves.toBe(false))
+        expect(fetchMock).toHaveBeenCalledTimes(1)
+
         await act(async () => expect(result.current.preparePublish()).resolves.toBe(true))
         expect(fetchMock).toHaveBeenCalledTimes(2)
         expect(result.current.revision).toBe(2)
@@ -404,6 +413,10 @@ describe('useAutosave', () => {
         await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(3))
         // Counterfactual: replacing afterPublish loses the edit queued behind the owning publish caller's target.
         expect(JSON.parse(fetchMock.mock.calls[2]![1].body)).toMatchObject({ graph: { start: 'during-second-publish' }, draft_revision: 2 })
+
+        await waitFor(() => expect(result.current.revision).toBe(3))
+        await act(async () => expect(result.current.preparePublish()).resolves.toBe(true))
+        act(() => result.current.finishPublish(3))
     })
 
     // Counterfactual: stale afterPublish creates a draft that is no longer on screen.

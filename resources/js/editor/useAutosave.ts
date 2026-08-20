@@ -120,6 +120,8 @@ export function useAutosave({
     const generation = useRef(0)
     /** The owning publish lease; while present, no draft PUT may cross the POST. */
     const publishBarrier = useRef<number | null>(null)
+    /** Synchronously closes the batching gap before React exposes the next lease render. */
+    const spentPublishLease = useRef(0)
     const publishTarget = useRef<string | null>(null)
     /** Edits made while POST /publish is in flight become the next draft. */
     const afterPublish = useRef<string | null>(null)
@@ -453,6 +455,8 @@ export function useAutosave({
             return
         }
 
+        spentPublishLease.current = Math.max(spentPublishLease.current, finishLease)
+
         if (nextRevision !== undefined && !isDraftRevision(nextRevision)) {
             halted.current = true
             publishBarrier.current = null
@@ -505,7 +509,7 @@ export function useAutosave({
     }, [debounceMs, run, ownerEpoch, finishLease])
 
     const preparePublish = useCallback(async (): Promise<boolean> => {
-        if (!mounted.current || flowIdentity.current.epoch !== ownerEpoch || publishBarrier.current !== null) {
+        if (!mounted.current || flowIdentity.current.epoch !== ownerEpoch || publishBarrier.current !== null || finishLease <= spentPublishLease.current) {
             return false
         }
 
