@@ -58,8 +58,11 @@ it('offers only amount and unit combinations the engine resolves to positive sec
     // either fails or no longer matches the production declaration.
     foreach (durationUnitsFromControl() as $unit) {
         foreach (range(1, maximumDurationAmountFromControl()) as $amount) {
-            expect(ValidDuration::seconds("{$amount} {$unit}"))
-                ->toBeGreaterThan(0, "The duration control can emit '{$amount} {$unit}', which ValidDuration rejects.");
+            $serializedUnit = $amount === 1 ? substr($unit, 0, -1) : $unit;
+            $duration = "{$amount} {$serializedUnit}";
+
+            expect(ValidDuration::seconds($duration))
+                ->toBeGreaterThan(0, "The duration control can emit '{$duration}', which ValidDuration rejects.");
         }
     }
 });

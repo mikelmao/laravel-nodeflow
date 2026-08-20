@@ -24,8 +24,12 @@ export type DurationUnit = (typeof DURATION_UNITS)[number]
 
 const DEFAULT_UNIT: DurationUnit = 'minutes'
 
+const singularUnit = (unit: DurationUnit): string => unit.slice(0, -1)
+
 export function formatDuration(amount: number, unit: DurationUnit): string | null {
-    return Number.isInteger(amount) && amount >= 1 && amount <= MAX_DURATION_AMOUNT ? `${amount} ${unit}` : null
+    return Number.isInteger(amount) && amount >= 1 && amount <= MAX_DURATION_AMOUNT
+        ? `${amount} ${amount === 1 ? singularUnit(unit) : unit}`
+        : null
 }
 
 /** Validate the spelling before Number() can turn exponent syntax into an integer. */
@@ -43,15 +47,16 @@ export function parseAmount(raw: string): number | null {
 export function parseDuration(value: unknown): { amount: number | null; unit: DurationUnit } {
     const match = typeof value === 'string' ? /^(\d+)\s+(\w+)$/.exec(value.trim()) : null
     const rawAmount = match?.[1]
-    const unit = match?.[2] as DurationUnit | undefined
+    const rawUnit = match?.[2]
 
-    if (!rawAmount || !unit || !(DURATION_UNITS as readonly string[]).includes(unit)) {
+    if (!rawAmount || !rawUnit) {
         return { amount: null, unit: DEFAULT_UNIT }
     }
 
     const amount = parseAmount(rawAmount)
+    const unit = DURATION_UNITS.find((candidate) => candidate === rawUnit || (amount === 1 && singularUnit(candidate) === rawUnit))
 
-    return amount === null ? { amount: null, unit: DEFAULT_UNIT } : { amount, unit }
+    return amount === null || !unit ? { amount: null, unit: DEFAULT_UNIT } : { amount, unit }
 }
 
 export function Duration({ field, value, onChange, errors }: FieldControlProps) {

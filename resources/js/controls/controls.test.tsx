@@ -204,10 +204,14 @@ describe('duration', () => {
         expect(DURATION_UNITS).toEqual(['seconds', 'minutes', 'hours', 'days', 'weeks'])
     })
 
-    // Counterfactual: omit the separating space and Carbon receives
-    // `5minutes`, which is outside the grammar the PHP boundary test verifies.
+    // Counterfactual: omit the separating space, or leave amount one paired
+    // with a plural unit, and the control diverges from the engine's canonical
+    // strings. The PHP boundary test exhausts the same emitted spellings.
     it('formats an amount and a unit into the string the engine parses', () => {
-        expect(formatDuration(5, 'minutes')).toBe('5 minutes')
+        for (const unit of DURATION_UNITS) {
+            expect(formatDuration(1, unit)).toBe(`1 ${unit.slice(0, -1)}`)
+            expect(formatDuration(2, unit)).toBe(`2 ${unit}`)
+        }
     })
 
     // Number inputs accept exponent, sign and decimal syntax when typed
@@ -231,6 +235,10 @@ describe('duration', () => {
     // Counterfactual: parse with a loose regex that accepts anything and the
     // amount box renders NaN.
     it('parses a stored duration back into its parts, and refuses nonsense', () => {
+        for (const unit of DURATION_UNITS) {
+            expect(parseDuration(`1 ${unit.slice(0, -1)}`)).toEqual({ amount: 1, unit })
+        }
+
         expect(parseDuration('2 days')).toEqual({ amount: 2, unit: 'days' })
         expect(parseDuration('1 fortnight')).toEqual({ amount: null, unit: 'minutes' })
         expect(parseDuration(null)).toEqual({ amount: null, unit: 'minutes' })
@@ -255,16 +263,23 @@ describe('duration', () => {
         expect(onChange).toHaveBeenLastCalledWith('5 days')
     })
 
-    // Counterfactual: emit the unit alone when amount is blank, or reconstruct
-    // the partial input only from that null emission, and the later amount uses
-    // the default minutes instead of the author's selected days.
+    // Counterfactual: emit the unit alone when amount is blank, leave amount
+    // one pluralized, or reconstruct the partial input only from that null
+    // emission and the later amount uses the default minutes instead of the
+    // author's selected days.
     it('emits a duration string when both parts are present', async () => {
         const onChange = renderControl(field({ key: 'duration', type: 'duration' }), null)
+        const amount = screen.getByRole('spinbutton')
+
+        await userEvent.type(amount, '1')
+        expect(onChange).toHaveBeenLastCalledWith('1 minute')
+
+        await userEvent.clear(amount)
 
         await userEvent.selectOptions(screen.getByRole('combobox'), 'days')
-        await userEvent.type(screen.getByRole('spinbutton'), '5')
+        await userEvent.type(amount, '1')
 
-        expect(onChange).toHaveBeenLastCalledWith('5 days')
+        expect(onChange).toHaveBeenLastCalledWith('1 day')
     })
 
     // Counterfactual: drop min/max and the browser advertises values outside the
