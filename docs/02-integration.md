@@ -71,6 +71,32 @@ Never implement it as `return true`.
 > that is a lot of round trips. Implement it against an indexed column. A set-shaped variant of this
 > contract is a known follow-up.
 
+### Which kind of null you mean
+
+`currentTenantId()` returning `null` is ambiguous, and the package cannot guess:
+it means either "this application has no tenancy" or "tenancy could not be
+resolved here". Reading unscoped is correct for the first and a cross-tenant leak
+for the second, so you declare which you mean:
+
+```php
+// config/nodeflow.php
+'tenancy' => 'resolver',   // or 'disabled'
+```
+
+- **`disabled`** (the default) — no tenancy. A null tenant reads unscoped. Correct
+  for a single-tenant application that never binds a resolver.
+- **`resolver`** — you have tenancy, so a null tenant means it could not be
+  resolved: a queue worker, a console command, an unauthenticated request. Scoped
+  reads throw `Nodeflow\Models\TenancyUnresolvedException` instead of quietly
+  returning every tenant's rows.
+
+**If you implement `TenantResolver`, set this to `resolver`.** A non-null tenant
+scopes identically in both modes; the setting governs only the null case.
+
+System operations that genuinely span tenants opt out explicitly with
+`Model::withoutTenancy()` — the package's own fan-out triggers and queue
+activities all do, so `resolver` does not break them.
+
 ### `SubjectResolver`
 
 ```php
@@ -175,6 +201,56 @@ php artisan queue:work
 
 Or Horizon. Without a worker, runs are created and then sit there: the interpreter is a queued
 workflow, and every node body executes as a queued activity.
+
+## Authorization: four gates
+
+The package makes no authorization decisions. It ships policies for `Flow` and
+`Run` that defer every question to a gate you define, and **deny when the gate
+does not exist** — so a fresh install refuses everything until you say otherwise,
+rather than shipping open and relying on you noticing.
+
+```php
+use Illuminate\Support\Facades\Gate;
+
+public function boot(): void
+{
+    Gate::define('nodeflow.viewAny', fn ($user) => $user->can('journeys.read'));
+    Gate::define('nodeflow.update', fn ($user, $flow) => $user->organization_id === $flow->tenant_id);
+    Gate::define('nodeflow.publish', fn ($user, $flow) => $user->isAdmin());
+    Gate::define('nodeflow.runManually', fn ($user, $flow) => $user->isAdmin());
+}
+```
+
+| Gate | Asked when |
+|---|---|
+| `nodeflow.viewAny` | Listing flows or runs, and viewing one of either |
+| `nodeflow.update` | Editing a flow, saving a draft, resolving field options |
+| `nodeflow.publish` | Freezing a new version |
+| `nodeflow.runManually` | Starting a run by hand, including a test-mode run |
+
+The second argument is the `Flow` or `Run` in question, and it is absent for the
+list case (`viewAny`) — so a gate reused for both should default it:
+`fn ($user, $flow = null) => ...`.
+
+**Type the first argument if a gate must be evaluated for guests.** Laravel only
+invokes a gate closure for an unauthenticated request when its first parameter
+accepts `null` — declared `?Authenticatable $user` or defaulted to `$user = null`.
+Leave it as a plain `$user`, as in the examples above, and Laravel skips the
+closure entirely for a guest and returns a deny without your logic ever running.
+That deny looks identical to a real one, so you end up debugging your
+authorization rule when the actual bug is the signature. The examples above are
+fine as written *because* these four abilities are meant to require a logged-in
+user — a guest denied without the closure running is the outcome you want here.
+Only make the first argument nullable when you deliberately want the closure
+itself to decide the guest case, such as a public read.
+
+Tenant isolation is **not** your gate's job: the models are already scoped, so a
+cross-tenant id is a 404 before any gate runs. Gates answer "may this person do
+this", not "is this row theirs".
+
+A host needing more than a gate can override the package's policy entirely by
+binding its own with `Gate::policy(Flow::class, YourPolicy::class)` in a
+provider that boots after this one.
 
 ## Verifying the install
 
