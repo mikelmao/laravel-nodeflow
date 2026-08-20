@@ -1,5 +1,6 @@
 <?php
 
+use Illuminate\Support\Facades\Validator;
 use Nodeflow\Schema\Field;
 
 it('serialises a select field for the editor', function () {
@@ -50,4 +51,18 @@ it('records a dynamic options source instead of inline options', function () {
         ->and($field->toArray()['dynamic_options'])->toBeTrue()
         ->and($field->toArray())->not->toHaveKey('options_source')
         ->and($field->rules())->toBe(['template' => ['nullable', 'string']]);
+});
+
+it('validates every multiselect choice against its declared options', function () {
+    // Counterfactual: change Multiselect's base rule away from array, drop the
+    // `in:` rule, or upgrade to a validator where top-level in is not array-aware;
+    // then either a valid emitted array fails or an undeclared member passes.
+    $rules = Field::multiselect('towns')
+        ->options(['a' => 'Ada', 'b' => 'Bek'])
+        ->required()
+        ->rules();
+
+    expect(Validator::make(['towns' => ['a', 'b']], $rules)->passes())->toBeTrue()
+        ->and(Validator::make(['towns' => ['a', 'z']], $rules)->passes())->toBeFalse()
+        ->and(Validator::make(['towns' => 'a'], $rules)->passes())->toBeFalse();
 });
