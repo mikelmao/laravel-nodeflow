@@ -20,6 +20,13 @@ class Flow extends Model
         'trigger_config' => 'array',
         'draft_graph' => 'array',
         'draft_updated_at' => 'datetime',
+        // The editor's concurrency token, compared with !== against a caller's
+        // int. MySQL and Postgres commonly hand an unsigned integer column back
+        // as a numeric string, where '1' !== 1 would refuse every save after the
+        // first as stale. SaveDraft casts inline as well, and deliberately keeps
+        // doing so: it is the file where the comparison lives, and a cast three
+        // files away is not a thing the next reader of that `!==` will check.
+        'draft_revision' => 'integer',
     ];
 
     // Unscoped: reaching this Flow already proved tenant entitlement, so its

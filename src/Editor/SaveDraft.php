@@ -15,7 +15,10 @@ use Nodeflow\Models\Flow;
  *
  * Concurrency is last-write-wins *with* a check rather than without one. The
  * caller sends the draft_revision it last saw; a mismatch is refused instead
- * of silently discarding whichever author saved second.
+ * of silently discarding whichever author saved second. The check is enforced
+ * in the UPDATE's own WHERE clause, not just compared in PHP, because two
+ * overlapping requests can both read the same revision before either writes —
+ * see save().
  *
  * The token is a revision counter, not draft_updated_at, on purpose.
  * Illuminate\Database\Grammar::getDateFormat() stores timestamps at second
@@ -61,12 +64,65 @@ class SaveDraft
         }
 
         $next = $current + 1;
+        $savedAt = now();
 
-        $flow->update([
+        // Compare-and-swap, not check-then-act. The comparison above is against a
+        // revision this process read some time ago — at route binding, before
+        // authorization — and `$flow->update()` emits `UPDATE ... WHERE id = ?`,
+        // which happily writes over whatever arrived in between. Two debounced
+        // autosaves from two open editors both reading revision N therefore both
+        // passed the check, both wrote N+1, and both reported success: one
+        // author's graph gone, no conflict reported to anyone. Adding
+        // `draft_revision = $current` to the WHERE clause makes the check and the
+        // write one statement, so exactly one of the two can win.
+        //
+        // A query-builder update rather than lockForUpdate() in a transaction, for
+        // three reasons. It is one statement with no transaction to hold open on
+        // the hot path of a debounced autosave. Flow's only `updating` hook is
+        // BelongsToTenant's tenant freeze, which this write cannot trip because it
+        // never touches tenant_id — so skipping the model hooks costs nothing
+        // here. And SQLite, this package's test driver, compiles `lockForUpdate()`
+        // to nothing at all, so a lock-based version would be a mechanism the
+        // suite could never exercise.
+        //
+        // withoutTenancy() because reaching this Flow already proved entitlement:
+        // the row was fetched through the scoped binding, and re-applying the
+        // scope here would make an autosave depend on the ambient tenant still
+        // resolving, which is a different question from "may this caller write".
+        $written = Flow::withoutTenancy()
+            ->whereKey($flow->getKey())
+            ->where('draft_revision', $current)
+            ->update([
+                // Encoded here, not left to the model's `array` cast: a
+                // query-builder update does not run casts, and handing the
+                // builder a PHP array binds it as one.
+                'draft_graph' => json_encode($graph),
+                'draft_updated_at' => $savedAt,
+                'draft_revision' => $next,
+            ]);
+
+        if ($written === 0) {
+            // Someone else moved the revision between our read and our write, or
+            // deleted the flow outright. Either way this save did not happen, and
+            // the caller gets the same refusal the pre-check gives — carrying
+            // whatever is actually there now, re-read rather than assumed.
+            $fresh = Flow::withoutTenancy()->whereKey($flow->getKey())->first();
+
+            throw new StaleDraftException(
+                $fresh?->draft_graph ?? [],
+                (int) ($fresh?->draft_revision ?? $current),
+            );
+        }
+
+        // The row moved, so the in-memory model must too: callers hold this
+        // instance across saves (a controller does not, but SaveDraft's own
+        // contract does not say so), and leaving it on the old revision would make
+        // the next save on the same instance wrongly refuse itself as stale.
+        $flow->forceFill([
             'draft_graph' => $graph,
-            'draft_updated_at' => now(),
+            'draft_updated_at' => $savedAt,
             'draft_revision' => $next,
-        ]);
+        ])->syncOriginal();
 
         return $next;
     }

@@ -156,6 +156,48 @@ it('refuses a token minted before a publish against a draft saved after it', fun
     expect(Flow::find($this->flow->id)->draft_graph)->toBe(graphWith('b1'));
 });
 
+it('refuses the write when the revision moved in the database after this request read it', function () {
+    // The read-then-write window, which is what a real pair of debounced
+    // autosaves collide inside: this request read revision 1 at route binding and
+    // is about to write, and by now the row says 5. True simultaneity is not
+    // reproducible in this suite, but the divergence it produces between a
+    // hydrated model and the row is — and that divergence is the whole reason the
+    // comparison cannot live in PHP alone.
+    //
+    // Counterfactual: drop `->where('draft_revision', $current)` from the update
+    // in SaveDraft::save() and this test's save succeeds, overwriting graph n9
+    // that the other request had already committed, and reports success for both.
+    $first = app(SaveDraft::class)->save($this->flow, graphWith('n1'), null);
+
+    Flow::withoutTenancy()->whereKey($this->flow->getKey())->update([
+        'draft_revision' => 5,
+        'draft_graph' => json_encode(graphWith('n9')),
+    ]);
+
+    try {
+        app(SaveDraft::class)->save($this->flow, graphWith('n2'), $first);
+        $this->fail('expected StaleDraftException');
+    } catch (StaleDraftException $e) {
+        // Re-read, not assumed: the caller is told what actually won.
+        expect($e->revision())->toBe(5)
+            ->and($e->graph())->toBe(graphWith('n9'));
+    }
+
+    expect(Flow::withoutTenancy()->find($this->flow->getKey())->draft_graph)->toBe(graphWith('n9'));
+});
+
+it('writes a graph the model can read back, without the array cast on the write path', function () {
+    // The conditional update bypasses Eloquent, so draft_graph is encoded by hand
+    // rather than by the model's `array` cast. Counterfactual: pass the raw PHP
+    // array to the query builder and the write fails outright; encode it twice and
+    // draft_graph comes back as a JSON string instead of an array, which every
+    // reader of the column — edit()'s graph prop included — then mishandles.
+    app(SaveDraft::class)->save($this->flow, graphWith('n1'), null);
+
+    expect(Flow::find($this->flow->getKey())->draft_graph)->toBe(graphWith('n1'))
+        ->and(Flow::find($this->flow->getKey())->draft_updated_at)->not->toBeNull();
+});
+
 it('treats a revision read back from the database as current, not stale', function () {
     // Every other test in this file reuses the same in-memory $flow object
     // across saves, so draft_revision never actually leaves PHP and comes
