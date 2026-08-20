@@ -30,3 +30,21 @@ it('confines the engine dependency to src/Engine and src/Workflows', function ()
 
     expect($offenders)->toBe([]);
 });
+
+it('keeps RunSubject and NodeExecution out of everything but the execution internals', function () {
+    // Spec E1: these two carry no tenant_id — they are the six-figure tables and
+    // are only reachable through a Run, which is scoped. So the isolation is
+    // structural, and this is the thing that keeps it structural once Plan 3
+    // adds controllers. The allowlist is the set of places that legitimately
+    // query them today: the interpreter internals and the prune command, which
+    // is explicitly a cross-tenant system operation.
+    //
+    // Counterfactual: add `RunSubject::where(...)` to any file in src/ outside
+    // the allowlist and this fails, naming the file.
+    $violations = Tests\Support\RequestContextScanner::violations(
+        __DIR__.'/../../src',
+        ['/src/Execution/', '/src/Console/PruneCommand.php'],
+    );
+
+    expect($violations)->toBe([]);
+});
