@@ -1,5 +1,5 @@
 import { act, renderHook, waitFor } from '@testing-library/react'
-import { StrictMode, type PropsWithChildren } from 'react'
+import { startTransition, StrictMode, Suspense, type PropsWithChildren } from 'react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { Graph } from '../graph/types'
 import { useAutosave } from './useAutosave'
@@ -19,7 +19,7 @@ function okOnce(revision: number) {
 }
 
 function StrictModeWrapper({ children }: PropsWithChildren) {
-    return <StrictMode>{children}</StrictMode>
+    return <StrictMode><Suspense fallback={null}>{children}</Suspense></StrictMode>
 }
 
 beforeEach(() => vi.useFakeTimers({ shouldAdvanceTime: true }))
@@ -30,9 +30,18 @@ describe('useAutosave', () => {
     it('does not save a graph that has not changed', async () => {
         const fetchMock = okOnce(8)
         vi.stubGlobal('fetch', fetchMock)
+        const never = new Promise<void>(() => undefined)
         const { result, rerender } = renderHook(
-            (props: { url: string; initialRevision: number; graph: Graph }) => useAutosave({ ...props, debounceMs: 500 }),
-            { initialProps: { url: URL, initialRevision: 0, graph: graph('a') }, wrapper: StrictModeWrapper },
+            (props: { url: string; initialRevision: number; graph: Graph; suspend?: boolean }) => {
+                const autosave = useAutosave({ ...props, debounceMs: 500 })
+
+                if (props.suspend) {
+                    throw never
+                }
+
+                return autosave
+            },
+            { initialProps: { url: URL, initialRevision: 0, graph: graph('a'), suspend: false }, wrapper: StrictModeWrapper },
         )
         await act(async () => {
             vi.advanceTimersByTime(2000)
@@ -41,21 +50,32 @@ describe('useAutosave', () => {
 
         const oldPrepare = result.current.preparePublish
         const oldFinish = result.current.finishPublish
-        rerender({ url: '/flows/13/draft', initialRevision: 7, graph: graph('new-flow') })
+
+        rerender({ url: URL, initialRevision: 0, graph: graph('pending-a'), suspend: false })
+        act(() => {
+            startTransition(() => rerender({ url: '/flows/13/draft', initialRevision: 7, graph: graph('new-flow'), suspend: true }))
+        })
+        await act(async () => vi.advanceTimersByTime(500))
+        // Counterfactual: mutating flow refs during B's abandoned render cancels A's committed pending save.
+        expect(fetchMock).toHaveBeenCalledTimes(1)
+        expect(fetchMock.mock.calls[0]![0]).toBe(URL)
+        expect(JSON.parse(fetchMock.mock.calls[0]![1].body)).toMatchObject({ graph: { start: 'pending-a' }, draft_revision: 0 })
+
+        rerender({ url: '/flows/13/draft', initialRevision: 7, graph: graph('new-flow'), suspend: false })
         await act(async () => vi.advanceTimersByTime(2000))
         // Counterfactual: treating graph/url changes alike autosaves one flow's mounted graph into another flow.
-        expect(fetchMock).not.toHaveBeenCalled()
+        expect(fetchMock).toHaveBeenCalledTimes(1)
         await act(async () => expect(oldPrepare()).resolves.toBe(false))
         act(() => oldFinish(99))
         // Counterfactual: callbacks captured by the previous page can replace the new flow's revision or barrier.
         expect(result.current.revision).toBe(7)
 
-        rerender({ url: '/flows/13/draft', initialRevision: 7, graph: graph('new-edit') })
+        rerender({ url: '/flows/13/draft', initialRevision: 7, graph: graph('new-edit'), suspend: false })
         await act(async () => vi.advanceTimersByTime(500))
-        expect(fetchMock).toHaveBeenCalledTimes(1)
+        expect(fetchMock).toHaveBeenCalledTimes(2)
         // Counterfactual: an old run closure writes a genuine new-flow edit through the previous flow's endpoint and token.
-        expect(fetchMock.mock.calls[0]![0]).toBe('/flows/13/draft')
-        expect(JSON.parse(fetchMock.mock.calls[0]![1].body).draft_revision).toBe(7)
+        expect(fetchMock.mock.calls[1]![0]).toBe('/flows/13/draft')
+        expect(JSON.parse(fetchMock.mock.calls[1]![1].body).draft_revision).toBe(7)
     })
 
     // Counterfactual: drop clearTimeout => every keystroke gets its own request.
@@ -98,6 +118,11 @@ describe('useAutosave', () => {
         // Counterfactual: leaving "saved" visible after another edit tells the author unsaved work is durable.
         expect(result.current.status).toBe('idle')
         expect(result.current.lastSavedAt).toBe(lastSavedAt)
+        rerender({ graph: graph('b') })
+        // Counterfactual: clearing the pending body without restoring status leaves a clean graph looking dirty.
+        expect(result.current.status).toBe('saved')
+        expect(result.current.lastSavedAt).toBe(lastSavedAt)
+        rerender({ graph: graph('c') })
         await act(async () => {
             vi.advanceTimersByTime(50)
         })
@@ -123,6 +148,8 @@ describe('useAutosave', () => {
         rerender({ graph: graph('c') })
         rerender({ graph: graph('latest') })
         await act(async () => resolveFirst(Response.json({ draft_revision: 1 })))
+        // Counterfactual: the old request's success labels the newer queued edit as durable.
+        expect(result.current.status).toBe('idle')
         expect(fetchMock).toHaveBeenCalledTimes(1)
         await act(async () => vi.advanceTimersByTime(9))
         expect(fetchMock).toHaveBeenCalledTimes(1)
@@ -311,6 +338,16 @@ describe('useAutosave', () => {
         })
         await waitFor(() => expect(fetchMock).toHaveBeenCalled())
         expect(JSON.parse(fetchMock.mock.calls[0]![1].body).draft_revision).toBe(5)
+
+        await act(async () => expect(result.current.preparePublish()).resolves.toBe(true))
+        rerender({ graph: graph('queued-after-invalid-publish') })
+        act(() => result.current.finishPublish(Number.NaN))
+        expect(result.current.status).toBe('error')
+        expect(result.current.message).toMatch(/invalid publish revision/i)
+        expect(result.current.revision).toBe(6)
+        await act(async () => vi.advanceTimersByTime(100))
+        // Counterfactual: adopting NaN both corrupts the token and sends a queued PUT with it.
+        expect(fetchMock).toHaveBeenCalledTimes(1)
     })
 
     // Counterfactual: releasing the barrier when prepare resolves allows a PUT to cross the POST and recreate a draft.
@@ -319,7 +356,10 @@ describe('useAutosave', () => {
         const first = new Promise<Response>((resolve) => {
             resolveSave = resolve
         })
-        const fetchMock = vi.fn().mockReturnValueOnce(first).mockResolvedValueOnce(Response.json({ draft_revision: 2 }))
+        const fetchMock = vi.fn()
+            .mockReturnValueOnce(first)
+            .mockResolvedValueOnce(Response.json({ draft_revision: 2 }))
+            .mockResolvedValueOnce(Response.json({ draft_revision: 3 }))
         vi.stubGlobal('fetch', fetchMock)
         const { result, rerender } = renderHook(
             (props: { graph: Graph }) => useAutosave({ url: URL, initialRevision: 0, graph: props.graph, debounceMs: 10 }),
@@ -345,11 +385,25 @@ describe('useAutosave', () => {
         await act(async () => vi.advanceTimersByTime(100))
         // Counterfactual: overlapping ownership lets the later prepare cross the first caller's still-active barrier.
         expect(fetchMock).toHaveBeenCalledTimes(1)
-        act(() => result.current.finishPublish(1))
+        const finishFirst = result.current.finishPublish
+        act(() => finishFirst(1))
+        await act(async () => expect(result.current.preparePublish()).resolves.toBe(true))
+        expect(fetchMock).toHaveBeenCalledTimes(2)
+        expect(result.current.revision).toBe(2)
+
+        const finishSecond = result.current.finishPublish
+        rerender({ graph: graph('during-second-publish') })
+        act(() => finishFirst(99))
+        expect(result.current.revision).toBe(2)
+        await act(async () => vi.advanceTimersByTime(100))
+        // Counterfactual: P1's delayed finish releases P2's barrier and poisons its revision.
+        expect(fetchMock).toHaveBeenCalledTimes(2)
+
+        act(() => finishSecond(2))
         await act(async () => vi.advanceTimersByTime(10))
-        await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(2))
-        // Counterfactual: replacing afterPublish loses the edit queued behind the first caller's publish target.
-        expect(JSON.parse(fetchMock.mock.calls[1]![1].body)).toMatchObject({ graph: { start: 'during-publish' }, draft_revision: 1 })
+        await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(3))
+        // Counterfactual: replacing afterPublish loses the edit queued behind the owning publish caller's target.
+        expect(JSON.parse(fetchMock.mock.calls[2]![1].body)).toMatchObject({ graph: { start: 'during-second-publish' }, draft_revision: 2 })
     })
 
     // Counterfactual: stale afterPublish creates a draft that is no longer on screen.

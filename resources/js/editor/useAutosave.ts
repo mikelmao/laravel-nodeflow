@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react'
 import type { Graph } from '../graph/types'
 import { send } from '../http'
 
@@ -118,8 +118,8 @@ export function useAutosave({
     const requestSequence = useRef(0)
     /** Invalidates older responses when publish adopts a newer token. */
     const generation = useRef(0)
-    /** True from preparePublish until finishPublish: no draft PUT may cross the POST. */
-    const publishBarrier = useRef(false)
+    /** The owning publish lease; while present, no draft PUT may cross the POST. */
+    const publishBarrier = useRef<number | null>(null)
     const publishTarget = useRef<string | null>(null)
     /** Edits made while POST /publish is in flight become the next draft. */
     const afterPublish = useRef<string | null>(null)
@@ -129,6 +129,8 @@ export function useAutosave({
     const timer = useRef<ReturnType<typeof setTimeout> | null>(null)
     /** Bumped by resolveConflict so the watcher effect reconsiders without the graph changing. */
     const [nudge, setNudge] = useState(0)
+    /** Gives every publish generation a callback identity that older finishes cannot own. */
+    const [publishLease, setPublishLease] = useState<{ active: number | null; next: number }>({ active: null, next: 1 })
 
     const [state, setState] = useState<{
         status: AutosaveStatus
@@ -138,7 +140,13 @@ export function useAutosave({
         lastSavedAt: number | null
     }>({ status: 'idle', revision: initialRevision, message: null, conflict: null, lastSavedAt: null })
 
-    if (flowIdentity.current.url !== url) {
+    const ownerEpoch = flowIdentity.current.epoch
+
+    useLayoutEffect(() => {
+        if (flowIdentity.current.url === url) {
+            return
+        }
+
         const supersededRequest = activeRequest.current
 
         flowIdentity.current = { url, epoch: flowIdentity.current.epoch + 1 }
@@ -149,11 +157,12 @@ export function useAutosave({
         baseline.current = serialised
         pending.current = null
         pendingDueAt.current = null
-        publishBarrier.current = false
+        publishBarrier.current = null
         publishTarget.current = null
         afterPublish.current = null
         halted.current = false
         conflict.current = null
+        setPublishLease((current) => ({ active: null, next: Math.max(current.next, current.active ?? 0) + 1 }))
 
         if (timer.current !== null) {
             clearTimeout(timer.current)
@@ -161,9 +170,7 @@ export function useAutosave({
         }
 
         setState({ status: 'idle', revision: initialRevision, message: null, conflict: null, lastSavedAt: null })
-    }
-
-    const ownerEpoch = flowIdentity.current.epoch
+    }, [url, initialRevision, serialised])
 
     useEffect(() => {
         mounted.current = true
@@ -174,7 +181,7 @@ export function useAutosave({
             const supersededRequest = activeRequest.current
             activeRequest.current = null
             supersededRequest?.settle()
-            publishBarrier.current = false
+            publishBarrier.current = null
             publishTarget.current = null
             afterPublish.current = null
             pending.current = null
@@ -196,7 +203,7 @@ export function useAutosave({
             return activeRequest.current.done
         }
 
-        if (halted.current || pending.current === null || !mounted.current || (publishBarrier.current && !force)) {
+        if (halted.current || pending.current === null || !mounted.current || (publishBarrier.current !== null && !force)) {
             return Promise.resolve()
         }
 
@@ -292,7 +299,14 @@ export function useAutosave({
 
                 revision.current = nextRevision
                 baseline.current = body
-                setState((current) => ({ ...current, status: 'saved', revision: revision.current, message: null, lastSavedAt: Date.now() }))
+                const hasNewerEdit = pending.current !== null || afterPublish.current !== null
+                setState((current) => ({
+                    ...current,
+                    status: hasNewerEdit ? 'idle' : 'saved',
+                    revision: revision.current,
+                    message: null,
+                    lastSavedAt: Date.now(),
+                }))
             } catch (reason: unknown) {
                 if (stillOwnsRequest()) {
                     halted.current = true
@@ -311,7 +325,7 @@ export function useAutosave({
 
                 // Preserve the new edit's own debounce. If its timer already
                 // expired while this request was active, delay is zero.
-                if (ownsRequest && mounted.current && pending.current !== null && !halted.current && !publishBarrier.current) {
+                if (ownsRequest && mounted.current && pending.current !== null && !halted.current && publishBarrier.current === null) {
                     const delay = Math.max(0, (pendingDueAt.current ?? Date.now()) - Date.now())
 
                     if (timer.current !== null) {
@@ -330,7 +344,7 @@ export function useAutosave({
             return
         }
 
-        if (publishBarrier.current) {
+        if (publishBarrier.current !== null) {
             afterPublish.current = serialised === publishTarget.current ? null : serialised
 
             if (afterPublish.current !== null) {
@@ -348,6 +362,12 @@ export function useAutosave({
 
             if (timer.current !== null) {
                 clearTimeout(timer.current)
+            }
+
+            if (activeRequest.current === null && serialised === baseline.current) {
+                setState((current) => current.status === 'idle' && current.lastSavedAt !== null
+                    ? { ...current, status: 'saved' }
+                    : current)
             }
 
             return
@@ -378,7 +398,7 @@ export function useAutosave({
     // pagehide is unreliable; visibilitychange fires early enough to be honoured.
     useEffect(() => {
         const flush = () => {
-            if (flowIdentity.current.epoch === ownerEpoch && document.visibilityState === 'hidden' && pending.current !== null && !halted.current && mounted.current && !publishBarrier.current) {
+            if (flowIdentity.current.epoch === ownerEpoch && document.visibilityState === 'hidden' && pending.current !== null && !halted.current && mounted.current && publishBarrier.current === null) {
                 if (timer.current !== null) {
                     clearTimeout(timer.current)
                 }
@@ -426,8 +446,35 @@ export function useAutosave({
         setNudge((count) => count + 1)
     }, [ownerEpoch])
 
+    const finishLease = publishLease.active ?? publishLease.next
+
     const finishPublish = useCallback((nextRevision?: number) => {
-        if (!mounted.current || flowIdentity.current.epoch !== ownerEpoch || !publishBarrier.current) {
+        if (!mounted.current || flowIdentity.current.epoch !== ownerEpoch || publishBarrier.current !== finishLease) {
+            return
+        }
+
+        if (nextRevision !== undefined && !isDraftRevision(nextRevision)) {
+            halted.current = true
+            publishBarrier.current = null
+            publishTarget.current = null
+            afterPublish.current = null
+            pending.current = null
+            pendingDueAt.current = null
+            setPublishLease((current) => current.active === finishLease
+                ? { active: null, next: Math.max(current.next, finishLease + 1) }
+                : current)
+
+            if (timer.current !== null) {
+                clearTimeout(timer.current)
+                timer.current = null
+            }
+
+            setState((current) => ({
+                ...current,
+                status: 'error',
+                message: 'The publish server returned an invalid publish revision: draft_revision must be a non-negative safe integer.',
+            }))
+
             return
         }
 
@@ -437,8 +484,11 @@ export function useAutosave({
             setState((current) => ({ ...current, revision: nextRevision }))
         }
 
-        publishBarrier.current = false
+        publishBarrier.current = null
         publishTarget.current = null
+        setPublishLease((current) => current.active === finishLease
+            ? { active: null, next: Math.max(current.next, finishLease + 1) }
+            : current)
 
         const queued = afterPublish.current
         afterPublish.current = null
@@ -452,14 +502,17 @@ export function useAutosave({
             }
             timer.current = setTimeout(() => void run(), debounceMs)
         }
-    }, [debounceMs, run, ownerEpoch])
+    }, [debounceMs, run, ownerEpoch, finishLease])
 
     const preparePublish = useCallback(async (): Promise<boolean> => {
-        if (!mounted.current || flowIdentity.current.epoch !== ownerEpoch || publishBarrier.current) {
+        if (!mounted.current || flowIdentity.current.epoch !== ownerEpoch || publishBarrier.current !== null) {
             return false
         }
 
-        publishBarrier.current = true
+        publishBarrier.current = finishLease
+        setPublishLease((current) => current.active === null && current.next === finishLease
+            ? { ...current, active: finishLease }
+            : current)
         publishTarget.current = serialised
         afterPublish.current = null
 
@@ -502,7 +555,7 @@ export function useAutosave({
         }
 
         return true
-    }, [finishPublish, run, serialised, ownerEpoch])
+    }, [finishPublish, finishLease, run, serialised, ownerEpoch])
 
     return { ...state, preparePublish, finishPublish, resolveConflict }
 }
