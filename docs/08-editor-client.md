@@ -59,7 +59,7 @@ does not live at `resources/css/app.css`:
 Tailwind v4's automatic source detection skips gitignored paths, and applications
 normally gitignore `vendor/`. Without the explicit source, the build succeeds and
 the editor renders, but utilities used only by the package source—for example
-`min-h-[36rem]`—are absent. Utilities the host happens to use elsewhere can mask
+`min-h-[32rem]`—are absent. Utilities the host happens to use elsewhere can mask
 part of the damage. **Quiet, and the worst of the five failures.**
 
 ### 4. Install React Flow in the host
@@ -117,9 +117,13 @@ export default function Page(props: FlowEditorProps) {
 }
 ```
 
-Put this file in the host at `resources/js/pages/nodeflow/editor.tsx`, matching the
-`nodeflow/editor` component rendered by the package controller. Inertia's resolver
-globs the host's pages; it will never find a page inside `vendor/`.
+The `nodeflow/editor` component name rendered by the package controller is relative
+to the host's configured Inertia pages root. With a lowercase
+`resources/js/pages` root, put the file at
+`resources/js/pages/nodeflow/editor.tsx`. A conventional `resources/js/Pages`
+host must instead use `resources/js/Pages/nodeflow/editor.tsx`, preserving the
+configured casing. Inertia's resolver globs the host's pages root; it will never
+find a page inside `vendor/`.
 
 This thin page is three seams at once: the Inertia resolver entry, the place to
 wrap the editor in the host's layout, and the place where host theming reaches the
@@ -131,7 +135,10 @@ provide the layout.
 Declare the custom type in the node definition:
 
 ```php
-Field::custom('destination', 'town')
+Field::custom('destination', 'town')->options([
+    'bucharest' => 'Bucharest',
+    'cluj-napoca' => 'Cluj-Napoca',
+])
 ```
 
 Then pass a control under the same type name:
