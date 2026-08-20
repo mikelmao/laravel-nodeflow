@@ -16,6 +16,13 @@ use Illuminate\Support\Facades\Gate;
  *
  * A host wanting finer control replaces the policy class outright; these exist
  * so that the common case is one Gate::define() per ability.
+ *
+ * Guest footgun: Laravel only invokes a gate closure for an unauthenticated
+ * user if its first parameter is nullable — typed `?Authenticatable` or
+ * defaulted to `null`. An untyped `function ($user, $flow)` is silently
+ * skipped for guests, and the resulting deny is indistinguishable from a
+ * real one; the host sees a public-facing check fail and reasonably suspects
+ * the package rather than their own gate signature.
  */
 abstract class DelegatesToGate
 {
