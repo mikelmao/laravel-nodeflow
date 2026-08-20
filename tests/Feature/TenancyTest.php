@@ -153,3 +153,79 @@ it('rejects integer tenant_id differing from string resolver', function () {
         'tenant_id' => 6,
     ]))->toThrow(CrossTenantWriteException::class);
 });
+
+it('refuses to move an existing row to another tenant on update', function () {
+    // Proven by probe before the fix: creating() guarded the insert and nothing
+    // guarded the update, so with $guarded = [] a host route doing
+    // $flow->update($request->all()) could hand the flow — and every run,
+    // subject and node execution hanging off it — to another tenant.
+    //
+    // Counterfactual: delete the updating() hook from BelongsToTenant and this
+    // returns 'org-2' instead of throwing.
+    $flow = Flow::create(['name' => 'A', 'trigger_type' => 'manual', 'status' => 'draft']);
+
+    expect(fn () => $flow->update(['tenant_id' => 'org-2']))
+        ->toThrow(CrossTenantWriteException::class);
+
+    expect(Flow::withoutTenancy()->find($flow->id)->tenant_id)->toBe('org-1');
+});
+
+it('refuses a tenant_id change even when the new value is the ambient tenant', function () {
+    // The question is not "does this match the ambient tenant" — it is "is this
+    // row's tenant being changed at all". A row created for org-3 in a console
+    // context must not become an org-1 row just because org-1 happens to be
+    // ambient on the request that updates it.
+    //
+    // Counterfactual: make the updating() hook compare against the ambient
+    // tenant the way creating() does, and this stops throwing.
+    $this->tenant = null;
+
+    $flow = Flow::create([
+        'name' => 'A',
+        'trigger_type' => 'manual',
+        'status' => 'draft',
+        'tenant_id' => 'org-3',
+    ]);
+
+    $this->tenant = 'org-1';
+
+    expect(fn () => Flow::withoutTenancy()->find($flow->id)->update(['tenant_id' => 'org-1']))
+        ->toThrow(CrossTenantWriteException::class);
+});
+
+it('allows an update that leaves tenant_id alone', function () {
+    // The guard must not make ordinary edits throw — PublishFlow's own
+    // $flow->update(['current_version_id' => ...]) runs through it.
+    $flow = Flow::create(['name' => 'A', 'trigger_type' => 'manual', 'status' => 'draft']);
+
+    $flow->update(['name' => 'B', 'status' => 'active']);
+
+    expect(Flow::find($flow->id)->name)->toBe('B');
+});
+
+it('allows an update that re-sends the rows existing tenant_id', function () {
+    // isDirty() is the test, not presence in the attribute list: an editor
+    // round-tripping the whole model back is not a tenant change.
+    $flow = Flow::create(['name' => 'A', 'trigger_type' => 'manual', 'status' => 'draft']);
+
+    $flow->update(['name' => 'B', 'tenant_id' => 'org-1']);
+
+    expect(Flow::find($flow->id)->name)->toBe('B');
+});
+
+it('lets a suspended guard write tenant_id on update, as it does on create', function () {
+    // Same escape hatch, same reason: a package-internal write whose tenant_id
+    // came from a trusted row rather than from request input. Without this the
+    // updating() guard would be a second, undocumented rule that
+    // TenancyGuardSuspension does not cover.
+    //
+    // Counterfactual: drop the isActive() check from the updating() hook and
+    // this throws instead of writing.
+    $flow = Flow::create(['name' => 'A', 'trigger_type' => 'manual', 'status' => 'draft']);
+
+    \Nodeflow\Models\Concerns\TenancyGuardSuspension::run(
+        fn () => $flow->update(['tenant_id' => 'org-2'])
+    );
+
+    expect(Flow::withoutTenancy()->find($flow->id)->tenant_id)->toBe('org-2');
+});

@@ -3,6 +3,7 @@
 namespace Nodeflow\Models\Concerns;
 
 use Illuminate\Database\Eloquent\Builder;
+use InvalidArgumentException;
 use Nodeflow\Contracts\TenantResolver;
 use Nodeflow\Models\CrossTenantWriteException;
 use Nodeflow\Models\TenancyUnresolvedException;
@@ -32,7 +33,7 @@ trait BelongsToTenant
                 && $currentTenantId !== null
                 && $model->tenant_id !== null
                 && (string)$model->tenant_id !== $currentTenantId) {
-                throw new CrossTenantWriteException(
+                throw CrossTenantWriteException::forCreate(
                     $model::class,
                     $currentTenantId,
                     $model->tenant_id
@@ -40,6 +41,34 @@ trait BelongsToTenant
             }
 
             $model->tenant_id ??= $currentTenantId;
+        });
+
+        // A row's tenant is fixed at creation. Nothing in the package moves a
+        // row between tenants, and neither should a host: $guarded is empty on
+        // every model here, so without this an `update($request->all())`
+        // carrying a tenant_id would silently reassign the row — and take with
+        // it every child row reachable through it, including RunSubject and
+        // NodeExecution, which carry no tenant_id of their own and rely
+        // entirely on their parent being scoped.
+        //
+        // Refuses any change, not just a change away from the ambient tenant:
+        // "which tenant is ambient right now" is not the question. isDirty()
+        // means a same-value write is not a change, so an update that merely
+        // re-sends the row's existing tenant_id passes.
+        //
+        // Suspended by TenancyGuardSuspension for the same reason creating() is
+        // — the package's own system-authored writes read their tenant_id from
+        // a trusted row, not from request input.
+        static::updating(function ($model) {
+            if (TenancyGuardSuspension::isActive() || ! $model->isDirty('tenant_id')) {
+                return;
+            }
+
+            throw CrossTenantWriteException::forTenantChange(
+                $model::class,
+                $model->getOriginal('tenant_id'),
+                $model->tenant_id
+            );
         });
     }
 
@@ -55,20 +84,45 @@ trait BelongsToTenant
      * and nothing in the null itself distinguishes them — so the host declares
      * which it means via nodeflow.tenancy.
      *
+     * The mode is matched against a known set on every scoped read, in both
+     * branches, rather than compared to 'resolver' alone. An unrecognised value
+     * — 'Resolver', true, or a stale cached config that no longer has the key —
+     * would otherwise take the same path as 'disabled' and read unscoped on a
+     * null tenant, with no diagnostic. That fails open for exactly the host who
+     * read the docs and mistyped the env var.
+     *
      * Package-internal reads that legitimately cross tenants never reach this:
      * every one of them opts out with withoutTenancy() before the scope applies.
      *
      * @throws \Nodeflow\Models\TenancyUnresolvedException
+     * @throws \InvalidArgumentException
      */
     protected static function resolveTenantIdForScope(): ?string
     {
         $tenantId = app(TenantResolver::class)->currentTenantId();
+        $mode = config('nodeflow.tenancy');
 
-        if ($tenantId === null && config('nodeflow.tenancy') === 'resolver') {
-            throw new TenancyUnresolvedException(static::class);
+        return match ($mode) {
+            'disabled' => $tenantId,
+            'resolver' => $tenantId ?? throw new TenancyUnresolvedException(static::class),
+            default => throw new InvalidArgumentException(
+                'Unrecognised nodeflow.tenancy mode '.static::describeTenancyMode($mode)
+                ."; the only valid values are 'resolver' and 'disabled'. Both are matched exactly, so "
+                ."'Resolver', 'RESOLVER' and true are all invalid. Reading is refused rather than "
+                .'falling back to unscoped, which on a null tenant would return every tenant\'s rows. '
+                .'Check NODEFLOW_TENANCY in the environment, and run `php artisan config:clear` if a '
+                .'cached config predates the key existing.'
+            ),
+        };
+    }
+
+    private static function describeTenancyMode(mixed $mode): string
+    {
+        if ($mode === null) {
+            return 'null (the key is absent)';
         }
 
-        return $tenantId;
+        return is_scalar($mode) ? var_export($mode, true) : get_debug_type($mode);
     }
 
     public static function withoutTenancy(): Builder

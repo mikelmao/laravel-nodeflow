@@ -121,3 +121,83 @@ it('lets an explicit system read through in resolver mode', function () {
 
     expect(Flow::withoutTenancy()->count())->toBe(2);
 });
+
+it('refuses to read on an unrecognised tenancy mode instead of reading unscoped', function () {
+    // The fail-open case, verified by probe before the fix: with the mode
+    // compared to 'resolver' alone, 'Resolver' took the 'disabled' path and
+    // returned rows across both tenants with no diagnostic — so the host who
+    // read the docs and mistyped the env var got the leak, and the host who
+    // never read them did not.
+    //
+    // Counterfactual: restore `config('nodeflow.tenancy') === 'resolver'` in
+    // resolveTenantIdForScope() and this returns 2 instead of throwing.
+    bindTenant(null);
+
+    makeFlowFor('org-1');
+    makeFlowFor('org-2');
+
+    config()->set('nodeflow.tenancy', 'Resolver');
+
+    expect(fn () => Flow::count())->toThrow(InvalidArgumentException::class);
+});
+
+it('names the offending value and both valid modes when the mode is unrecognised', function () {
+    // Same reasoning as the TenancyUnresolvedException message test: an error
+    // the reader cannot act on gets "fixed" by setting something that reads
+    // unscoped again.
+    config()->set('nodeflow.tenancy', 'Resolver');
+    bindTenant(null);
+
+    try {
+        Flow::count();
+        expect(false)->toBeTrue('expected an InvalidArgumentException');
+    } catch (InvalidArgumentException $e) {
+        expect($e->getMessage())
+            ->toContain("'Resolver'")
+            ->toContain("'resolver'")
+            ->toContain("'disabled'")
+            ->toContain('NODEFLOW_TENANCY');
+    }
+});
+
+it('refuses to read when the tenancy key is absent entirely', function () {
+    // A stale cached config from before the key existed reads as null. Under
+    // the old comparison that was indistinguishable from 'disabled', so a
+    // resolver-managed application silently lost its fail-closed read the
+    // moment someone forgot `php artisan config:clear`.
+    //
+    // Counterfactual: restore the === 'resolver' comparison and this returns 1.
+    config()->set('nodeflow.tenancy', null);
+    bindTenant(null);
+
+    makeFlowFor('org-1');
+
+    expect(fn () => Flow::count())->toThrow(InvalidArgumentException::class, 'null (the key is absent)');
+});
+
+it('refuses to read on a truthy non-string tenancy mode', function () {
+    // NODEFLOW_TENANCY=true casts to bool through Laravel's env() handling, and
+    // a host reading "set this on" could plausibly write it. It is not a mode.
+    config()->set('nodeflow.tenancy', true);
+    bindTenant(null);
+
+    makeFlowFor('org-1');
+
+    expect(fn () => Flow::count())->toThrow(InvalidArgumentException::class, 'true');
+});
+
+it('still validates the mode when a tenant does resolve', function () {
+    // The mode is wrong whether or not a tenant happens to be resolvable on
+    // this request. Validating only the null branch would leave the typo latent
+    // until the first request that could not resolve one — a queue worker, at
+    // 3am, reading unscoped.
+    //
+    // Counterfactual: move the match inside an `if ($tenantId === null)` and
+    // this returns 1 instead of throwing.
+    config()->set('nodeflow.tenancy', 'Resolver');
+    bindTenant('org-1');
+
+    makeFlowFor('org-1');
+
+    expect(fn () => Flow::count())->toThrow(InvalidArgumentException::class);
+});
