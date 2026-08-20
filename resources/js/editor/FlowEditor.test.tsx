@@ -522,20 +522,18 @@ describe('FlowEditor', () => {
         expect(requestBody(fetchMock, urls.publish).graph).toMatchObject({ start: 'exit1' })
     })
 
-    // Explicit start selection and blank control drafts both belong to the selected node; counterfactual changing
-    // only the badge publishes the old start, while reusing a field-keyed Duration carries hours into another node.
+    // Explicit start selection and blank control drafts both belong to the selected node. A field-only key leaks
+    // between nodes with the same field, while a colon composite collides for [a:b, c] and [a, b:c].
     it('isolates selected node control state, makes it start and publishes it', async () => {
-        const fetchMock = successfulFetch()
-        vi.stubGlobal('fetch', fetchMock)
-        const waitADefinition: NodeTypePayload = {
-            type: 'app.wait-a',
-            label: 'Wait A',
+        const durationDefinition = (type: string, label: string, fieldKey: string): NodeTypePayload => ({
+            type,
+            label,
             group: 'Core',
             icon: null,
             description: 'Wait before continuing.',
             outputs: ['completed'],
             fields: [{
-                key: 'c',
+                key: fieldKey,
                 type: 'duration',
                 label: 'Duration',
                 help: null,
@@ -544,17 +542,43 @@ describe('FlowEditor', () => {
                 options: {},
                 dynamic_options: false,
             }],
-            default_config: { c: null },
+            default_config: { [fieldKey]: null },
             cardinality: ['subject'],
-        }
-        const waitBDefinition: NodeTypePayload = {
-            ...waitADefinition,
-            type: 'app.wait-b',
-            label: 'Wait B',
-            fields: [{ ...waitADefinition.fields[0]!, key: 'b:c' }],
-            default_config: { 'b:c': null },
-            cardinality: ['subject'],
-        }
+        })
+
+        const sameFieldFetch = successfulFetch()
+        vi.stubGlobal('fetch', sameFieldFetch)
+        const sameFieldDefinition = durationDefinition('app.wait', 'Wait', 'duration')
+        const sameFieldEditor = renderEditor({
+            palette: [sameFieldDefinition],
+            graph: {
+                start: 'same-a',
+                nodes: [
+                    { id: 'same-a', type: 'app.wait', config: { duration: null }, position: { x: 0, y: 0 } },
+                    { id: 'same-b', type: 'app.wait', config: { duration: null }, position: { x: 300, y: 0 } },
+                ],
+                edges: [],
+            },
+        })
+
+        fireEvent.click(canvasNode('same-a'))
+        fireEvent.change(screen.getByRole('combobox', { name: 'Duration unit' }), { target: { value: 'hours' } })
+        fireEvent.click(canvasNode('same-b'))
+        expect(screen.getByRole('combobox', { name: 'Duration unit' })).toHaveValue('minutes')
+        fireEvent.change(screen.getByRole('spinbutton', { name: 'Duration amount' }), { target: { value: '1' } })
+        fireEvent.click(screen.getByRole('button', { name: 'Publish' }))
+        await waitFor(() => expect(sameFieldFetch.mock.calls.some(([url]) => url === urls.publish)).toBe(true))
+        expect(requestBody(sameFieldFetch, urls.publish).graph).toMatchObject({
+            nodes: expect.arrayContaining([
+                expect.objectContaining({ id: 'same-b', config: { duration: '1 minute' } }),
+            ]),
+        })
+        sameFieldEditor.unmount()
+
+        const fetchMock = successfulFetch()
+        vi.stubGlobal('fetch', fetchMock)
+        const waitADefinition = durationDefinition('app.wait-a', 'Wait A', 'c')
+        const waitBDefinition = durationDefinition('app.wait-b', 'Wait B', 'b:c')
         renderEditor({
             palette: [waitADefinition, waitBDefinition],
             graph: {
