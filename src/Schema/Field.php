@@ -19,6 +19,10 @@ class Field
 
     private ?string $optionsSource = null;
 
+    private ?string $customType = null;
+
+    private string $customBaseRule = 'string';
+
     private function __construct(
         public readonly string $key,
         public readonly FieldType $type,
@@ -52,6 +56,24 @@ class Field
     public static function duration(string $key): self
     {
         return new self($key, FieldType::Duration);
+    }
+
+    /**
+     * A field type the package does not know about.
+     *
+     * FieldType is an enum, so a host cannot add a case to it — but the field-type
+     * to control mapping is deliberately extensible (spec E5), and a host with a
+     * town picker needs a type string to key it on. The base rule travels with it
+     * because publish-time validation must still work for a type the package has
+     * never heard of; without it a numeric custom field would accept anything.
+     */
+    public static function custom(string $key, string $type, string $baseRule = 'string'): self
+    {
+        $field = new self($key, FieldType::Text);
+        $field->customType = $type;
+        $field->customBaseRule = $baseRule;
+
+        return $field;
     }
 
     public function label(string $label): self
@@ -96,23 +118,38 @@ class Field
         return $this;
     }
 
+    /**
+     * The declared option source, for server-side resolution only.
+     *
+     * Deliberately not in toArray(): the browser learns that a field is dynamic,
+     * never which class backs it (spec E6). The options endpoint reads this from
+     * the node's own definition, so a client-supplied class name is never part of
+     * the lookup.
+     */
+    public function optionsSourceClass(): ?string
+    {
+        return $this->optionsSource;
+    }
+
     public function toArray(): array
     {
         return [
             'key' => $this->key,
-            'type' => $this->type->value,
+            'type' => $this->customType ?? $this->type->value,
             'label' => $this->label ?? Str::ucfirst(str_replace('_', ' ', Str::snake($this->key))),
             'help' => $this->help,
             'required' => $this->required,
             'default' => $this->default,
             'options' => $this->options,
-            'options_source' => $this->optionsSource,
+            'dynamic_options' => $this->optionsSource !== null,
         ];
     }
 
     public function rules(): array
     {
-        $rules = [$this->required ? 'required' : 'nullable', $this->type->baseRule()];
+        $rules = [$this->required ? 'required' : 'nullable', $this->customType !== null
+            ? $this->customBaseRule
+            : $this->type->baseRule()];
 
         if ($this->options !== [] && $this->optionsSource === null) {
             $rules[] = 'in:'.implode(',', array_keys($this->options));

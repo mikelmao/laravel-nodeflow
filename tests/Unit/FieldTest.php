@@ -17,7 +17,7 @@ it('serialises a select field for the editor', function () {
         'required' => true,
         'default' => 'sms',
         'options' => ['sms' => 'SMS', 'whatsapp' => 'WhatsApp'],
-        'options_source' => null,
+        'dynamic_options' => false,
     ]);
 });
 
@@ -47,6 +47,7 @@ it('records a dynamic options source instead of inline options', function () {
     $field = Field::select('template')->optionsFrom('App\\Nodeflow\\YayaTemplates');
 
     expect($field->toArray()['options'])->toBe([])
-        ->and($field->toArray()['options_source'])->toBe('App\\Nodeflow\\YayaTemplates')
+        ->and($field->toArray()['dynamic_options'])->toBeTrue()
+        ->and($field->toArray())->not->toHaveKey('options_source')
         ->and($field->rules())->toBe(['template' => ['nullable', 'string']]);
 });
