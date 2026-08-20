@@ -78,6 +78,18 @@ it('resolves the attribute options of the packages own condition node', function
         ->assertJsonPath('options.clicked', 'Has clicked');
 });
 
+it('returns an empty object, not an empty array, when the source has nothing registered', function () {
+    // A fresh host that has not registered any SubjectAttribute is the normal
+    // starting state, and SubjectAttributeRegistry::options() genuinely returns
+    // [] in that state. The docs promise `options` is always a JSON *object*,
+    // `{}` when there are none — assertJsonPath/assertJson decode before
+    // comparing, so they cannot tell `[]` from `{}`. Only the raw body can.
+    $this->actingAs($this->user)
+        ->getJson("/nodeflow/flows/{$this->flow->id}/nodes/core.condition/fields/attribute/options")
+        ->assertOk()
+        ->assertContent('{"options":{}}');
+});
+
 it('four-oh-fours an unknown node type', function () {
     $this->actingAs($this->user)
         ->getJson("/nodeflow/flows/{$this->flow->id}/nodes/nope.missing/fields/template/options")

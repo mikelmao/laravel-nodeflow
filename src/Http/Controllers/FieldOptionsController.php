@@ -59,7 +59,11 @@ class FieldOptionsController extends Controller
             throw UnknownOptionSourceException::notAnOptionSource($sourceClass);
         }
 
-        return response()->json(['options' => $source->options()]);
+        // Cast to an object: a PHP array with no entries encodes as JSON `[]`, not
+        // `{}`. The docs promise `options` is always a JSON object, `{}` when there
+        // are none, so a fresh host with no sources registered yet must not hand a
+        // client-typed-from-the-docs a shape it did not sign up for.
+        return response()->json(['options' => (object) $source->options()]);
     }
 
     /** @param  Field[]  $fields */
