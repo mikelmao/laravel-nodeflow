@@ -15,14 +15,14 @@ import { Unregistered } from './Unregistered'
  * A plain object, not a registry: E5. A module-level registry populated by
  * import side-effects is order-dependent and does not survive Inertia SSR.
  */
-export const defaultControls: ControlMap = {
+export const defaultControls: ControlMap = Object.freeze({
     text: Text,
     number: NumberControl,
     boolean: BooleanControl,
     select: Select,
     multiselect: Multiselect,
     duration: Duration,
-}
+})
 
 /** Host overrides last, so a host may replace a built-in as well as add a type. */
 export function mergeControls(overrides?: ControlMap): ControlMap {

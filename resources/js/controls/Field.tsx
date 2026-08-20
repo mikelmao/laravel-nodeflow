@@ -10,16 +10,25 @@ import type { FieldPayload } from '../graph/types'
  * inside the host's design system rather than looking like an iframe that isn't
  * one. No colour is hardcoded and no CSS file is shipped.
  */
-export function FieldShell({ field, errors, children }: { field: FieldPayload; errors: string[]; children: ReactNode }) {
-    return (
-        <div className="space-y-1">
-            <label className="block text-xs font-medium text-foreground" htmlFor={`nf-${field.key}`}>
-                {field.label}
-                {field.required && <span className="text-destructive"> *</span>}
-            </label>
-
-            {children}
-
+export function FieldShell({
+    field,
+    errors,
+    children,
+    grouped = false,
+}: {
+    field: FieldPayload
+    errors: string[]
+    children: ReactNode
+    grouped?: boolean
+}) {
+    const label = (
+        <>
+            {field.label}
+            {field.required && <span className="text-destructive"> *</span>}
+        </>
+    )
+    const supportingContent = (
+        <>
             {field.help && <p className="text-[11px] text-muted-foreground">{field.help}</p>}
 
             {errors.length > 0 && (
@@ -29,6 +38,28 @@ export function FieldShell({ field, errors, children }: { field: FieldPayload; e
                     ))}
                 </ul>
             )}
+        </>
+    )
+
+    if (grouped) {
+        return (
+            <fieldset className="space-y-1">
+                <legend className="block text-xs font-medium text-foreground">{label}</legend>
+
+                {children}
+                {supportingContent}
+            </fieldset>
+        )
+    }
+
+    return (
+        <div className="space-y-1">
+            <label className="block text-xs font-medium text-foreground" htmlFor={`nf-${field.key}`}>
+                {label}
+            </label>
+
+            {children}
+            {supportingContent}
         </div>
     )
 }

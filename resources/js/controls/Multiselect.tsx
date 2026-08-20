@@ -25,14 +25,14 @@ export function Multiselect({ field, value, onChange, errors, options, optionsLo
 
     if (optionsLoading) {
         return (
-            <FieldShell field={field} errors={errors}>
+            <FieldShell field={field} errors={errors} grouped>
                 <p className="text-[11px] text-muted-foreground">Loading...</p>
             </FieldShell>
         )
     }
 
     return (
-        <FieldShell field={field} errors={errors}>
+        <FieldShell field={field} errors={errors} grouped>
             <div className="space-y-1 rounded-md border border-input bg-background p-2">
                 {Object.keys(options).length === 0 && <p className="text-[11px] text-muted-foreground">No choices available.</p>}
                 {Object.entries(options).map(([key, label]) => (

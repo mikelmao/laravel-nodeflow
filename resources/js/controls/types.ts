@@ -26,4 +26,4 @@ export type FieldControlProps = {
 
 export type FieldControl = (props: FieldControlProps) => ReactElement | null
 
-export type ControlMap = Record<string, FieldControl>
+export type ControlMap = Readonly<Record<string, FieldControl>>

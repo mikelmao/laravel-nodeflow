@@ -1,3 +1,4 @@
+import { useEffect, useState } from 'react'
 import { FieldShell, inputClass } from './Field'
 import type { FieldControlProps } from './types'
 
@@ -54,7 +55,20 @@ export function parseDuration(value: unknown): { amount: number | null; unit: Du
 }
 
 export function Duration({ field, value, onChange, errors }: FieldControlProps) {
-    const { amount, unit } = parseDuration(value)
+    const parsed = parseDuration(value)
+    const [draftUnit, setDraftUnit] = useState<DurationUnit>(parsed.unit)
+
+    // A valid serialized value from the parent is authoritative. Null cannot
+    // carry the author's partial unit selection, so leave the draft untouched
+    // until the amount becomes valid again.
+    useEffect(() => {
+        if (parsed.amount !== null) {
+            setDraftUnit(parsed.unit)
+        }
+    }, [parsed.amount, parsed.unit])
+
+    const amount = parsed.amount
+    const unit = amount === null ? draftUnit : parsed.unit
 
     // Null, not '0 minutes' and not '': ValidDuration rejects anything resolving
     // to zero or fewer seconds, and '0 days' resolves to 0. Emitting null lets
@@ -64,10 +78,11 @@ export function Duration({ field, value, onChange, errors }: FieldControlProps) 
         onChange(nextAmount === null ? null : formatDuration(nextAmount, nextUnit))
 
     return (
-        <FieldShell field={field} errors={errors}>
+        <FieldShell field={field} errors={errors} grouped>
             <div className="flex gap-1">
                 <input
-                    id={`nf-${field.key}`}
+                    id={`nf-${field.key}-amount`}
+                    aria-label={`${field.label} amount`}
                     type="number"
                     min="1"
                     max={MAX_DURATION_AMOUNT}
@@ -76,7 +91,18 @@ export function Duration({ field, value, onChange, errors }: FieldControlProps) 
                     value={amount === null ? '' : String(amount)}
                     onChange={(event) => emit(parseAmount(event.target.value), unit)}
                 />
-                <select className={inputClass} value={unit} onChange={(event) => emit(amount, event.target.value as DurationUnit)}>
+                <select
+                    id={`nf-${field.key}-unit`}
+                    aria-label={`${field.label} unit`}
+                    className={inputClass}
+                    value={unit}
+                    onChange={(event) => {
+                        const nextUnit = event.target.value as DurationUnit
+
+                        setDraftUnit(nextUnit)
+                        emit(amount, nextUnit)
+                    }}
+                >
                     {DURATION_UNITS.map((candidate) => (
                         <option key={candidate} value={candidate}>
                             {candidate}

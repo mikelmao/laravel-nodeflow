@@ -51,9 +51,11 @@ function renderControl(f: FieldPayload, value: unknown, onChange = vi.fn(), extr
 
 describe('control selection', () => {
     // Counterfactual: key defaultControls on anything but the wire `type` string
-    // and every field falls through to Unregistered.
+    // and every field falls through to Unregistered. Leave the shared defaults
+    // mutable and one editor can corrupt every later editor in the same process.
     it('has a built-in for each of the six field types and no more', () => {
         expect(Object.keys(defaultControls).sort()).toEqual(['boolean', 'duration', 'multiselect', 'number', 'select', 'text'])
+        expect(Object.isFrozen(defaultControls)).toBe(true)
     })
 
     // Counterfactual: return a text control as the fallback and a town picker
@@ -63,12 +65,16 @@ describe('control selection', () => {
     })
 
     // Counterfactual: spread the overrides before the defaults in mergeControls
-    // and a host can never replace a built-in.
+    // and a host can never replace a built-in. Return the shared frozen object
+    // and one editor's merge is no longer an isolated, host-specific map.
     it('lets a host override a built-in as well as add a custom type', () => {
         const Mine = () => null
+        const controls = mergeControls({ town: Mine, text: Mine })
 
-        expect(controlFor('town', mergeControls({ town: Mine }))).toBe(Mine)
-        expect(controlFor('text', mergeControls({ text: Mine }))).toBe(Mine)
+        expect(controlFor('town', controls)).toBe(Mine)
+        expect(controlFor('text', controls)).toBe(Mine)
+        expect(controls).not.toBe(defaultControls)
+        expect(mergeControls()).not.toBe(mergeControls())
     })
 })
 
@@ -124,10 +130,12 @@ describe('select', () => {
 describe('multiselect', () => {
     // The 1 gap: the field type existed in PHP and the prototype degraded it to
     // a single <select>. Counterfactual: emit a string and the server's `array`
-    // base rule rejects the publish.
+    // base rule rejects the publish. Wrap the checkbox set in a generic div and
+    // assistive technology cannot discover that the choices belong to Towns.
     it('always emits an array', async () => {
-        const onChange = renderControl(field({ key: 'towns', type: 'multiselect', options: { a: 'Ada', b: 'Bek' } }), [])
+        const onChange = renderControl(field({ key: 'towns', type: 'multiselect', label: 'Towns', options: { a: 'Ada', b: 'Bek' } }), [])
 
+        expect(screen.getByRole('group', { name: 'Towns' })).toBeInTheDocument()
         await userEvent.click(screen.getByRole('checkbox', { name: 'Ada' }))
 
         expect(onChange).toHaveBeenCalledWith(['a'])
@@ -224,32 +232,44 @@ describe('duration', () => {
 
     // The dangerous emission. ValidDuration rejects a value resolving to <= 0,
     // and '0 days' resolves to 0. Counterfactual: pass the raw input straight to
-    // formatDuration and clearing the box publishes '0 minutes', which fails at
+    // formatDuration and clearing the box publishes '0 days', which fails at
     // publish time with a message about seconds rather than about a blank field.
+    // Counterfactual: derive the unit only from the now-null serialized value
+    // and retyping silently changes the author's chosen days back to minutes.
     it('emits null for an empty amount rather than a zero-second duration', async () => {
-        const onChange = renderControl(field({ key: 'duration', type: 'duration' }), '5 minutes')
+        const onChange = renderControl(field({ key: 'duration', type: 'duration' }), '5 days')
+        const amount = screen.getByRole('spinbutton')
 
-        await userEvent.clear(screen.getByRole('spinbutton'))
+        await userEvent.clear(amount)
 
         expect(onChange).toHaveBeenLastCalledWith(null)
+
+        await userEvent.type(amount, '5')
+
+        expect(onChange).toHaveBeenLastCalledWith('5 days')
     })
 
-    // Counterfactual: emit the unit alone or preserve the old unit and this does
-    // not produce the server-accepted `5 days` value.
+    // Counterfactual: emit the unit alone when amount is blank, or reconstruct
+    // the partial input only from that null emission, and the later amount uses
+    // the default minutes instead of the author's selected days.
     it('emits a duration string when both parts are present', async () => {
-        const onChange = renderControl(field({ key: 'duration', type: 'duration' }), '5 minutes')
+        const onChange = renderControl(field({ key: 'duration', type: 'duration' }), null)
 
         await userEvent.selectOptions(screen.getByRole('combobox'), 'days')
+        await userEvent.type(screen.getByRole('spinbutton'), '5')
 
         expect(onChange).toHaveBeenLastCalledWith('5 days')
     })
 
     // Counterfactual: drop min/max and the browser advertises values outside the
-    // same finite range the PHP test exhausts.
+    // same finite range the PHP test exhausts. Use one label for this compound
+    // control and its amount/unit distinction and group name disappear.
     it('advertises the exhaustively verified amount range', () => {
-        renderControl(field({ key: 'duration', type: 'duration' }), '5 minutes')
+        renderControl(field({ key: 'duration', type: 'duration', label: 'Duration' }), '5 minutes')
 
-        expect(screen.getByRole('spinbutton')).toHaveAttribute('min', '1')
-        expect(screen.getByRole('spinbutton')).toHaveAttribute('max', '999')
+        expect(screen.getByRole('group', { name: 'Duration' })).toBeInTheDocument()
+        expect(screen.getByRole('spinbutton', { name: 'Duration amount' })).toHaveAttribute('min', '1')
+        expect(screen.getByRole('spinbutton', { name: 'Duration amount' })).toHaveAttribute('max', '999')
+        expect(screen.getByRole('combobox', { name: 'Duration unit' })).toBeInTheDocument()
     })
 })
