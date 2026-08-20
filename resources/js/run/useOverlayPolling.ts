@@ -85,11 +85,35 @@ export function useOverlayPolling(
 
                     setError(null)
                     // Decided against the value being replaced, not against a
-                    // render-time closure: two responses can be in flight across
-                    // an interval boundary, and a late non-terminal one must not
-                    // resurrect a run that has already finished — which would
-                    // restart polling as well as lie about the run.
+                    // render-time closure. The inFlight guard above means two
+                    // requests are never in flight at once — but it does not mean
+                    // this line is unreachable defence-in-depth: tick() only
+                    // checks inFlight, not snapshot.terminal, and inFlight is
+                    // cleared the instant this .then() finishes, before React has
+                    // necessarily committed the state update below and torn down
+                    // the interval via the effect's snapshot.terminal dependency.
+                    // In that real, if narrow, gap the same interval can fire
+                    // again and land a further response — observed directly by
+                    // removing this guard under real timers: a terminal state got
+                    // overwritten by a trailing non-terminal response, and because
+                    // that flips snapshot.terminal back to false, the effect saw a
+                    // reason to keep running and polling never stopped. Deciding
+                    // against the value being replaced, rather than a stale
+                    // closure, is what keeps a run that has already gone terminal
+                    // from being resurrected.
                     setSnapshot((previous) => (previous.terminal ? previous : next))
+                })
+                .catch((reason: unknown) => {
+                    // Only a network failure rejects (http.ts's send() contract);
+                    // an HTTP error status resolves and is handled above. Per the
+                    // stated policy, a network failure keeps polling while
+                    // surfacing the last error rather than freezing a stale
+                    // overlay or leaving this promise chain to reject unhandled.
+                    if (!live) {
+                        return
+                    }
+
+                    setError(`Could not refresh this run: ${String(reason)}`)
                 })
                 .finally(() => {
                     if (inFlight.current === request) {
