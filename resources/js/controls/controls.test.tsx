@@ -62,6 +62,9 @@ describe('control selection', () => {
     // becomes a free-text box that passes `string` validation.
     it('falls back to Unregistered for a type nothing registered', () => {
         expect(controlFor('town', mergeControls())).toBe(Unregistered)
+        expect(controlFor('__proto__', mergeControls())).toBe(Unregistered)
+        expect(controlFor('constructor', mergeControls())).toBe(Unregistered)
+        expect(controlFor('toString', Object.create({ toString: () => null }))).toBe(Unregistered)
     })
 
     // Counterfactual: spread the overrides before the defaults in mergeControls
@@ -73,6 +76,9 @@ describe('control selection', () => {
 
         expect(controlFor('town', controls)).toBe(Mine)
         expect(controlFor('text', controls)).toBe(Mine)
+        expect(controlFor('__proto__', mergeControls({ ['__proto__']: Mine }))).toBe(Mine)
+        expect(controlFor('constructor', mergeControls({ constructor: Mine }))).toBe(Mine)
+        expect(controlFor('toString', mergeControls({ toString: Mine }))).toBe(Mine)
         expect(controls).not.toBe(defaultControls)
         expect(mergeControls()).not.toBe(mergeControls())
     })

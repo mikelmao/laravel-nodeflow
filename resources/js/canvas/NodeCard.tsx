@@ -5,7 +5,7 @@ import type { NodeflowNode } from './Canvas'
 import { NODE_WIDTH, outputHandleTop } from './layout'
 
 export function rendererFor(type: string, renderers: NodeRendererMap): NodeRenderer {
-    return renderers[type] ?? defaultNodeRenderer
+    return Object.prototype.hasOwnProperty.call(renderers, type) ? renderers[type]! : defaultNodeRenderer
 }
 
 /**
@@ -54,10 +54,10 @@ export const defaultNodeRenderer: NodeRenderer = ({ data, def }) => (
  */
 export function NodeCard({ id, data, selected, isConnectable }: NodeProps<NodeflowNode>) {
     const { defs, renderers, nodeErrors } = useContext(CanvasContext)
-    const def = defs[data.type]
+    const def = Object.prototype.hasOwnProperty.call(defs, data.type) ? defs[data.type] : undefined
     const outputs = def?.outputs ?? []
     const Body = rendererFor(data.type, renderers)
-    const errors = nodeErrors[id] ?? []
+    const errors = Object.prototype.hasOwnProperty.call(nodeErrors, id) ? nodeErrors[id]! : []
     const selectionClassName = selected ? 'border-primary ring-1 ring-primary' : 'border-border'
 
     return (

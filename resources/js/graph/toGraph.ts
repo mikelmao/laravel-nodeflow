@@ -2,7 +2,13 @@ import type { CanvasEdge, CanvasNode, Graph, NodeTypePayload } from './types'
 
 /** The palette as a lookup. One place builds it, so one place decides what a missing type means. */
 export function defsByType(palette: NodeTypePayload[]): Record<string, NodeTypePayload> {
-  return Object.fromEntries(palette.map((entry) => [entry.type, entry]))
+  const defs: Record<string, NodeTypePayload> = Object.create(null)
+
+  for (const entry of palette) {
+    defs[entry.type] = entry
+  }
+
+  return defs
 }
 
 /**
@@ -50,7 +56,11 @@ export function toGraph(
   const unresolved: CanvasEdge[] = []
 
   const edges = canvas.edges.map((edge) => {
-    const output = resolveOutput(edge.sourceHandle, defs[typeOf.get(edge.source) ?? ''])
+    const sourceType = typeOf.get(edge.source)
+    const definition = sourceType !== undefined && Object.prototype.hasOwnProperty.call(defs, sourceType)
+      ? defs[sourceType]
+      : undefined
+    const output = resolveOutput(edge.sourceHandle, definition)
 
     if (output === null) {
       unresolved.push(edge)

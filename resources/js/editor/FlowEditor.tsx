@@ -6,7 +6,7 @@ import {
     type EdgeChange,
     type NodeChange,
 } from '@xyflow/react'
-import { useCallback, useMemo, useRef, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { Canvas, type NodeflowEdge, type NodeflowNode } from '../canvas/Canvas'
 import type { NodeRendererMap } from '../canvas/context'
 import { mergeControls } from '../controls'
@@ -40,6 +40,27 @@ export type FlowEditorProps = {
     className?: string
 }
 
+type EditorState = {
+    nodes: NodeflowNode[]
+    edges: NodeflowEdge[]
+    startId: string
+    selectedId: string | null
+    outcome: PublishOutcome | null
+    publishedVersion: number | null
+}
+
+function initialEditorState(flow: FlowSummary, graph: Graph): EditorState {
+    const canvas = toCanvas(graph)
+    return {
+        nodes: canvas.nodes,
+        edges: canvas.edges,
+        startId: graph.start ?? '',
+        selectedId: null,
+        outcome: null,
+        publishedVersion: flow.version,
+    }
+}
+
 function copiedConfig(definition: NodeTypePayload): Record<string, unknown> {
     return Array.isArray(definition.default_config) ? {} : { ...definition.default_config }
 }
@@ -48,7 +69,16 @@ function unique(messages: string[]): string[] {
     return [...new Set(messages)]
 }
 
-export function FlowEditor({
+function sessionKey({ flow, urls }: FlowEditorProps): string {
+    return JSON.stringify([flow.id, urls.draft, flow.draft_revision, flow.version])
+}
+
+/** Authoritative server identity remounts every session-local state/ref together. */
+export function FlowEditor(props: FlowEditorProps) {
+    return <FlowEditorSession key={sessionKey(props)} {...props} />
+}
+
+function FlowEditorSession({
     flow,
     graph,
     palette,
@@ -59,26 +89,37 @@ export function FlowEditor({
     autosaveDebounceMs,
     className,
 }: FlowEditorProps) {
-    const initialCanvas = useRef(toCanvas(graph))
-    const [nodes, setNodes] = useState<NodeflowNode[]>(initialCanvas.current.nodes)
-    const [edges, setEdges] = useState<NodeflowEdge[]>(initialCanvas.current.edges)
-    const [startId, setStartId] = useState(graph.start ?? '')
-    const [selectedId, setSelectedId] = useState<string | null>(null)
-    const [outcome, setOutcome] = useState<PublishOutcome | null>(null)
+    const [editor, setEditor] = useState(() => initialEditorState(flow, graph))
     const [publishing, setPublishing] = useState(false)
-    const [publishedVersion, setPublishedVersion] = useState(flow.version)
+    const editorRef = useRef(editor)
+    editorRef.current = editor
+    const graphGeneration = useRef(0)
+    const mounted = useRef(true)
+    const publishSequence = useRef(0)
+    const activePublish = useRef<number | null>(null)
+    const optionsCache = useRef(new Map<string, Record<string, string>>())
+
+    useEffect(() => () => {
+        mounted.current = false
+        activePublish.current = null
+    }, [])
 
     const defs = useMemo(() => defsByType(palette), [palette])
     const mergedControls = useMemo(() => mergeControls(controls), [controls])
-    const optionsCache = useRef(new Map<string, Record<string, string>>())
     const optionsSource = useMemo(() => ({ template: urls.options, cache: optionsCache.current }), [urls.options])
     const trigger = triggers.find((candidate) => candidate.type === flow.trigger_type)
 
     const canvasNodes = useMemo(
-        () => nodes.map((node) => ({ ...node, data: { ...node.data, isStart: node.id === startId } })),
-        [nodes, startId],
+        () => editor.nodes.map((node) => ({
+            ...node,
+            data: { ...node.data, isStart: node.id === editor.startId },
+        })),
+        [editor.nodes, editor.startId],
     )
-    const built = useMemo(() => toGraph({ nodes: canvasNodes, edges }, startId, defs), [canvasNodes, edges, startId, defs])
+    const built = useMemo(
+        () => toGraph({ nodes: canvasNodes, edges: editor.edges }, editor.startId, defs),
+        [canvasNodes, editor.edges, editor.startId, defs],
+    )
     const autosave = useAutosave({
         url: urls.draft,
         initialRevision: flow.draft_revision,
@@ -86,109 +127,179 @@ export function FlowEditor({
         debounceMs: autosaveDebounceMs,
     })
 
-    const cleanRemoved = useCallback((removed: Set<string>) => {
-        setEdges((current) => current.filter((edge) => !removed.has(edge.source) && !removed.has(edge.target)))
-        setStartId((current) => removed.has(current) ? '' : current)
-        setSelectedId((current) => current !== null && removed.has(current) ? null : current)
+    const onNodesChange = useCallback((changes: NodeChange<NodeflowNode>[]) => {
+        const changesGraph = changes.some((change) => change.type !== 'select' && change.type !== 'dimensions')
+        if (changesGraph) {
+            graphGeneration.current += 1
+        }
+
+        setEditor((current) => {
+            const removed = new Set(changes.filter((change) => change.type === 'remove').map((change) => change.id))
+            return {
+                ...current,
+                nodes: applyNodeChanges(changes, current.nodes),
+                edges: removed.size === 0
+                    ? current.edges
+                    : current.edges.filter((edge) => !removed.has(edge.source) && !removed.has(edge.target)),
+                startId: removed.has(current.startId) ? '' : current.startId,
+                selectedId: current.selectedId !== null && removed.has(current.selectedId) ? null : current.selectedId,
+                outcome: changesGraph ? null : current.outcome,
+            }
+        })
     }, [])
 
-    const onNodesChange = useCallback((changes: NodeChange<NodeflowNode>[]) => {
-        const removed = new Set(changes.filter((change) => change.type === 'remove').map((change) => change.id))
-        setNodes((current) => applyNodeChanges(changes, current))
-        if (removed.size > 0) {
-            cleanRemoved(removed)
-        }
-    }, [cleanRemoved])
-
     const onEdgesChange = useCallback((changes: EdgeChange<NodeflowEdge>[]) => {
-        setEdges((current) => applyEdgeChanges(changes, current))
+        const changesGraph = changes.some((change) => change.type !== 'select')
+        if (changesGraph) {
+            graphGeneration.current += 1
+        }
+        setEditor((current) => ({
+            ...current,
+            edges: applyEdgeChanges(changes, current.edges),
+            outcome: changesGraph ? null : current.outcome,
+        }))
     }, [])
 
     const onConnect = useCallback((connection: Connection) => {
-        const sourceType = nodes.find((node) => node.id === connection.source)?.data.type
+        const sourceType = editorRef.current.nodes.find((node) => node.id === connection.source)?.data.type
         if (!canConnect(sourceType, connection.sourceHandle, defs)) {
             return
         }
 
-        setEdges((current) => addEdge<NodeflowEdge>({
-            ...connection,
-            label: connection.sourceHandle ?? undefined,
-        }, current))
-    }, [nodes, defs])
+        graphGeneration.current += 1
+        setEditor((current) => ({
+            ...current,
+            edges: addEdge<NodeflowEdge>({
+                ...connection,
+                label: connection.sourceHandle ?? undefined,
+            }, current.edges),
+            outcome: null,
+        }))
+    }, [defs])
 
     const addNode = useCallback((definition: NodeTypePayload) => {
-        setNodes((current) => {
-            const id = nextNodeId(definition.type, new Set(current.map((node) => node.id)))
+        graphGeneration.current += 1
+        setEditor((current) => {
+            const id = nextNodeId(definition.type, new Set(current.nodes.map((node) => node.id)))
+            const first = current.nodes.length === 0
             const next: NodeflowNode = {
                 id,
                 type: 'nodeflowNode',
-                position: { x: 120 + current.length * 30, y: 120 + current.length * 20 },
-                data: { id, type: definition.type, config: copiedConfig(definition), isStart: current.length === 0 },
+                position: { x: 120 + current.nodes.length * 30, y: 120 + current.nodes.length * 20 },
+                data: { id, type: definition.type, config: copiedConfig(definition), isStart: first },
             }
-            if (current.length === 0) {
-                setStartId(id)
+            return {
+                ...current,
+                nodes: [...current.nodes, next],
+                startId: first ? id : current.startId,
+                selectedId: id,
+                outcome: null,
             }
-            setSelectedId(id)
-            return [...current, next]
         })
-        setOutcome(null)
     }, [])
 
     const deleteNode = useCallback((id: string) => {
-        const removed = new Set([id])
-        setNodes((current) => current.filter((node) => !removed.has(node.id)))
-        cleanRemoved(removed)
-        setOutcome(null)
-    }, [cleanRemoved])
+        graphGeneration.current += 1
+        setEditor((current) => ({
+            ...current,
+            nodes: current.nodes.filter((node) => node.id !== id),
+            edges: current.edges.filter((edge) => edge.source !== id && edge.target !== id),
+            startId: current.startId === id ? '' : current.startId,
+            selectedId: current.selectedId === id ? null : current.selectedId,
+            outcome: null,
+        }))
+    }, [])
 
-    const selected = selectedId === null ? undefined : canvasNodes.find((node) => node.id === selectedId)
-    const semanticEntries = outcome?.kind === 'semantic' && selected !== undefined
-        ? outcome.byNode[selected.id] ?? []
+    const selected = editor.selectedId === null
+        ? undefined
+        : canvasNodes.find((node) => node.id === editor.selectedId)
+    const semanticEntries = editor.outcome?.kind === 'semantic' && selected !== undefined
+        ? editor.outcome.byNode[selected.id] ?? []
         : []
     const nodeErrors = useMemo(() => {
-        if (outcome?.kind !== 'semantic') {
+        if (editor.outcome?.kind !== 'semantic') {
             return {}
         }
 
-        return Object.fromEntries(Object.entries(outcome.byNode).map(([id, entries]) => [
+        return Object.fromEntries(Object.entries(editor.outcome.byNode).map(([id, entries]) => [
             id,
             entries.map((entry) => entry.field === null ? entry.message : `${entry.field}: ${entry.message}`),
         ]))
-    }, [outcome])
+    }, [editor.outcome])
 
     const publish = useCallback(async () => {
+        if (activePublish.current !== null) {
+            return
+        }
         if (built.unresolved.length > 0) {
-            setOutcome({
-                kind: 'failed',
-                message: 'Choose which output each unresolved connection should use before publishing.',
-            })
+            setEditor((current) => ({
+                ...current,
+                outcome: {
+                    kind: 'failed',
+                    message: 'Choose which output each unresolved connection should use before publishing.',
+                },
+            }))
             return
         }
 
+        const attempt = ++publishSequence.current
+        activePublish.current = attempt
+        const publishedGeneration = graphGeneration.current
+        const ownsAttempt = () => mounted.current && activePublish.current === attempt
         setPublishing(true)
-        setOutcome(null)
+        setEditor((current) => ({ ...current, outcome: null }))
+
         const ready = await autosave.preparePublish()
         if (!ready) {
-            setOutcome({ kind: 'failed', message: autosave.message ?? 'The draft could not be saved before publishing.' })
-            setPublishing(false)
+            if (ownsAttempt()) {
+                if (publishedGeneration === graphGeneration.current) {
+                    setEditor((current) => ({
+                        ...current,
+                        outcome: {
+                            kind: 'failed',
+                            message: autosave.message ?? 'The draft could not be saved before publishing.',
+                        },
+                    }))
+                }
+                activePublish.current = null
+                setPublishing(false)
+            }
             return
         }
 
         try {
             const result = await send('POST', urls.publish, { graph: built.graph })
-            const next = interpretPublish(result, new Set(canvasNodes.map((node) => node.id)))
+            const currentIds = new Set(editorRef.current.nodes.map((node) => node.id))
+            const next = interpretPublish(result, currentIds)
             autosave.finishPublish(next.kind === 'published' ? next.revision : undefined)
-            if (next.kind === 'published') {
-                setPublishedVersion(next.version)
+
+            if (!ownsAttempt()) {
+                return
             }
-            setOutcome(next)
+            if (next.kind === 'published') {
+                setEditor((current) => ({
+                    ...current,
+                    publishedVersion: next.version,
+                    outcome: next,
+                }))
+            } else if (publishedGeneration === graphGeneration.current) {
+                setEditor((current) => ({ ...current, outcome: next }))
+            }
         } catch (reason: unknown) {
             autosave.finishPublish()
-            setOutcome({ kind: 'failed', message: `Could not reach server to publish this flow: ${String(reason)}` })
+            if (ownsAttempt() && publishedGeneration === graphGeneration.current) {
+                setEditor((current) => ({
+                    ...current,
+                    outcome: { kind: 'failed', message: `Could not reach server to publish this flow: ${String(reason)}` },
+                }))
+            }
         } finally {
-            setPublishing(false)
+            if (ownsAttempt()) {
+                activePublish.current = null
+                setPublishing(false)
+            }
         }
-    }, [autosave, built, canvasNodes, urls.publish])
+    }, [autosave, built, urls.publish])
 
     const useTheirs = useCallback(() => {
         const conflict = autosave.conflict
@@ -198,17 +309,24 @@ export function FlowEditor({
 
         const converted = toCanvas(conflict.graph)
         const canonical = toGraph(converted, conflict.graph.start ?? '', defs)
-        setNodes(converted.nodes)
-        setEdges(converted.edges)
-        setStartId(conflict.graph.start ?? '')
-        setSelectedId(null)
-        setOutcome(null)
+        graphGeneration.current += 1
+        setEditor((current) => ({
+            ...current,
+            nodes: converted.nodes,
+            edges: converted.edges,
+            startId: conflict.graph.start ?? '',
+            selectedId: null,
+            outcome: null,
+        }))
         autosave.resolveConflict('theirs', canonical.graph)
     }, [autosave, defs])
 
-    const bannerMessages = outcome?.kind === 'semantic'
-        ? unique([...outcome.banner, ...outcome.unplaceable])
+    const bannerMessages = editor.outcome?.kind === 'semantic'
+        ? unique([...editor.outcome.banner, ...editor.outcome.unplaceable])
         : []
+    const autosaveDetail = autosave.status === 'error' && autosave.message !== null
+        ? ` — ${autosave.message}`
+        : ''
 
     return (
         <FieldOptionsContext.Provider value={optionsSource}>
@@ -218,9 +336,9 @@ export function FlowEditor({
                         <h1 className="text-xl font-semibold">{flow.name}</h1>
                         <p>{trigger?.label ?? flow.trigger_type}</p>
                         {trigger?.description && <p>{trigger.description}</p>}
-                        <p>published v{publishedVersion ?? '-'}</p>
-                        <p>Start: {startId || 'none'}</p>
-                        <p aria-live="polite">Draft: {autosave.status}</p>
+                        <p>published v{editor.publishedVersion ?? '-'}</p>
+                        <p>Start: {editor.startId || 'none'}</p>
+                        <p aria-live="polite">Draft: {autosave.status}{autosaveDetail}</p>
                     </div>
                     <button type="button" disabled={publishing} onClick={() => void publish()}>
                         {publishing ? 'Publishing' : 'Publish'}
@@ -235,33 +353,33 @@ export function FlowEditor({
                     </div>
                 )}
 
-                {outcome?.kind === 'failed' && <p role="alert">{outcome.message}</p>}
-                {outcome?.kind === 'structural' && (
+                {editor.outcome?.kind === 'failed' && <p role="alert">{editor.outcome.message}</p>}
+                {editor.outcome?.kind === 'structural' && (
                     <div role="alert">
                         <p>The editor sent a graph the server could not read. This is a client bug.</p>
-                        <ul>{outcome.developer.map((message) => <li key={message}>{message}</li>)}</ul>
+                        <ul>{editor.outcome.developer.map((message) => <li key={message}>{message}</li>)}</ul>
                     </div>
                 )}
-                {outcome?.kind === 'semantic' && (
+                {editor.outcome?.kind === 'semantic' && (
                     <div role="alert">
                         <p>This flow could not be published.</p>
                         <ul>{bannerMessages.map((message) => <li key={message}>{message}</li>)}</ul>
                     </div>
                 )}
-                {outcome?.kind === 'published' && <p role="status">Published v{outcome.version}.</p>}
+                {editor.outcome?.kind === 'published' && <p role="status">Published v{editor.outcome.version}.</p>}
 
                 <div className="grid grid-cols-[16rem_minmax(0,1fr)_20rem] gap-4">
                     <Palette palette={palette} onAdd={addNode} />
                     <Canvas
                         nodes={canvasNodes}
-                        edges={edges}
+                        edges={editor.edges}
                         defs={defs}
                         renderers={nodeRenderers}
                         nodeErrors={nodeErrors}
                         onNodesChange={onNodesChange}
                         onEdgesChange={onEdgesChange}
                         onConnect={onConnect}
-                        onNodeClick={setSelectedId}
+                        onNodeClick={(id) => setEditor((current) => ({ ...current, selectedId: id }))}
                     />
                     {selected === undefined ? (
                         <p>Select a node to configure it.</p>
@@ -271,16 +389,20 @@ export function FlowEditor({
                             def={defs[selected.data.type]}
                             controls={mergedControls}
                             errors={semanticEntries}
-                            isStart={selected.id === startId}
+                            isStart={selected.id === editor.startId}
                             onConfigChange={(key, value) => {
-                                setNodes((current) => current.map((node) => node.id === selected.id
-                                    ? { ...node, data: { ...node.data, config: { ...node.data.config, [key]: value } } }
-                                    : node))
-                                setOutcome(null)
+                                graphGeneration.current += 1
+                                setEditor((current) => ({
+                                    ...current,
+                                    nodes: current.nodes.map((node) => node.id === selected.id
+                                        ? { ...node, data: { ...node.data, config: { ...node.data.config, [key]: value } } }
+                                        : node),
+                                    outcome: null,
+                                }))
                             }}
                             onMakeStart={() => {
-                                setStartId(selected.id)
-                                setOutcome(null)
+                                graphGeneration.current += 1
+                                setEditor((current) => ({ ...current, startId: selected.id, outcome: null }))
                             }}
                             onDelete={() => deleteNode(selected.id)}
                         />

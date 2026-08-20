@@ -30,7 +30,7 @@ export function mergeControls(overrides?: ControlMap): ControlMap {
 }
 
 export function controlFor(type: string, controls: ControlMap): FieldControl {
-    return controls[type] ?? Unregistered
+    return Object.prototype.hasOwnProperty.call(controls, type) ? controls[type]! : Unregistered
 }
 
 export { Unregistered }

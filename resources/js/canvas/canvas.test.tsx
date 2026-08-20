@@ -60,6 +60,12 @@ describe('rendererFor', () => {
         const Mine = () => null
         expect(rendererFor('app.send', { 'app.send': Mine })).toBe(Mine)
         expect(rendererFor('app.send', {})).toBe(defaultNodeRenderer)
+        expect(rendererFor('__proto__', {})).toBe(defaultNodeRenderer)
+        expect(rendererFor('constructor', {})).toBe(defaultNodeRenderer)
+        expect(rendererFor('toString', Object.create({ toString: Mine }))).toBe(defaultNodeRenderer)
+        expect(rendererFor('__proto__', { ['__proto__']: Mine })).toBe(Mine)
+        expect(rendererFor('constructor', { constructor: Mine })).toBe(Mine)
+        expect(rendererFor('toString', { toString: Mine })).toBe(Mine)
     })
 })
 
@@ -136,7 +142,7 @@ describe('NodeCard', () => {
     // Counterfactual ignore nodeErrors and errors exist only in banner.
     it('renders the errors recorded against its own id and no others', () => {
         const Mine = () => <p>host body</p>
-        render(
+        const view = render(
             <ReactFlowProvider>
                 <CanvasContext.Provider
                     value={{
@@ -152,6 +158,28 @@ describe('NodeCard', () => {
 
         expect(screen.getByRole('alert').textContent).toContain('field [template]: required')
         expect(screen.queryByText('not mine')).toBeNull()
+
+        const inheritedDefs = Object.create({ toString: def({ type: 'toString', label: 'inherited definition' }) })
+        const inheritedRenderers = Object.create({ toString: () => <p>inherited renderer</p> })
+        const inheritedErrors = Object.create({ constructor: ['inherited error'] })
+        view.rerender(
+            <ReactFlowProvider>
+                <CanvasContext.Provider
+                    value={{ defs: inheritedDefs, renderers: inheritedRenderers, nodeErrors: inheritedErrors }}
+                >
+                    <NodeCard
+                        {...nodeProps}
+                        id="constructor"
+                        data={{ ...data, id: 'constructor', type: 'toString' }}
+                    />
+                </CanvasContext.Provider>
+            </ReactFlowProvider>,
+        )
+
+        expect(screen.getByRole('alert')).toHaveTextContent('toString')
+        expect(screen.queryByText('inherited definition')).toBeNull()
+        expect(screen.queryByText('inherited renderer')).toBeNull()
+        expect(screen.queryByText('inherited error')).toBeNull()
     })
 })
 

@@ -17,7 +17,14 @@ function def(type: string, outputs: string[]): NodeTypePayload {
   }
 }
 
-const defs = defsByType([def('app.send', ['sent', 'failed']), def('core.exit', []), def('one.out', ['default'])])
+const defs = defsByType([
+  def('app.send', ['sent', 'failed']),
+  def('core.exit', []),
+  def('one.out', ['default']),
+  def('__proto__', ['own-proto']),
+  def('constructor', ['own-constructor']),
+  def('toString', ['own-string']),
+])
 
 const graph = {
   start: 'n1',
@@ -38,6 +45,10 @@ describe('toGraph', () => {
 
     expect(out).toEqual(graph)
     expect(unresolved).toEqual([])
+    expect(Object.getPrototypeOf(defs)).toBeNull()
+    expect(defs['__proto__']?.outputs).toEqual(['own-proto'])
+    expect(defs['constructor']?.outputs).toEqual(['own-constructor'])
+    expect(defs['toString']?.outputs).toEqual(['own-string'])
   })
 
   // The binding contract says canvas positions round-trip untouched.
@@ -103,6 +114,20 @@ describe('toGraph', () => {
 
     expect(out.edges?.[0]?.output).toBeNull()
     expect(unresolved).toHaveLength(1)
+
+    const inheritedDefs = Object.create({ constructor: def('constructor', ['inherited']) })
+    const special: Graph = {
+      start: 'a',
+      nodes: [
+        { id: 'a', type: 'constructor', config: {}, position: { x: 0, y: 0 } },
+        { id: 'b', type: 'core.exit', config: {}, position: { x: 0, y: 0 } },
+      ],
+      edges: [{ from: 'a', to: 'b', output: null }],
+    }
+    const inherited = toGraph(toCanvas(special), 'a', inheritedDefs)
+
+    expect(inherited.graph.edges?.[0]?.output).toBeNull()
+    expect(inherited.unresolved).toHaveLength(1)
   })
 
   // The draft endpoint accepts an omitted output as well as null. toCanvas is

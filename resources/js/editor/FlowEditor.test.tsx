@@ -1,4 +1,4 @@
-import { fireEvent, render, screen, waitFor, within } from '@testing-library/react'
+import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import type { FieldControlProps } from '../controls/types'
 import type { Graph, NodeTypePayload } from '../graph/types'
@@ -122,17 +122,117 @@ beforeEach(() => {
 
 describe('FlowEditor', () => {
     // Trigger metadata is server-authored and read-only; counterfactual showing only the key hides author guidance.
-    it('names the flow and describes its selected trigger', () => {
-        renderEditor()
+    it('names the flow and resets the whole editor only when its authoritative identity changes', async () => {
+        let resolveOldPublish!: (response: Response) => void
+        const oldPublish = new Promise<Response>((resolve) => { resolveOldPublish = resolve })
+        const fetchMock = vi.fn((url: string) => {
+            if (url === urls.publish) {
+                return oldPublish
+            }
+            if (url === '/flows/13/publish') {
+                return Promise.resolve(Response.json({ version: 6, draft_revision: 11 }))
+            }
+            return Promise.resolve(Response.json({ draft_revision: 10 }))
+        })
+        vi.stubGlobal('fetch', fetchMock)
+        const view = renderEditor()
         expect(screen.getByText('Welcome journey')).toBeInTheDocument()
         expect(screen.getByText('Order placed')).toBeInTheDocument()
         expect(screen.getByText('When a customer places an order.')).toBeInTheDocument()
+
+        fireEvent.click(canvasNode('send1'))
+        fireEvent.click(screen.getByRole('button', { name: 'Publish' }))
+        await waitFor(() => expect(fetchMock.mock.calls.filter(([url]) => url === urls.publish)).toHaveLength(1))
+
+        const nextFlow = {
+            ...flow,
+            id: 13,
+            name: 'Flow Two',
+            version: 5,
+            draft_revision: 9,
+        }
+        const nextUrls = {
+            ...urls,
+            draft: '/flows/13/draft',
+            publish: '/flows/13/publish',
+        }
+        const nextGraph: Graph = {
+            start: 'new1',
+            nodes: [{
+                id: 'new1',
+                type: 'app.send',
+                config: { template: 'new flow' },
+                position: { x: 25, y: 50 },
+            }],
+            edges: [],
+        }
+        view.rerender(
+            <FlowEditor
+                flow={nextFlow}
+                graph={nextGraph}
+                palette={palette}
+                triggers={triggers}
+                urls={nextUrls}
+                autosaveDebounceMs={5}
+            />,
+        )
+
+        expect(screen.getByText('Flow Two')).toBeInTheDocument()
+        expect(screen.getByText(/published v5/i)).toBeInTheDocument()
+        expect(screen.getByText(/Start: new1/i)).toBeInTheDocument()
+        expect(canvasNode('new1')).toBeInTheDocument()
+        expect(screen.getByText('Select a node to configure it.')).toBeInTheDocument()
+        await new Promise((resolve) => setTimeout(resolve, 15))
+        expect(fetchMock.mock.calls.filter(([url]) => url === nextUrls.draft)).toHaveLength(0)
+
+        await act(async () => resolveOldPublish(Response.json({ version: 77, draft_revision: 77 })))
+        expect(screen.queryByText(/v77/i)).toBeNull()
+        expect(screen.queryByRole('status')).toBeNull()
+
+        fireEvent.click(canvasNode('new1'))
+        fireEvent.change(screen.getByLabelText(/Template/), { target: { value: 'kept through churn' } })
+        view.rerender(
+            <FlowEditor
+                flow={{ ...nextFlow }}
+                graph={{ ...nextGraph, nodes: [...(nextGraph.nodes ?? [])], edges: [] }}
+                palette={[...palette]}
+                triggers={[...triggers]}
+                urls={{ ...nextUrls }}
+                autosaveDebounceMs={5}
+            />,
+        )
+        expect(screen.getByLabelText(/Template/)).toHaveValue('kept through churn')
+
+        fireEvent.click(screen.getByRole('button', { name: 'Publish' }))
+        await waitFor(() => expect(fetchMock.mock.calls.filter(([url]) => url === nextUrls.publish)).toHaveLength(1))
+        expect(requestBody(fetchMock, nextUrls.publish).graph).toMatchObject({
+            start: 'new1',
+            nodes: [expect.objectContaining({ id: 'new1', config: { template: 'kept through churn' } })],
+        })
     })
 
     // Published version is durable state; counterfactual reporting draft revision confuses concurrency with releases.
-    it('reports the published version', () => {
-        renderEditor()
+    it('reports the published version and actionable draft autosave failures', async () => {
+        const published = renderEditor()
         expect(screen.getByText(/published v3/i)).toBeInTheDocument()
+        published.unmount()
+
+        vi.stubGlobal('fetch', vi.fn().mockRejectedValue(new TypeError('draft offline')))
+        const offline = renderEditor()
+        fireEvent.click(screen.getByRole('button', { name: /Exitcore\.exit/ }))
+        expect(await screen.findByText(/Could not reach the server to save this draft.*draft offline/i)).toBeInTheDocument()
+        offline.unmount()
+
+        vi.stubGlobal('fetch', vi.fn().mockResolvedValue(new Response('<html>Page Expired</html>', { status: 419 })))
+        const expired = renderEditor()
+        fireEvent.click(screen.getByRole('button', { name: /Exitcore\.exit/ }))
+        expect(await screen.findByText(/session expired before this draft could be saved/i)).toBeInTheDocument()
+        expired.unmount()
+
+        vi.stubGlobal('fetch', vi.fn().mockResolvedValue(Response.json({ draft_revision: 'bad' })))
+        renderEditor()
+        fireEvent.click(screen.getByRole('button', { name: /Exitcore\.exit/ }))
+        expect(await screen.findByText(/invalid draft response.*non-negative safe integer/i)).toBeInTheDocument()
     })
 
     // One semantic error has three scopes; counterfactual flatten-only loses card and field placement.
@@ -261,7 +361,33 @@ describe('FlowEditor', () => {
     })
 
     // Network rejection is recoverable UI state; counterfactual leaving the button disabled forces a reload.
-    it('reports a network publish failure and re-enables publish', async () => {
+    it('owns one publish attempt, suppresses stale validation and recovers from a network failure', async () => {
+        let resolvePublish!: (response: Response) => void
+        const pendingPublish = new Promise<Response>((resolve) => { resolvePublish = resolve })
+        const fetchMock = vi.fn((url: string) => url === urls.publish
+            ? pendingPublish
+            : Promise.resolve(Response.json({ draft_revision: 8 })))
+        vi.stubGlobal('fetch', fetchMock)
+        const ownership = renderEditor()
+
+        const publish = screen.getByRole('button', { name: 'Publish' })
+        act(() => {
+            publish.dispatchEvent(new MouseEvent('click', { bubbles: true }))
+            publish.dispatchEvent(new MouseEvent('click', { bubbles: true }))
+        })
+        await waitFor(() => expect(fetchMock.mock.calls.filter(([url]) => url === urls.publish)).toHaveLength(1))
+        expect(screen.getByRole('button', { name: 'Publishing' })).toBeDisabled()
+        expect(screen.queryByText(/draft could not be saved before publishing/i)).toBeNull()
+
+        fireEvent.click(screen.getByRole('button', { name: /Exitcore\.exit/ }))
+        await act(async () => resolvePublish(Response.json({
+            errors: ['Node [send1] field [template]: stale validation'],
+            node_errors: [{ node: 'send1', field: 'template', message: 'stale validation' }],
+        }, { status: 422 })))
+        await waitFor(() => expect(screen.getByRole('button', { name: 'Publish' })).toBeEnabled())
+        expect(screen.queryAllByText(/stale validation/i)).toHaveLength(0)
+        ownership.unmount()
+
         vi.stubGlobal('fetch', vi.fn().mockRejectedValue(new TypeError('offline')))
         renderEditor()
         fireEvent.click(screen.getByRole('button', { name: 'Publish' }))
@@ -270,10 +396,15 @@ describe('FlowEditor', () => {
     })
 
     // IDs extend the existing type sequence; counterfactual counting nodes alone can collide with send1.
-    it('mints send2 when adding another Send message node', () => {
+    it('mints collision-safe ids across two synchronous additions', () => {
         renderEditor()
-        fireEvent.click(screen.getByRole('button', { name: /Send messageapp\.send/ }))
+        const add = screen.getByRole('button', { name: /Send messageapp\.send/ })
+        act(() => {
+            add.dispatchEvent(new MouseEvent('click', { bubbles: true }))
+            add.dispatchEvent(new MouseEvent('click', { bubbles: true }))
+        })
         expect(canvasNode('send2')).toBeInTheDocument()
+        expect(canvasNode('send3')).toBeInTheDocument()
     })
 
     // Panel edits mutate graph data; counterfactual local input state publishes the stale welcome value.
@@ -380,8 +511,18 @@ describe('FlowEditor', () => {
 
     // Host node renderers own only the body; counterfactual ignoring nodeRenderers prevents package customization.
     it('uses a host node body renderer', () => {
-        renderEditor({ nodeRenderers: { 'app.send': ({ data }) => <p>host node body: {data.id}</p> } })
+        renderEditor({
+            graph: {
+                ...graph,
+                nodes: [
+                    ...(graph.nodes ?? []),
+                    { id: 'constructor', type: 'toString', config: {}, position: { x: 600, y: 0 } },
+                ],
+            },
+            nodeRenderers: { 'app.send': ({ data }) => <p>host node body: {data.id}</p> },
+        })
         expect(screen.getByText('host node body: send1')).toBeInTheDocument()
+        expect(within(canvasNode('constructor')).getByText(/Node type "toString"/)).toBeInTheDocument()
     })
 
     // Dynamic option failure stays named beside the field; counterfactual empty select looks like a valid empty registry.
