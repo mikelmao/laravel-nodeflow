@@ -226,7 +226,26 @@ Implementing both is worth it for a sending node: `forAudience()` turns 100,000 
 batch calls, and `forSubject()` stays as the version a reader can follow.
 
 `optionsFrom(MessageTemplateOptions::class)` means each institution sees only its own templates in the
-editor's dropdown.
+editor's dropdown. The class it names has to implement `OptionSource` — the options endpoint refuses
+anything else rather than degrading to an empty dropdown:
+
+```php
+namespace App\Nodeflow;
+
+use App\Models\MessageTemplate;
+use Nodeflow\Schema\OptionSource;
+
+class MessageTemplateOptions implements OptionSource
+{
+    /** @return array<string, string> value => label */
+    public function options(): array
+    {
+        // Runs inside the editor request, so the tenancy scope already applies:
+        // this returns only the current institution's templates.
+        return MessageTemplate::orderBy('name')->pluck('name', 'key')->all();
+    }
+}
+```
 
 ## 5. The subject attributes
 

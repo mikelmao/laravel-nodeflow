@@ -107,9 +107,14 @@ it('fails loudly when the declared source is not an OptionSource', function () {
         ->assertStatus(500);
 });
 
-it('denies when the host has not defined the update gate', function () {
+it('denies when the update gate refuses', function () {
     // Options are edit-time data about the tenant's own records, so they sit
     // behind the same gate as editing.
+    //
+    // Named for what it does: it defines the gate as false. The *undefined* gate
+    // case is not covered here — EditorRoutesTest's "denies editing when the host
+    // has defined no gates" is the one that exercises that, and beforeEach() in
+    // this file defines the gate for every other test.
     Gate::define('nodeflow.update', fn ($user, $flow = null) => false);
 
     $this->actingAs($this->user)

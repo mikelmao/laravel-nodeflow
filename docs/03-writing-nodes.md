@@ -252,6 +252,28 @@ at edit time, scoped to the current tenant, so each customer sees only their own
 with a dynamic source deliberately gets no `in:` validation rule, since the valid set is only knowable
 per tenant at request time.
 
+**The class you name must implement `Nodeflow\Schema\OptionSource`:**
+
+```php
+use Nodeflow\Schema\OptionSource;
+
+class MessageTemplates implements OptionSource
+{
+    /** @return array<string, string> value => label */
+    public function options(): array
+    {
+        // Runs inside the request, with your tenancy resolver already in play.
+        return Template::pluck('name', 'id')->all();
+    }
+}
+```
+
+It is resolved out of the container, so constructor injection works. Naming a class that does not
+implement the interface is a **500 from the options endpoint** — deliberately loud, because the
+alternative (duck-typing `options()`) degrades to an empty dropdown that looks exactly like a customer
+who has no templates yet. A field with `optionsFrom()` set is advertised to the editor as
+`dynamic_options: true`, so the sidebar will call that endpoint the first time the field is shown.
+
 ## Retries and idempotency
 
 Node bodies run as queued activities. **The retry policy is currently the engine's default of one
