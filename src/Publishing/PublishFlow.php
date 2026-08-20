@@ -17,7 +17,7 @@ class PublishFlow
         $result = $this->validator->validate(Graph::fromArray($graph));
 
         if (! $result->passes()) {
-            throw new GraphInvalidException($result->errors());
+            throw new GraphInvalidException($result->errors(), $result->nodeErrors());
         }
 
         return DB::transaction(function () use ($flow, $graph, $publishedBy) {

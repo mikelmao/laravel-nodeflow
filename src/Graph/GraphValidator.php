@@ -14,17 +14,22 @@ class GraphValidator
     {
         $errors = [];
         $warnings = [];
+        $nodeErrors = [];
 
         if ($graph->startNodeId() === '') {
             $errors[] = 'The flow has no start node set. Choose a starting node before publishing.';
+            // No node exists yet to pin this to — the graph itself has no start.
+            $nodeErrors[] = ['node' => null, 'field' => null, 'message' => end($errors)];
         } elseif ($graph->node($graph->startNodeId()) === null) {
             $errors[] = "The start node [{$graph->startNodeId()}] does not exist in this flow. ".
                 'Set the start to one of the flow\'s existing nodes.';
+            $nodeErrors[] = ['node' => $graph->startNodeId(), 'field' => null, 'message' => end($errors)];
         }
 
         foreach ($graph->duplicateNodeIds() as $id) {
             $errors[] = "Node id [{$id}] is used by more than one node. Node ids must be unique — ".
                 'rename or remove the duplicate so each node keeps its own id.';
+            $nodeErrors[] = ['node' => $id, 'field' => null, 'message' => end($errors)];
         }
 
         foreach ($graph->nodeIds() as $id) {
@@ -33,6 +38,7 @@ class GraphValidator
 
             if (! $this->registry->has($type)) {
                 $errors[] = "Node [{$id}] uses unknown type [{$type}].";
+                $nodeErrors[] = ['node' => $id, 'field' => null, 'message' => end($errors)];
 
                 continue;
             }
@@ -43,10 +49,15 @@ class GraphValidator
                 $errors[] = "Node [{$id}] uses type [{$type}], whose class ".$instance::class.' implements '
                     .'neither HandlesSubject nor HandlesAudience and therefore cannot be executed. '
                     .'The node class must implement at least one cardinality interface.';
+                $nodeErrors[] = ['node' => $id, 'field' => null, 'message' => end($errors)];
             }
 
             foreach ($instance->validate($node['config'] ?? []) as $field => $messages) {
                 $errors[] = "Node [{$id}] field [{$field}]: ".implode(' ', $messages);
+                // The bare field message, not the prefixed string: the editor already
+                // knows the node and field from the structure, so re-prefixing here
+                // would make the client strip its own node id back off.
+                $nodeErrors[] = ['node' => $id, 'field' => $field, 'message' => implode(' ', $messages)];
             }
         }
 
@@ -55,6 +66,7 @@ class GraphValidator
         foreach ($graph->edges() as $edge) {
             if ($graph->node($edge['to']) === null) {
                 $errors[] = "Edge from [{$edge['from']}] points at missing node [{$edge['to']}].";
+                $nodeErrors[] = ['node' => $edge['from'], 'field' => null, 'message' => end($errors)];
             }
 
             $from = $graph->node($edge['from']);
@@ -64,6 +76,7 @@ class GraphValidator
 
                 if (! in_array($edge['output'], $outputs, true)) {
                     $errors[] = "Node [{$edge['from']}] has no output [{$edge['output']}].";
+                    $nodeErrors[] = ['node' => $edge['from'], 'field' => null, 'message' => end($errors)];
                 }
             }
 
@@ -78,6 +91,7 @@ class GraphValidator
                     'An output may lead to exactly one node. Use a Condition node to send each subject '.
                     'down one of several branches; sending the same subject down two branches at once is '.
                     'not supported in this version.';
+                $nodeErrors[] = ['node' => $edge['from'], 'field' => null, 'message' => end($errors)];
             }
 
             $seenOutputs[$key] = true;
@@ -86,6 +100,9 @@ class GraphValidator
         if (($cycle = $this->findCycle($graph)) !== null) {
             $path = implode(' -> ', $cycle);
             $errors[] = "The flow contains a cycle: {$path}. Flows must be acyclic.";
+            // A cycle spans every node on its path, not one node in particular —
+            // attributing it to a single id would put a red badge on an innocent card.
+            $nodeErrors[] = ['node' => null, 'field' => null, 'message' => end($errors)];
         }
 
         if ($this->hasConcurrentWaits($graph)) {
@@ -93,7 +110,7 @@ class GraphValidator
                 'run sequentially rather than concurrently, so total elapsed time is the sum, not the maximum.';
         }
 
-        return new GraphValidationResult($errors, $warnings);
+        return new GraphValidationResult($errors, $warnings, $nodeErrors);
     }
 
     /**
