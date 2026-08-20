@@ -39,7 +39,15 @@ class FlowEditorController extends Controller
     // endpoint here fatals rather than authorizing.
     use AuthorizesRequests;
 
-    public function edit(Flow $flow): \Inertia\Response
+    /**
+     * Per-field URL-template sentinels. Both use only unreserved URI characters,
+     * so route() leaves them intact for the client to replace with encoded values.
+     */
+    private const TYPE_PLACEHOLDER = '__NODEFLOW_TYPE__';
+
+    private const FIELD_PLACEHOLDER = '__NODEFLOW_FIELD__';
+
+    public function edit(Request $request, Flow $flow): \Inertia\Response
     {
         $this->authorize('update', $flow);
 
@@ -61,6 +69,18 @@ class FlowEditorController extends Controller
                 ?? ['start' => '', 'nodes' => [], 'edges' => []],
             'palette' => app(NodeRegistry::class)->palette(),
             'triggers' => app(TriggerRegistry::class)->palette(),
+            // Prefixes, middleware, and route-name prefixes belong to the host.
+            // The client must consume these resolved endpoints rather than revive
+            // the prototype's hardcoded /nodeflow route assumptions.
+            'urls' => [
+                'draft' => route($this->routeName($request, 'nodeflow.flows.draft'), ['flow' => $flow]),
+                'publish' => route($this->routeName($request, 'nodeflow.flows.publish'), ['flow' => $flow]),
+                'options' => route($this->routeName($request, 'nodeflow.fields.options'), [
+                    'flow' => $flow,
+                    'type' => self::TYPE_PLACEHOLDER,
+                    'field' => self::FIELD_PLACEHOLDER,
+                ]),
+            ],
         ]);
     }
 
@@ -176,5 +196,21 @@ class FlowEditorController extends Controller
             // validation failure. Publish requires it; draft does not (see there).
             'graph.edges.*.output' => ['required', 'string'],
         ];
+    }
+
+    /**
+     * Derive the host's route-name prefix from the matched edit route, whose
+     * sibling endpoints are registered by the same Nodeflow::routes() call.
+     */
+    private function routeName(Request $request, string $name): string
+    {
+        $current = $request->route()?->getName();
+        $own = 'nodeflow.flows.edit';
+
+        if ($current !== null && $current !== $own && str_ends_with($current, $own)) {
+            return substr($current, 0, -strlen($own)).$name;
+        }
+
+        return $name;
     }
 }

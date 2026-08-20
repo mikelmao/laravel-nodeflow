@@ -371,9 +371,21 @@ with these props:
   },
   "graph":    { "start": "n1", "nodes": [], "edges": [] },
   "palette":  [ /* node definitions — see Writing nodes */ ],
-  "triggers": [ /* trigger definitions */ ]
+  "triggers": [ /* trigger definitions */ ],
+  "urls": {
+    "draft": "https://app.test/admin/flows/12/draft",
+    "publish": "https://app.test/admin/flows/12/publish",
+    // A template. Substitute the node type and field key, URL-encoded.
+    "options": "https://app.test/admin/flows/12/nodes/__NODEFLOW_TYPE__/fields/__NODEFLOW_FIELD__/options"
+  }
 }
 ```
+
+`urls` is where the client gets its endpoints. The host chose the prefix and
+middleware, so the client must not construct them. They are resolved through
+route names, including any route-name prefix supplied by the host. `options` is
+a template: replace both sentinels with URL-encoded values. The sentinels use
+only encoder-safe characters, so generating the template leaves them intact.
 
 **`graph` is the draft if there is one, otherwise the published version, otherwise
 `{"start": "", "nodes": [], "edges": []}`** — in that order. The author's unsaved

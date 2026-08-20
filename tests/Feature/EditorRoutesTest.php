@@ -109,6 +109,10 @@ it('renders the editor page with the props the client is written against', funct
         ->assertJsonPath('props.flow.version', null)
         ->assertJsonPath('props.flow.draft_revision', 0)
         ->assertJsonPath('props.flow.draft_updated_at', null)
+        // The endpoint URL is part of the same client contract. Counterfactual:
+        // drop `urls` from edit() and this fails before the React client has to
+        // discover the missing endpoint at runtime.
+        ->assertJsonPath('props.urls.draft', "http://localhost/nodeflow/flows/{$this->flow->id}/draft")
         // No draft and no published version: the empty skeleton, not null, so the
         // canvas has something of the right shape to mount on.
         ->assertJsonPath('props.graph', ['start' => '', 'nodes' => [], 'edges' => []]);
@@ -419,4 +423,45 @@ it('ignores a version id smuggled into the publish payload', function () {
         ->assertOk();
 
     expect($this->flow->fresh()->current_version_id)->not->toBe(99999);
+});
+
+it('hands the client the urls for its own endpoints', function () {
+    // The client cannot build these itself: Nodeflow::routes() is called inside
+    // the host's own group, so prefix and middleware are the host's choice (E4).
+    // Counterfactual: drop the `urls` prop and every assertion here fails; the
+    // throwaway prototype hardcoded '/nodeflow/flows/{id}/publish' instead, which
+    // is exactly what this prop exists to prevent.
+    allowEverything();
+
+    $response = editPage($this, $this->flow->id);
+
+    $response->assertJsonPath('props.urls.draft', "http://localhost/nodeflow/flows/{$this->flow->id}/draft")
+        ->assertJsonPath('props.urls.publish', "http://localhost/nodeflow/flows/{$this->flow->id}/publish");
+
+    // A template, not a URL: the client substitutes the node type and field key
+    // when it renders a dynamic field. The sentinels are made of unreserved
+    // characters so route() cannot re-encode them out from under the client.
+    expect($response->json('props.urls.options'))->toBe(
+        "http://localhost/nodeflow/flows/{$this->flow->id}/nodes/__NODEFLOW_TYPE__/fields/__NODEFLOW_FIELD__/options"
+    );
+});
+
+it('resolves its urls through the hosts own route name prefix', function () {
+    // Route::name('admin.')->group(fn () => Nodeflow::routes()) is an ordinary
+    // Laravel pattern — the demo app uses it for its own routes — and it renames
+    // every route in this package. Counterfactual: call route('nodeflow.flows.draft')
+    // directly and this assertion sees the default /nodeflow URL (or, without an
+    // unprefixed registration, dies on RouteNotFoundException).
+    allowEverything();
+
+    Route::middleware('web')->prefix('admin')->name('admin.')->group(fn () => Nodeflow::routes());
+
+    $response = $this->actingAs($this->user)
+        ->withHeaders(['X-Inertia' => 'true', 'X-Inertia-Version' => ''])
+        ->get("/admin/flows/{$this->flow->id}/edit");
+
+    $response->assertOk()
+        ->assertJsonPath('props.urls.draft', "http://localhost/admin/flows/{$this->flow->id}/draft")
+        ->assertJsonPath('props.urls.publish', "http://localhost/admin/flows/{$this->flow->id}/publish")
+        ->assertJsonPath('props.urls.options', "http://localhost/admin/flows/{$this->flow->id}/nodes/__NODEFLOW_TYPE__/fields/__NODEFLOW_FIELD__/options");
 });
