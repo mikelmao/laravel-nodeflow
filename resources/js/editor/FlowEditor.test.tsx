@@ -522,17 +522,59 @@ describe('FlowEditor', () => {
         expect(requestBody(fetchMock, urls.publish).graph).toMatchObject({ start: 'exit1' })
     })
 
-    // Explicit start selection is graph state; counterfactual changing only the badge publishes the old start.
-    it('makes a selected node the start node and publishes it', async () => {
+    // Explicit start selection and blank control drafts both belong to the selected node; counterfactual changing
+    // only the badge publishes the old start, while reusing a field-keyed Duration carries hours into another node.
+    it('isolates selected node control state, makes it start and publishes it', async () => {
         const fetchMock = successfulFetch()
         vi.stubGlobal('fetch', fetchMock)
-        renderEditor()
-        fireEvent.click(canvasNode('exit1'))
+        const waitDefinition: NodeTypePayload = {
+            type: 'core.wait',
+            label: 'Wait',
+            group: 'Core',
+            icon: null,
+            description: 'Wait before continuing.',
+            outputs: ['completed'],
+            fields: [{
+                key: 'duration',
+                type: 'duration',
+                label: 'Duration',
+                help: null,
+                default: null,
+                required: true,
+                options: {},
+                dynamic_options: false,
+            }],
+            default_config: { duration: null },
+            cardinality: ['subject'],
+        }
+        renderEditor({
+            palette: [waitDefinition],
+            graph: {
+                start: 'wait-a',
+                nodes: [
+                    { id: 'wait-a', type: 'core.wait', config: { duration: null }, position: { x: 0, y: 0 } },
+                    { id: 'wait-b', type: 'core.wait', config: { duration: null }, position: { x: 300, y: 0 } },
+                ],
+                edges: [],
+            },
+        })
+
+        fireEvent.click(canvasNode('wait-a'))
+        fireEvent.change(screen.getByRole('combobox', { name: 'Duration unit' }), { target: { value: 'hours' } })
+
+        fireEvent.click(canvasNode('wait-b'))
+        expect(screen.getByRole('combobox', { name: 'Duration unit' })).toHaveValue('minutes')
+        fireEvent.change(screen.getByRole('spinbutton', { name: 'Duration amount' }), { target: { value: '1' } })
         fireEvent.click(screen.getByRole('button', { name: 'Make start node' }))
-        expect(screen.getByText(/Start: exit1/i)).toBeInTheDocument()
+        expect(screen.getByText(/Start: wait-b/i)).toBeInTheDocument()
         fireEvent.click(screen.getByRole('button', { name: 'Publish' }))
         await waitFor(() => expect(fetchMock.mock.calls.some(([url]) => url === urls.publish)).toBe(true))
-        expect(requestBody(fetchMock, urls.publish).graph).toMatchObject({ start: 'exit1' })
+        expect(requestBody(fetchMock, urls.publish).graph).toMatchObject({
+            start: 'wait-b',
+            nodes: expect.arrayContaining([
+                expect.objectContaining({ id: 'wait-b', config: { duration: '1 minute' } }),
+            ]),
+        })
     })
 
     // Host controls merge with built-ins; counterfactual replacing the map makes Template disappear.
