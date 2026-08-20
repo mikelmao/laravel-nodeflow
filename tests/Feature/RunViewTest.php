@@ -159,3 +159,17 @@ it('carries an overlay entry for every node in the pinned graph', function () {
         ->and($overlay['nodes']['pinned']['reached'])->toBeFalse()
         ->and($overlay['terminal'])->toBeFalse();
 });
+
+it('serves urls whose node sentinel survives route generation', function () {
+    // E4: the client substitutes into these, so both the sentinel and the
+    // host's chosen prefix must arrive intact. Counterfactual: build the URL by
+    // string concatenation in the client and a host prefix breaks every run
+    // view in the field with no test failing here.
+    allowRunViewing();
+
+    $urls = runPage($this, $this->run->id)->assertOk()->json('props.urls');
+
+    expect($urls['overlay'])->toBe("http://localhost/nodeflow/runs/{$this->run->id}/overlay")
+        ->and($urls['subjects'])
+        ->toBe("http://localhost/nodeflow/runs/{$this->run->id}/nodes/__NODEFLOW_NODE__/subjects");
+});

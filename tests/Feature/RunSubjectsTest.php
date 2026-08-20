@@ -1,11 +1,15 @@
 <?php
 
+use Illuminate\Foundation\Auth\User;
+use Illuminate\Support\Facades\Gate;
+use Illuminate\Support\Facades\Route;
 use Illuminate\Support\Facades\Schema;
 use Nodeflow\Contracts\TenantResolver;
 use Nodeflow\Models\Flow;
 use Nodeflow\Models\FlowVersion;
 use Nodeflow\Models\Run;
 use Nodeflow\Models\RunSubject;
+use Nodeflow\Nodeflow;
 use Nodeflow\Runs\RunSubjects;
 
 beforeEach(function () {
@@ -15,6 +19,10 @@ beforeEach(function () {
 
         public function ownsSubject(string $t, string $ty, string $i): bool { return true; }
     });
+
+    Route::middleware('web')->prefix('nodeflow')->group(fn () => Nodeflow::routes());
+    $this->user = new User;
+    $this->user->id = 1;
 
     $flow = Flow::create(['name' => 'F', 'trigger_type' => 'manual', 'status' => 'active']);
     $version = FlowVersion::create([
@@ -95,4 +103,72 @@ it('keeps the id column on the subjects index so the ordered read is not a files
         ->map(fn (array $c) => implode(',', $c));
 
     expect($columns)->toContain('run_id,current_node_id,status,id');
+});
+
+it('denies the subjects endpoint when the host has defined no gates', function () {
+    $this->actingAs($this->user)
+        ->getJson("/nodeflow/runs/{$this->run->id}/nodes/wait/subjects")
+        ->assertForbidden();
+});
+
+it('four-oh-fours a node id that is not in the pinned graph', function () {
+    // Counterfactual: pass {node} straight into the query and an unknown id
+    // returns 200 with an empty list, which reads to an operator as "nobody is
+    // here" rather than "that node does not exist."
+    Gate::define('nodeflow.viewAny', fn ($user, $subject = null) => true);
+
+    $this->actingAs($this->user)
+        ->getJson("/nodeflow/runs/{$this->run->id}/nodes/nosuchnode/subjects")
+        ->assertNotFound();
+});
+
+/**
+ * Open issue G-3, as a test.
+ *
+ * 'other' is a perfectly real node id — in a different run's graph. Accepting
+ * it here would be treating a raw key as equivalent to authorization: the
+ * caller is entitled to *this* run, and nothing about that entitles them to a
+ * node from another. Counterfactual: validate {node} against any graph, or not
+ * at all, and this returns 200.
+ */
+it('four-oh-fours a node id that is only valid in another runs graph', function () {
+    Gate::define('nodeflow.viewAny', fn ($user, $subject = null) => true);
+
+    $otherVersion = FlowVersion::create([
+        'flow_id' => $this->run->flowVersion->flow_id, 'version' => 2, 'content_hash' => 'h2',
+        'graph' => ['start' => 'other', 'nodes' => [['id' => 'other', 'type' => 'core.exit', 'config' => []]], 'edges' => []],
+    ]);
+    $otherRun = Run::create([
+        'flow_version_id' => $otherVersion->id, 'tenant_id' => 'org-1',
+        'strategy' => 'cohort', 'status' => 'running',
+    ]);
+    RunSubject::create([
+        'run_id' => $otherRun->id, 'subject_type' => 'user', 'subject_id' => '99',
+        'current_node_id' => 'other', 'status' => 'active',
+    ]);
+
+    $this->actingAs($this->user)
+        ->getJson("/nodeflow/runs/{$this->run->id}/nodes/other/subjects")
+        ->assertNotFound();
+});
+
+it('serves a page of subjects with its node and cursor', function () {
+    Gate::define('nodeflow.viewAny', fn ($user, $subject = null) => true);
+    config(['nodeflow.limits.subject_page' => 2]);
+
+    $body = $this->actingAs($this->user)
+        ->getJson("/nodeflow/runs/{$this->run->id}/nodes/wait/subjects")
+        ->assertOk()
+        ->json();
+
+    expect($body['node'])->toBe('wait')
+        ->and($body['data'])->toHaveCount(2)
+        ->and($body['next_cursor'])->not->toBeNull();
+
+    $second = $this->actingAs($this->user)
+        ->getJson("/nodeflow/runs/{$this->run->id}/nodes/wait/subjects?cursor=".urlencode($body['next_cursor']))
+        ->assertOk()
+        ->json();
+
+    expect(array_column($second['data'], 'subject_id'))->toBe(['3', '4']);
 });

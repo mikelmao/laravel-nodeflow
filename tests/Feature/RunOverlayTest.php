@@ -1,13 +1,18 @@
 <?php
 
+use Illuminate\Foundation\Auth\User;
 use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Gate;
+use Illuminate\Support\Facades\Route;
 use Nodeflow\Contracts\TenantResolver;
 use Nodeflow\Graph\Graph;
+use Nodeflow\Models\Concerns\TenancyGuardSuspension;
 use Nodeflow\Models\Flow;
 use Nodeflow\Models\FlowVersion;
 use Nodeflow\Models\NodeExecution;
 use Nodeflow\Models\Run;
 use Nodeflow\Models\RunSubject;
+use Nodeflow\Nodeflow;
 use Nodeflow\Runs\RunOverlay;
 
 beforeEach(function () {
@@ -17,6 +22,10 @@ beforeEach(function () {
 
         public function ownsSubject(string $t, string $ty, string $i): bool { return true; }
     });
+
+    Route::middleware('web')->prefix('nodeflow')->group(fn () => Nodeflow::routes());
+    $this->user = new User;
+    $this->user->id = 1;
 
     // Four nodes, deliberately one of each kind the overlay must tell apart:
     //   sent    — reached, released 2 subjects down 'sent'
@@ -164,4 +173,47 @@ it('aggregates with exactly two queries regardless of how many nodes the graph h
     app(RunOverlay::class)->snapshot($this->run, $this->graph);
 
     expect($queries)->toHaveCount(2);
+});
+
+it('denies the overlay endpoint when the host has defined no gates', function () {
+    // Counterfactual: omit authorize() from the polling endpoint and a run's
+    // live counts are readable by anyone who can guess an id — the page having
+    // been authorized says nothing about the endpoint the page polls.
+    $this->actingAs($this->user)->getJson("/nodeflow/runs/{$this->run->id}/overlay")->assertForbidden();
+});
+
+it('four-oh-fours another tenants overlay rather than forbidding it', function () {
+    Gate::define('nodeflow.viewAny', fn ($user, $subject = null) => true);
+
+    $theirs = TenancyGuardSuspension::run(function () {
+        $flow = Flow::withoutTenancy()->create([
+            'tenant_id' => 'org-2', 'name' => 'T', 'trigger_type' => 'manual', 'status' => 'active',
+        ]);
+        $version = FlowVersion::withoutTenancy()->create([
+            'flow_id' => $flow->id, 'tenant_id' => 'org-2', 'version' => 1, 'content_hash' => 'h',
+            'graph' => ['start' => 'x', 'nodes' => [], 'edges' => []],
+        ]);
+
+        return Run::withoutTenancy()->create([
+            'flow_version_id' => $version->id, 'tenant_id' => 'org-2',
+            'strategy' => 'cohort', 'status' => 'running',
+        ]);
+    });
+
+    $this->actingAs($this->user)->getJson("/nodeflow/runs/{$theirs->id}/overlay")->assertNotFound();
+});
+
+it('returns the snapshot alone, with no graph or palette to re-send on every poll', function () {
+    // Counterfactual: reuse the page's prop array here and every 5-second poll
+    // ships the whole graph and the entire node palette. Nothing else in the
+    // suite would notice; the client would still work, just expensively.
+    Gate::define('nodeflow.viewAny', fn ($user, $subject = null) => true);
+
+    $body = $this->actingAs($this->user)
+        ->getJson("/nodeflow/runs/{$this->run->id}/overlay")
+        ->assertOk()
+        ->json();
+
+    expect(array_keys($body))->toBe(['status', 'terminal', 'nodes'])
+        ->and($body['nodes']['parked']['waiting'])->toBe(3);
 });

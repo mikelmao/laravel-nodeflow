@@ -74,12 +74,12 @@ class RunViewController extends Controller
             'graph' => $version->graph,
             'palette' => app(NodeRegistry::class)->palette(),
             'overlay' => $overlay,
-            // 'subjects' belongs here too, but its route is Task 5's: this task
-            // registers only nodeflow.runs.show and nodeflow.runs.overlay, and
-            // route() throws RouteNotFoundException for a name nothing has
-            // registered yet. Task 5 adds the key back once that route exists.
             'urls' => [
                 'overlay' => route($this->routeName($request, 'nodeflow.runs.overlay', self::OWN_ROUTE), ['run' => $run]),
+                'subjects' => route($this->routeName($request, 'nodeflow.runs.subjects', self::OWN_ROUTE), [
+                    'run' => $run,
+                    'node' => self::NODE_PLACEHOLDER,
+                ]),
             ],
         ]);
     }

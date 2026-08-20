@@ -3,6 +3,7 @@
 use Illuminate\Support\Facades\Route;
 use Nodeflow\Http\Controllers\FieldOptionsController;
 use Nodeflow\Http\Controllers\FlowEditorController;
+use Nodeflow\Http\Controllers\RunSubjectsController;
 use Nodeflow\Http\Controllers\RunViewController;
 
 /*
@@ -37,3 +38,5 @@ Route::get('flows/{flow}/nodes/{type}/fields/{field}/options', FieldOptionsContr
  */
 Route::get('runs/{run}', [RunViewController::class, 'show'])->name('nodeflow.runs.show');
 Route::get('runs/{run}/overlay', [RunViewController::class, 'overlay'])->name('nodeflow.runs.overlay');
+Route::get('runs/{run}/nodes/{node}/subjects', RunSubjectsController::class)
+    ->name('nodeflow.runs.subjects');
