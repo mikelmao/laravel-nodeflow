@@ -25,7 +25,53 @@ export type Autosave = {
     resolveConflict(choice: 'mine' | 'theirs', acceptedGraph?: Graph): void
 }
 
-const EMPTY_GRAPH: Graph = { start: '', nodes: [], edges: [] }
+function isDraftRevision(value: unknown): value is number {
+    return typeof value === 'number' && Number.isSafeInteger(value) && value >= 0
+}
+
+function isObject(value: unknown): value is Record<string, unknown> {
+    return typeof value === 'object' && value !== null && !Array.isArray(value)
+}
+
+function isGraph(value: unknown): value is Graph {
+    if (!isObject(value)) {
+        return false
+    }
+
+    if (value.start !== undefined && value.start !== null && typeof value.start !== 'string') {
+        return false
+    }
+
+    if (value.nodes !== undefined && value.nodes !== null) {
+        if (!Array.isArray(value.nodes) || !value.nodes.every((node) => {
+            if (!isObject(node) || typeof node.id !== 'string' || typeof node.type !== 'string') {
+                return false
+            }
+
+            if (node.config !== undefined && node.config !== null && typeof node.config !== 'object') {
+                return false
+            }
+
+            return node.position === undefined || (
+                isObject(node.position) &&
+                typeof node.position.x === 'number' &&
+                Number.isFinite(node.position.x) &&
+                typeof node.position.y === 'number' &&
+                Number.isFinite(node.position.y)
+            )
+        })) {
+            return false
+        }
+    }
+
+    return value.edges === undefined || value.edges === null || (
+        Array.isArray(value.edges) &&
+        value.edges.every((edge) => isObject(edge) &&
+            typeof edge.from === 'string' &&
+            typeof edge.to === 'string' &&
+            (edge.output === undefined || edge.output === null || typeof edge.output === 'string'))
+    )
+}
 
 /**
  * Debounced draft autosave (5.9), with the 409 as a state rather than an error.
@@ -58,6 +104,8 @@ export function useAutosave({
 }): Autosave {
     const serialised = JSON.stringify(graph)
 
+    /** URL is the flow identity; the epoch prevents callbacks surviving a leave-and-return. */
+    const flowIdentity = useRef({ url, epoch: 0 })
     const revision = useRef(initialRevision)
     /** The serialisation the server is known to hold. */
     const baseline = useRef(serialised)
@@ -66,7 +114,7 @@ export function useAutosave({
     /** When the current pending edit's debounce expires. */
     const pendingDueAt = useRef<number | null>(null)
     /** The request allowed to update state, and the promise publish must await. */
-    const activeRequest = useRef<{ id: number; generation: number; body: string; done: Promise<void> } | null>(null)
+    const activeRequest = useRef<{ id: number; generation: number; body: string; done: Promise<void>; settle: () => void } | null>(null)
     const requestSequence = useRef(0)
     /** Invalidates older responses when publish adopts a newer token. */
     const generation = useRef(0)
@@ -90,12 +138,42 @@ export function useAutosave({
         lastSavedAt: number | null
     }>({ status: 'idle', revision: initialRevision, message: null, conflict: null, lastSavedAt: null })
 
+    if (flowIdentity.current.url !== url) {
+        const supersededRequest = activeRequest.current
+
+        flowIdentity.current = { url, epoch: flowIdentity.current.epoch + 1 }
+        generation.current += 1
+        activeRequest.current = null
+        supersededRequest?.settle()
+        revision.current = initialRevision
+        baseline.current = serialised
+        pending.current = null
+        pendingDueAt.current = null
+        publishBarrier.current = false
+        publishTarget.current = null
+        afterPublish.current = null
+        halted.current = false
+        conflict.current = null
+
+        if (timer.current !== null) {
+            clearTimeout(timer.current)
+            timer.current = null
+        }
+
+        setState({ status: 'idle', revision: initialRevision, message: null, conflict: null, lastSavedAt: null })
+    }
+
+    const ownerEpoch = flowIdentity.current.epoch
+
     useEffect(() => {
         mounted.current = true
 
         return () => {
             mounted.current = false
             generation.current += 1
+            const supersededRequest = activeRequest.current
+            activeRequest.current = null
+            supersededRequest?.settle()
             publishBarrier.current = false
             publishTarget.current = null
             afterPublish.current = null
@@ -104,11 +182,16 @@ export function useAutosave({
 
             if (timer.current !== null) {
                 clearTimeout(timer.current)
+                timer.current = null
             }
         }
     }, [])
 
     const run = useCallback((force = false): Promise<void> => {
+        if (!mounted.current || flowIdentity.current.epoch !== ownerEpoch) {
+            return Promise.resolve()
+        }
+
         if (activeRequest.current !== null) {
             return activeRequest.current.done
         }
@@ -127,11 +210,12 @@ export function useAutosave({
             finish = resolve
         })
 
-        activeRequest.current = { id: requestId, generation: requestGeneration, body, done }
+        activeRequest.current = { id: requestId, generation: requestGeneration, body, done, settle: finish }
         setState((current) => ({ ...current, status: 'saving', message: null }))
 
         const stillOwnsRequest = () =>
             mounted.current &&
+            flowIdentity.current.epoch === ownerEpoch &&
             generation.current === requestGeneration &&
             activeRequest.current?.id === requestId &&
             activeRequest.current.generation === requestGeneration
@@ -145,10 +229,25 @@ export function useAutosave({
                 }
 
                 if (result.status === 409) {
+                    const nextRevision = result.data?.draft_revision
+                    const nextGraph = result.data?.graph
+
+                    if (!isDraftRevision(nextRevision) || !isGraph(nextGraph)) {
+                        halted.current = true
+                        setState((current) => ({
+                            ...current,
+                            status: 'error',
+                            conflict: null,
+                            message: 'The draft server returned an invalid conflict response: graph and draft_revision must match the editor protocol.',
+                        }))
+
+                        return
+                    }
+
                     halted.current = true
                     conflict.current = {
-                        graph: (result.data?.graph as Graph | undefined) ?? EMPTY_GRAPH,
-                        revision: Number(result.data?.draft_revision ?? revision.current),
+                        graph: nextGraph,
+                        revision: nextRevision,
                     }
                     setState((current) => ({
                         ...current,
@@ -178,7 +277,20 @@ export function useAutosave({
                     return
                 }
 
-                revision.current = Number(result.data?.draft_revision ?? revision.current)
+                const nextRevision = result.data?.draft_revision
+
+                if (!isDraftRevision(nextRevision)) {
+                    halted.current = true
+                    setState((current) => ({
+                        ...current,
+                        status: 'error',
+                        message: 'The draft server returned an invalid draft response: draft_revision must be a non-negative safe integer.',
+                    }))
+
+                    return
+                }
+
+                revision.current = nextRevision
                 baseline.current = body
                 setState((current) => ({ ...current, status: 'saved', revision: revision.current, message: null, lastSavedAt: Date.now() }))
             } catch (reason: unknown) {
@@ -187,14 +299,19 @@ export function useAutosave({
                     setState((current) => ({ ...current, status: 'error', message: `Could not reach the server to save this draft: ${String(reason)}` }))
                 }
             } finally {
-                if (activeRequest.current?.id === requestId) {
+                const ownsRequest = flowIdentity.current.epoch === ownerEpoch &&
+                    generation.current === requestGeneration &&
+                    activeRequest.current?.id === requestId &&
+                    activeRequest.current.generation === requestGeneration
+
+                if (ownsRequest) {
                     activeRequest.current = null
                 }
                 finish()
 
                 // Preserve the new edit's own debounce. If its timer already
                 // expired while this request was active, delay is zero.
-                if (mounted.current && pending.current !== null && !halted.current && !publishBarrier.current) {
+                if (ownsRequest && mounted.current && pending.current !== null && !halted.current && !publishBarrier.current) {
                     const delay = Math.max(0, (pendingDueAt.current ?? Date.now()) - Date.now())
 
                     if (timer.current !== null) {
@@ -206,11 +323,19 @@ export function useAutosave({
         })()
 
         return done
-    }, [url])
+    }, [ownerEpoch, url])
 
     useEffect(() => {
+        if (flowIdentity.current.epoch !== ownerEpoch) {
+            return
+        }
+
         if (publishBarrier.current) {
             afterPublish.current = serialised === publishTarget.current ? null : serialised
+
+            if (afterPublish.current !== null) {
+                setState((current) => current.status === 'saved' ? { ...current, status: 'idle' } : current)
+            }
 
             return
         }
@@ -234,6 +359,7 @@ export function useAutosave({
 
         pending.current = serialised
         pendingDueAt.current = Date.now() + debounceMs
+        setState((current) => current.status === 'saved' ? { ...current, status: 'idle' } : current)
 
         if (timer.current !== null) {
             clearTimeout(timer.current)
@@ -246,13 +372,13 @@ export function useAutosave({
                 clearTimeout(timer.current)
             }
         }
-    }, [serialised, debounceMs, run, nudge])
+    }, [serialised, debounceMs, run, nudge, ownerEpoch])
 
     // A tab hidden mid-debounce would otherwise lose the pending edit. fetch on
     // pagehide is unreliable; visibilitychange fires early enough to be honoured.
     useEffect(() => {
         const flush = () => {
-            if (document.visibilityState === 'hidden' && pending.current !== null && !halted.current && mounted.current && !publishBarrier.current) {
+            if (flowIdentity.current.epoch === ownerEpoch && document.visibilityState === 'hidden' && pending.current !== null && !halted.current && mounted.current && !publishBarrier.current) {
                 if (timer.current !== null) {
                     clearTimeout(timer.current)
                 }
@@ -265,9 +391,13 @@ export function useAutosave({
         document.addEventListener('visibilitychange', flush)
 
         return () => document.removeEventListener('visibilitychange', flush)
-    }, [run])
+    }, [run, ownerEpoch])
 
     const resolveConflict = useCallback((choice: 'mine' | 'theirs', acceptedGraph?: Graph) => {
+        if (!mounted.current || flowIdentity.current.epoch !== ownerEpoch) {
+            return
+        }
+
         const theirs = conflict.current
 
         if (theirs === null) {
@@ -294,10 +424,10 @@ export function useAutosave({
 
         setState((current) => ({ ...current, status: 'idle', conflict: null, message: null, revision: theirs.revision }))
         setNudge((count) => count + 1)
-    }, [])
+    }, [ownerEpoch])
 
     const finishPublish = useCallback((nextRevision?: number) => {
-        if (!publishBarrier.current) {
+        if (!mounted.current || flowIdentity.current.epoch !== ownerEpoch || !publishBarrier.current) {
             return
         }
 
@@ -322,9 +452,13 @@ export function useAutosave({
             }
             timer.current = setTimeout(() => void run(), debounceMs)
         }
-    }, [debounceMs, run])
+    }, [debounceMs, run, ownerEpoch])
 
     const preparePublish = useCallback(async (): Promise<boolean> => {
+        if (!mounted.current || flowIdentity.current.epoch !== ownerEpoch || publishBarrier.current) {
+            return false
+        }
+
         publishBarrier.current = true
         publishTarget.current = serialised
         afterPublish.current = null
@@ -337,6 +471,10 @@ export function useAutosave({
         // client ignores its response. Publish must therefore wait for it.
         if (activeRequest.current !== null) {
             await activeRequest.current.done
+        }
+
+        if (flowIdentity.current.epoch !== ownerEpoch) {
+            return false
         }
 
         if (halted.current || !mounted.current) {
@@ -353,6 +491,10 @@ export function useAutosave({
             await run(true)
         }
 
+        if (flowIdentity.current.epoch !== ownerEpoch) {
+            return false
+        }
+
         if (halted.current || !mounted.current) {
             finishPublish()
 
@@ -360,7 +502,7 @@ export function useAutosave({
         }
 
         return true
-    }, [finishPublish, run, serialised])
+    }, [finishPublish, run, serialised, ownerEpoch])
 
     return { ...state, preparePublish, finishPublish, resolveConflict }
 }
