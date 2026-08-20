@@ -130,7 +130,7 @@ Six implementation plans, sequenced by dependency. One spec, because the field-c
 | Plan | Contents | Spec | Depends on |
 |---|---|---|---|
 | **1 — Node generator** ✅ **delivered** `4cadfb7..e22bd89` | `nodeflow:make-node` with `--test` | §7.2 | — |
-| **2 — Security floor** | Authorization gates; `FlowVersion` scoping; `nodeflow.tenancy`; the structural invariant for `RunSubject`/`NodeExecution` | §4 | — |
+| **2 — Security floor** ✅ **delivered** `aa963ff..62c9e66` | Authorization gates; `FlowVersion` scoping; `nodeflow.tenancy`; the structural invariant for `RunSubject`/`NodeExecution` | §4 | — |
 | **3 — Editor** | `draft_graph`; `Nodeflow::routes()` and controllers; options endpoint; `Field::custom()`; `resources/js`; six field controls; dev `package.json` + Vitest | §5 | 2 |
 | **4 — Run view** | `FlowRun` component and routes; overlay queries; subject drill-down; polling | §6 | 3 |
 | **5 — Remaining tooling** | `nodeflow:install`; `make-trigger`; `make-subject-attribute` | §7.1, §7.3 | 3 |
@@ -156,7 +156,54 @@ shipping as untested branch.
 
 ---
 
-## 4. The security floor (Plan 2)
+## 4. The security floor (Plan 2) — ✅ delivered, `aa963ff..62c9e66`
+
+**This section is now a description of shipped behaviour.** Everything below the "as built" block was
+written before implementation and is kept for its reasoning; where the two disagree, "as built" is the
+truth. Plan 2's execution produced substantial corrections to it, and **Plan 3 reads this section as
+its authority**, so read the block first.
+
+> #### As built
+>
+> **`nodeflow.tenancy`** is `disabled` (default) or `resolver`, and governs **only** what a `null`
+> return from `currentTenantId()` means. A non-null tenant scopes identically in both modes. Under
+> `resolver`, a null tenant makes a scoped read throw `TenancyUnresolvedException`, naming the model,
+> the config key and `withoutTenancy()`. **An unrecognised mode value throws** rather than degrading
+> to unscoped. See open issue **D-1**: the default is closed by documentation only, and should
+> probably be inferred from whether the host bound its own resolver.
+>
+> **`FlowVersion` is scoped** and carries `tenant_id` (`NOT NULL`). Its `booted()` hook is
+> authoritative: it always reads the flow unscoped, inherits the tenant when none is set, and throws
+> `CrossTenantWriteException` on a parent-child contradiction — **unconditionally**, not waivable by
+> `TenancyGuardSuspension`. `PublishFlow` still stamps explicitly, which documents intent at the
+> publish site.
+>
+> **Three relations are declared `->withoutGlobalScope('nodeflow_tenant')`** — `Run::flowVersion()`,
+> `Flow::currentVersion()`, `Flow::versions()` — because reaching a `Run` or `Flow` already proves
+> entitlement, and because `withoutTenancy()` on an outer query has no effect on a relation's own
+> query, so five call-site opt-outs would not have covered eager loads. **This rests on an FK
+> invariant that is documented but not enforced: `flow_version_id` and `current_version_id` must
+> point inside the parent's tenant. Plan 3's controllers must never accept either from request
+> input.** See open issue **G-3**.
+>
+> **`tenant_id` is immutable on update** for every scoped model, via an `updating` guard mirroring
+> `creating`'s. Query-builder updates bypass it — see **G-2**.
+>
+> **The deploy gate stays cross-tenant.** `CheckNodeTypesResolver` uses `FlowVersion::withoutTenancy()`
+> and deliberately loads no relations, because eager-loading `flow` would reapply `Flow`'s scope and
+> throw. `FlowVersion::hasLiveRuns()` queries `Run::withoutTenancy()` for the same reason.
+>
+> **`RunSubject` and `NodeExecution` remain unscoped by design**, guarded by an architecture test over
+> an extracted scanner that catches static calls and raw `nodeflow_*` table names, case-insensitively.
+> Aliased and joined forms still evade it — see **G-1**.
+>
+> **Policies**: `FlowPolicy` (`viewAny`, `view`, `update`, `publish`, `runManually`) and `RunPolicy`
+> (`viewAny`, `view`), both registered unconditionally, both denying when the host has not defined the
+> gate. `view` maps to `nodeflow.viewAny` rather than inventing a fifth gate. A host `Gate::before`
+> returning true overrides default deny — Laravel semantics, now documented.
+>
+> **Not delivered here:** foundation spec §9's layer 2, an assertion in `RunNodeActivity` that the
+> run's tenant matches. It does not exist in code. See **D-2**.
 
 ### 4.1 Authorization
 
