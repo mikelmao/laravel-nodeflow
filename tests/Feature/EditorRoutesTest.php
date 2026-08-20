@@ -75,6 +75,87 @@ it('four-oh-fours another tenants flow rather than forbidding it', function () {
         ->assertNotFound();
 });
 
+/**
+ * Inertia's own JSON response, which is what a real editor request produces.
+ *
+ * Without the X-Inertia header Inertia::render() renders a root Blade view that
+ * Testbench does not ship, which is why edit()'s success path went untested at
+ * first. With it, the response is a plain JSON prop payload and needs no view at
+ * all. X-Inertia-Version is sent empty because no HandleInertiaRequests
+ * middleware is registered here, so there is no asset version to match.
+ */
+function editPage($test, int $flowId)
+{
+    return $test->actingAs($test->user)
+        ->withHeaders(['X-Inertia' => 'true', 'X-Inertia-Version' => ''])
+        ->get("/nodeflow/flows/{$flowId}/edit");
+}
+
+it('renders the editor page with the props the client is written against', function () {
+    // The edit page's prop shape is the contract the React client is built on, so
+    // it is pinned here rather than left to the first person who breaks it.
+    // Counterfactual: rename or drop any prop — `graph`, `palette`, `triggers`, or
+    // `flow.draft_revision`, without which the client cannot autosave at all —
+    // and this fails.
+    allowEverything();
+
+    $response = editPage($this, $this->flow->id)->assertOk();
+
+    $response->assertJsonPath('component', 'nodeflow/editor')
+        ->assertJsonPath('props.flow.id', $this->flow->id)
+        ->assertJsonPath('props.flow.name', 'A')
+        ->assertJsonPath('props.flow.trigger_type', 'manual')
+        ->assertJsonPath('props.flow.status', 'draft')
+        ->assertJsonPath('props.flow.version', null)
+        ->assertJsonPath('props.flow.draft_revision', 0)
+        ->assertJsonPath('props.flow.draft_updated_at', null)
+        // No draft and no published version: the empty skeleton, not null, so the
+        // canvas has something of the right shape to mount on.
+        ->assertJsonPath('props.graph', ['start' => '', 'nodes' => [], 'edges' => []]);
+
+    $palette = collect($response->json('props.palette'));
+
+    expect($palette->pluck('type'))->toContain('core.condition')
+        ->and($palette->firstWhere('type', 'core.condition'))
+        ->toHaveKeys(['label', 'group', 'outputs', 'fields', 'default_config', 'cardinality'])
+        ->and($response->json('props.triggers'))->toBeArray();
+});
+
+it('shows the draft graph in preference to the published version', function () {
+    // `draft_graph ?? currentVersion.graph ?? empty` is a real precedence rule
+    // with three legs, and an author's unsaved work losing to the published
+    // version is the kind of bug that reads as "the editor threw away my
+    // changes". Counterfactual: swap the first two operands and the third
+    // assertion below returns the published graph while a draft exists.
+    allowEverything();
+
+    $published = exitGraph();
+    app(\Nodeflow\Publishing\PublishFlow::class)->publish($this->flow, $published);
+
+    // Leg two: a published version and no draft.
+    editPage($this, $this->flow->id)
+        ->assertOk()
+        ->assertJsonPath('props.graph', $published)
+        ->assertJsonPath('props.flow.version', 1);
+
+    $draft = exitGraph();
+    $draft['nodes'][0]['id'] = 'unsaved';
+    $draft['start'] = 'unsaved';
+
+    app(\Nodeflow\Editor\SaveDraft::class)->save(
+        $this->flow->fresh(),
+        $draft,
+        (int) $this->flow->fresh()->draft_revision,
+    );
+
+    // Leg one: the draft wins, and the version number still reports the published
+    // one, so the editor can say "editing changes on top of v1".
+    editPage($this, $this->flow->id)
+        ->assertOk()
+        ->assertJsonPath('props.graph', $draft)
+        ->assertJsonPath('props.flow.version', 1);
+});
+
 it('saves a draft and returns the new revision', function () {
     allowEverything();
 

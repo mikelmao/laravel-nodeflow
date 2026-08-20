@@ -334,6 +334,38 @@ dependency.
 dependency, not a required one, precisely so the engine-only host does not carry it.
 Install it if you use these routes.
 
+### The edit page
+
+`GET .../edit` is an Inertia response rendering the component `nodeflow/editor`,
+with these props:
+
+```jsonc
+{
+  "flow": {
+    "id": 12,
+    "name": "Welcome journey",
+    "trigger_type": "app.order_placed",
+    "status": "draft",              // or "active"
+    "version": 3,                   // published version number, null if never published
+    "draft_revision": 7,            // the concurrency token — echo it on every save
+    "draft_updated_at": "2026-08-20T09:15:00+00:00"   // display only, null if no draft
+  },
+  "graph":    { "start": "n1", "nodes": [], "edges": [] },
+  "palette":  [ /* node definitions — see Writing nodes */ ],
+  "triggers": [ /* trigger definitions */ ]
+}
+```
+
+**`graph` is the draft if there is one, otherwise the published version, otherwise
+`{"start": "", "nodes": [], "edges": []}`** — in that order. The author's unsaved
+work wins; the empty skeleton is the right shape rather than `null`, so the canvas
+has something to mount on. `flow.version` keeps reporting the *published* number
+while a draft is shown, so the editor can say "unsaved changes on top of v3".
+
+`flow.draft_revision` is the token the draft endpoint expects; it is `0` for a flow
+that has never had a draft saved. Take it from here on load and there is no need to
+send `null`.
+
 ### Drafts
 
 `PUT .../draft` takes `{graph, draft_revision}` and returns the new
