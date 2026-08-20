@@ -20,7 +20,11 @@ describe('toCanvas', () => {
 
   it('places the second positionless node on the deterministic grid', () => {
     // Counterfactual: using a random or first-slot fallback would make layout unstable.
-    expect(toCanvas(baseGraph).nodes[1]?.position).toEqual({ x: 300, y: 60 })
+    const first = toCanvas(baseGraph).nodes[1]?.position
+    const second = toCanvas(baseGraph).nodes[1]?.position
+
+    expect(first).toEqual({ x: 300, y: 60 })
+    expect(second).toEqual(first)
   })
 
   it('marks only the graph start node as the start', () => {
