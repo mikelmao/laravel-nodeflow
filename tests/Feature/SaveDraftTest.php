@@ -117,3 +117,44 @@ it('clears the draft when the flow publishes', function () {
         ->and($this->flow->fresh()->draft_updated_at)->toBeNull()
         ->and($this->flow->fresh()->draft_revision)->toBe(0);
 });
+
+it('treats a revision read back from the database as current, not stale', function () {
+    // Every other test in this file reuses the same in-memory $flow object
+    // across saves, so draft_revision never actually leaves PHP and comes
+    // back through the driver between calls. A real controller loads a fresh
+    // model per request. Counterfactual: a bug in how save() reads
+    // draft_revision that happens to be masked by object reuse (e.g. reading
+    // a stale local variable instead of the model's current attribute) would
+    // pass every other test here and still break the very first real request.
+    $first = app(SaveDraft::class)->save($this->flow, graphWith('n1'), null);
+
+    $reloaded = Flow::find($this->flow->id);
+
+    $second = app(SaveDraft::class)->save($reloaded, graphWith('n2'), $first);
+
+    expect($second)->toBe(2)
+        ->and($reloaded->fresh()->draft_graph)->toBe(graphWith('n2'));
+});
+
+it('does not treat a driver-returned string revision as stale against the caller\'s int', function () {
+    // draft_revision carries no cast on the Flow model, so save() must not
+    // rely on the database driver handing back an int. SQLite (this suite's
+    // driver) always does, so this can't be reproduced through a real fetch
+    // here — it is forced directly onto the model to stand in for MySQL or
+    // Postgres, which commonly return an unsigned integer column as a numeric
+    // string. Counterfactual: drop the (int) cast on $flow->draft_revision in
+    // SaveDraft::save() and this fails, because '1' !== 1 under PHP's strict
+    // comparison — meaning every save after the first would be wrongly
+    // refused as stale on those drivers while this exact scenario kept
+    // passing on SQLite.
+    $first = app(SaveDraft::class)->save($this->flow, graphWith('n1'), null);
+
+    $this->flow->setRawAttributes(
+        array_merge($this->flow->getAttributes(), ['draft_revision' => (string) $first]),
+        true
+    );
+
+    $second = app(SaveDraft::class)->save($this->flow, graphWith('n2'), $first);
+
+    expect($second)->toBe(2);
+});

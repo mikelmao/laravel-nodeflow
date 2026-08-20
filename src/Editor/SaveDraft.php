@@ -35,16 +35,28 @@ class SaveDraft
      */
     public function save(Flow $flow, array $graph, ?int $lastSeenRevision): int
     {
-        // Falls back to 0 for an in-memory model that was created without this
-        // attribute set explicitly: the column default is 0, but an Eloquent
-        // model does not know that until it is refreshed from the database.
-        $current = $flow->draft_revision ?? 0;
+        // Explicit (int) here, not just the `?? 0` fallback: draft_revision
+        // carries no cast on the Flow model, so what comes back is whatever the
+        // driver hands over. SQLite (this package's test driver) returns a
+        // native PHP int for an integer column, but MySQL and Postgres commonly
+        // return one as a numeric string — and a bare `!==` below would then
+        // compare a string against an int and always find them "different",
+        // rejecting every normal save as stale, including a flow's very first
+        // save after being loaded the ordinary way. Dropping this cast would
+        // not fail loudly; it would silently start refusing saves on those
+        // drivers while this suite kept passing on SQLite.
+        $current = (int) ($flow->draft_revision ?? 0);
 
         // A null last-seen means "I have never loaded a draft," which is
         // revision 0. It must not be treated as "skip the check": a client
         // that never loaded the flow must not be able to blow away an
-        // existing draft just by omitting the token.
-        if (($lastSeenRevision ?? 0) !== $current) {
+        // existing draft just by omitting the token. The (int) cast on this
+        // side is defensive, not load-bearing: PHP's own coercive typing
+        // already normalizes any numeric-string caller input to int at this
+        // method's boundary (this file declares no strict_types), so this
+        // line is here to state the intent plainly rather than to change
+        // behaviour.
+        if ((int) ($lastSeenRevision ?? 0) !== $current) {
             throw new StaleDraftException($flow->draft_graph ?? [], $current);
         }
 
