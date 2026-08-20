@@ -29,6 +29,14 @@ class PublishFlow
                 // happen in a console or queue context with no ambient tenant,
                 // where stamping ambient would write null and make the version
                 // invisible to every scoped read afterwards.
+                //
+                // Enforcement lives in FlowVersion's creating() hook, which
+                // reads the flow itself and throws on any contradiction, so
+                // this line is belt-and-braces: it states at the publish site
+                // which tenant a version belongs to, rather than leaving the
+                // reader to infer it from a hook two files away. Removing it
+                // would not open the mismatch hole (the hook closes that); it
+                // would only make the intent implicit.
                 'tenant_id' => $flow->tenant_id,
                 'version' => ((int) $flow->versions()->max('version')) + 1,
                 'graph' => $graph,
