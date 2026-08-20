@@ -416,7 +416,9 @@ replaced it for that reason.)
 allowed to be broken: no start node, nodes wired to nothing, a type you have not
 registered, a half-filled config. That is why a draft is not a version, and
 publish is where meaning is checked. What both endpoints *do* enforce is shape,
-so a malformed payload is a **422** rather than a 500:
+so a malformed payload is a **422** rather than a 500 — but on publish this is a
+different 422 from the one a validly-shaped-but-nonsensical graph gets back; see
+[Publish](#publish) for the two shapes and how to tell them apart:
 
 | Key | Rule |
 |---|---|
@@ -437,18 +439,63 @@ listed is left alone: a node's `position` round-trips untouched, as promised
 
 ### Publish
 
-`POST .../publish` takes `{graph}` and returns `{version, draft_revision}`. On
-rejection it returns **422** with `message` plus both shapes of the same failures:
+`POST .../publish` takes `{graph}` and returns `{version, draft_revision}` on
+success. On rejection it returns **422** — but there are two different rejections
+here, sharing a status code and *not* sharing a body shape, and the docs used to
+describe only one of them.
 
-- `errors` — flat strings, fine for a summary banner
-- `node_errors` — `[{node, field, message}]`, so each message can be rendered on its
-  own node. `node` is `null` for a graph-level problem such as a cycle, which belongs
-  to no single node.
+**Structural failure.** The payload does not match the [shape table
+above](#drafts) — a node missing `id`, an edge missing `to`. This never reaches
+publish's own logic; it is Laravel's own validation failure, rendered before the
+graph is even looked at:
 
-One further wrinkle: for "the start node you set does not exist in this flow",
-`node` is set to that missing start id — an id that has, by definition, no node in
-the graph. A client cannot assume every `node_errors` entry maps to a rendered
-card; render what you can find and fall back to the banner for the rest.
+```json
+{
+  "message": "The graph.nodes.0.id field is required.",
+  "errors": {
+    "graph.nodes.0.id": ["The graph.nodes.0.id field is required."]
+  }
+}
+```
+
+Here `errors` is a **keyed object** — one entry per invalid field, each an array
+of messages — and there is no `node_errors` key at all, not even an empty one.
+
+**Semantic failure.** The payload is shaped correctly but fails a graph rule — a
+cycle, an invalid duration, a start node that does not exist:
+
+```json
+{
+  "message": "The flow could not be published.",
+  "errors": ["Node [w1] field [duration]: ..."],
+  "node_errors": [
+    {"node": "w1", "field": "duration", "message": "..."}
+  ]
+}
+```
+
+- `errors` — flat strings, fine for a summary banner. This is a **different type**
+  from the structural failure's `errors` above: an array here, an object there,
+  under the same key at the same status code.
+- `node_errors` — `[{node, field, message}]`, so each message can be rendered on
+  its own node. `node` is `null` for a graph-level problem such as a cycle, which
+  belongs to no single node. This key is present only on the semantic failure —
+  never on the structural one.
+
+One further wrinkle, specific to the semantic failure: for "the start node you set
+does not exist in this flow", `node` is set to that missing start id — an id that
+has, by definition, no node in the graph. A client cannot assume every
+`node_errors` entry maps to a rendered card; render what you can find and fall
+back to the banner for the rest.
+
+**Telling the two apart.** Check for the `node_errors` key rather than inspecting
+the type of `errors`. Its presence means this is the semantic failure: read
+`errors` as a flat array for the summary banner and render `node_errors` on the
+canvas. Its absence means this is Laravel's own structural-validation body:
+`errors` is the field-keyed object shown above, and seeing this shape at all
+usually means the client sent a payload that skips a shape the editor itself
+already guarantees before it ever calls publish — closer to a client bug than
+something to surface to the flow's author.
 
 Publishing clears the draft, since the draft became the version — but **it does not
 reset `draft_revision`**, which is why the response carries it. The counter is
