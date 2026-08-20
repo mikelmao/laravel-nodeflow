@@ -6431,10 +6431,10 @@ php artisan test && npm run types:check && npm run build
 All three must exit 0. Then verify the class scan reached into `vendor/` - a "scripted edit that silently matched nothing" is a recorded failure mode of this project, and this one fails by producing a correct-looking build:
 
 ```bash
-rg -lF 'min-h-\[36rem\]' public/build/assets/*.css
+rg -lF 'min-h-\[32rem\]' public/build/assets/*.css
 ```
 
-Expected: all 44 PHP tests pass, `tsc` is silent, Vite exits 0, and the fixed-string search names at least one CSS asset. Generated arbitrary-value selectors escape their brackets, hence the literal `min-h-\[36rem\]` rather than the source spelling. That utility appears only in `FlowEditor.tsx`; it proves package-only utilities were scanned. Without `@source`, shared utilities the host also uses can remain while package-only ones disappear, so a visual spot-check alone is not this proof.
+Expected: all 44 PHP tests pass, `tsc` is silent, Vite exits 0, and the fixed-string search names at least one CSS asset. Generated arbitrary-value selectors escape their brackets, hence the literal `min-h-\[32rem\]` rather than the source spelling. That utility appears only in `Canvas.tsx`; it proves package-only utilities were scanned. Without `@source`, shared utilities the host also uses can remain while package-only ones disappear, so a visual spot-check alone is not this proof.
 
 - [ ] **Step 13: Initialise the isolated app and click through it in a browser**
 
@@ -6579,7 +6579,7 @@ Do not merge either repository inside a task agent. Run one final whole-branch s
    composer reinstall atram/laravel-nodeflow
    test "$(realpath vendor/atram/laravel-nodeflow)" = /Users/mikelmao/Projects/laravel-nodeflow
    php artisan test && npm run types:check && npm run build
-   rg -lF 'min-h-\[36rem\]' public/build/assets/*.css
+   rg -lF 'min-h-\[32rem\]' public/build/assets/*.css
    ```
 
    Repeat Task 10 Step 13's browser path against this relinked demo branch. This is the proof that merged package `main`, rather than the feature-worktree symlink, works in the real app.
@@ -6593,7 +6593,7 @@ Do not merge either repository inside a task agent. Run one final whole-branch s
    npm ci
    test "$(realpath vendor/atram/laravel-nodeflow)" = /Users/mikelmao/Projects/laravel-nodeflow
    php artisan test && npm run types:check && npm run build
-   rg -lF 'min-h-\[36rem\]' public/build/assets/*.css
+   rg -lF 'min-h-\[32rem\]' public/build/assets/*.css
    ```
 
 4. Run the same login/tenant/editor browser smoke on demo `main` against an explicitly fresh SQLite database; editing the already-run published migration does not upgrade any existing ignored database. Initialise the exact server environment before the smoke:

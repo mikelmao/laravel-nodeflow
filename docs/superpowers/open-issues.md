@@ -7,7 +7,7 @@ most were proven by probe during a review rather than suspected.
 **Status key:** `DECISION` needs a human call · `DEFECT` is proven and unfixed · `GAP` is missing
 coverage or missing code · `DRIFT` is documentation disagreeing with code.
 
-Last updated 2026-08-20 after Plan 3 package acceptance (`c5684e4..d56cba5`) and
+Last updated 2026-08-20 after Plan 3 package acceptance (`c5684e4..bf7a719`) and
 demo acceptance (`549fe42`): 123 package Vitest tests, 325 package Pest tests and
 44 demo Pest tests passing.
 
