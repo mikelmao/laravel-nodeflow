@@ -16,7 +16,11 @@ class Flow extends Model
 
     protected $guarded = [];
 
-    protected $casts = ['trigger_config' => 'array'];
+    protected $casts = [
+        'trigger_config' => 'array',
+        'draft_graph' => 'array',
+        'draft_updated_at' => 'datetime',
+    ];
 
     // Unscoped: reaching this Flow already proved tenant entitlement, so its
     // own versions are not a second authorization decision — and this must

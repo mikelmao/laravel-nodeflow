@@ -17,6 +17,17 @@ return new class extends Migration
             $t->string('status')->default('draft');
             $t->string('reentry_policy')->default('reenter');
             $t->foreignId('current_version_id')->nullable();
+            $t->json('draft_graph')->nullable();
+            $t->timestamp('draft_updated_at')->nullable();
+            // The concurrency token save() and StaleDraftException compare on, not
+            // draft_updated_at: a stored timestamp only has second precision
+            // (Illuminate\Database\Grammar::getDateFormat()), and a debounced
+            // autosave can save several times inside one second. Two saves that
+            // close together would mint an identical timestamp and stale-write
+            // detection would silently stop detecting. draft_updated_at is kept
+            // anyway, because "last saved 3 minutes ago" is worth showing an
+            // author — it just is not the token.
+            $t->unsignedInteger('draft_revision')->default(0);
             $t->timestamps();
             $t->index(['tenant_id', 'trigger_type', 'status']);
         });

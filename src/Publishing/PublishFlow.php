@@ -45,7 +45,19 @@ class PublishFlow
                 'published_by' => $publishedBy,
             ]);
 
-            $flow->update(['current_version_id' => $version->id, 'status' => 'active']);
+            // The draft became this version, so it is no longer pending work. Left
+            // behind, the editor reopens showing an already-published graph as
+            // unsaved changes. draft_revision resets to 0 alongside it: the next
+            // draft save after a publish has nothing to be stale against, so it
+            // must be able to pass a null last-seen, exactly like a flow's first
+            // ever draft.
+            $flow->update([
+                'current_version_id' => $version->id,
+                'status' => 'active',
+                'draft_graph' => null,
+                'draft_updated_at' => null,
+                'draft_revision' => 0,
+            ]);
 
             return $version;
         });
