@@ -51,6 +51,19 @@ class NodeflowServiceProvider extends ServiceProvider
 
     public function boot(): void
     {
+        // Registered unconditionally: the run view and the editor both authorize
+        // on every request, and a policy registered only in some contexts is a
+        // policy that silently does not apply in the others.
+        \Illuminate\Support\Facades\Gate::policy(
+            \Nodeflow\Models\Flow::class,
+            \Nodeflow\Policies\FlowPolicy::class,
+        );
+
+        \Illuminate\Support\Facades\Gate::policy(
+            \Nodeflow\Models\Run::class,
+            \Nodeflow\Policies\RunPolicy::class,
+        );
+
         if ($this->app->runningInConsole()) {
             $this->publishes([
                 __DIR__.'/../config/nodeflow.php' => config_path('nodeflow.php'),
