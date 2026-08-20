@@ -7,6 +7,7 @@ use InvalidArgumentException;
 use Nodeflow\Contracts\TenantResolver;
 use Nodeflow\Models\CrossTenantWriteException;
 use Nodeflow\Models\TenancyUnresolvedException;
+use Nodeflow\Tenancy\NoTenancyResolver;
 
 trait BelongsToTenant
 {
@@ -103,15 +104,19 @@ trait BelongsToTenant
         $mode = config('nodeflow.tenancy');
 
         return match ($mode) {
+            // The host never expressed an opinion, so a null means "no tenancy".
+            'auto' => app(TenantResolver::class) instanceof NoTenancyResolver
+                ? $tenantId
+                : $tenantId ?? throw new TenancyUnresolvedException(static::class),
             'disabled' => $tenantId,
             'resolver' => $tenantId ?? throw new TenancyUnresolvedException(static::class),
             default => throw new InvalidArgumentException(
                 'Unrecognised nodeflow.tenancy mode '.static::describeTenancyMode($mode)
-                ."; the only valid values are 'resolver' and 'disabled'. Both are matched exactly, so "
-                ."'Resolver', 'RESOLVER' and true are all invalid. Reading is refused rather than "
-                .'falling back to unscoped, which on a null tenant would return every tenant\'s rows. '
-                .'Check NODEFLOW_TENANCY in the environment, and run `php artisan config:clear` if a '
-                .'cached config predates the key existing.'
+                ."; the only valid values are 'auto', 'resolver' and 'disabled'. All are matched "
+                ."exactly, so 'Auto', 'AUTO' and true are all invalid. Reading is refused rather "
+                .'than falling back to unscoped, which on a null tenant would return every '
+                .'tenant\'s rows. Check NODEFLOW_TENANCY in the environment, and run '
+                .'`php artisan config:clear` if a cached config predates the key existing.'
             ),
         };
     }

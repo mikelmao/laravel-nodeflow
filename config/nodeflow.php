@@ -8,21 +8,22 @@ return [
     /*
      * What a null return from TenantResolver::currentTenantId() means.
      *
-     * 'disabled' — the application has no tenancy, so a null tenant reads
-     *   unscoped. This is the default because the package's own fallback
-     *   TenantResolver returns null, and a single-tenant host that never binds
-     *   a resolver must work out of the box.
+     * 'auto' (default) — infer it. If the container holds the package's own
+     *   NoTenancyResolver, the host never expressed an opinion about tenancy and a
+     *   null means "this application has no tenancy": read unscoped. If the host
+     *   bound its own resolver, a null means it could not be resolved — a queue
+     *   worker, a console command, an unauthenticated request — and a scoped read
+     *   throws rather than quietly returning every tenant's rows.
      *
-     * 'resolver' — the application has tenancy, so a null tenant means it could
-     *   not be resolved: a queue worker, a console command, an unauthenticated
-     *   request. Scoped reads throw rather than silently returning every
-     *   tenant's rows. The package's own cross-tenant reads are unaffected —
-     *   they opt out with withoutTenancy() explicitly.
+     * 'disabled' — always treat null as "no tenancy" and read unscoped. The escape
+     *   hatch for a host that binds a resolver and genuinely wants that.
      *
-     * A non-null tenant always scopes, in both modes. This setting governs only
-     * what null means.
+     * 'resolver' — always treat null as unresolved and throw.
+     *
+     * A non-null tenant always scopes, in every mode. This setting governs only
+     * what null means. An unrecognised value throws rather than degrading.
      */
-    'tenancy' => env('NODEFLOW_TENANCY', 'disabled'),
+    'tenancy' => env('NODEFLOW_TENANCY', 'auto'),
 
     /*
      * When enabled, check that all node types referenced by versions with live runs

@@ -29,17 +29,11 @@ class NodeflowServiceProvider extends ServiceProvider
 
         $this->app->bind(WorkflowEngine::class, DurableWorkflowEngine::class);
 
-        $this->app->bindIf(TenantResolver::class, fn () => new class implements TenantResolver {
-            public function currentTenantId(): ?string
-            {
-                return null;
-            }
-
-            public function ownsSubject(string $tenantId, string $subjectType, string $subjectId): bool
-            {
-                return false;
-            }
-        });
+        // bindIf, so a host binding its own resolver wins. Which of the two is in
+        // the container is exactly what `nodeflow.tenancy = auto` reads to decide
+        // what a null tenant means, so this must stay a bindIf and must stay this
+        // class rather than an anonymous one.
+        $this->app->bindIf(TenantResolver::class, fn () => new \Nodeflow\Tenancy\NoTenancyResolver);
 
         $this->app->bindIf(SubjectResolver::class, fn () => new class implements SubjectResolver {
             public function resolve(string $subjectType, array $subjectIds): array
