@@ -49,9 +49,13 @@ describe('canConnect', () => {
         expect(canConnect('app.send', 'sent', defs)).toBe(true)
     })
 
-    it('allows a missing handle when the source has exactly one output', () => {
+    it('allows a missing handle only when the source has one non-empty output', () => {
         // Rejecting the implicit handle would prevent a valid single-output connection.
         expect(canConnect('one.out', null, defs)).toBe(true)
+
+        const blankDefs = { ...defs, 'blank.out': def('blank.out', ['']) }
+        expect(canConnect('blank.out', null, blankDefs)).toBe(false)
+        expect(canConnect('blank.out', '', blankDefs)).toBe(false)
     })
 
     it('rejects a named handle that the source does not declare', () => {
@@ -70,5 +74,10 @@ describe('canConnect', () => {
         // An unknown draft type must not crash the editor or create an unresolved edge.
         expect(canConnect('missing.type', null, defs)).toBe(false)
         expect(canConnect(undefined, null, defs)).toBe(false)
+
+        const inheritedDefs = Object.create({
+            inherited: def('inherited', ['default']),
+        }) as Record<string, NodeTypePayload>
+        expect(canConnect('inherited', 'default', inheritedDefs)).toBe(false)
     })
 })

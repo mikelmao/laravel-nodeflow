@@ -18,7 +18,11 @@ export function canConnect(
     sourceHandle: string | null,
     defs: Record<string, NodeTypePayload>,
 ): boolean {
-    const outputs = sourceType === undefined ? undefined : defs[sourceType]?.outputs
+    const definition = sourceType !== undefined
+        && Object.prototype.hasOwnProperty.call(defs, sourceType)
+        ? defs[sourceType]
+        : undefined
+    const outputs = definition?.outputs
 
     // Unknown types refuse safely, as does any canvas gesture that toGraph cannot resolve.
     if (outputs === undefined || outputs.length === 0) {
@@ -26,7 +30,7 @@ export function canConnect(
     }
 
     if (sourceHandle === null || sourceHandle === '') {
-        return outputs.length === 1
+        return outputs.length === 1 && outputs[0] !== ''
     }
 
     return outputs.includes(sourceHandle)
