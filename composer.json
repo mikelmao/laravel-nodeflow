@@ -12,7 +12,11 @@
     },
     "require-dev": {
         "orchestra/testbench": "^10.0|^11.0",
-        "pestphp/pest": "^4.0"
+        "pestphp/pest": "^4.0",
+        "inertiajs/inertia-laravel": "^2.0"
+    },
+    "suggest": {
+        "inertiajs/inertia-laravel": "Required only if you use the editor routes; the engine works without it."
     },
     "minimum-stability": "dev",
     "prefer-stable": true,

@@ -21,6 +21,14 @@ abstract class TestCase extends Orchestra
             'prefix' => '',
         ]);
 
+        // Task 5 is the first suite to send a request through the 'web'
+        // middleware group (EditorRoutesTest, via actingAs()+get/put/postJson).
+        // That group's EncryptCookies middleware resolves the encrypter
+        // regardless of whether any cookie actually needs it, so every test in
+        // the suite now needs an app key even though only the editor routes
+        // exercise it.
+        $app['config']->set('app.key', 'base64:'.base64_encode(random_bytes(32)));
+
         $app->singleton(\Nodeflow\Engine\WorkflowEngine::class, \Nodeflow\Engine\FakeWorkflowEngine::class);
     }
 
