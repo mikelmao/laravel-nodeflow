@@ -337,10 +337,13 @@ Install it if you use these routes.
 ### Drafts
 
 `PUT .../draft` takes `{graph, draft_revision}` and returns the new
-`{draft_revision}` — an integer counter, not a timestamp. Echo it back on the next
-save: if it does not match what the server holds, you get **409** with the newer
-`graph` and `draft_revision`, so the editor can say "someone else edited this"
-rather than silently discarding a colleague's work.
+`{draft_revision}` — an integer counter, not a timestamp. `draft_revision` is
+nullable: omit it (or send `null`) for a flow's first-ever save, since there is
+nothing yet to be stale against. Echo the value you were last given back on
+every save after that: if it does not match what the server holds, you get
+**409** with `{message, graph, draft_revision}` — the newer graph and its
+revision — so the editor can say "someone else edited this" rather than
+silently discarding a colleague's work.
 
 `draft_updated_at` still exists and is written on every save, but it never
 appears in this endpoint's response. It surfaces only in `flow.draft_updated_at`
@@ -357,7 +360,7 @@ is why a draft is not a version. Validation happens at publish.
 ### Publish
 
 `POST .../publish` takes `{graph}` and returns `{version}`. On rejection it returns
-**422** with both shapes of the same failures:
+**422** with `message` plus both shapes of the same failures:
 
 - `errors` — flat strings, fine for a summary banner
 - `node_errors` — `[{node, field, message}]`, so each message can be rendered on its
@@ -447,8 +450,10 @@ That writes a single class (optionally with a test), and appends it to
 
 ## What you have not wired yet
 
-There is **no UI**. Nothing in this package renders anything. Flows are created and published
-programmatically:
+There is **no bundled front end**. The editor's server half — [the routes above](#the-editors-routes),
+draft autosave, publish validation, tenant-scoped field options — is complete; what is missing is the
+React app: no canvas, no field controls, no palette sidebar for a staff member to actually click
+through. Until that exists, or if you never want it, flows are created and published programmatically:
 
 ```php
 use Nodeflow\Models\Flow;
@@ -476,5 +481,6 @@ app(PublishFlow::class)->publish($flow, [
 and throws `Nodeflow\Publishing\GraphInvalidException` (carrying `errors()`) if it fails — see
 [Execution model](05-execution-model.md#publish-time-validation) for what is checked.
 
-The graph JSON shape above is the contract a future editor will produce. A node may carry a `position`
-key for canvas coordinates; the package round-trips it untouched and ignores it.
+The graph JSON shape above is the same shape [the editor's routes](#the-editors-routes) already
+consume, not a hypothetical one. A node may carry a `position` key for canvas coordinates; the
+package round-trips it untouched and ignores it.
