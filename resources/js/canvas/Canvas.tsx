@@ -14,7 +14,7 @@ import {
 import '@xyflow/react/dist/style.css'
 import { useCallback, useMemo } from 'react'
 import type { CanvasEdge, CanvasNode, NodeCardData, NodeTypePayload } from '../graph/types'
-import { CanvasContext, type NodeRendererMap } from './context'
+import { CanvasContext, type NodeDecorationMap, type NodeRendererMap } from './context'
 import { NodeCard } from './NodeCard'
 
 // The graph module stays free of xyflow. These intersections make adapter drift
@@ -28,6 +28,8 @@ export type CanvasProps = {
     defs: Record<string, NodeTypePayload>
     renderers?: NodeRendererMap
     nodeErrors?: Record<string, string[]>
+    /** Per-node badges and dimming. The editor passes none; the run view does. */
+    nodeDecorations?: NodeDecorationMap
     onNodesChange?: OnNodesChange<NodeflowNode>
     onEdgesChange?: OnEdgesChange<NodeflowEdge>
     onConnect?: (connection: Connection) => void
@@ -41,6 +43,7 @@ export type CanvasProps = {
 const nodeTypes = { nodeflowNode: NodeCard } satisfies NodeTypes
 const EMPTY_RENDERERS: NodeRendererMap = Object.freeze({})
 const EMPTY_NODE_ERRORS: Record<string, string[]> = Object.freeze({})
+const EMPTY_DECORATIONS: NodeDecorationMap = Object.freeze({})
 
 type InteractionProps = Pick<
     ReactFlowProps<NodeflowNode, NodeflowEdge>,
@@ -124,6 +127,7 @@ export function Canvas({
     defs,
     renderers = EMPTY_RENDERERS,
     nodeErrors = EMPTY_NODE_ERRORS,
+    nodeDecorations = EMPTY_DECORATIONS,
     onNodesChange,
     onEdgesChange,
     onConnect,
@@ -131,7 +135,10 @@ export function Canvas({
     interactive = true,
     className = 'h-full min-h-[32rem] w-full',
 }: CanvasProps) {
-    const context = useMemo(() => ({ defs, renderers, nodeErrors }), [defs, renderers, nodeErrors])
+    const context = useMemo(
+        () => ({ defs, renderers, nodeErrors, decorations: nodeDecorations }),
+        [defs, renderers, nodeErrors, nodeDecorations],
+    )
     const interactions = interactionProps(interactive)
     const behavior = useMemo(
         () => canvasBehavior(interactive, nodes, edges, { onNodesChange, onEdgesChange, onConnect }),

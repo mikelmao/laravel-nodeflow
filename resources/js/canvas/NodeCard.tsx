@@ -53,15 +53,23 @@ export const defaultNodeRenderer: NodeRenderer = ({ data, def }) => (
  * graph edge contract even when a host supplies a custom body renderer.
  */
 export function NodeCard({ id, data, selected, isConnectable }: NodeProps<NodeflowNode>) {
-    const { defs, renderers, nodeErrors } = useContext(CanvasContext)
+    const { defs, renderers, nodeErrors, decorations } = useContext(CanvasContext)
     const def = Object.prototype.hasOwnProperty.call(defs, data.type) ? defs[data.type] : undefined
     const outputs = def?.outputs ?? []
     const Body = rendererFor(data.type, renderers)
     const errors = Object.prototype.hasOwnProperty.call(nodeErrors, id) ? nodeErrors[id]! : []
     const selectionClassName = selected ? 'border-primary ring-1 ring-primary' : 'border-border'
+    // Own-key read for the same reason `defs` and `nodeErrors` use one: `id` is
+    // a persisted graph node id, so `toString` and `__proto__` are values a
+    // flow author can choose.
+    const decoration = Object.prototype.hasOwnProperty.call(decorations, id) ? decorations[id]! : undefined
+    const dimClassName = decoration?.dimmed === true ? ' opacity-40' : ''
 
     return (
-        <div style={{ width: NODE_WIDTH }} className={`rounded-md border bg-card shadow-sm ${selectionClassName}`}>
+        <div
+            style={{ width: NODE_WIDTH }}
+            className={`rounded-md border bg-card shadow-sm ${selectionClassName}${dimClassName}`}
+        >
             <Handle
                 type="target"
                 position={Position.Left}
@@ -69,6 +77,18 @@ export function NodeCard({ id, data, selected, isConnectable }: NodeProps<Nodefl
                 className="!size-2 !bg-muted-foreground"
             />
             <Body data={data} def={def} selected={selected} errors={errors} />
+            {decoration !== undefined && decoration.badges.length > 0 && (
+                <ul
+                    data-testid={`nodeflow-badges-${id}`}
+                    className="flex flex-wrap gap-1 px-3 pb-2 text-[10px] text-muted-foreground"
+                >
+                    {decoration.badges.map((badge) => (
+                        <li key={badge.key} className="rounded bg-muted px-1">
+                            {badge.label} <span className="font-semibold text-foreground">{badge.value}</span>
+                        </li>
+                    ))}
+                </ul>
+            )}
             {errors.length > 0 && (
                 <ul role="alert" className="space-y-0.5 px-3 pb-2 text-[10px] text-destructive">
                     {errors.map((error) => (

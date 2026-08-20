@@ -26,11 +26,13 @@ export type CanvasContextValue = {
     defs: Record<string, NodeTypePayload>
     renderers: NodeRendererMap
     nodeErrors: Record<string, string[]>
+    decorations: NodeDecorationMap
 }
 export const CanvasContext = createContext<CanvasContextValue>({
     defs: {},
     renderers: {},
     nodeErrors: {},
+    decorations: {},
 })
 
 /**
