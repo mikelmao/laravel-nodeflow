@@ -447,7 +447,7 @@ different 422 from the one a validly-shaped-but-nonsensical graph gets back; see
 
 Node ids and edge endpoints must be **strings** — `"n1"`, not `1`. Any key not
 listed is left alone: a node's `position` round-trips untouched, as promised
-[below](#what-you-have-not-wired-yet).
+[below](#wiring-the-editors-front-end).
 
 ### Publish
 
@@ -602,12 +602,17 @@ That writes a single class (optionally with a test), and appends it to
 `app/Providers/NodeflowServiceProvider.php` when you have one — otherwise it prints the
 `Nodeflow::register([...])` line for you to paste. See [Writing nodes](03-writing-nodes.md).
 
-## What you have not wired yet
+## Wiring the editor's front end
 
-There is **no bundled front end**. The editor's server half — [the routes above](#the-editors-routes),
-draft autosave, publish validation, tenant-scoped field options — is complete; what is missing is the
-React app: no canvas, no field controls, no palette sidebar for a staff member to actually click
-through. Until that exists, or if you never want it, flows are created and published programmatically:
+The package ships the React editor as TypeScript source for the host application's
+Vite build. Follow [Editor client](08-editor-client.md) for the five host-wiring
+requirements, the thin Inertia page and the control and node-renderer extension
+points.
+
+### Building flows without the editor
+
+If you do not want to mount the editor, flows can still be created and published
+programmatically:
 
 ```php
 use Nodeflow\Models\Flow;
