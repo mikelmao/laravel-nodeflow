@@ -94,7 +94,7 @@ export function ConfigPanel({
 
                 return (
                     <FieldRow
-                        key={`${node.id}:${definitionField.key}`}
+                        key={JSON.stringify([node.id, definitionField.key])}
                         nodeType={node.type}
                         field={definitionField}
                         value={value}

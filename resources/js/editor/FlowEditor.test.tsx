@@ -527,15 +527,15 @@ describe('FlowEditor', () => {
     it('isolates selected node control state, makes it start and publishes it', async () => {
         const fetchMock = successfulFetch()
         vi.stubGlobal('fetch', fetchMock)
-        const waitDefinition: NodeTypePayload = {
-            type: 'core.wait',
-            label: 'Wait',
+        const waitADefinition: NodeTypePayload = {
+            type: 'app.wait-a',
+            label: 'Wait A',
             group: 'Core',
             icon: null,
             description: 'Wait before continuing.',
             outputs: ['completed'],
             fields: [{
-                key: 'duration',
+                key: 'c',
                 type: 'duration',
                 label: 'Duration',
                 help: null,
@@ -544,35 +544,43 @@ describe('FlowEditor', () => {
                 options: {},
                 dynamic_options: false,
             }],
-            default_config: { duration: null },
+            default_config: { c: null },
+            cardinality: ['subject'],
+        }
+        const waitBDefinition: NodeTypePayload = {
+            ...waitADefinition,
+            type: 'app.wait-b',
+            label: 'Wait B',
+            fields: [{ ...waitADefinition.fields[0]!, key: 'b:c' }],
+            default_config: { 'b:c': null },
             cardinality: ['subject'],
         }
         renderEditor({
-            palette: [waitDefinition],
+            palette: [waitADefinition, waitBDefinition],
             graph: {
-                start: 'wait-a',
+                start: 'a:b',
                 nodes: [
-                    { id: 'wait-a', type: 'core.wait', config: { duration: null }, position: { x: 0, y: 0 } },
-                    { id: 'wait-b', type: 'core.wait', config: { duration: null }, position: { x: 300, y: 0 } },
+                    { id: 'a:b', type: 'app.wait-a', config: { c: null }, position: { x: 0, y: 0 } },
+                    { id: 'a', type: 'app.wait-b', config: { 'b:c': null }, position: { x: 300, y: 0 } },
                 ],
                 edges: [],
             },
         })
 
-        fireEvent.click(canvasNode('wait-a'))
+        fireEvent.click(canvasNode('a:b'))
         fireEvent.change(screen.getByRole('combobox', { name: 'Duration unit' }), { target: { value: 'hours' } })
 
-        fireEvent.click(canvasNode('wait-b'))
+        fireEvent.click(canvasNode('a'))
         expect(screen.getByRole('combobox', { name: 'Duration unit' })).toHaveValue('minutes')
         fireEvent.change(screen.getByRole('spinbutton', { name: 'Duration amount' }), { target: { value: '1' } })
         fireEvent.click(screen.getByRole('button', { name: 'Make start node' }))
-        expect(screen.getByText(/Start: wait-b/i)).toBeInTheDocument()
+        expect(screen.getByText(/Start: a$/i)).toBeInTheDocument()
         fireEvent.click(screen.getByRole('button', { name: 'Publish' }))
         await waitFor(() => expect(fetchMock.mock.calls.some(([url]) => url === urls.publish)).toBe(true))
         expect(requestBody(fetchMock, urls.publish).graph).toMatchObject({
-            start: 'wait-b',
+            start: 'a',
             nodes: expect.arrayContaining([
-                expect.objectContaining({ id: 'wait-b', config: { duration: '1 minute' } }),
+                expect.objectContaining({ id: 'a', config: { 'b:c': '1 minute' } }),
             ]),
         })
     })
