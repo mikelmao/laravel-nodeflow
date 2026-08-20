@@ -325,20 +325,21 @@ failure state is invented.
 **The discipline, unchanged from the editor spec §9:** for every test, name the production change
 that would make it fail.
 
-**PHP — 30 new Pest tests, `325 → 355`.**
+**PHP — 31 new Pest tests, `325 → 356`.**
 
 | File | Tests | The sharp ones |
 |---|---|---|
 | `tests/Feature/RunViewTest.php` | 6 | The pinned version, twice, because two different wrong implementations exist: a **draft-only** node is absent (reads `draft_graph`) and a **newer published version's** node is absent (reads `flow->currentVersion`). Both fixtures make the graphs genuinely differ; a same-graph fixture passes vacuously. Plus 403-no-gates, 404-cross-tenant, sentinel-intact urls, one overlay entry per graph node |
 | `tests/Feature/RunOverlayTest.php` | 11 | **One fixture containing a never-reached node and a node reached with zero subjects**, asserting they differ in `reached` rather than both rendering 0; the test is named for the counterfactual it kills. Plus per-output summing across two visits, waiting counted only for `active`, failures and representative error from the `output IS NULL` rows, stale node ids ignored, numeric node ids and output names encoding as JSON objects, the endpoint returning the envelope alone, `terminal` true only for `completed`, and **exactly two queries** for the aggregation via `DB::listen` |
-| `tests/Feature/RunSubjectsTest.php` | 7 | Cursor paging across two pages; non-active subjects excluded; unknown node 404; **a node id valid in another run's graph → 404**; 403-no-gates; 404-cross-tenant |
+| `tests/Feature/RunSubjectsTest.php` | 8 | Cursor paging across two pages; non-active subjects excluded; unknown node 404; **a node id valid in another run's graph → 404**; 403-no-gates; 404-cross-tenant; and the extended index asserted present, because it is load-bearing for the six-figure claim and would otherwise be silently droppable |
 | `tests/Unit/ArchitectureTest.php` | +1 | Scans `src/Http/` and `src/Runs/` with an **empty** allowlist, so neither tree can be exempted the way the global case's allowlist could grow |
 | `tests/Unit/RequestContextScannerTest.php` | +5 | The four G-1 forms — alias, join, from, raw SQL — plus the over-matching guard: a comment or docblock naming the model or table is not a violation |
 
-**Vitest — 25 new tests, `123 → 148`.**
+**Vitest — 28 new tests, `123 → 151`.**
 
-- `run/overlay.test.ts` (7) — prototype-key node ids not resolving inherited entries, malformed
-  payload named, and the dim/badge rules at data level.
+- `run/overlay.test.ts` (8) — prototype-key node ids not resolving inherited entries, a node
+  genuinely *named* like a prototype key staying addressable, a malformed payload named, a malformed
+  single entry coerced to a safe shape, and the four dim/badge rules at data level.
 - `run/useOverlayPolling.test.tsx` (7) — interval polling; terminal stop; zero requests when the
   initial snapshot is terminal; Strict Mode replay not doubling the rate; terminality decided from
   functional-updater state; stop on 403/404; keep-and-surface on 500.
@@ -350,6 +351,9 @@ that would make it fail.
   `import { useAutosave } from '../editor/useAutosave'` to `FlowRun.tsx` and it fails, naming the file.
 - `canvas/canvas.test.tsx` (+2) — decorations applied; the prop's absence leaves the editor path
   unchanged.
+- `http.test.ts` (+2) — `subjectsUrl` substituting and URI-encoding the node sentinel, and throwing by
+  name when it is absent. New code needs its own coverage; the `optionsUrl` refactor is already
+  covered by the two cases that exist.
 - `index.test.ts` (+1) — `FlowRun` and the run types are exported.
 
 **Demo — 5 new Pest tests, `44 → 49`**, in `tests/Feature/NodeflowRunViewTest.php`: resolved urls
