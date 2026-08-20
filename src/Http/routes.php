@@ -3,6 +3,7 @@
 use Illuminate\Support\Facades\Route;
 use Nodeflow\Http\Controllers\FieldOptionsController;
 use Nodeflow\Http\Controllers\FlowEditorController;
+use Nodeflow\Http\Controllers\RunViewController;
 
 /*
  * Loaded by Nodeflow::routes(), which a host calls inside its own Route::group —
@@ -25,3 +26,14 @@ Route::post('flows/{flow}/publish', [FlowEditorController::class, 'publish'])->n
  */
 Route::get('flows/{flow}/nodes/{type}/fields/{field}/options', FieldOptionsController::class)
     ->name('nodeflow.fields.options');
+
+/*
+ * The run view (spec §6, plan 4). Read-only: there is no write path here at all.
+ *
+ * {run} binds through the tenant-scoped Run, so a cross-tenant id is a 404
+ * before any controller code runs — same reasoning as {flow} above. {node} is a
+ * graph node id, not a record id: the controller validates it against the run's
+ * own pinned graph before it reaches a query.
+ */
+Route::get('runs/{run}', [RunViewController::class, 'show'])->name('nodeflow.runs.show');
+Route::get('runs/{run}/overlay', [RunViewController::class, 'overlay'])->name('nodeflow.runs.overlay');

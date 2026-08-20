@@ -9,6 +9,7 @@ use Illuminate\Routing\Controller;
 use Inertia\Inertia;
 use Nodeflow\Editor\SaveDraft;
 use Nodeflow\Editor\StaleDraftException;
+use Nodeflow\Http\ResolvesRouteNames;
 use Nodeflow\Models\Flow;
 use Nodeflow\Nodes\NodeRegistry;
 use Nodeflow\Publishing\GraphInvalidException;
@@ -38,6 +39,7 @@ class FlowEditorController extends Controller
     // trait is required for $this->authorize() to exist at all. Without it every
     // endpoint here fatals rather than authorizing.
     use AuthorizesRequests;
+    use ResolvesRouteNames;
 
     /**
      * Per-field URL-template sentinels. Both use only unreserved URI characters,
@@ -73,9 +75,9 @@ class FlowEditorController extends Controller
             // The client must consume these resolved endpoints rather than revive
             // the prototype's hardcoded /nodeflow route assumptions.
             'urls' => [
-                'draft' => route($this->routeName($request, 'nodeflow.flows.draft'), ['flow' => $flow]),
-                'publish' => route($this->routeName($request, 'nodeflow.flows.publish'), ['flow' => $flow]),
-                'options' => route($this->routeName($request, 'nodeflow.fields.options'), [
+                'draft' => route($this->routeName($request, 'nodeflow.flows.draft', 'nodeflow.flows.edit'), ['flow' => $flow]),
+                'publish' => route($this->routeName($request, 'nodeflow.flows.publish', 'nodeflow.flows.edit'), ['flow' => $flow]),
+                'options' => route($this->routeName($request, 'nodeflow.fields.options', 'nodeflow.flows.edit'), [
                     'flow' => $flow,
                     'type' => self::TYPE_PLACEHOLDER,
                     'field' => self::FIELD_PLACEHOLDER,
@@ -196,21 +198,5 @@ class FlowEditorController extends Controller
             // validation failure. Publish requires it; draft does not (see there).
             'graph.edges.*.output' => ['required', 'string'],
         ];
-    }
-
-    /**
-     * Derive the host's route-name prefix from the matched edit route, whose
-     * sibling endpoints are registered by the same Nodeflow::routes() call.
-     */
-    private function routeName(Request $request, string $name): string
-    {
-        $current = $request->route()?->getName();
-        $own = 'nodeflow.flows.edit';
-
-        if ($current !== null && $current !== $own && str_ends_with($current, $own)) {
-            return substr($current, 0, -strlen($own)).$name;
-        }
-
-        return $name;
     }
 }
