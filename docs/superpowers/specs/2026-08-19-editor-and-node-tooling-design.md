@@ -132,7 +132,7 @@ Six implementation plans, sequenced by dependency. One spec, because the field-c
 |---|---|---|---|
 | **1 — Node generator** ✅ **delivered** `4cadfb7..e22bd89` | `nodeflow:make-node` with `--test` | §7.2 | — |
 | **2 — Security floor** ✅ **delivered** `aa963ff..62c9e66` | Authorization gates; `FlowVersion` scoping; `nodeflow.tenancy`; the structural invariant for `RunSubject`/`NodeExecution` | §4 | — |
-| **3 — Editor** ✅ **delivered** `c5684e4..bf7a719` (demo acceptance `549fe42`) | `draft_graph`; `Nodeflow::routes()` and controllers; options endpoint; `Field::custom()`; `resources/js`; six field controls; dev `package.json` + Vitest | §5 | 2 |
+| **3 — Editor** ✅ **delivered** `c5684e4..8951b96` (demo acceptance `549fe42`) | `draft_graph`; `Nodeflow::routes()` and controllers; options endpoint; `Field::custom()`; `resources/js`; six field controls; dev `package.json` + Vitest | §5 | 2 |
 | **4 — Run view** | `FlowRun` component and routes; overlay queries; subject drill-down; polling | §6 | 3 |
 | **5 — Remaining tooling** | `nodeflow:install`; `make-trigger`; `make-subject-attribute` | §7.1, §7.3 | 3 |
 | **6 — Packaging** | `make-node-package`; `extract-node` | §8 | 1, 5 |
@@ -245,7 +245,7 @@ The three unscoped models are treated differently, because they differ in cost a
 
 ---
 
-## 5. The editor (Plan 3) — ✅ delivered, `c5684e4..bf7a719`
+## 5. The editor (Plan 3) — ✅ delivered, `c5684e4..8951b96`
 
 **This section is now a description of shipped behaviour.** Everything below the "as built" block
 was written before implementation and is kept for its reasoning; where the two disagree, the "as

@@ -5735,7 +5735,7 @@ export function FlowEditor({
 
     return (
         <FieldOptionsContext.Provider value={optionsSource}>
-            <div className={className ?? 'flex h-[calc(100vh-6rem)] min-h-[36rem] flex-col'}>
+            <section className={className ?? 'space-y-4'}>
                 <header className="flex flex-wrap items-center gap-3 border-b border-border px-4 py-2">
                     <div>
                         <h1 className="text-sm font-semibold text-foreground">{flow.name}</h1>
@@ -5874,7 +5874,7 @@ export function FlowEditor({
                         )}
                     </aside>
                 </div>
-            </div>
+            </section>
         </FieldOptionsContext.Provider>
     )
 }
@@ -6043,7 +6043,7 @@ The document a client author reads. It must contain, in this order:
 2. **Five wiring steps, each with the exact snippet and the exact symptom of skipping it.** Four are from 5.6; the fifth was found while planning this work:
    - **The Vite alias.** `'@nodeflow/editor': path.resolve(__dirname, 'vendor/atram/laravel-nodeflow/resources/js')`. Symptom if missing: the build fails to resolve the import. **Loud.**
    - **The tsconfig path mapping.** `"@nodeflow/editor": ["./vendor/atram/laravel-nodeflow/resources/js"]` plus `"@nodeflow/editor/*"`. Symptom if missing: the build succeeds and both the host's `tsc` and their editor's IntelliSense fail on the import. **Quiet.**
-   - **The Tailwind `@source` line.** `@source '../../vendor/atram/laravel-nodeflow/resources/js';` in the host's CSS entry. Symptom if missing: the build succeeds and the editor renders, but utilities used only in the package source (for example `min-h-[36rem]`) are absent; utilities the host happens to use elsewhere may mask part of the damage. Tailwind v4's automatic source detection deliberately skips gitignored paths, and `vendor/` is gitignored. **Quiet, and the worst of the five.**
+   - **The Tailwind `@source` line.** `@source '../../vendor/atram/laravel-nodeflow/resources/js';` in the host's CSS entry. Symptom if missing: the build succeeds and the editor renders, but utilities used only in the package source (for example `min-h-[32rem]` in `Canvas.tsx`) are absent; utilities the host happens to use elsewhere may mask part of the damage. Tailwind v4's automatic source detection deliberately skips gitignored paths, and `vendor/` is gitignored. **Quiet, and the worst of the five.**
    - **`@xyflow/react` in the host's `package.json`.** The host's Vite compiles our source, so npm installs nothing on our behalf and an alias into `vendor/` does not pull a package's dependencies. Symptom if missing: the build fails to resolve `@xyflow/react`. **Loud.**
    - **`resolve.dedupe: ['react', 'react-dom', '@xyflow/react']`, required when the package is symlinked for local development.** Vite resolves symlinks to their real path, so a bare `react` import inside `resources/js` resolves from the *package's* `node_modules` - which exists, because Vitest and `tsc` need it - rather than the host's. Two Reacts in one page means "Invalid hook call" or "Cannot read properties of null (reading 'useState')" the first time the editor mounts. A host that installed the package with Composer normally has no `node_modules` inside `vendor/atram/laravel-nodeflow`, so resolution walks up to theirs and the problem does not arise; `dedupe` is harmless there and is the one line that makes both cases work. **Quiet, and it looks like a React bug rather than a config one.**
 3. **The thin page**, with the note that it is three things at once - the Inertia resolver entry, the layout wrap and the theming seam:
