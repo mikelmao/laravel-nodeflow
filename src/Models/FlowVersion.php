@@ -6,7 +6,6 @@ use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
 use Illuminate\Database\Eloquent\Relations\HasMany;
 use Nodeflow\Models\Concerns\BelongsToTenant;
-use Nodeflow\Models\Concerns\TenancyGuardSuspension;
 
 class FlowVersion extends Model
 {
@@ -38,10 +37,13 @@ class FlowVersion extends Model
      * entitlement is already established, and a null ambient tenant (console,
      * queue, cross-tenant fan-out) must not stop the inheritance happening.
      *
-     * Honours TenancyGuardSuspension for the same reason the trait's own guard
-     * does — the package's own writes take their tenant_id from a trusted row
-     * rather than from request input, and the test-suite seeds do the same.
-     * Suspension disables only the throw; the inheritance still happens.
+     * Unlike the trait's creating() guard, this check is never suspended.
+     * TenancyGuardSuspension exists for a system write whose tenant_id came
+     * from a trusted row — and a trusted row's tenant_id *is* the flow's own
+     * tenant, so a legitimate suspended write never disagrees with
+     * $flowTenantId here. The only writes this would let through are ones
+     * where the trusted row and the child actually contradict each other,
+     * which is the corruption this hook exists to catch, suspended or not.
      */
     protected static function booted(): void
     {
@@ -65,8 +67,7 @@ class FlowVersion extends Model
                 return;
             }
 
-            if ((string) $version->tenant_id !== (string) $flowTenantId
-                && ! TenancyGuardSuspension::isActive()) {
+            if ((string) $version->tenant_id !== (string) $flowTenantId) {
                 throw CrossTenantWriteException::forParentMismatch(
                     $version::class,
                     "flow [{$version->flow_id}]",

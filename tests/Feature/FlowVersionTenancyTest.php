@@ -261,31 +261,6 @@ it('still inherits the flows tenant when nothing is set and nothing is ambient',
     expect($version->tenant_id)->toBe('org-1');
 });
 
-it('lets a suspended guard write a version whose tenant contradicts its flow', function () {
-    // The escape hatch has to cover this hook too, for the same reason it
-    // covers the trait's: a package-internal write takes its tenant_id from a
-    // trusted row, not from request input, and a caller inside
-    // TenancyGuardSuspension::run() has said so explicitly. Suspension
-    // disables only the throw — the inheritance branch above still runs.
-    //
-    // Counterfactual: drop the isActive() check from FlowVersion::booted() and
-    // this throws instead of writing. (Verified: the rest of the suite stays
-    // green either way, so this test is the only thing holding the behaviour.)
-    $flow = Flow::create(['name' => 'A', 'trigger_type' => 'manual', 'status' => 'draft']);
-
-    $version = \Nodeflow\Models\Concerns\TenancyGuardSuspension::run(
-        fn () => FlowVersion::withoutTenancy()->create([
-            'flow_id' => $flow->id,
-            'tenant_id' => 'org-2',
-            'version' => 1,
-            'graph' => ['start' => 'n1', 'nodes' => [['id' => 'n1', 'type' => 'core.exit', 'config' => []]], 'edges' => []],
-            'content_hash' => 'x',
-        ])
-    );
-
-    expect($version->tenant_id)->toBe('org-2');
-});
-
 it('names the flow and both tenants when it refuses a mismatched version', function () {
     // The message has to identify which flow and which two tenants, or the
     // reader has no way to tell a seeding mistake from a real cross-tenant
