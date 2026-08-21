@@ -3,6 +3,7 @@
 namespace Nodeflow\Console\Install;
 
 use Illuminate\Filesystem\Filesystem;
+use Nodeflow\Console\HostPath;
 use Nodeflow\Console\SourceText;
 
 /**
@@ -41,7 +42,7 @@ use Nodeflow\Console\SourceText;
  * lived in baseUrl's segments, not the target's. check() now runs the ".."
  * refusal on the MERGED list (baseUrl segments followed by target segments),
  * which closes both the original climb-out and this variant with one rule.
- * Round 1 also let a leading "/" through: segments() drops empty and "."
+ * Round 1 also let a leading "/" through: HostPath::segments() drops empty and "."
  * segments, and an absolute path's leading "/" produces an empty first
  * segment, so "/vendor/atram/laravel-nodeflow/resources/js" was silently
  * compared as though it were project-relative. An absolute path — on the RAW
@@ -96,8 +97,8 @@ final class TsconfigPathsStep implements InstallStep
         // An absolute baseUrl is a real filesystem path, not a project-relative
         // one, and must never be resolved as though it starts at the project
         // root. Checked on the RAW string, before segmenting: a leading "/"
-        // turns into an empty first segment, and segments() drops empty segments
-        // exactly like it drops ".", which would otherwise hide this.
+        // turns into an empty first segment, and HostPath::segments() drops empty
+        // segments exactly like it drops ".", which would otherwise hide this.
         if (str_starts_with($baseUrl, '/')) {
             return InstallOutcome::CannotWire;
         }
@@ -108,8 +109,8 @@ final class TsconfigPathsStep implements InstallStep
             return InstallOutcome::CannotWire;
         }
 
-        $expected = self::segments(self::PACKAGE_SOURCE);
-        $baseSegments = self::segments($baseUrl);
+        $expected = HostPath::segments(self::PACKAGE_SOURCE);
+        $baseSegments = HostPath::segments($baseUrl);
 
         foreach (self::MAPPINGS as $mapping) {
             $targets = $paths[$mapping] ?? null;
@@ -125,7 +126,7 @@ final class TsconfigPathsStep implements InstallStep
                 return InstallOutcome::CannotWire;
             }
 
-            $resolved = array_merge($baseSegments, self::segments($target));
+            $resolved = array_merge($baseSegments, HostPath::segments($target));
 
             // Checked on the MERGED list, not the target's segments alone: a
             // baseUrl of "vendor/atram/laravel-nodeflow/resources/js/.." walks
@@ -157,19 +158,6 @@ final class TsconfigPathsStep implements InstallStep
         }
 
         return InstallOutcome::AlreadyPresent;
-    }
-
-    /**
-     * Splits a tsconfig path (or baseUrl) into path segments, dropping empty and
-     * "." segments. A literal ".." segment is deliberately kept, not dropped —
-     * check() must see it in order to refuse it.
-     */
-    private static function segments(string $path): array
-    {
-        return array_values(array_filter(
-            explode('/', $path),
-            static fn (string $segment): bool => $segment !== '' && $segment !== '.',
-        ));
     }
 
     /** Verify-only: check() never returns Writable, so this is unreachable. */

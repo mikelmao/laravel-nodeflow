@@ -17,7 +17,12 @@ namespace Nodeflow\Console\Install;
  */
 final class ViteAliasStep extends ViteConfigStep
 {
-    private const PACKAGE_SOURCE = 'atram/laravel-nodeflow/resources/js';
+    // Corrected E41: the FULL vendor/... form, not just the atram/... tail. The
+    // full string already tolerates a './vendor/…' prefix, because
+    // str_contains('./vendor/x', 'vendor/x') is true — so the shorter constant
+    // bought no tolerance and only matched paths like '/tmp/packages/atram/…'
+    // that the full form correctly rejects.
+    private const PACKAGE_SOURCE = 'vendor/atram/laravel-nodeflow/resources/js';
 
     public function describe(): string
     {

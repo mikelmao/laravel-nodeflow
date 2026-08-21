@@ -3,6 +3,7 @@
 namespace Nodeflow\Console\Install;
 
 use Illuminate\Filesystem\Filesystem;
+use Nodeflow\Console\HostPath;
 use Nodeflow\Console\SourceText;
 
 /**
@@ -29,7 +30,12 @@ final class TailwindSourceStep implements InstallStep
 
     private const IMPORT_PATTERN = '/^[ \t]*@import\s+[\'"]tailwindcss[\'"].*$/m';
 
-    public function __construct(private Filesystem $files, private string $basePath) {}
+    private readonly HostPath $host;
+
+    public function __construct(private Filesystem $files, private string $basePath)
+    {
+        $this->host = HostPath::root($this->basePath);
+    }
 
     public function describe(): string
     {
@@ -214,52 +220,20 @@ final class TailwindSourceStep implements InstallStep
      * How many `../` it takes to get from the entry's directory back to the
      * project root.
      *
-     * Strips the basePath prefix segment-by-segment, not with str_replace() or
-     * ltrim() on the raw string. Either of those removes the basePath's text
+     * Delegates the arithmetic to HostPath::relativeDepth(), which compares
+     * segments rather than stripping the basePath prefix with str_replace() or
+     * ltrim() on the raw string — either of those removes the basePath's text
      * WHEREVER it occurs, not only as the leading path component — so a nested
      * directory that happens to repeat a segment of the project's own path (e.g.
      * basePath ".../project" and an entry under "resources/project/css/app.css")
      * would have that inner "project" segment stripped too, undercounting the
      * depth and pointing the emitted @source at the wrong directory. The
      * tsconfig step hit the same class of bug from ltrim() first; see its
-     * fix-round history.
-     *
-     * KNOWN LIMIT: an entry path containing a literal ".." segment is not
-     * resolved before counting, because no caller of this method ever produces
-     * one — entry() only ever concatenates basePath with a fixed literal suffix
-     * or a files->glob() result, neither of which contains "..". Resolving it
-     * defensively would mean shelling out to realpath(), which fails on paths
-     * that do not exist and would make apply()'s own in-progress write path
-     * fragile for no reachable benefit.
+     * fix-round history. This class and TsconfigPathsStep now share one
+     * implementation of that arithmetic in HostPath (G-6).
      */
     private function relativePath(string $entry): string
     {
-        $base = $this->segments($this->basePath);
-        $directory = $this->segments(dirname($entry));
-
-        $matched = 0;
-
-        while ($matched < count($base) && ($directory[$matched] ?? null) === $base[$matched]) {
-            $matched++;
-        }
-
-        // Only when every basePath segment matched in order does the entry sit
-        // under the project root; otherwise there is no boundary to strip, so the
-        // whole directory counts (never reachable via entry(), but never allowed
-        // to under-count either).
-        $depth = $matched === count($base)
-            ? count($directory) - $matched
-            : count($directory);
-
-        return str_repeat('../', $depth).self::PACKAGE_SOURCE;
-    }
-
-    /** @return list<string> */
-    private function segments(string $path): array
-    {
-        return array_values(array_filter(
-            explode('/', trim($path, '/')),
-            fn (string $segment): bool => $segment !== '',
-        ));
+        return str_repeat('../', $this->host->relativeDepth(dirname($entry))).self::PACKAGE_SOURCE;
     }
 }
