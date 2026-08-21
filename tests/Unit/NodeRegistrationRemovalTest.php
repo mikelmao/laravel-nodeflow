@@ -716,3 +716,90 @@ it('does not strip the new last entry\'s own trailing comma when removing the en
     expectParseablePhp($path);
 });
 
+it('lints with PHP_BINARY rather than whatever "php" resolves to on PATH', function () {
+    // Important #1 (round 4). compiles() must invoke PHP_BINARY, not a
+    // bare `php` — PATH is not guaranteed to resolve to the interpreter
+    // currently running this process (a php8.3-only image, or an older
+    // `php` shadowing it earlier on PATH), and linting a CORRECT removal
+    // with the wrong binary can make it look like invalid PHP forever.
+    //
+    // Constructed deterministically rather than relying on real PATH
+    // state: a fake "php" is placed first on PATH and made to always fail,
+    // regardless of input. If compiles() shelled out to a bare `php`, this
+    // fake binary would make every removal look like it produced invalid
+    // PHP, and this would report WriteFailed with the original bytes
+    // restored. Using PHP_BINARY (an absolute path) ignores PATH entirely,
+    // so the real removal succeeds despite the hijacked PATH.
+    $binDir = removalFixtureDirectory().'-fake-php-'.bin2hex(random_bytes(6));
+    mkdir($binDir, 0777, true);
+
+    $fakePhp = $binDir.'/php';
+    file_put_contents($fakePhp, "#!/bin/sh\nexit 1\n");
+    chmod($fakePhp, 0755);
+
+    $path = providerForRemoval('        \App\Nodeflow\Nodes\SendMessage::class,');
+
+    $originalPath = getenv('PATH');
+    putenv('PATH='.$binDir.':'.$originalPath);
+
+    try {
+        $outcome = remove($path, 'App\Nodeflow\Nodes\SendMessage');
+    } finally {
+        putenv('PATH='.$originalPath);
+        unlink($fakePhp);
+        rmdir($binDir);
+    }
+
+    expect($outcome)->toBe(NodeRemovalOutcome::Removed);
+    expect(file_get_contents($path))->not->toContain('SendMessage');
+});
+
+it('removes a middle element whose delimiting comma is stranded alone on its own line', function () {
+    // Important #2 (round 4). ownLineMatch()'s 'neither' branch, reached
+    // for a NON-FIRST element, was only ever exercised (in the existing
+    // suite) by removing element 0 — which the removed-prefix fix-up
+    // rescues independently, masking a mutation that collapses 'neither'
+    // into 'line'. This fixture removes a MIDDLE element (B) whose own
+    // line carries no comma at all, with the delimiter stranded entirely
+    // on its own dedicated line between B and C. Real code produces
+    // "A::class,\n        C::class" — valid PHP. Counterfactual: collapse
+    // ownLineMatch()'s 'neither' into 'line' and this reports WriteFailed
+    // instead, refusing a perfectly legitimate removal.
+    $directory = removalFixtureDirectory();
+
+    if (! is_dir($directory)) {
+        mkdir($directory, 0777, true);
+    }
+
+    $path = $directory.'/middle-lone-comma-'.bin2hex(random_bytes(6)).'.php';
+    file_put_contents($path, <<<'PHP'
+    <?php
+
+    namespace App\Providers;
+
+    use Illuminate\Support\ServiceProvider;
+    use App\Nodeflow\Nodes\TagUser;
+    use App\Nodeflow\Nodes\SendMessage;
+    use App\Nodeflow\Nodes\UserTagged;
+
+    class NodeflowServiceProvider extends ServiceProvider
+    {
+        protected array $nodes = [
+            TagUser::class,
+            SendMessage::class
+            ,
+            UserTagged::class
+        ];
+    }
+    PHP);
+
+    expect(remove($path, 'App\Nodeflow\Nodes\SendMessage'))->toBe(NodeRemovalOutcome::Removed);
+
+    $contents = file_get_contents($path);
+
+    expect($contents)->not->toContain('SendMessage::class');
+    expect($contents)->toContain('TagUser::class');
+    expect($contents)->toContain('UserTagged::class');
+    expectParseablePhp($path);
+});
+

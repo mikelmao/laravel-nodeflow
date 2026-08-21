@@ -1057,12 +1057,21 @@ class NodeRegistrationWriter
      * host that still references it. appendTo()'s parses() is left as-is
      * so no shipped command's behaviour changes; this stricter check is
      * added on the removal path only.
+     *
+     * Invokes PHP_BINARY, not a bare `php`: PATH is not guaranteed to
+     * resolve to the interpreter currently running this process — a
+     * php8.3-only image, or an older `php` shadowing it earlier on PATH —
+     * and linting with the wrong binary can make a CORRECT removal look
+     * like it produced invalid PHP (any syntax the wrong version rejects)
+     * and get reverted with WriteFailed, permanently, since every future
+     * attempt would fail the same way. Do not "simplify" this back to
+     * `php -l`.
      */
     private function compiles(string $path): bool
     {
         $output = [];
 
-        exec('php -l '.escapeshellarg($path).' 2>&1', $output, $exitCode);
+        exec(escapeshellarg(PHP_BINARY).' -l '.escapeshellarg($path).' 2>&1', $output, $exitCode);
 
         return $exitCode === 0;
     }
