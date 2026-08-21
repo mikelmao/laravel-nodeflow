@@ -128,20 +128,87 @@ it('does not add a second entry for a class already registered', function () {
     expect(substr_count(file_get_contents($path), 'SendSms::class'))->toBe(1);
 });
 
-it('recognises a class listed without a leading backslash', function () {
-    // The counterfactual: search for '\'.$class.'::class' (with the backslash, as
-    // this did) and this fails — the writer reports Appended and adds a second
-    // entry for a class already there. The leading backslash is optional in PHP,
-    // and only entries this writer wrote itself carry one; a hand-written provider,
-    // or one a future nodeflow:install generated, need not. Idempotency is the
-    // whole point of this check, so it cannot depend on who wrote the line.
+it('appends rather than reporting AlreadyPresent when the namespace makes the written entry a different class', function () {
+    // E50. This test used to assert AlreadyPresent for this exact fixture, which
+    // was wrong: providerWithAnchor() declares `namespace App\Providers;`, so by
+    // PHP's own name-resolution rule (verified by probe, and what PhpNameResolver
+    // implements), the unqualified entry `App\Nodeflow\Nodes\SendSms::class`
+    // resolves to `App\Providers\App\Nodeflow\Nodes\SendSms` — NOT
+    // `App\Nodeflow\Nodes\SendSms`, the class actually being registered. Matching
+    // must not diverge between appendTo() and removeFrom() (a divergence of
+    // exactly that kind produced execution-record C1), so this now expects
+    // Appended, and a second entry is added rather than the mismatched one being
+    // mistaken for the target.
     $path = providerWithAnchor('        App\Nodeflow\Nodes\SendSms::class,');
+
+    $outcome = (new NodeRegistrationWriter(new Filesystem))
+        ->register($path, 'App\Nodeflow\Nodes\SendSms');
+
+    expect($outcome)->toBe(NodeRegistrationOutcome::Appended);
+    expect(substr_count(file_get_contents($path), 'SendSms::class'))->toBe(2);
+});
+
+it('recognises a class listed without a leading backslash when the file declares no namespace', function () {
+    // The companion the rewritten test above owes: the case the original test
+    // was reaching for. With no `namespace` declaration, PhpNameResolver
+    // resolves the unqualified entry `App\Nodeflow\Nodes\SendSms::class` to
+    // itself, `App\Nodeflow\Nodes\SendSms` — which IS the target — so this must
+    // report AlreadyPresent and add nothing.
+    $path = writeProviderFixture(<<<'PHP'
+    <?php
+
+    use Illuminate\Support\ServiceProvider;
+    use Nodeflow\Nodeflow;
+
+    class NodeflowServiceProvider extends ServiceProvider
+    {
+        protected array $nodes = [
+            App\Nodeflow\Nodes\SendSms::class,
+        ];
+
+        public function boot(): void
+        {
+            Nodeflow::register($this->nodes);
+        }
+    }
+    PHP);
 
     $outcome = (new NodeRegistrationWriter(new Filesystem))
         ->register($path, 'App\Nodeflow\Nodes\SendSms');
 
     expect($outcome)->toBe(NodeRegistrationOutcome::AlreadyPresent);
     expect(substr_count(file_get_contents($path), 'SendSms::class'))->toBe(1);
+});
+
+it('does not read a mention outside the nodes array as already registered', function () {
+    // Pre-existing shipped defect, found by this plan's external review:
+    // appendTo() ran str_contains over the WHOLE comment-stripped file, so any
+    // mention anywhere read AlreadyPresent and the entry was never added.
+    // Counterfactual: restore the whole-file str_contains and this fails.
+    $path = writeProviderFixture(<<<'PHP'
+    <?php
+
+    namespace App\Providers;
+
+    use Illuminate\Support\ServiceProvider;
+
+    class NodeflowServiceProvider extends ServiceProvider
+    {
+        protected array $nodes = [
+        ];
+
+        public function boot(): void
+        {
+            $documentation = 'see \App\Nodeflow\Nodes\SendSms::class for an example';
+        }
+    }
+    PHP);
+
+    $outcome = (new NodeRegistrationWriter(new Filesystem))
+        ->register($path, 'App\Nodeflow\Nodes\SendSms');
+
+    expect($outcome)->toBe(NodeRegistrationOutcome::Appended);
+    expectParseablePhp($path);
 });
 
 it('does not mistake a longer class name for one already registered', function () {
