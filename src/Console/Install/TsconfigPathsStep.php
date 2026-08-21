@@ -70,7 +70,11 @@ final class TsconfigPathsStep implements InstallStep
 
     private const PACKAGE_SOURCE = 'vendor/atram/laravel-nodeflow/resources/js';
 
-    private const MAPPINGS = ['@nodeflow/editor', '@nodeflow/editor/*'];
+    private const BASE_MAPPING = '@nodeflow/editor';
+
+    private const WILDCARD_MAPPING = '@nodeflow/editor/*';
+
+    private const MAPPINGS = [self::BASE_MAPPING, self::WILDCARD_MAPPING];
 
     public function __construct(private Filesystem $files, private string $basePath) {}
 
@@ -137,6 +141,17 @@ final class TsconfigPathsStep implements InstallStep
             // match against "resources/js" because the substring "js" is itself a
             // prefix of "jsx" — a second false accept from the same line.
             if (array_slice($resolved, 0, count($expected)) !== $expected) {
+                return InstallOutcome::CannotWire;
+            }
+
+            // The wildcard mapping's target must resolve to a wildcard, not
+            // merely the package's base directory: the snippet this step prints
+            // says so itself — "without the wildcard, a subpath import fails the
+            // host's tsc while Vite still builds" — so a target that is missing
+            // its own trailing "*" is exactly the quiet failure this check
+            // exists to catch, not a pass.
+            if ($mapping === self::WILDCARD_MAPPING
+                && array_slice($resolved, count($expected)) !== ['*']) {
                 return InstallOutcome::CannotWire;
             }
         }

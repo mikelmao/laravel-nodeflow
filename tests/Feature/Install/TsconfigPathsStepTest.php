@@ -76,6 +76,48 @@ it('rejects a tsconfig with only the base mapping', function () {
     expect($this->step->snippet())->toContain('@nodeflow/editor/*');
 });
 
+it('rejects a wildcard mapping whose target is missing its own trailing *', function () {
+    // I1. The wildcard mapping's target used to be checked only for the same
+    // prefix as the base mapping, so a target with no "*" at all — precisely
+    // the quiet failure the step's own snippet warns about, where a subpath
+    // import fails tsc while Vite still builds — read as AlreadyPresent.
+    ($this->write)(json_encode(['compilerOptions' => ['paths' => [
+        '@nodeflow/editor' => ['./vendor/atram/laravel-nodeflow/resources/js'],
+        '@nodeflow/editor/*' => ['./vendor/atram/laravel-nodeflow/resources/js'],
+    ]]]));
+
+    expect($this->step->check())->toBe(InstallOutcome::CannotWire);
+});
+
+it('accepts the wildcard mapping when its target does carry the trailing *', function () {
+    ($this->write)(json_encode(['compilerOptions' => ['paths' => [
+        '@nodeflow/editor' => ['./vendor/atram/laravel-nodeflow/resources/js'],
+        '@nodeflow/editor/*' => ['./vendor/atram/laravel-nodeflow/resources/js/*'],
+    ]]]));
+
+    expect($this->step->check())->toBe(InstallOutcome::AlreadyPresent);
+});
+
+it('still accepts both forms the base mapping is known to occur in, wildcard fix notwithstanding', function () {
+    // Regression guard: the new rule is scoped to the WILDCARD mapping only.
+    // The base mapping must keep accepting both real-world forms — the
+    // directory form the docs print, and the accepted host's own
+    // "index.ts" form — neither of which carries or needs a "*".
+    ($this->write)(json_encode(['compilerOptions' => ['paths' => [
+        '@nodeflow/editor' => ['./vendor/atram/laravel-nodeflow/resources/js'],
+        '@nodeflow/editor/*' => ['./vendor/atram/laravel-nodeflow/resources/js/*'],
+    ]]]));
+
+    expect($this->step->check())->toBe(InstallOutcome::AlreadyPresent);
+
+    ($this->write)(json_encode(['compilerOptions' => ['paths' => [
+        '@nodeflow/editor' => ['./vendor/atram/laravel-nodeflow/resources/js/index.ts'],
+        '@nodeflow/editor/*' => ['./vendor/atram/laravel-nodeflow/resources/js/*'],
+    ]]]));
+
+    expect($this->step->check())->toBe(InstallOutcome::AlreadyPresent);
+});
+
 it('rejects a commented-out mapping', function () {
     ($this->write)(<<<'JSONC'
     {
