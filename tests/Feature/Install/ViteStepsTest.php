@@ -58,6 +58,27 @@ it('rejects a commented-out alias', function () {
     expect($this->alias->snippet())->toContain('@nodeflow/editor');
 });
 
+it('rejects an alias pointing at a sibling packages/ directory without the vendor/ prefix', function () {
+    // The E41 discriminator: PACKAGE_SOURCE used to be the short
+    // 'atram/laravel-nodeflow/resources/js' tail, which is also a substring of
+    // this path. A host who aliased the package's un-vendored source tree
+    // (e.g. a workspace symlink under packages/, not vendor/) read as
+    // correctly wired under the old constant. The full 'vendor/...' form does
+    // not match this path, so it must report CannotWire.
+    ($this->write)(<<<'TS'
+    import path from 'node:path'
+    export default defineConfig({
+        resolve: {
+            alias: {
+                '@nodeflow/editor': path.resolve(__dirname, 'packages/atram/laravel-nodeflow/resources/js'),
+            },
+        },
+    })
+    TS);
+
+    expect($this->alias->check())->toBe(InstallOutcome::CannotWire);
+});
+
 it('rejects a commented-out dedupe', function () {
     ($this->write)("/* dedupe: ['react', 'react-dom', '@xyflow/react'], */\nexport default defineConfig({})");
 
