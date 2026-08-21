@@ -87,6 +87,9 @@ export function substituteSentinels(template: string, replacements: Record<strin
 }
 
 export function optionsUrl(template: string, nodeType: string, fieldKey: string): string {
+    // substituteSentinels checks its replacements in object key order, so when
+    // both sentinels are missing it throws naming this one first. A test
+    // pins that order; keep TYPE_PLACEHOLDER first if you ever reorder these keys.
     return substituteSentinels(template, {
         [TYPE_PLACEHOLDER]: nodeType,
         [FIELD_PLACEHOLDER]: fieldKey,

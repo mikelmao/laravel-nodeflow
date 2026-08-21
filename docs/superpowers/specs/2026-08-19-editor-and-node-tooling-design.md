@@ -133,7 +133,7 @@ Six implementation plans, sequenced by dependency. One spec, because the field-c
 | **1 — Node generator** ✅ **delivered** `4cadfb7..e22bd89` | `nodeflow:make-node` with `--test` | §7.2 | — |
 | **2 — Security floor** ✅ **delivered** `aa963ff..62c9e66` | Authorization gates; `FlowVersion` scoping; `nodeflow.tenancy`; the structural invariant for `RunSubject`/`NodeExecution` | §4 | — |
 | **3 — Editor** ✅ **delivered** `c5684e4..a5194ed` (demo acceptance `549fe42`) | `draft_graph`; `Nodeflow::routes()` and controllers; options endpoint; `Field::custom()`; `resources/js`; six field controls; dev `package.json` + Vitest | §5 | 2 |
-| **4 — Run view** | `FlowRun` component and routes; overlay queries; subject drill-down; polling | §6 | 3 |
+| **4 — Run view** ✅ **delivered** `8e79b99..4192275` | `FlowRun` component and routes; overlay queries; subject drill-down; polling | §6 | 3 |
 | **5 — Remaining tooling** | `nodeflow:install`; `make-trigger`; `make-subject-attribute` | §7.1, §7.3 | 3 |
 | **6 — Packaging** | `make-node-package`; `extract-node` | §8 | 1, 5 |
 
@@ -447,7 +447,71 @@ with the newer graph rather than discarding either side.
 
 ---
 
-## 6. The run view (Plan 4)
+## 6. The run view (Plan 4) — ✅ delivered, `8e79b99..4192275`
+
+**This section is now a description of shipped behaviour.** Everything below the "as built" block
+was written before implementation and is kept for its reasoning; where the two disagree, the "as
+built" block is the truth. Full reasoning, including the four findings that corrected this section
+before implementation started, lives in
+`docs/superpowers/specs/2026-08-21-run-view-design.md`, whose decisions continue this document's
+**E** series at **E13**.
+
+> #### As built
+>
+> **`reached` is row existence OR an active subject at the node (E13), not a count.** This corrects
+> this section's own claim below that "a node with no `node_executions` row was never touched": it
+> is false for the package's own terminal node. `NodeRunner::advance()` writes a
+> `node_executions` row per named output plus one for failures; `NodeResult::empty()` — which
+> `core.exit` returns — produces neither, so a node that ran and released nobody writes no row.
+> Without the "or an active subject" half, the node holding the whole audience mid-wait would also
+> read as never touched, which is the state this view exists to show. The residue is honest and
+> documented: once every subject has moved past a node like `core.exit`, it reads as never reached
+> even though it genuinely ran. See `docs/05-execution-model.md`'s known limitations and open issue
+> C-1's neighbour.
+>
+> **The overlay is a plain JSON endpoint, not an Inertia partial reload (E14).** `GET
+> runs/{run}/overlay` is polled through the package's own `send()` helper against a
+> server-authored `urls.overlay`, on a 5-second interval, because nothing under `resources/js`
+> imports Inertia and E4's `urls` prop exists precisely so components consume server-authored
+> endpoints without knowing the page framework. `GET runs/{run}` embeds the identical envelope as
+> its initial `overlay` prop, so first paint costs no extra request.
+>
+> **The drill-down answers "who is here now" (E15).**
+> `runs/{run}/nodes/{node}/subjects` lists active subjects at the node, cursor-paginated on
+> `config('nodeflow.limits.subject_page')` (default 50). Per-node failures are countable, from the
+> overlay's execution rows, but not listable: every terminal transition nulls `current_node_id`,
+> and there is no per-subject visit history anywhere. The `nodeflow_run_subjects` index gained `id`
+> as a fourth column so the drill-down's ordered read is a range scan rather than a filesort on
+> Postgres and SQLite.
+>
+> **Run decoration reaches `NodeCard` as an additive data prop (E16).** `nodeDecorations:
+> Record<string, NodeDecoration>` travels on the canvas context, keyed by node id rather than node
+> type — the overlay is keyed by id, and a type-keyed renderer map would leave a pinned node whose
+> type is no longer registered without a badge, which is the node most in need of one. It also
+> keeps run vocabulary out of `canvas/` and lets Vitest assert data and DOM independently. A host
+> using `nodeRenderers` gets this decoration for free; there is nothing to wire.
+>
+> **`terminal` is computed server-side from `['completed']` alone (E17)**, and travels in both the
+> initial prop and every polled response. C-1's caveat then lives in exactly one place instead of
+> being hardcoded in the client: a run that dies today leaves the client polling until the page
+> closes, and the day a durable failure state exists the client needs no change.
+>
+> **G-1 was resolved before this shipped, not carried into it (E18).** The request-context rule
+> became "request-context code never names these tables", matched over comment-stripped source
+> (`token_get_all()`, dropping `T_COMMENT`/`T_DOC_COMMENT`). One bright line catches the aliased,
+> joined, `from()` and raw-SQL forms the old builder-method list missed. `src/Models/RunSubject.php`
+> and `src/Models/NodeExecution.php` are path-allowlisted for their own legitimate `protected
+> $table` declarations; a scope method added to either model is still caught at its call site by
+> the `Model::` rule.
+>
+> Failure policy for polling: halt on 401/403/404/419 — the run is gone or the gate was revoked,
+> and retrying forever is noise — and keep polling on 5xx and network failures while surfacing the
+> last error, rather than freezing a stale overlay silently.
+>
+> Acceptance: **356 package Pest tests** (5820 assertions) and **156 package Vitest tests** — the
+> plan predicted 151; six additional tests were required during execution, each covering a guard
+> that otherwise had none — plus a silent package `tsc`. Browser acceptance against the real demo
+> is Task 13's work; see `docs/superpowers/open-issues.md` for its placeholder.
 
 `GET runs/{run}` renders a page carrying the run, **the graph from the run's pinned
 `flow_version`** — never `draft_graph` — and an overlay snapshot. `GET runs/{run}/overlay` returns

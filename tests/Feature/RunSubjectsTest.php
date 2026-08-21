@@ -125,11 +125,17 @@ it('four-oh-fours a node id that is not in the pinned graph', function () {
 /**
  * Open issue G-3, as a test.
  *
- * 'other' is a perfectly real node id — in a different run's graph. Accepting
- * it here would be treating a raw key as equivalent to authorization: the
- * caller is entitled to *this* run, and nothing about that entitles them to a
- * node from another. Counterfactual: validate {node} against any graph, or not
- * at all, and this returns 200.
+ * 'other' is a perfectly real node id — in a different run's graph. The graph
+ * check this test defends is what turns "unknown to any graph" into 404 for
+ * an id that a permissive implementation would otherwise accept as valid.
+ * Without it, the request would still resolve 200 with an *empty* list rather
+ * than the other run's subjects — RunSubjects::atNode() is always scoped
+ * through the route-bound $run, so 'other' simply matches nothing in this
+ * run's rows. That is still the wrong answer: an operator reading an empty
+ * list cannot tell "this node doesn't exist" from "nobody is here right now",
+ * and accepting a raw key as equivalent to authorization is exactly what G-3
+ * warns about. Counterfactual: validate {node} against any graph, or not at
+ * all, and this returns 200 with an empty list instead of 404.
  */
 it('four-oh-fours a node id that is only valid in another runs graph', function () {
     Gate::define('nodeflow.viewAny', fn ($user, $subject = null) => true);

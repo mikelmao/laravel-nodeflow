@@ -248,9 +248,98 @@ Publish can return two different **422** bodies:
   The editor labels it as a client bug because its own graph serializer should not
   send malformed wire data; it is not presented as an authoring mistake.
 
-## Not here yet
+## Run view
 
-The run-inspection component, `FlowRun`, lands in Plan 4. The
-`nodeflow:install` command lands in Plan 5 and will verify all five host-wiring
-requirements. Until then these five steps are manual, and **three of the five fail
-quietly**.
+`FlowRun` renders a run's frozen graph with live per-node counts painted onto
+it. It ships as a second export alongside `FlowEditor`, reuses the same
+`Canvas`/`NodeCard`/`layout` primitives, and imports nothing from `editor/` —
+there is no autosave, no dirty state and no publish path here, because a run
+already executed and nothing about looking at it should be able to change it.
+
+Wire it with a second thin page, the same shape as the editor's:
+
+```tsx
+// resources/js/pages/nodeflow/run.tsx
+import { FlowRun } from '@nodeflow/editor'
+import type { FlowRunProps } from '@nodeflow/editor'
+
+export default function Page(props: FlowRunProps) {
+    return <FlowRun {...props} />
+}
+```
+
+`GET runs/{run}` renders the `nodeflow/run` Inertia component with that props
+shape:
+
+```ts
+type FlowRunProps = {
+    run: RunSummary
+    graph: Graph
+    palette: NodeTypePayload[]
+    overlay: OverlaySnapshot
+    urls: RunUrls
+    nodeRenderers?: NodeRendererMap
+    pollIntervalMs?: number
+    className?: string
+}
+```
+
+`graph` is `$run->flowVersion->graph` — **the run's pinned version, never
+`draft_graph` and never `flow->currentVersion`.** A run executed a frozen
+graph; the flow's draft or current version may have diverged from it since,
+and painting live counts onto a graph the run never executed is exactly the
+misreading this component exists to prevent. There is no way to ask `FlowRun`
+for the draft instead — the prop is the only graph it can render.
+
+### The overlay
+
+`overlay` (and every polled response at `urls.overlay`) carries one entry per
+node in that pinned graph:
+
+```ts
+type NodeOverlay = {
+    reached: boolean
+    byOutput: Record<string, number>
+    waiting: number
+    failed: number
+    error: string | null
+}
+```
+
+A node reads as **reached** when the run recorded an execution against it, or
+when subjects are sitting on it right now. A node that ran, released nobody
+and is now empty — `core.exit` is the common case — reads as never reached,
+because the engine records no row for it. The counts are right; only that
+node's dimming is misleading. See
+[Execution model](05-execution-model.md#known-limitations) for why, and open
+issue C-1 for the related caveat on when polling stops.
+
+### Polling
+
+`FlowRun` polls `urls.overlay` on a 5-second interval and stops once the
+server reports the run as **terminal**. `terminal` travels in both the initial
+prop and every polled response, computed server-side rather than hardcoded on
+the client — today that means the run's status is `completed`, and nothing
+else, so a run that dies leaves the client polling until the page is closed.
+
+Failure policy: a 401, 403, 404 or 419 response halts polling — the run is
+gone or the viewer's access was revoked, and retrying forever would just be
+noise. A 5xx response or a network failure keeps polling while surfacing the
+last error, rather than silently freezing a stale overlay.
+
+### The canvas seam
+
+`nodeRenderers` behaves exactly as it does for `FlowEditor` — a host does not
+need it to use `FlowRun` at all. The one thing worth knowing in advance:
+run decoration (dimming and badges) reaches `NodeCard` through a separate,
+additive `nodeDecorations` prop on the canvas, keyed by node id rather than
+node type. A host overriding a node's appearance keeps that decoration for
+free; there is nothing to opt into or wire up.
+
+### What's still manual
+
+The five host-wiring requirements above are unchanged by any of this —
+`FlowRun` shares the same Vite alias, tsconfig path, Tailwind `@source`,
+`@xyflow/react` dependency and `dedupe` setting as `FlowEditor`, and adds no
+sixth. The `nodeflow:install` command that verifies all five is still Plan 5
+work.

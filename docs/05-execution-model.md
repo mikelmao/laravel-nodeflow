@@ -140,7 +140,21 @@ the canonical journey on a real worker before trusting it in production.**
 `runs.status` is only ever written as `running` and then `completed`. An activity exception leaves a run
 `running` indefinitely, and a run that exhausts the step guard is recorded as `completed`. There is no
 `failed` and no recoverable `blocked` state yet, so a stuck run stays visible to the health check and
-unprunable.
+unprunable. The run view's overlay polling treats "terminal" as `completed` alone for the same reason,
+so a dead run leaves a browser tab polling until it is closed — see
+[Editor client](08-editor-client.md#polling).
+
+### A node that released nobody writes no execution row
+
+`NodeRunner::advance()` writes a `nodeflow_node_executions` row per named output the node released
+subjects on, plus one for failures. `NodeResult::empty()` produces neither, so a node that ran and
+released nobody — `core.exit` is the common case, since it is a terminal node by definition — writes no
+row at all. The run view's overlay derives "reached" from row existence (or an active subject currently
+sitting on the node), so once every subject has moved past `core.exit` it shows as never reached, even
+though the run genuinely executed it. The per-output counts elsewhere on the graph are unaffected; only
+that one node's dimming misleads. Closing this means writing a row on the durable execution path, which
+the run view deliberately does not touch — see open issue C-1's neighbour in
+`docs/superpowers/open-issues.md`.
 
 ### Three models carry no tenant scope
 
