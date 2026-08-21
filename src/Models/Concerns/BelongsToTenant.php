@@ -60,6 +60,20 @@ trait BelongsToTenant
         // Suspended by TenancyGuardSuspension for the same reason creating() is
         // — the package's own system-authored writes read their tenant_id from
         // a trusted row, not from request input.
+        //
+        // KNOWN LIMIT, and the reason it is stated here rather than only in the
+        // docs: this is an `updating` model hook, so it sees only writes that go
+        // through a model instance. Flow::withoutTenancy()->where(...)->update([...])
+        // fires no model events and bypasses this guard completely. That is
+        // inherent to the approach and is not a bug to be fixed here — but it is a
+        // trap, because this codebase already uses query-builder updates for
+        // status writes (CompleteRunActivity), so it is a pattern a reader may
+        // copy without noticing what it skips.
+        //
+        // tests/Feature/TenantIdImmutabilityTest.php pins that bypass with a test
+        // that asserts the query-builder write SUCCEEDS. If you change the
+        // mechanism so it is caught, that test fails on purpose: update this
+        // comment and docs/02-integration.md in the same commit.
         static::updating(function ($model) {
             if (TenancyGuardSuspension::isActive() || ! $model->isDirty('tenant_id')) {
                 return;
