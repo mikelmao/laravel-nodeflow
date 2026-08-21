@@ -188,6 +188,54 @@ it('produces an audience class the registry accepts and the runtime can execute'
     expect($result->outputs())->toBe(['sent' => ['7', '8']]);
 });
 
+it('produces a both-cardinality class the registry accepts and both paths execute', function () {
+    // F-2. Nothing but `php -l` watched node.both.stub, and `php -l` resolves no
+    // symbols: renaming ->help( to ->helpText( in that file alone left every test
+    // green while the stub fataled in every host that generated from it.
+    //
+    // A fourth distinct class name is mandatory. SendSms and SendBlast are already
+    // required into this process by the tests above, and `require`ing two
+    // generated classes that share an FQCN fatals with "class already declared".
+    $this->artisan('nodeflow:make-node', [
+        'name' => 'SendDigest',
+        '--type' => 'yaya.send_digest',
+        '--cardinality' => 'both',
+        '--outputs' => 'sent, failed',
+    ])->assertExitCode(0);
+
+    require $this->root.'/app/Nodeflow/Nodes/SendDigest.php';
+
+    app(NodeRegistry::class)->register('App\Nodeflow\Nodes\SendDigest');
+
+    $node = app(NodeRegistry::class)->resolve('yaya.send_digest');
+
+    expect($node)->toBeInstanceOf(HandlesSubject::class)
+        ->toBeInstanceOf(HandlesAudience::class);
+
+    // definition() executes the whole NodeDefinition::make()->group()
+    // ->description()->outputs()->fields([Field::text()->label()->help()
+    // ->required()]) chain as a side effect of being called at all. This is the
+    // assertion that fails on an API rename confined to this stub.
+    expect($node->definition()->outputNames())->toBe(['sent', 'failed']);
+    expect($node->validate([]))->toHaveKey('example');
+
+    // Both bodies, because a both-cardinality node whose two paths disagree is
+    // invisible until scale changes which one the runtime picks. Asserting the
+    // routing rather than merely that nothing threw: a body returning
+    // NodeResult::empty() would satisfy the weaker check.
+    $subject = $node->forSubject(new SubjectContext(
+        new Run(['is_test' => true]), 'n1', [], '42', null,
+    ));
+
+    expect($subject->outputs())->toBe(['sent' => ['42']]);
+
+    $audience = $node->forAudience(new AudienceContext(
+        new Run(['is_test' => true]), 'n1', [], 'user', ['7', '8'],
+    ));
+
+    expect($audience->outputs())->toBe(['sent' => ['7', '8']]);
+});
+
 it('generates an audience node that does not also declare forSubject', function () {
     // The counterfactual: make getStub() ignore --cardinality and this fails on
     // the forSubject assertion, because the subject stub would be rendered.
@@ -653,4 +701,51 @@ it('does not clobber a hand-edited test file on regeneration without --force', f
     // file-exists check passes even with the guard deleted, since writeTest()
     // would just re-render the same path with fresh (non-hand-edited) content.
     expect(file_get_contents($testPath))->toBe($handEdited);
+});
+
+it('renders a group containing a placeholder literally instead of re-substituting it', function () {
+    // F-1. The counterfactual: restore str_replace() in buildClass() and this
+    // fails, because the sequential substitution turns --group='{{ outputs }}'
+    // into ->group(''default'') — a parse error the command reports as success.
+    $this->artisan('nodeflow:make-node', [
+        'name' => 'SendPlaceholder',
+        '--type' => 'yaya.send_placeholder',
+        '--group' => '{{ outputs }}',
+    ])->assertExitCode(0);
+
+    $path = $this->root.'/app/Nodeflow/Nodes/SendPlaceholder.php';
+
+    expect(file_get_contents($path))->toContain("->group('{{ outputs }}')");
+
+    // php -l is the only thing that catches an unparseable render, and it is
+    // what reported success on the broken version.
+    expectParseablePhp($path);
+});
+
+it('validates each invocation independently, even when the command instance is reused', function () {
+    // Symfony's Application resolves one command object per command name and
+    // keeps it for the process's lifetime, so a second artisan() call of
+    // nodeflow:make-node reuses this exact same MakeNodeCommand instance
+    // rather than a fresh one. Counterfactual: without resetting
+    // $resolvedType at the top of handle(), nodeType() would short-circuit
+    // on its memoized-not-null guard and return the FIRST call's already-
+    // validated type, silently rendering the first node's type into the
+    // second file while still reporting success — and published flow
+    // versions resolve through that string forever, so the wrong value is
+    // permanent, not cosmetic.
+    $this->artisan('nodeflow:make-node', [
+        'name' => 'FirstLeakProbeNode',
+        '--type' => 'yaya.first_leak_probe',
+    ])->assertExitCode(0);
+
+    $this->artisan('nodeflow:make-node', [
+        'name' => 'SecondLeakProbeNode',
+        '--type' => 'yaya.second_leak_probe',
+    ])->assertExitCode(0);
+
+    $secondFile = file_get_contents($this->root.'/app/Nodeflow/Nodes/SecondLeakProbeNode.php');
+
+    expect($secondFile)
+        ->toContain("return 'yaya.second_leak_probe';")
+        ->not->toContain("return 'yaya.first_leak_probe';");
 });

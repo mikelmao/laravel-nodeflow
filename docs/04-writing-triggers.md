@@ -4,6 +4,25 @@ A trigger turns one of your existing Laravel events into something a customer ca
 You do not dispatch anything new; you declare that an event your application already fires is an
 authoring surface.
 
+## Scaffold one
+
+```bash
+php artisan nodeflow:make-trigger FloodAlertFires \
+    --event='App\Events\FloodAlertDispatched' \
+    --type=rada.flood_alert
+```
+
+That writes `app/Nodeflow/Triggers/FloodAlertFires.php` with the four required
+methods and `idempotencyKey()` / `matchesConfig()` commented out, and appends the
+class to your provider's `$triggers` array.
+
+`--event` is the part worth care. Registering a trigger calls `Event::listen()`
+for that class, at the moment of registration — so naming the wrong class raises
+no error at all: the listener attaches to an event that never fires and the
+trigger is simply silent. The command warns when the class cannot be found, but it
+still generates the file, because writing the trigger before the event is a normal
+order of work.
+
 ## A complete trigger
 
 ```php

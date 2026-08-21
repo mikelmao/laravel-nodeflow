@@ -21,6 +21,23 @@ class MakeNodeCommand extends GeneratorCommand
 
     public function handle(): int
     {
+        // Symfony's Application resolves one command object per name and keeps
+        // it for the process's lifetime, so a second Artisan::call() of this
+        // same command (from a host script, a queued job, or a test's own
+        // artisan() call run twice) reuses this exact instance rather than a
+        // fresh one. Without this reset, $resolvedType from a first, unrelated
+        // invocation would still be set on the second call, and nodeType()
+        // would return the stale value straight from cache — skipping
+        // validation entirely and rendering the first node's type into the
+        // second file while still reporting success. Published flow versions
+        // resolve through that string forever, so a leaked type here is a
+        // permanent defect, not a cosmetic one. Resetting here keeps the
+        // memoization useful within one handle() (nodeType() is called
+        // several times per run: once here, again inside buildClass(), again
+        // inside writeTest() when --test is passed) without letting it survive
+        // across separate runs.
+        $this->resolvedType = null;
+
         // All three are resolved before parent::handle() writes anything, so a
         // usage error never leaves a half-generated file behind.
         try {
@@ -73,13 +90,18 @@ class MakeNodeCommand extends GeneratorCommand
                 'Already registered in app/Providers/NodeflowServiceProvider.php.'
             ),
             NodeRegistrationOutcome::ProviderMissing => $this->manualRegistration($nodeClass,
-                'No app/Providers/NodeflowServiceProvider.php found.'
+                'No app/Providers/NodeflowServiceProvider.php found. Run `php artisan nodeflow:install`.'
             ),
             NodeRegistrationOutcome::AnchorMissing => $this->manualRegistration($nodeClass,
                 'app/Providers/NodeflowServiceProvider.php has no `'.NodeRegistrationWriter::ANCHOR.'` line.'
             ),
             NodeRegistrationOutcome::AnchorAmbiguous => $this->manualRegistration($nodeClass,
                 'app/Providers/NodeflowServiceProvider.php has more than one `'.NodeRegistrationWriter::ANCHOR.'` line.'
+            ),
+            NodeRegistrationOutcome::WriteFailed => $this->manualRegistration($nodeClass,
+                'The automatic edit to app/Providers/NodeflowServiceProvider.php did not '
+                .'produce valid PHP — the `'.NodeRegistrationWriter::ANCHOR.'` line may be '
+                .'commented out.'
             ),
         };
     }
@@ -139,24 +161,17 @@ class MakeNodeCommand extends GeneratorCommand
             ],
         };
 
-        $this->files->put($path, str_replace(
-            [
-                '{{ namespacedClass }}',
-                '{{ cardinalityImports }}',
-                '{{ cardinalityExpectations }}',
-                '{{ class }}',
-                '{{ type }}',
-                '{{ outputs }}',
-            ],
-            [
-                $nodeClass,
-                $imports,
-                $expectations,
-                $class,
-                $this->nodeType(),
-                implode(', ', array_map(fn (string $o) => "'{$o}'", $outputs)),
-            ],
+        // strtr for the same reason as buildClass(): see F-1 in paletteGroup().
+        $this->files->put($path, strtr(
             $this->files->get($this->resolveStubPath('/stubs/node.test.stub')),
+            [
+                '{{ namespacedClass }}' => $nodeClass,
+                '{{ cardinalityImports }}' => $imports,
+                '{{ cardinalityExpectations }}' => $expectations,
+                '{{ class }}' => $class,
+                '{{ type }}' => $this->nodeType(),
+                '{{ outputs }}' => implode(', ', array_map(fn (string $o) => "'{$o}'", $outputs)),
+            ],
         ));
 
         $this->components->info("Test [{$path}] created successfully.");
@@ -217,17 +232,16 @@ class MakeNodeCommand extends GeneratorCommand
 
         $outputs = $this->outputNames();
 
-        return str_replace(
-            ['{{ type }}', '{{ label }}', '{{ group }}', '{{ outputs }}', '{{ firstOutput }}'],
-            [
-                $this->nodeType(),
-                Str::headline(class_basename($this->getNameInput())),
-                $this->paletteGroup(),
-                implode(', ', array_map(fn (string $o) => "'{$o}'", $outputs)),
-                $outputs[0],
-            ],
-            $stub,
-        );
+        // strtr, not str_replace: str_replace with array arguments is sequential
+        // and re-substitutes inside its own output, so a --group value containing
+        // a later placeholder rendered an unparseable file and exited 0 (F-1).
+        return strtr($stub, [
+            '{{ type }}' => $this->nodeType(),
+            '{{ label }}' => Str::headline(class_basename($this->getNameInput())),
+            '{{ group }}' => $this->paletteGroup(),
+            '{{ outputs }}' => implode(', ', array_map(fn (string $o) => "'{$o}'", $outputs)),
+            '{{ firstOutput }}' => $outputs[0],
+        ]);
     }
 
     /** Reserved for the package's own nodes: core.wait, core.condition, and so on. */
@@ -255,8 +269,17 @@ class MakeNodeCommand extends GeneratorCommand
 
         // Guarded on isInteractive() rather than on the --no-interaction option:
         // a Testbench PendingCommand does not necessarily pass that flag, and an
-        // unguarded prompt in a test suite hangs rather than fails.
-        if ($type === '' && $this->input->isInteractive()) {
+        // unguarded prompt in a test suite hangs rather than fails. Also guarded
+        // on ! runningUnitTests(): Laravel's own ConfiguresPrompts unconditionally
+        // enables the Prompts fallback under tests (Prompt::fallbackWhen(...  ||
+        // $this->laravel->runningUnitTests())), and that fallback calls the
+        // console output's askQuestion() — which Testbench's mocked output has no
+        // expectation for unless a test opts in with expectsQuestion(). Without
+        // this second check, a bare artisan() call reaching this branch crashes
+        // ugly instead of falling through to the derived-type warning below.
+        // runningUnitTests() is true only when APP_ENV === 'testing', so this
+        // cannot suppress the prompt for a real interactive user.
+        if ($type === '' && $this->input->isInteractive() && ! $this->laravel->runningUnitTests()) {
             $type = trim(text(
                 label: 'Stable type identifier for this node',
                 placeholder: 'yaya.send_message',
@@ -383,8 +406,16 @@ class MakeNodeCommand extends GeneratorCommand
     /**
      * Escaped rather than rejected, unlike the type and the output names: the group
      * is a human-facing palette label, and "Client's Tools" is a fair thing to call
-     * one. It is rendered inside a single-quoted PHP string, where a backslash and
-     * a single quote are the only two characters that can end it early.
+     * one. It is rendered inside a single-quoted PHP string, so a backslash and a
+     * single quote are escaped here.
+     *
+     * Escaping those two is NOT sufficient on its own, and a previous version of
+     * this comment claimed it was. A value containing another stub placeholder —
+     * `--group='{{ outputs }}'` — needed no quote to break the render, because the
+     * renderer substituted this value and then kept substituting *inside it*.
+     * buildClass() and writeTest() use strtr() rather than str_replace() for that
+     * reason: strtr never re-scans what it has already written. Do not change
+     * either back.
      */
     protected function paletteGroup(): string
     {
