@@ -21,6 +21,14 @@ namespace Nodeflow\Console;
  * A basename-derived type survives a namespace move byte-identical, so the
  * empirical gate passes while the type is still derived from the class name and
  * the author's next rename orphans every published version.
+ *
+ * WHY EVERYTHING IS SCOPED TO ONE CLASS'S OWN BODY. E36 requires the constant
+ * to be found "in the same class body" — a flat, whole-file token scan cannot
+ * enforce that. A sibling class declaring a constant of the same name, or a
+ * nested anonymous class declaring its own type(), must not be visible to this
+ * lookup; a bodiless interface signature that happens to precede the real class
+ * must not stop it either. classBody() narrows every subsequent scan to the one
+ * named class's own braces before methodBody() or sameClassConstant() ever run.
  */
 final class NodeTypeLiteral
 {
@@ -28,7 +36,16 @@ final class NodeTypeLiteral
     {
         $tokens = self::significantTokens($source);
 
-        $body = self::methodBody($tokens, 'type');
+        $classBody = self::classBody($tokens, $shortClassName);
+
+        if ($classBody === null) {
+            return NodeTypeResult::refused(
+                "[{$shortClassName}] was not found as a class declaration in the given source, so "
+                .'extraction cannot inspect its type() method.'
+            );
+        }
+
+        $body = self::methodBody($classBody, 'type');
 
         if ($body === null) {
             return NodeTypeResult::refused(
@@ -53,7 +70,7 @@ final class NodeTypeLiteral
             && $body[2][0] === T_DOUBLE_COLON
             && $body[3][0] === T_STRING
             && $body[4][1] === ';') {
-            return self::sameClassConstant($tokens, $body[3][1], $shortClassName);
+            return self::sameClassConstant($classBody, $body[3][1], $shortClassName);
         }
 
         $literals = array_filter($body, fn (array $t) => $t[0] === T_CONSTANT_ENCAPSED_STRING);
@@ -107,26 +124,29 @@ final class NodeTypeLiteral
     }
 
     /**
-     * The token list strictly inside the named method's braces, or null.
+     * The token list strictly inside the named class's own braces, or null.
      *
-     * Brace-matched rather than searched for a closing pattern: an unbalanced
-     * scan is how an edit lands in the wrong block, and this class refuses
-     * rather than guesses.
+     * Matched on `class <ShortClassName>` specifically: an anonymous class
+     * (`new class ...`) never carries a name token immediately after `class`,
+     * so it cannot be mistaken for this one. A sibling class of a different
+     * name — however many constants or methods it declares — is simply never
+     * inside the returned span, which is what lets methodBody() and
+     * sameClassConstant() assume every token they see belongs to this class
+     * alone.
      *
      * @param  list<array{0: int, 1: string}>  $tokens
      * @return list<array{0: int, 1: string}>|null
      */
-    private static function methodBody(array $tokens, string $method): ?array
+    private static function classBody(array $tokens, string $shortClassName): ?array
     {
         $count = count($tokens);
 
         for ($i = 0; $i < $count; $i++) {
-            if ($tokens[$i][0] !== T_FUNCTION) {
+            if ($tokens[$i][0] !== T_CLASS) {
                 continue;
             }
 
-            if (($tokens[$i + 1][0] ?? null) !== T_STRING
-                || strtolower($tokens[$i + 1][1]) !== $method) {
+            if (($tokens[$i + 1][0] ?? null) !== T_STRING || $tokens[$i + 1][1] !== $shortClassName) {
                 continue;
             }
 
@@ -137,11 +157,6 @@ final class NodeTypeLiteral
                     $open = $j;
 
                     break;
-                }
-
-                // A ';' before any '{' means an abstract or interface method.
-                if ($tokens[$j][1] === ';') {
-                    return null;
                 }
             }
 
@@ -164,36 +179,153 @@ final class NodeTypeLiteral
                     }
                 }
             }
+
+            return null;
         }
 
         return null;
     }
 
     /**
-     * @param  list<array{0: int, 1: string}>  $tokens
+     * The token list strictly inside the named method's braces, or null.
+     *
+     * Brace-matched rather than searched for a closing pattern: an unbalanced
+     * scan is how an edit lands in the wrong block, and this class refuses
+     * rather than guesses.
+     *
+     * Only a T_FUNCTION token seen at depth 0 of the given class body counts as
+     * one of the class's own methods — one that sits inside a nested anonymous
+     * class (itself only reachable from inside another method's body, since
+     * anonymous classes are expressions) is at depth 1 or deeper and is not a
+     * candidate. A method of a different name is skipped by letting the same
+     * depth counter walk through its body like any other tokens, rather than
+     * jumping over it, so nested braces of any depth are handled uniformly.
+     *
+     * A same-named method that is bodiless (an interface signature, or an
+     * abstract declaration) does not stop the search — it is simply not a
+     * match, and PHP does not allow a class to declare the same method name
+     * twice, so scanning continues rather than returning null outright.
+     *
+     * @param  list<array{0: int, 1: string}>  $classBody
+     * @return list<array{0: int, 1: string}>|null
      */
-    private static function sameClassConstant(array $tokens, string $name, string $shortClassName): NodeTypeResult
+    private static function methodBody(array $classBody, string $method): ?array
     {
-        $count = count($tokens);
+        $count = count($classBody);
+        $depth = 0;
 
-        for ($i = 0; $i < $count - 3; $i++) {
-            if ($tokens[$i][0] !== T_CONST) {
+        for ($i = 0; $i < $count; $i++) {
+            if ($classBody[$i][0] === T_FUNCTION
+                && $depth === 0
+                && ($classBody[$i + 1][0] ?? null) === T_STRING
+                && strtolower($classBody[$i + 1][1]) === $method) {
+                $open = null;
+
+                for ($j = $i + 2; $j < $count; $j++) {
+                    if ($classBody[$j][1] === '{') {
+                        $open = $j;
+
+                        break;
+                    }
+
+                    // A ';' before any '{' means an abstract or interface
+                    // signature: no body to extract, and no second same-named
+                    // method can exist in this class, but keep scanning rather
+                    // than guessing that this is the only "type" in the file.
+                    if ($classBody[$j][1] === ';') {
+                        break;
+                    }
+                }
+
+                if ($open !== null) {
+                    $innerDepth = 0;
+
+                    for ($j = $open; $j < $count; $j++) {
+                        if ($classBody[$j][1] === '{') {
+                            $innerDepth++;
+                        }
+
+                        if ($classBody[$j][1] === '}') {
+                            $innerDepth--;
+
+                            if ($innerDepth === 0) {
+                                return array_values(array_slice($classBody, $open + 1, $j - $open - 1));
+                            }
+                        }
+                    }
+
+                    return null;
+                }
+
                 continue;
             }
 
-            if (($tokens[$i + 1][0] ?? null) !== T_STRING || $tokens[$i + 1][1] !== $name) {
-                continue;
+            if ($classBody[$i][1] === '{') {
+                $depth++;
             }
 
-            if ($tokens[$i + 2][1] !== '=') {
-                continue;
+            if ($classBody[$i][1] === '}') {
+                $depth--;
+            }
+        }
+
+        return null;
+    }
+
+    /**
+     * Resolves self::CONST / static::CONST to a proven literal, or refuses.
+     *
+     * Scoped to $classBody (the named class's own tokens) and, within that, to
+     * depth 0 — the class's own direct members — so a same-named constant on a
+     * sibling class, or one nested inside an anonymous class expression, cannot
+     * be attributed to this class.
+     *
+     * The token immediately after the literal must be ';': the same
+     * single-token rule Shape A applies to a `return` statement. Without it,
+     * `const TYPE = 'demo.' . static::class;` would be accepted by checking
+     * only the token right after '=' — exactly the concatenation shape this
+     * guard exists to refuse, just one level of indirection away from the
+     * return statement.
+     *
+     * @param  list<array{0: int, 1: string}>  $classBody
+     */
+    private static function sameClassConstant(array $classBody, string $name, string $shortClassName): NodeTypeResult
+    {
+        $count = count($classBody);
+        $depth = 0;
+
+        for ($i = 0; $i < $count; $i++) {
+            if ($classBody[$i][0] === T_CONST && $depth === 0) {
+                if (($classBody[$i + 1][0] ?? null) === T_STRING && $classBody[$i + 1][1] === $name) {
+                    if (($classBody[$i + 2][1] ?? null) !== '=') {
+                        break;
+                    }
+
+                    if (($classBody[$i + 3][0] ?? null) !== T_CONSTANT_ENCAPSED_STRING) {
+                        break;
+                    }
+
+                    if (($classBody[$i + 4][1] ?? null) !== ';') {
+                        return NodeTypeResult::refused(
+                            "the constant {$name} on {$shortClassName} is not a single string literal: "
+                            .'its initialiser concatenates a literal with something else (for example '
+                            .'static::class). Even a concatenation of two literal strings is refused, '
+                            .'because accepting it would also accept a value built from static::class. '
+                            .'Inline the finished type as a single literal.'
+                        );
+                    }
+
+                    return self::unquote($classBody[$i + 3][1]);
+                }
             }
 
-            if (($tokens[$i + 3][0] ?? null) !== T_CONSTANT_ENCAPSED_STRING) {
-                break;
+            if ($classBody[$i][1] === '{') {
+                $depth++;
             }
 
-            return self::unquote($tokens[$i + 3][1]);
+            if ($classBody[$i][1] === '}') {
+                $depth--;
+            }
         }
 
         return NodeTypeResult::refused(
