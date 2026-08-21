@@ -188,6 +188,54 @@ it('produces an audience class the registry accepts and the runtime can execute'
     expect($result->outputs())->toBe(['sent' => ['7', '8']]);
 });
 
+it('produces a both-cardinality class the registry accepts and both paths execute', function () {
+    // F-2. Nothing but `php -l` watched node.both.stub, and `php -l` resolves no
+    // symbols: renaming ->help( to ->helpText( in that file alone left every test
+    // green while the stub fataled in every host that generated from it.
+    //
+    // A fourth distinct class name is mandatory. SendSms and SendBlast are already
+    // required into this process by the tests above, and `require`ing two
+    // generated classes that share an FQCN fatals with "class already declared".
+    $this->artisan('nodeflow:make-node', [
+        'name' => 'SendDigest',
+        '--type' => 'yaya.send_digest',
+        '--cardinality' => 'both',
+        '--outputs' => 'sent, failed',
+    ])->assertExitCode(0);
+
+    require $this->root.'/app/Nodeflow/Nodes/SendDigest.php';
+
+    app(NodeRegistry::class)->register('App\Nodeflow\Nodes\SendDigest');
+
+    $node = app(NodeRegistry::class)->resolve('yaya.send_digest');
+
+    expect($node)->toBeInstanceOf(HandlesSubject::class)
+        ->toBeInstanceOf(HandlesAudience::class);
+
+    // definition() executes the whole NodeDefinition::make()->group()
+    // ->description()->outputs()->fields([Field::text()->label()->help()
+    // ->required()]) chain as a side effect of being called at all. This is the
+    // assertion that fails on an API rename confined to this stub.
+    expect($node->definition()->outputNames())->toBe(['sent', 'failed']);
+    expect($node->validate([]))->toHaveKey('example');
+
+    // Both bodies, because a both-cardinality node whose two paths disagree is
+    // invisible until scale changes which one the runtime picks. Asserting the
+    // routing rather than merely that nothing threw: a body returning
+    // NodeResult::empty() would satisfy the weaker check.
+    $subject = $node->forSubject(new SubjectContext(
+        new Run(['is_test' => true]), 'n1', [], '42', null,
+    ));
+
+    expect($subject->outputs())->toBe(['sent' => ['42']]);
+
+    $audience = $node->forAudience(new AudienceContext(
+        new Run(['is_test' => true]), 'n1', [], 'user', ['7', '8'],
+    ));
+
+    expect($audience->outputs())->toBe(['sent' => ['7', '8']]);
+});
+
 it('generates an audience node that does not also declare forSubject', function () {
     // The counterfactual: make getStub() ignore --cardinality and this fails on
     // the forSubject assertion, because the subject stub would be rendered.
