@@ -67,8 +67,13 @@ class RunViewController extends Controller
                 // is fine here and deliberately unlike CheckNodeTypesResolver:
                 // that runs in a console context with no ambient tenant, where
                 // the scope would throw. A request has a resolved tenant, so
-                // the scope resolves — and it is a welcome second check that
-                // this version's flow really is in this tenant.
+                // the scope resolves — but this is not a second authorization
+                // check: G-3's invariant (flow_version_id points inside its
+                // own tenant) is what makes this row belong to $run's tenant
+                // in the first place, and nothing here re-verifies it. If that
+                // invariant were ever violated, the scope would simply find no
+                // row and $version->flow->id would throw a 500 (a missing
+                // relation), not return a 404 or any other diagnostic.
                 'flow' => ['id' => $version->flow->id, 'name' => $version->flow->name],
             ],
             'graph' => $version->graph,
