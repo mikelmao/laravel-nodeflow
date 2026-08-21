@@ -13,7 +13,6 @@ beforeEach(function () {
         new Filesystem,
         $this->root,
         'App\\',
-        new NodeRegistrationWriter(new Filesystem),
     );
 
     $this->path = $this->root.'/'.ProviderStep::PATH;

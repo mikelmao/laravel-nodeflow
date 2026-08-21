@@ -21,7 +21,6 @@ final class ProviderStep implements InstallStep
         private Filesystem $files,
         private string $basePath,
         private string $rootNamespace,
-        private NodeRegistrationWriter $writer,
     ) {}
 
     public function describe(): string
