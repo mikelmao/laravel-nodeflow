@@ -110,8 +110,15 @@ it('resolves a leading-backslash import to the same target as one without', func
 
 it('lets the later of two case-differing aliases win, because alias lookup is case-insensitive', function () {
     // Probe 3: `Sender` and `sender` collide under the lowercased alias table.
-    // PHP class/alias names are case-insensitive, so this collision is real and
-    // the second declaration overwrites the first — document that explicitly.
+    // This is NOT a real PHP semantic being documented: `php -l` fatals on this
+    // exact file ("Cannot use X as sender because the name is already in use"),
+    // whether the two aliases target the same class or different ones — PHP
+    // itself refuses the collision at compile time, it does not pick a winner.
+    // What this test documents is this resolver's own DEFENSIVE behaviour on
+    // input that is not valid PHP: it must not crash or throw on adversarial or
+    // malformed source, so the later declaration silently overwrites the
+    // earlier one in the lowercased alias table. A file that actually reaches
+    // this resolver in valid form will never exercise this path.
     $source = "<?php\nnamespace App\\Providers;\n"
         ."use App\\Nodeflow\\Nodes\\SendMessage as Sender;\n"
         ."use App\\Nodeflow\\Nodes\\TagUser as sender;\n";
@@ -131,4 +138,50 @@ it('reads only the first namespace of a file with two namespace blocks, a stated
     $source = "<?php\nnamespace A { }\nnamespace B { }\n";
 
     expect(PhpNameResolver::forSource($source)->namespaceName())->toBe('A');
+});
+
+// --- Round-2 review findings ---
+
+it('resolves an import declared inside a braced namespace block', function () {
+    // Critical review finding: `namespace App\Providers { ... }` is valid PHP
+    // (confirmed by php -l and by real execution: inside it,
+    // App\Nodeflow\Nodes\SendMessage::class stays App\Nodeflow\Nodes\SendMessage
+    // when the class is imported). A bare brace-depth counter treated this
+    // namespace's own opening brace as hiding its `use` statements, the same
+    // way a class body hides a trait use — which produced imports() === [] and
+    // resolve('SendMessage') falling through to the wrong,
+    // namespace-relative answer 'App\Providers\SendMessage'. This is not the
+    // multi-namespace limit (there is exactly one namespace here); the brace
+    // kind must be told apart from a class/closure brace instead.
+    $source = "<?php\nnamespace App\\Providers {\n    use App\\Nodeflow\\Nodes\\SendMessage;\n}\n";
+
+    expect(PhpNameResolver::forSource($source)->resolve('SendMessage'))
+        ->toBe('App\Nodeflow\Nodes\SendMessage');
+});
+
+it('still resolves a top-level import declared after an earlier brace has already closed', function () {
+    // Guards the brace-kind stack's pop: a class body opens and closes a
+    // non-namespace brace BEFORE the real import. Counterfactual: never pop
+    // the stack on `}` and every use after the first closed brace is wrongly
+    // treated as nested forever, so this import is silently dropped and
+    // resolve() falls through to the namespace-relative (wrong) answer.
+    $source = "<?php\nnamespace App\\Providers;\nclass Foo {}\nuse App\\Nodeflow\\Nodes\\SendMessage;\n";
+
+    expect(PhpNameResolver::forSource($source)->resolve('SendMessage'))
+        ->toBe('App\Nodeflow\Nodes\SendMessage');
+});
+
+it('resolves both members of a group import when the aliased member comes first', function () {
+    // Guards resetting $alias back to null after each group member.
+    // Counterfactual: leave $alias set after consuming "SendMessage as Sender"
+    // and the next member, "TagUser", is wrongly keyed under the stale "sender"
+    // alias too, dropping SendMessage's own entry entirely.
+    $source = "<?php\nnamespace App\\Providers;\n"
+        ."use App\\Nodeflow\\Nodes\\{SendMessage as Sender, TagUser};\n";
+
+    $r = PhpNameResolver::forSource($source);
+
+    expect($r->resolve('Sender'))->toBe('App\Nodeflow\Nodes\SendMessage');
+    expect($r->resolve('TagUser'))->toBe('App\Nodeflow\Nodes\TagUser');
+    expect($r->imports())->toHaveCount(2);
 });

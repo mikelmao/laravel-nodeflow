@@ -28,6 +28,12 @@ namespace Nodeflow\Console;
  * not supported — this reads only the first and does not attempt to scope
  * imports or resolution per-block. NodeReferenceScanner must refuse such a file
  * outright rather than rely on this resolver to handle it correctly.
+ *
+ * A braced namespace (`namespace App\Providers { ... }`) IS supported: its
+ * brace is not a scope that hides imports. readImports() tracks a stack of
+ * brace *kinds* rather than a bare depth counter, so a `use` nested only
+ * inside namespace braces is still a top-level import, while one nested
+ * inside any other brace (class body, closure) is not.
  */
 final class PhpNameResolver
 {
@@ -125,18 +131,27 @@ final class PhpNameResolver
     {
         $imports = [];
         $count = count($tokens);
-        $braceDepth = 0;
+
+        // A braced namespace's `{` is not the kind of brace that hides a `use`
+        // (a namespace's own use statements are still top-level imports); a
+        // class body's or closure's `{` is. Track which opening braces belong
+        // to a namespace declaration up front, then walk a stack of brace
+        // *kinds* — not a bare depth counter — so nesting is judged correctly:
+        // a `use` is a top-level import only while every open brace on the
+        // stack is a namespace brace.
+        $namespaceBraces = self::namespaceBraceIndexes($tokens);
+        $braceKinds = [];
 
         for ($i = 0; $i < $count; $i++) {
             $token = $tokens[$i];
 
             if (! is_array($token)) {
                 if ($token === '{') {
-                    $braceDepth++;
+                    $braceKinds[] = isset($namespaceBraces[$i]) ? 'namespace' : 'other';
                 }
 
                 if ($token === '}') {
-                    $braceDepth--;
+                    array_pop($braceKinds);
                 }
 
                 continue;
@@ -146,10 +161,10 @@ final class PhpNameResolver
                 continue;
             }
 
-            // A `use` inside any brace is either a trait use in a class body or a
-            // closure's captured-variable list. Neither is an import, and reading
-            // one as an import produces a garbage alias.
-            if ($braceDepth > 0) {
+            // A `use` inside a non-namespace brace is either a trait use in a
+            // class body or a closure's captured-variable list. Neither is an
+            // import, and reading one as an import produces a garbage alias.
+            if (in_array('other', $braceKinds, true)) {
                 continue;
             }
 
@@ -164,6 +179,45 @@ final class PhpNameResolver
         }
 
         return $imports;
+    }
+
+    /**
+     * Finds the token index of every `{` that opens a namespace's braced body
+     * (`namespace App\Providers { ... }`, or the bare global form
+     * `namespace { ... }`), so readImports() can tell that brace apart from a
+     * class body's or closure's.
+     *
+     * @param  list<array{0:int,1:string}|string>  $tokens
+     * @return array<int, true> token index => true
+     */
+    private static function namespaceBraceIndexes(array $tokens): array
+    {
+        $indexes = [];
+        $count = count($tokens);
+
+        for ($i = 0; $i < $count; $i++) {
+            $token = $tokens[$i];
+
+            if (! is_array($token) || $token[0] !== T_NAMESPACE) {
+                continue;
+            }
+
+            $j = $i + 1;
+
+            while (
+                $j < $count
+                && is_array($tokens[$j])
+                && in_array($tokens[$j][0], [T_NAME_QUALIFIED, T_STRING, T_NS_SEPARATOR], true)
+            ) {
+                $j++;
+            }
+
+            if (($tokens[$j] ?? null) === '{') {
+                $indexes[$j] = true;
+            }
+        }
+
+        return $indexes;
     }
 
     /**
