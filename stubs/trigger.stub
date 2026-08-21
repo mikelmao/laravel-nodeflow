@@ -1,0 +1,76 @@
+<?php
+
+namespace {{ namespace }};
+
+use Nodeflow\Schema\TriggerDefinition;
+use Nodeflow\Triggers\Trigger;
+use Nodeflow\Triggers\TriggerMatch;
+
+class {{ class }} extends Trigger
+{
+    /**
+     * The stable identifier for this trigger type.
+     *
+     * A flow's trigger_type stores this string, so changing it orphans every flow
+     * that references it. Never derive it from the class name.
+     */
+    public static function type(): string
+    {
+        return '{{ type }}';
+    }
+
+    /**
+     * The host event class this trigger listens to.
+     *
+     * This is the confusable part of the contract, so read it once: registering
+     * the trigger calls Event::listen() for this class, at the moment of
+     * registration. Name the wrong class and nothing errors — the listener is
+     * attached to an event that never fires, and the trigger is simply silent.
+     */
+    public static function event(): string
+    {
+        return \{{ event }}::class;
+    }
+
+    public function definition(): TriggerDefinition
+    {
+        return TriggerDefinition::make('{{ label }}')
+            ->description('TODO: describe when this trigger fires, for the person authoring a flow.');
+    }
+
+    /**
+     * Which subjects this event should start, grouped by tenant.
+     *
+     * Returning an empty match is legitimate and means "this event starts
+     * nobody" — so the scaffolded body below is a safe no-op rather than a
+     * placeholder that throws.
+     */
+    public function resolve(object $event): TriggerMatch
+    {
+        // TODO: return the subjects this event should start. For example:
+        //
+        // return TriggerMatch::make()->forTenant(
+        //     (string) $event->tenantId,
+        //     'user',
+        //     $event->userIds,
+        // );
+
+        return TriggerMatch::make();
+    }
+
+    // Uncomment when the event carries a natural identity for one firing. Without
+    // it, two deliveries of the same event start two runs.
+    //
+    // public function idempotencyKey(object $event): ?string
+    // {
+    //     return 'alert-'.$event->id;
+    // }
+
+    // Uncomment to let a flow's own trigger config narrow which firings it wants.
+    // The default accepts every firing.
+    //
+    // public function matchesConfig(object $event, array $config): bool
+    // {
+    //     return ($config['severity'] ?? null) === $event->severity;
+    // }
+}
