@@ -7,11 +7,12 @@ most were proven by probe during a review rather than suspected.
 **Status key:** `DECISION` needs a human call · `DEFECT` is proven and unfixed · `GAP` is missing
 coverage or missing code · `DRIFT` is documentation disagreeing with code.
 
-Last updated 2026-08-21 after Plan 4 package work (`8e79b99..4192275`): **157 package Vitest
+Last updated 2026-08-21 after Plan 4 package work (`8e79b99..d6c7a59`): **157 package Vitest
 tests, 356 package Pest tests (5820 assertions)** passing, silent package `tsc`. Demo integration
-and real-browser acceptance for Plan 4 have not run yet — see "Plan 4 acceptance evidence" below,
-which is a placeholder pending Task 13. Demo Pest tests remain **44**, from Plan 3's demo
-acceptance (`549fe42`), unchanged by Plan 4's package-only work.
+has landed: **49 demo Pest tests (191 assertions)**, silent demo `tsc`, a successful demo
+`npm run build`. Real-browser acceptance for Plan 4 has **not** run yet — see "Plan 4 acceptance
+evidence" below, which remains an unfilled placeholder pending Task 13. (A final whole-branch fix
+wave landed after this entry; see the fix-wave report for its own totals and commits.)
 
 ---
 
@@ -85,15 +86,20 @@ Tailwind output containing `min-h-[32rem]`.
 
 ## Plan 4 acceptance evidence
 
-**PLACEHOLDER — not yet filled in. Do not read this section as accepted.** Plan 4's real-browser
-acceptance against the symlinked demo, and the demo integration it depends on, are Task 13's work
-and have not run as of this entry. This section exists now so Task 13 has a fixed place to record
-that evidence rather than inventing one later; it will be replaced wholesale once the six checks in
+**PLACEHOLDER — not yet filled in. Do not read this section as accepted.** The demo integration
+this evidence depends on has landed — see below — but Plan 4's real-browser acceptance against
+the symlinked demo, Task 13's remaining work, has not run as of this entry. This section exists so
+Task 13 has a fixed place to record that evidence rather than inventing one later; it will be
+replaced wholesale once the six checks in
 `docs/superpowers/specs/2026-08-21-run-view-design.md` §9 have actually been run.
 
 Package-only gates already measured, ahead of that browser pass: **356 package Pest tests (5820
 assertions)**, **157 package Vitest tests** (the design predicted 151; six extra tests were added
 during execution, each covering a guard that otherwise had none), and a silent package `tsc`.
+
+Demo integration gates, also already measured: **49 demo Pest tests (191 assertions)**, silent
+demo `tsc`, and a successful demo `npm run build`. Still missing before this section can be filled
+in for real: the six real-browser checks themselves.
 
 ---
 
