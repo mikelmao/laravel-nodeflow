@@ -154,6 +154,59 @@ disposable.
 
 ---
 
+## Plan 5 acceptance evidence
+
+Measured on merged `main` (`c080184`) with the demo at `58cd733`. **Real-browser acceptance has NOT
+run** — see the caveat at the end; everything below was verified without a browser.
+
+**Gates.** Package: **488 Pest tests (6152 assertions)**, **160 Vitest tests**, silent
+`npx tsc --noEmit`. Demo: **56 Pest tests (223 assertions)**, silent `tsc`, a passing Vite build.
+
+**`nodeflow:install` run for real against the one installed host.** This is the only place E25's
+additive-edit claim is tested against a genuine hand-written provider rather than a fixture.
+`--check` exited **1** beforehand, naming exactly two gaps (the provider's three registration homes,
+and an unpublished config); `install` then exited **0**; the re-check exited **0** with every
+requirement "already wired". The provider diff was **21 insertions, 0 deletions**, and the demo's own
+`Nodeflow::register([SendMessage::class, TagUser::class, SegmentUsers::class])` survives verbatim.
+`php -l` clean.
+
+That run also confirms the fix for the worst defect the final review found: `bootstrap/providers.php`
+reads **"already wired"**. That file registers the provider through an *import* and lists the short
+class name, which the pre-fix presence check missed — so `install --check`, the form these docs put in
+CI, exited non-zero on a correctly wired host and then wrote a duplicate into it.
+
+**The two reports, on real data.** All four authorization gates reported defined. Tenancy reported
+`auto — App\Nodeflow\SessionTenantResolver is bound, so a null tenant throws
+TenancyUnresolvedException` — the branch-specific answer, not the bare config string, and true against
+`BelongsToTenant::resolveTenantIdForScope()`.
+
+**Host wiring verified in the compiled artifact**, not in config, because a wiring regression is
+invisible to both suites: `opacity-40` — a utility used only by the package source — appears in the
+built CSS, so the Tailwind `@source` line works end to end; and exactly **one** chunk carries React's
+`__CLIENT_INTERNALS_…` marker despite two `node_modules/react` trees on disk, so `resolve.dedupe`
+(**G-4**) holds in the built output.
+
+**The demo security fix over real HTTP.** `GET /nodeflow` unauthenticated returns **302**. `route:list`
+shows `nodeflow/runs/{run}/subjects/{subject}/convert` and `/click` carrying `web` **and** `auth` — the
+group previously carried `web` alone, and the routes had no `{run}` segment at all.
+
+The proof the bug was real, captured before the fix (the route reshape would otherwise have destroyed
+it): an **unauthenticated** POST to the original `/nodeflow/subjects/{subject}/convert` returned
+**302**, flipped another organisation's `confirmed_interest_at` from null to non-null, and moved their
+subject to `exited`. After the fix, the same attack from an Acme session against a Globex run returns
+**404** with the victim's row untouched and their subject still `active`, while the legitimate
+own-organisation path still returns 302 and writes.
+
+**Caveat, stated rather than buried: real-browser acceptance did not run.** The browser harness
+requires Chrome's "Allow remote debugging" toggle to be clicked by hand, and this Chrome (151) demands
+it even for a separate instance launched with `--remote-debugging-port` and a throwaway profile — the
+workaround Plan 4 relied on. Four things therefore remain unverified by observation: console
+cleanliness across interactions, the editor and run view actually rendering, the two demo buttons
+working from the real client through the reshaped URLs, and logout closing the demo in-browser. The
+first three are the ones a green suite genuinely cannot substitute for.
+
+---
+
 ## Proven defects
 
 ### F-1 · `--group='{{ outputs }}'` renders an unparseable file and exits 0
