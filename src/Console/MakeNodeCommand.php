@@ -139,24 +139,17 @@ class MakeNodeCommand extends GeneratorCommand
             ],
         };
 
-        $this->files->put($path, str_replace(
-            [
-                '{{ namespacedClass }}',
-                '{{ cardinalityImports }}',
-                '{{ cardinalityExpectations }}',
-                '{{ class }}',
-                '{{ type }}',
-                '{{ outputs }}',
-            ],
-            [
-                $nodeClass,
-                $imports,
-                $expectations,
-                $class,
-                $this->nodeType(),
-                implode(', ', array_map(fn (string $o) => "'{$o}'", $outputs)),
-            ],
+        // strtr for the same reason as buildClass(): see F-1 in paletteGroup().
+        $this->files->put($path, strtr(
             $this->files->get($this->resolveStubPath('/stubs/node.test.stub')),
+            [
+                '{{ namespacedClass }}' => $nodeClass,
+                '{{ cardinalityImports }}' => $imports,
+                '{{ cardinalityExpectations }}' => $expectations,
+                '{{ class }}' => $class,
+                '{{ type }}' => $this->nodeType(),
+                '{{ outputs }}' => implode(', ', array_map(fn (string $o) => "'{$o}'", $outputs)),
+            ],
         ));
 
         $this->components->info("Test [{$path}] created successfully.");
@@ -217,17 +210,16 @@ class MakeNodeCommand extends GeneratorCommand
 
         $outputs = $this->outputNames();
 
-        return str_replace(
-            ['{{ type }}', '{{ label }}', '{{ group }}', '{{ outputs }}', '{{ firstOutput }}'],
-            [
-                $this->nodeType(),
-                Str::headline(class_basename($this->getNameInput())),
-                $this->paletteGroup(),
-                implode(', ', array_map(fn (string $o) => "'{$o}'", $outputs)),
-                $outputs[0],
-            ],
-            $stub,
-        );
+        // strtr, not str_replace: str_replace with array arguments is sequential
+        // and re-substitutes inside its own output, so a --group value containing
+        // a later placeholder rendered an unparseable file and exited 0 (F-1).
+        return strtr($stub, [
+            '{{ type }}' => $this->nodeType(),
+            '{{ label }}' => Str::headline(class_basename($this->getNameInput())),
+            '{{ group }}' => $this->paletteGroup(),
+            '{{ outputs }}' => implode(', ', array_map(fn (string $o) => "'{$o}'", $outputs)),
+            '{{ firstOutput }}' => $outputs[0],
+        ]);
     }
 
     /** Reserved for the package's own nodes: core.wait, core.condition, and so on. */
@@ -383,8 +375,16 @@ class MakeNodeCommand extends GeneratorCommand
     /**
      * Escaped rather than rejected, unlike the type and the output names: the group
      * is a human-facing palette label, and "Client's Tools" is a fair thing to call
-     * one. It is rendered inside a single-quoted PHP string, where a backslash and
-     * a single quote are the only two characters that can end it early.
+     * one. It is rendered inside a single-quoted PHP string, so a backslash and a
+     * single quote are escaped here.
+     *
+     * Escaping those two is NOT sufficient on its own, and a previous version of
+     * this comment claimed it was. A value containing another stub placeholder —
+     * `--group='{{ outputs }}'` — needed no quote to break the render, because the
+     * renderer substituted this value and then kept substituting *inside it*.
+     * buildClass() and writeTest() use strtr() rather than str_replace() for that
+     * reason: strtr never re-scans what it has already written. Do not change
+     * either back.
      */
     protected function paletteGroup(): string
     {

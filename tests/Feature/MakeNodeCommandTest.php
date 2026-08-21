@@ -654,3 +654,22 @@ it('does not clobber a hand-edited test file on regeneration without --force', f
     // would just re-render the same path with fresh (non-hand-edited) content.
     expect(file_get_contents($testPath))->toBe($handEdited);
 });
+
+it('renders a group containing a placeholder literally instead of re-substituting it', function () {
+    // F-1. The counterfactual: restore str_replace() in buildClass() and this
+    // fails, because the sequential substitution turns --group='{{ outputs }}'
+    // into ->group(''default'') — a parse error the command reports as success.
+    $this->artisan('nodeflow:make-node', [
+        'name' => 'SendPlaceholder',
+        '--type' => 'yaya.send_placeholder',
+        '--group' => '{{ outputs }}',
+    ])->assertExitCode(0);
+
+    $path = $this->root.'/app/Nodeflow/Nodes/SendPlaceholder.php';
+
+    expect(file_get_contents($path))->toContain("->group('{{ outputs }}')");
+
+    // php -l is the only thing that catches an unparseable render, and it is
+    // what reported success on the broken version.
+    expectParseablePhp($path);
+});
