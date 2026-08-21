@@ -185,3 +185,25 @@ it('resolves both members of a group import when the aliased member comes first'
     expect($r->resolve('TagUser'))->toBe('App\Nodeflow\Nodes\TagUser');
     expect($r->imports())->toHaveCount(2);
 });
+
+it('pops the innermost brace first when a braced namespace nests a class that nests a trait use', function () {
+    // Re-review finding M11: the brace-kind stack must behave as a STACK
+    // (pop the innermost/most-recently-opened brace), not a queue. Nothing
+    // else in this suite has two simultaneously-open braces of DIFFERENT
+    // kinds, so array_pop($braceKinds) (LIFO, correct) and array_shift
+    // (FIFO, wrong) were indistinguishable on the rest of the suite. Here:
+    // a braced namespace opens ('namespace'), a class body opens inside it
+    // ('other', for its trait use), the class closes, and only THEN does a
+    // real top-level use appear. Popping the innermost ('other') on the
+    // class's closing brace correctly leaves 'namespace' on the stack, so
+    // the later use is read as a top-level import. Shifting the outermost
+    // ('namespace') instead would leave 'other' on the stack forever,
+    // silently dropping every use after it.
+    $source = "<?php\nnamespace App\\Providers {\n"
+        ."    class Foo { use HasNodeType; }\n"
+        ."    use App\\Nodeflow\\Nodes\\SendMessage;\n"
+        ."}\n";
+
+    expect(PhpNameResolver::forSource($source)->resolve('SendMessage'))
+        ->toBe('App\Nodeflow\Nodes\SendMessage');
+});

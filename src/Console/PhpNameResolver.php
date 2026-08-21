@@ -34,6 +34,14 @@ namespace Nodeflow\Console;
  * brace *kinds* rather than a bare depth counter, so a `use` nested only
  * inside namespace braces is still a top-level import, while one nested
  * inside any other brace (class body, closure) is not.
+ *
+ * Known characteristic, not a bug: imports() is a single flat map, not one
+ * scoped per namespace block. A file with two braced namespace blocks each
+ * declaring their own `use` statements has both sets merged into the same
+ * map, which is wrong for such a file in isolation — but the stated
+ * multi-namespace limit above means NodeReferenceScanner refuses that file
+ * before this resolver ever sees it, so the flat map never has to answer for
+ * more than one namespace's imports in practice.
  */
 final class PhpNameResolver
 {
