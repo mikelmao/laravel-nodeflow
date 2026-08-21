@@ -11,6 +11,17 @@ class MakeTriggerTestEvent
     public function __construct(public string $tenantId = 't1', public array $userIds = ['7']) {}
 }
 
+/**
+ * A second, distinct stand-in host event. Needed because two generated
+ * triggers `require`d into the same process cannot share an FQCN — PHP
+ * fatals with "class already declared" — and the leak-detection test below
+ * needs two invocations whose --event genuinely differ.
+ */
+class MakeTriggerTestEventTwo
+{
+    public function __construct(public string $tenantId = 't2', public array $userIds = ['9']) {}
+}
+
 beforeEach(function () {
     $this->root = sys_get_temp_dir().'/nodeflow-make-trigger-'.bin2hex(random_bytes(6));
 
@@ -196,4 +207,61 @@ it('generates a file that passes php -l', function () {
     ])->assertExitCode(0);
 
     expectParseablePhp($this->root.'/app/Nodeflow/Triggers/LintedTrigger.php');
+});
+
+it('validates each invocation independently, even when the command instance is reused', function () {
+    // Symfony's Application resolves one command object per command name and
+    // keeps it for the process's lifetime, so a second artisan() call of
+    // nodeflow:make-trigger reuses this exact same MakeTriggerCommand
+    // instance rather than a fresh one. Counterfactual: without resetting
+    // $resolvedType/$resolvedEvent at the top of handle(), triggerType() and
+    // eventClass() would short-circuit on their memoized-not-null guard and
+    // return the FIRST call's already-validated values, silently rendering
+    // the first trigger's type and event into the second file while still
+    // reporting success.
+    $this->artisan('nodeflow:make-trigger', [
+        'name' => 'FirstInvocationTrigger',
+        '--event' => MakeTriggerTestEvent::class,
+        '--type' => 'shop.first_invocation',
+    ])->assertExitCode(0);
+
+    $this->artisan('nodeflow:make-trigger', [
+        'name' => 'SecondInvocationTrigger',
+        '--event' => MakeTriggerTestEventTwo::class,
+        '--type' => 'shop.second_invocation',
+    ])->assertExitCode(0);
+
+    $secondFile = file_get_contents($this->root.'/app/Nodeflow/Triggers/SecondInvocationTrigger.php');
+
+    expect($secondFile)
+        ->toContain("return 'shop.second_invocation';")
+        ->toContain('return \MakeTriggerTestEventTwo::class;')
+        ->not->toContain("return 'shop.first_invocation';")
+        ->not->toContain('return \MakeTriggerTestEvent::class;');
+});
+
+it('refuses a --type colliding with an already-registered trigger type', function () {
+    // Same rule, and the same reason, as MakeNodeCommand's NodeRegistry check:
+    // TriggerRegistry keys by type, so a second trigger sharing an existing
+    // type would silently replace the first one in every host boot that
+    // resolves it. The registry is genuinely populated here — a real
+    // register() call, not merely a file written to disk — so the collision
+    // triggerType() must catch is real.
+    $this->artisan('nodeflow:make-trigger', [
+        'name' => 'FirstClaimantTrigger',
+        '--event' => MakeTriggerTestEvent::class,
+        '--type' => 'shop.claimed_type',
+    ])->assertExitCode(0);
+
+    require $this->root.'/app/Nodeflow/Triggers/FirstClaimantTrigger.php';
+
+    app(TriggerRegistry::class)->register('App\Nodeflow\Triggers\FirstClaimantTrigger');
+
+    $this->artisan('nodeflow:make-trigger', [
+        'name' => 'SecondClaimantTrigger',
+        '--event' => MakeTriggerTestEvent::class,
+        '--type' => 'shop.claimed_type',
+    ])->assertExitCode(1);
+
+    expect($this->root.'/app/Nodeflow/Triggers/SecondClaimantTrigger.php')->not->toBeFile();
 });
