@@ -7,19 +7,21 @@ most were proven by probe during a review rather than suspected.
 **Status key:** `DECISION` needs a human call · `DEFECT` is proven and unfixed · `GAP` is missing
 coverage or missing code · `DRIFT` is documentation disagreeing with code.
 
-Last updated 2026-08-21 after Plan 4 was merged and accepted (branch `8e79b99..f36f54f`, merged
-as `f5b2e31`, acceptance recorded in `627cdf2`): **160 package Vitest
-tests, 358 package Pest tests (5832 assertions)** passing, silent package `tsc`. Demo integration
-has landed: **49 demo Pest tests (191 assertions)**, silent demo `tsc`, a successful demo
-`npm run build`. Real-browser acceptance for Plan 4 has since run and passed — see "Plan 4
-acceptance evidence" below for the six checks. (A final whole-branch fix wave landed after this
-entry; see the fix-wave report for its own totals and commits.)
+Last updated 2026-08-21 as **Plan 5** merged (branch `f56f9e1..0e5274f`, 28 commits).
+Gates measured on the branch immediately before merge: **488 package Pest tests (6152 assertions)**, **160 package Vitest
+tests**, silent package `tsc`. Demo: **56 demo Pest tests (223 assertions)**, silent demo `tsc`, a
+successful demo `npm run build`. Real-browser acceptance is recorded separately below once run —
+until that section exists, Plan 5 is merged but **not** browser-accepted. Plan 5 closed F-1, F-2, G-2 and G-4, cut G-3 (**E26**), verified and
+closed R-2, and added F-3 plus the demo tenant-switcher limitation below.
 
-<!-- TASK-17-TODO: Plan 5 has since merged and closed F-1, F-2, G-2 and G-4, cut G-3 (E26),
-     verified R-2, and added the demo tenant-switcher and MakeNodeCommand/MakeTriggerCommand
-     caching-bug entries. Update this "Last updated" paragraph with Plan 5's merge commit, its
-     accepted-branch range, and its own measured package Pest/Vitest counts once Task 17 has run
-     and measured them on merged main. Do not guess the numbers here in the meantime. -->
+**Read `docs/superpowers/plans/2026-08-21-nodeflow-remaining-tooling-execution-record.md` before
+trusting Plan 5's plan document.** Execution forced 22 recorded rulings, 15 of them corrections to
+that plan; the final whole-branch review then found four Critical false accepts or false rejects in
+`nodeflow:install`'s exit contract that all sixteen per-task reviews had passed. Both are recorded
+there with the evidence.
+
+The prior baseline, for comparison: Plan 4 merged as `f5b2e31` with acceptance recorded in `627cdf2`
+— 160 Vitest, 358 Pest (5832 assertions), 49 demo Pest (191 assertions).
 
 ---
 
