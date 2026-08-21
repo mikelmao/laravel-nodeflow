@@ -74,6 +74,51 @@ it('walks the whole population through its cursor without repeating or skipping 
     expect($seen)->toBe(['1', '2', '3', '4', '5']);
 });
 
+/**
+ * The counterfactual the previous test's comment names but does not kill: an
+ * OFFSET/LIMIT walk against this fixture's *static* five rows happens to
+ * return the identical sequence a cursor does, so that test would pass
+ * unchanged even if `atNode()` paginated by offset. It proves the walk
+ * terminates and covers the set; it says nothing about offset vs. cursor,
+ * which is the entire reason E15 chose a cursor.
+ *
+ * This test makes the population move mid-walk. Subject '1' — already
+ * returned on page 1 — leaves the node the same way every terminal
+ * transition does (`current_node_id` nulled). Offset pagination re-evaluates
+ * `OFFSET 2 LIMIT 2` against the now-four-row population for page 2: the
+ * window shifts down by one, so it would return ['4', '5'] and silently skip
+ * '3', who moved into the gap the departure left behind. Cursor pagination
+ * here is keyed on `id` (`->orderBy('id')->cursorPaginate(...)`), a strictly
+ * increasing column no departure renumbers, so removing an earlier row cannot
+ * shift a later one's position — page 2 must still return '3' unharmed.
+ */
+it('does not skip a subject who leaves the node mid-walk, unlike an offset would', function () {
+    config(['nodeflow.limits.subject_page' => 2]);
+
+    $page1 = app(RunSubjects::class)->atNode($this->run, 'wait');
+    expect(array_column($page1['data'], 'subject_id'))->toBe(['1', '2']);
+
+    // The mid-walk departure: subject '1', already counted on page 1, leaves
+    // the node between page 1 and page 2 — exactly what a terminal transition
+    // does to current_node_id.
+    RunSubject::where('run_id', $this->run->id)
+        ->where('subject_id', '1')
+        ->update(['current_node_id' => null, 'status' => 'completed']);
+
+    $seen = array_column($page1['data'], 'subject_id');
+    $cursor = $page1['next_cursor'];
+
+    do {
+        $page = app(RunSubjects::class)->atNode($this->run, 'wait', $cursor);
+        $seen = array_merge($seen, array_column($page['data'], 'subject_id'));
+        $cursor = $page['next_cursor'];
+    } while ($cursor !== null);
+
+    // '3' is the one an offset-based walk would have skipped. It must still
+    // show up, and nobody still active at the node is missing from the walk.
+    expect($seen)->toBe(['1', '2', '3', '4', '5']);
+});
+
 it('excludes subjects that are not active at that node', function () {
     // Every terminal transition nulls current_node_id, so these rows can only
     // arrive by a bug or a host write. Counterfactual: drop the predicates and
