@@ -202,9 +202,14 @@ final class NodeTypeLiteral
      * jumping over it, so nested braces of any depth are handled uniformly.
      *
      * A same-named method that is bodiless (an interface signature, or an
-     * abstract declaration) does not stop the search — it is simply not a
-     * match, and PHP does not allow a class to declare the same method name
-     * twice, so scanning continues rather than returning null outright.
+     * abstract declaration missing its `abstract` keyword) refuses outright
+     * rather than scanning for a second declaration of the same name: PHP
+     * fatals on a non-abstract bodiless method, and fatals separately on any
+     * class declaring the same method name twice, so no valid, loadable PHP
+     * class can ever reach this branch with a second, real "type()" still to
+     * find. A branch no valid input can exercise differently either way is
+     * not a defensive improvement — it is untested code with a comment
+     * attached, so it is refused immediately instead.
      *
      * @param  list<array{0: int, 1: string}>  $classBody
      * @return list<array{0: int, 1: string}>|null
@@ -229,35 +234,36 @@ final class NodeTypeLiteral
                     }
 
                     // A ';' before any '{' means an abstract or interface
-                    // signature: no body to extract, and no second same-named
-                    // method can exist in this class, but keep scanning rather
-                    // than guessing that this is the only "type" in the file.
+                    // signature: no body to extract. See the docblock above —
+                    // no valid PHP class can have a second, real declaration
+                    // of the same method name to find instead, so this
+                    // refuses immediately rather than scanning further.
                     if ($classBody[$j][1] === ';') {
-                        break;
+                        return null;
                     }
                 }
 
-                if ($open !== null) {
-                    $innerDepth = 0;
-
-                    for ($j = $open; $j < $count; $j++) {
-                        if ($classBody[$j][1] === '{') {
-                            $innerDepth++;
-                        }
-
-                        if ($classBody[$j][1] === '}') {
-                            $innerDepth--;
-
-                            if ($innerDepth === 0) {
-                                return array_values(array_slice($classBody, $open + 1, $j - $open - 1));
-                            }
-                        }
-                    }
-
+                if ($open === null) {
                     return null;
                 }
 
-                continue;
+                $innerDepth = 0;
+
+                for ($j = $open; $j < $count; $j++) {
+                    if ($classBody[$j][1] === '{') {
+                        $innerDepth++;
+                    }
+
+                    if ($classBody[$j][1] === '}') {
+                        $innerDepth--;
+
+                        if ($innerDepth === 0) {
+                            return array_values(array_slice($classBody, $open + 1, $j - $open - 1));
+                        }
+                    }
+                }
+
+                return null;
             }
 
             if ($classBody[$i][1] === '{') {

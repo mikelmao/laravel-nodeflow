@@ -259,6 +259,104 @@ it('proves the real class type() even when a bodiless interface signature preced
     expect($result->type)->toBe('demo.send');
 });
 
+it('refuses a same-class constant lookup that only matches inside a nested anonymous class', function () {
+    // Re-review finding 4: mutation-testing the shipped code by deleting
+    // "&& $depth === 0" from sameClassConstant()'s T_CONST match left all 17
+    // tests passing. Without that check, sameClassConstant() reaches into a
+    // nested anonymous class's own constant and reports a value the moved
+    // class itself does not declare -- SendMessage has no TYPE of its own
+    // here, only a decoy nested inside helper(). This must be refused.
+    $source = <<<'PHP'
+    <?php
+
+    namespace App\Nodeflow\Nodes;
+
+    class SendMessage
+    {
+        public static function helper(): object
+        {
+            return new class
+            {
+                public const TYPE = 'wrong.nested';
+            };
+        }
+
+        public static function type(): string
+        {
+            return self::TYPE;
+        }
+    }
+    PHP;
+
+    $result = NodeTypeLiteral::resolve($source, 'SendMessage');
+
+    expect($result->ok())->toBeFalse();
+    expect($result->reason)->toContain('TYPE');
+});
+
+it('proves type() even when it is declared after another method in the same class', function () {
+    // Found by the same mutation technique: deleting methodBody()'s closing
+    // "$depth--;" (the counterpart to the depth check above) also left the
+    // suite green, because every prior fixture declares type() as the class's
+    // only or first method -- depth never needs to return to 0 after a
+    // sibling method's own braces close. helper() here forces exactly that.
+    $source = <<<'PHP'
+    <?php
+
+    namespace App\Nodeflow\Nodes;
+
+    class SendMessage
+    {
+        public static function helper(): string
+        {
+            return 'unrelated';
+        }
+
+        public static function type(): string
+        {
+            return 'demo.send';
+        }
+    }
+    PHP;
+
+    $result = NodeTypeLiteral::resolve($source, 'SendMessage');
+
+    expect($result->ok())->toBeTrue();
+    expect($result->type)->toBe('demo.send');
+});
+
+it('proves a same-class constant declared after another method with its own braces', function () {
+    // The sameClassConstant() counterpart to the test above: its own closing
+    // "$depth--;" has the identical, previously-undetected gap for the same
+    // reason -- no prior fixture declares TYPE after some other bracketed
+    // method in the same class.
+    $source = <<<'PHP'
+    <?php
+
+    namespace App\Nodeflow\Nodes;
+
+    class SendMessage
+    {
+        public static function helper(): string
+        {
+            return 'unrelated';
+        }
+
+        public const TYPE = 'demo.send';
+
+        public static function type(): string
+        {
+            return self::TYPE;
+        }
+    }
+    PHP;
+
+    $result = NodeTypeLiteral::resolve($source, 'SendMessage');
+
+    expect($result->ok())->toBeTrue();
+    expect($result->type)->toBe('demo.send');
+});
+
 it('refuses a type() supplied by a trait', function () {
     $source = <<<'PHP'
     <?php
