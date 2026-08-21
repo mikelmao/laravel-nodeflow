@@ -240,6 +240,20 @@ Recorded in the foundation spec's known-limitations and still open. None are in 
   on `completed`; this is why `core.exit` reads as never reached. Both are honest limitations of
   what the run view can show given what the durable execution path records today, and closing
   either means writing to that path — deliberately out of scope for Plan 4, which only reads it.
+  See also **C-6**, discovered after Plan 4 shipped, which shares this exact root cause from the
+  other direction.
+- **C-6** (new, found after Plan 4 shipped, spec decision E13) `reached` can also flip from `true`
+  back to `false` on a later poll, not just start `false` and stay there. `RunOverlay`'s
+  `reached = (rows !== null || waiting > 0)`: if a subject was active at a node — the only thing
+  making that node `reached` — and is then cancelled via `SubjectExiter::exit()` without ever
+  producing an output or a failure row there, the next poll reports `reached: false`, even though
+  the node genuinely held that subject. `FlowRun`'s drill-down panel says "this node was never
+  reached by this run, so no subject has ever been here" in that state, which is false. **Same root
+  cause as C-5, not a separate defect:** `reached` is derived from currently observable state
+  rather than durable history, so any path that erases its own evidence also erases the fact that
+  it happened — `core.exit` writing no row (C-5) and a cancellation-only visit leaving nothing
+  behind (this) are the same gap approached from two directions. Closing either means writing a row
+  on the durable execution path, which Plan 4 deliberately does not touch.
 - **C-2** `ownsSubject()` is called once per subject; a set-shaped contract is wanted before
   six-figure use.
 - **C-3** The suite is SQLite-only.

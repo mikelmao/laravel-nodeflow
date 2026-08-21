@@ -291,6 +291,26 @@ and painting live counts onto a graph the run never executed is exactly the
 misreading this component exists to prevent. There is no way to ask `FlowRun`
 for the draft instead — the prop is the only graph it can render.
 
+### Authorization
+
+All three run-view routes — the page above, the overlay poll below, and the
+subject drill-down — authorize the same way: each calls
+`$this->authorize('view', $run)`, and `RunPolicy::view()` defers to the host's
+own `nodeflow.viewAny` gate, passed the `Run`. That gate is the one thing a
+host must define to use `FlowRun` at all; a host that has already wired the
+editor's authorization has already defined it, since the editor's policies
+default-deny the same way.
+
+Two response codes are deliberate rather than incidental:
+
+- A **cross-tenant `{run}` id is `404`, not `403`.** `{run}` binds through the
+  already tenant-scoped `Run` model, so a mismatched id never resolves and
+  never reaches the gate. Returning `403` instead would confirm to an
+  unauthorized caller that the row exists at all.
+- **An undefined `nodeflow.viewAny` gate is `403`** on all three routes — the
+  same default-deny the editor's own gates use when a host installs the
+  package and wires nothing.
+
 ### The overlay
 
 `overlay` (and every polled response at `urls.overlay`) carries one entry per
@@ -310,9 +330,50 @@ A node reads as **reached** when the run recorded an execution against it, or
 when subjects are sitting on it right now. A node that ran, released nobody
 and is now empty — `core.exit` is the common case — reads as never reached,
 because the engine records no row for it. The counts are right; only that
-node's dimming is misleading. See
+node's dimming is misleading.
+
+The same gap can also make a node flip from reached back to never-reached
+across two polls. If a subject was active at a node — the only thing making
+that node `reached` at the time — and is then cancelled out of the run
+without ever producing an output or a failure there, the node's next poll
+reports `reached: false`, even though the run genuinely held that subject at
+that node. The drill-down panel's never-reached wording ("no subject has ever
+been here") is not true in that state either; there is nothing in either the
+overlay or the drill-down that can tell the two states apart, because neither
+is backed by a durable record of the visit. See
 [Execution model](05-execution-model.md#known-limitations) for why, and open
 issue C-1 for the related caveat on when polling stops.
+
+### The subject drill-down
+
+Clicking a node on the canvas opens a panel — there is no prop to suppress
+this, and a host reading only the props table above would not otherwise learn
+it exists. The panel fetches `GET runs/{run}/nodes/{node}/subjects`,
+substituting the clicked node's id into `urls.subjects`.
+
+It answers **"who is at this node right now,"** not who ever passed through
+it. Every terminal status transition nulls a subject's `current_node_id`, and
+the package keeps no per-subject visit history, so a node's failures are
+**countable** — the overlay's `failed` count above is correct — but **not
+listable** here. The panel pages through active subjects behind a
+server-issued cursor, `config('nodeflow.limits.subject_page')` rows per page
+(default `50`), rather than an offset, so paging stays cheap at six-figure
+audiences.
+
+Each row is a `RunSubjectRow`, exported from the package root alongside
+`FlowRun`:
+
+```ts
+type RunSubjectRow = {
+    id: number
+    subject_type: string
+    subject_id: string
+    status: string
+    current_node_id: string | null
+    last_error: string | null
+    exited_at: string | null
+}
+```
 
 ### Polling
 
