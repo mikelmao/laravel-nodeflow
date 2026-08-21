@@ -112,7 +112,17 @@ function decoration(overlay: NodeOverlay | undefined): NodeDecoration {
     }
 
     if (overlay.failed > 0) {
-        badges.push({ key: 'failed', label: 'failed', value: overlay.failed })
+        // Labelled "errors", not "failed" (a deliberate override of spec
+        // §4.2): a node can declare an output literally named "failed" (the
+        // demo's `demo.send` does), which gets its own `out:failed` badge
+        // right alongside this one. Two badges both reading "failed" — one
+        // meaning "1 subject took the output named failed" and the other "2
+        // subjects errored at this node" — is nonsense to an operator, even
+        // though the React keys stay distinct (`out:failed` vs `errors`).
+        // Nothing stops a node from also declaring an output named "errors",
+        // so this does not eliminate the collision in general — it only
+        // avoids the one real, demonstrated case.
+        badges.push({ key: 'errors', label: 'errors', value: overlay.failed })
     }
 
     return {

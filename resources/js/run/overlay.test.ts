@@ -88,7 +88,26 @@ describe('decorationsFor', () => {
             { key: 'out:sent', label: 'sent', value: 7 },
             { key: 'out:failed', label: 'failed', value: 1 },
             { key: 'waiting', label: 'waiting', value: 3 },
-            { key: 'failed', label: 'failed', value: 2 },
+            { key: 'errors', label: 'errors', value: 2 },
+        ])
+    })
+
+    /**
+     * Deliberate override of spec §4.2, which labels this badge "failed": a
+     * node that declares an output literally named "failed" (the demo's
+     * `demo.send` does) would otherwise render two badges both reading
+     * "failed" for two different meanings — one output-count, one
+     * error-count. React keys stay distinct (`out:failed` vs `errors`), but
+     * the label collision is what an operator actually reads.
+     */
+    it('labels the failure bucket "errors" so it cannot read as the output literally named "failed"', () => {
+        const decorations = decorationsFor(['n1'], snapshot({
+            n1: { reached: true, byOutput: { failed: 1 }, waiting: 0, failed: 2, error: 'boom' },
+        }))
+
+        expect(decorations.n1?.badges).toEqual([
+            { key: 'out:failed', label: 'failed', value: 1 },
+            { key: 'errors', label: 'errors', value: 2 },
         ])
     })
 
