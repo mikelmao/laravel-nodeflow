@@ -33,6 +33,28 @@ use RecursiveIteratorIterator;
  * are case-insensitive too, so `runsubject::where(...)` is a working query that
  * a case-sensitive pattern would miss — and `::CLASS` is a working
  * class-constant reference that a case-sensitive lookahead would wrongly flag.
+ *
+ * This is not a complete guard, and it is worth naming what it cannot see
+ * rather than letting a green run be read as a broader guarantee than it is.
+ * At least three request-context forms reach `RunSubject` or `NodeExecution`
+ * without ever writing the model name followed by `::` or the bare table
+ * name — the only two things this scanner looks for:
+ *
+ * - `(new RunSubject)->newQuery()` — a query built off an instance, with no
+ *   `::` anywhere in the source.
+ * - `app(RunSubject::class)->newQuery()` — the negative lookahead that lets a
+ *   `hasMany(RunSubject::class)` relation definition through as a mention
+ *   also lets this through, even though `app(...)` immediately resolves and
+ *   queries it.
+ * - A type-hinted, route-bound parameter, e.g. `__invoke(RunSubject $subject)`
+ *   — Laravel resolves this via implicit route-model binding with no query
+ *   call anywhere in the controller's own source for this scanner to match.
+ *
+ * No live violation of any of the three exists in `src/` today — this is
+ * recorded so the boundary of the guard is known, not because one was found.
+ * A future author changing this scanner should extend it to close a form
+ * above only if doing so does not also widen the false-positive surface
+ * `codeWithoutComments()` exists to keep narrow.
  */
 class RequestContextScanner
 {
