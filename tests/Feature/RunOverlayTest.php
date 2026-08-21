@@ -203,6 +203,73 @@ it('four-oh-fours another tenants overlay rather than forbidding it', function (
     $this->actingAs($this->user)->getJson("/nodeflow/runs/{$theirs->id}/overlay")->assertNotFound();
 });
 
+/**
+ * Spec §7's numeric-id/output case. Every other fixture in this file uses
+ * non-numeric node ids ('sent', 'segment', ...) and casts the decoded JSON
+ * back to an array before comparing, so deleting either `(object)` cast in
+ * RunOverlay::snapshot() (lines 56 and 68) leaves every other assertion here
+ * green. A real graph with node ids "0", "1", "2" encodes `nodes` as a JSON
+ * *array* without the cast (PHP renumbers a list of sequential numeric-string
+ * keys), and a node whose output is literally named "1" does the same to
+ * `byOutput`. `normalizeOverlay` on the client rejects an array and throws;
+ * that throw happens inside FlowRunSession's `useMemo` during render, with no
+ * error boundary, so the host's run page goes blank.
+ */
+it('encodes nodes and byOutput as JSON objects even when every key is a numeric string', function () {
+    Gate::define('nodeflow.viewAny', fn ($user, $subject = null) => true);
+
+    $graph = Graph::fromArray([
+        'start' => '0',
+        'nodes' => [
+            ['id' => '0', 'type' => 'core.exit', 'config' => []],
+            ['id' => '1', 'type' => 'core.exit', 'config' => []],
+            ['id' => '2', 'type' => 'core.exit', 'config' => []],
+        ],
+        'edges' => [],
+    ]);
+
+    $flow = Flow::create(['name' => 'Numeric', 'trigger_type' => 'manual', 'status' => 'active']);
+    $version = FlowVersion::create([
+        'flow_id' => $flow->id, 'version' => 1,
+        'graph' => $graph->toArray(), 'content_hash' => 'h-numeric',
+    ]);
+    $run = Run::create([
+        'flow_version_id' => $version->id, 'tenant_id' => 'org-1',
+        'strategy' => 'cohort', 'status' => 'running',
+    ]);
+
+    // Node "0" produced two outputs literally named "0" and "1" — the same
+    // numeric-key collision one level deeper, inside byOutput. Both keys
+    // matter: PHP's array_is_list() (which json_encode consults without the
+    // cast) only misfires on a *sequential-from-zero* run of numeric-string
+    // keys, so a single output named "1" alone would already encode as an
+    // object by accident and this test would pass even with the cast
+    // deleted.
+    NodeExecution::create(['run_id' => $run->id, 'node_id' => '0', 'output' => '0', 'subject_count' => 3]);
+    NodeExecution::create(['run_id' => $run->id, 'node_id' => '0', 'output' => '1', 'subject_count' => 2]);
+
+    $content = $this->actingAs($this->user)
+        ->getJson("/nodeflow/runs/{$run->id}/overlay")
+        ->assertOk()
+        ->getContent();
+
+    // Decoded without $assoc: a JSON object becomes stdClass, a JSON array
+    // stays an array. That is the only way to tell the two encodings apart —
+    // json_decode(..., true) would turn either shape into a PHP array and
+    // hide the defect this test exists to catch.
+    $decoded = json_decode($content);
+
+    expect(is_object($decoded->nodes))->toBeTrue()
+        ->and(property_exists($decoded->nodes, '0'))->toBeTrue()
+        ->and(property_exists($decoded->nodes, '1'))->toBeTrue()
+        ->and(property_exists($decoded->nodes, '2'))->toBeTrue()
+        ->and(is_object($decoded->nodes->{'0'}->byOutput))->toBeTrue()
+        ->and(property_exists($decoded->nodes->{'0'}->byOutput, '0'))->toBeTrue()
+        ->and(property_exists($decoded->nodes->{'0'}->byOutput, '1'))->toBeTrue()
+        ->and($decoded->nodes->{'0'}->byOutput->{'0'})->toBe(3)
+        ->and($decoded->nodes->{'0'}->byOutput->{'1'})->toBe(2);
+});
+
 it('returns the snapshot alone, with no graph or palette to re-send on every poll', function () {
     // Counterfactual: reuse the page's prop array here and every 5-second poll
     // ships the whole graph and the entire node palette. Nothing else in the
