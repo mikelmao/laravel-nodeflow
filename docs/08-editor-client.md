@@ -397,6 +397,40 @@ additive `nodeDecorations` prop on the canvas, keyed by node id rather than
 node type. A host overriding a node's appearance keeps that decoration for
 free; there is nothing to opt into or wire up.
 
+### Other exports from the package root
+
+`FlowRun`, `FlowRunProps`, `NodeOverlay` and `RunSubjectRow` above are what most
+hosts need. The package root also exports the pieces `FlowRun` is built from, for
+a host assembling its own run UI instead of using `FlowRun` directly:
+
+- `useOverlayPolling(url, initial)` — the polling hook described in
+  [Polling](#polling): starts from `initial`, polls `url` every 5 seconds, applies
+  the same terminal and failure-status stop rules, and returns the latest
+  `OverlaySnapshot` plus the last error string, if any.
+- `normalizeOverlay(raw)` — validates and re-keys a raw overlay payload (server
+  response or prop) into an `OverlaySnapshot`. **Throws synchronously on a
+  malformed payload rather than returning a recoverable error** — see the note
+  below.
+- `decorationsFor(nodeIds, snapshot)` — the per-node `{ dimmed, badges }` decision
+  described under [The overlay](#the-overlay), for a list of node ids against one
+  snapshot.
+- `overlayFor(snapshot, nodeId)` — looks up one node's `NodeOverlay` entry in a
+  snapshot, `undefined` if the snapshot has no entry for that id.
+- Types: `OverlaySnapshot`, `RunSummary`, `RunUrls`, `NodeBadge`, `NodeDecoration`,
+  `NodeDecorationMap` — the shapes the functions above consume and produce.
+- `Canvas`'s `nodeDecorations` prop (`NodeDecorationMap`, described under
+  [The canvas seam](#the-canvas-seam)) is host-reachable too, since `Canvas`
+  itself is exported from the package root for both the editor and the run view.
+
+**A malformed `overlay` prop throws during render, not as a recoverable error.**
+`FlowRunSession` calls `normalizeOverlay(overlay)` inside a `useMemo` with no error
+boundary anywhere in the package, so a payload that fails validation (not an
+object, `terminal` not a boolean, `nodes` not an object) throws synchronously out
+of render. A spec-driven expectation exists that this would surface as a named
+client error a host could catch and render around (see spec §6); the shipped
+behavior is a plain, uncaught `Error`. A host that wants to survive a malformed
+overlay needs its own error boundary around `FlowRun`.
+
 ### What's still manual
 
 The five host-wiring requirements above are unchanged by any of this —
