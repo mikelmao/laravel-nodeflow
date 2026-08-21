@@ -374,6 +374,95 @@ what makes the check mean anything.
 
 ---
 
+### G-5 · Browser acceptance for Plan 5 never ran
+**Status:** GAP · **Raised by:** Plan 5 close · **Cost:** one manual toggle plus ~20 minutes
+
+Plan 5 merged without real-browser acceptance. The browser harness needs Chrome's "Allow remote
+debugging" toggle clicked by hand, and Chrome 151 demands it even for a separate instance launched
+with `--remote-debugging-port` and a throwaway profile — which is the workaround Plan 4 relied on and
+recorded as sufficient. It is no longer sufficient.
+
+Four things are therefore unverified by observation, and the first three are what a passing suite
+genuinely cannot substitute for:
+
+1. Console cleanliness across every interaction.
+2. The editor and the run view actually rendering — Plan 5 changed `demo.tsx`, and the Tailwind
+   `@source` line and `dedupe` setting are wiring `install` now reports on.
+3. The two demo buttons working from the real client through the reshaped
+   `runs/{run}/subjects/{subject}/…` URLs. No test exercises those URLs from the browser.
+4. Logout closing the demo, now that the group carries `auth`.
+
+**To run it later:** launch `/Applications/Google Chrome.app/Contents/MacOS/Google Chrome
+--remote-debugging-port=9222 --user-data-dir=/tmp/nodeflow-chrome`, visit
+`chrome://inspect/#remote-debugging` in *that* window and tick the box, start
+`php artisan queue:work` in the demo, then point the harness at the CDP endpoint. Note it binds to
+IPv6 loopback — use `http://[::1]:9222/json/version`, not `127.0.0.1`.
+
+### G-6 · Duplicated path logic across the install steps
+**Status:** GAP · **Raised by:** Plan 5 whole-branch review · **Cost:** small
+
+Two of Plan 5's fix-round defects (**R13**, **R15**) were path-arithmetic bugs in separate step
+classes, and the logic was still not shared afterwards. There are three `PACKAGE_SOURCE` constants
+holding **two different values** — `TailwindSourceStep` and `TsconfigPathsStep` use
+`vendor/atram/…`, `ViteAliasStep` uses `atram/…` — and two independent `segments()` helpers with
+different filtering rules (one drops `''`, the other drops `''` and `'.'`).
+
+The characteristic bug of this codebase is a substring test standing in for real path handling; it has
+now appeared four times. Sharing one normalised path helper is the structural answer.
+
+### G-7 · `ViteAliasStep` requires two facts that need never be adjacent
+**Status:** GAP · **Raised by:** Plan 5 whole-branch review, proven by probe · **Cost:** small
+
+`check()` asks whether the comment-stripped config contains `@nodeflow/editor` **and**, separately,
+the package path. An alias pointing at the wrong directory plus any other mention of the vendor path
+anywhere in the file reads `AlreadyPresent`. The docblock discloses a *different*, narrower limit —
+that it cannot prove the alias is in the actively exported config. State the real limit or bound the
+match to the alias entry.
+
+### G-8 · The install steps disagree about what an unpublished optional file means
+**Status:** GAP · **Raised by:** Plan 5 whole-branch review · **Cost:** small
+
+`MigrationStep` deliberately reports "no published copy" as `AlreadyPresent`, because that is the
+state **E19** wants hosts in. `PublishConfigStep` reports an unpublished `config/nodeflow.php` as
+`Writable`, even though the provider does `mergeConfigFrom` and publishing is equally optional. Net
+effect: `install --check` is red on a working host that never published the config — verified against
+the real demo host before Plan 5's install run published it.
+
+### G-9 · The generators' paste snippets use short class names
+**Status:** GAP · **Raised by:** Plan 5 whole-branch review · **Cost:** trivial
+
+**R7** established that an additive edit into a host provider must use fully-qualified names, because
+it never touches the `use` block — and `ProviderStep::homes()` does. But `MakeTriggerCommand` and
+`MakeSubjectAttributeCommand` tell the host to paste `app(TriggerRegistry::class)` and
+`app(SubjectAttributeRegistry::class)` into a provider that may have neither import. Same reasoning,
+opposite conclusion.
+
+### G-10 · The writer's short-name gap is fixed but its documentation is not
+**Status:** DRIFT · **Raised by:** Plan 5 whole-branch review · **Cost:** trivial
+
+`NodeRegistrationWriter`'s comment recording that a bare imported `SendSms::class` is not recognised
+was deleted during Plan 5's Task 3 refactor and exists nowhere in `src/`, `tests/` or `docs/`. Spec
+§3.4 still cites it as documented, and it is the gap behind the worst defect the Plan 5 whole-branch
+review found (`install --check` failing on the reference host). The gap is now closed in
+`ProviderRegistrationStep` for the `providers.php` case, but the writer's own generic behaviour and
+its documentation both need restating.
+
+### G-11 · Spec E20's arithmetic contradicts §3.2
+**Status:** DRIFT · **Raised by:** Plan 5 whole-branch review · **Cost:** trivial
+
+`2026-08-21-remaining-tooling-design.md` decision **E20** says `install` "writes four things and
+verifies three", then lists four verifies. §3.2's nine steps are **five writers and four verifiers**.
+The code and `docs/02-integration.md` both follow §3.2, which is the correct resolution; E20's
+headline numbers are wrong in the binding document.
+
+### G-12 · `ViteConfigStep` prefers the config file Vite ignores
+**Status:** GAP · **Raised by:** Plan 5 whole-branch review, proven by probe · **Cost:** trivial
+
+`CONFIG_CANDIDATES` checks `vite.config.ts` first; Vite itself resolves `.js` before `.ts`. A host with
+both is checked against the file Vite does not use. One-line ordering fix.
+
+---
+
 ## Documentation drift
 
 ### R-1 · The spec does not record Plan 2 as delivered
