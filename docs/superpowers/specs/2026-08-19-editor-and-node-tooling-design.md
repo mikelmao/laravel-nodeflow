@@ -508,7 +508,7 @@ before implementation started, lives in
 > and retrying forever is noise — and keep polling on 5xx and network failures while surfacing the
 > last error, rather than freezing a stale overlay silently.
 >
-> Acceptance: **356 package Pest tests** (5820 assertions) and **156 package Vitest tests** — the
+> Acceptance: **356 package Pest tests** (5820 assertions) and **157 package Vitest tests** — the
 > plan predicted 151; six additional tests were required during execution, each covering a guard
 > that otherwise had none — plus a silent package `tsc`. Browser acceptance against the real demo
 > is Task 13's work; see `docs/superpowers/open-issues.md` for its placeholder.

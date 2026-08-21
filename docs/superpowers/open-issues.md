@@ -7,7 +7,7 @@ most were proven by probe during a review rather than suspected.
 **Status key:** `DECISION` needs a human call · `DEFECT` is proven and unfixed · `GAP` is missing
 coverage or missing code · `DRIFT` is documentation disagreeing with code.
 
-Last updated 2026-08-21 after Plan 4 package work (`8e79b99..4192275`): **156 package Vitest
+Last updated 2026-08-21 after Plan 4 package work (`8e79b99..4192275`): **157 package Vitest
 tests, 356 package Pest tests (5820 assertions)** passing, silent package `tsc`. Demo integration
 and real-browser acceptance for Plan 4 have not run yet — see "Plan 4 acceptance evidence" below,
 which is a placeholder pending Task 13. Demo Pest tests remain **44**, from Plan 3's demo
@@ -92,7 +92,7 @@ that evidence rather than inventing one later; it will be replaced wholesale onc
 `docs/superpowers/specs/2026-08-21-run-view-design.md` §9 have actually been run.
 
 Package-only gates already measured, ahead of that browser pass: **356 package Pest tests (5820
-assertions)**, **156 package Vitest tests** (the design predicted 151; six extra tests were added
+assertions)**, **157 package Vitest tests** (the design predicted 151; six extra tests were added
 during execution, each covering a guard that otherwise had none), and a silent package `tsc`.
 
 ---
