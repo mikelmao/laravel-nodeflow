@@ -157,6 +157,88 @@ it('rejects a mapping to a sibling directory whose name merely starts with js', 
     expect($this->step->check())->toBe(InstallOutcome::CannotWire);
 });
 
+it('rejects a baseUrl that walks into resources/js and straight back out', function () {
+    // Fix round 2, finding 3: round 1 checked only the TARGET's segments for a
+    // literal "..", never baseUrl's. A baseUrl that walks in and back out via a
+    // trailing ".." resolves outside the package, and any target passed the
+    // check because the ".." was never inspected.
+    ($this->write)(json_encode(['compilerOptions' => [
+        'baseUrl' => 'vendor/atram/laravel-nodeflow/resources/js/..',
+        'paths' => [
+            '@nodeflow/editor' => ['anything-not-real'],
+            '@nodeflow/editor/*' => ['anything-not-real/*'],
+        ],
+    ]]));
+
+    expect($this->step->check())->toBe(InstallOutcome::CannotWire);
+});
+
+it('rejects a baseUrl that climbs out via a longer .. chain mid-path', function () {
+    ($this->write)(json_encode(['compilerOptions' => [
+        'baseUrl' => 'vendor/atram/laravel-nodeflow/resources/js/../../elsewhere',
+        'paths' => [
+            '@nodeflow/editor' => ['totally/bogus'],
+            '@nodeflow/editor/*' => ['totally/bogus/*'],
+        ],
+    ]]));
+
+    expect($this->step->check())->toBe(InstallOutcome::CannotWire);
+});
+
+it('rejects an absolute target instead of reading it as project-relative', function () {
+    // Fix round 2, finding 4: segments() drops a leading "/" alongside ".",
+    // which used to let an absolute filesystem path be compared as though it
+    // were relative to the project root.
+    ($this->write)(json_encode(['compilerOptions' => ['paths' => [
+        '@nodeflow/editor' => ['/vendor/atram/laravel-nodeflow/resources/js'],
+        '@nodeflow/editor/*' => ['/vendor/atram/laravel-nodeflow/resources/js/*'],
+    ]]]));
+
+    expect($this->step->check())->toBe(InstallOutcome::CannotWire);
+});
+
+it('rejects an absolute baseUrl', function () {
+    ($this->write)(json_encode(['compilerOptions' => [
+        'baseUrl' => '/absolute/base',
+        'paths' => [
+            '@nodeflow/editor' => ['vendor/atram/laravel-nodeflow/resources/js'],
+            '@nodeflow/editor/*' => ['vendor/atram/laravel-nodeflow/resources/js/*'],
+        ],
+    ]]));
+
+    expect($this->step->check())->toBe(InstallOutcome::CannotWire);
+});
+
+it('still accepts the real host\'s baseUrl of "." after the climb-out fix', function () {
+    // Regression guard for fix round 2: the merged-list ".." check and the
+    // leading-"/" check must not disturb the one real installed host, whose
+    // baseUrl is the ordinary ".".
+    ($this->write)(json_encode(['compilerOptions' => [
+        'baseUrl' => '.',
+        'paths' => [
+            '@nodeflow/editor' => ['./vendor/atram/laravel-nodeflow/resources/js'],
+            '@nodeflow/editor/*' => ['./vendor/atram/laravel-nodeflow/resources/js/*'],
+        ],
+    ]]));
+
+    expect($this->step->check())->toBe(InstallOutcome::AlreadyPresent);
+});
+
+it('still accepts a baseUrl that legitimately covers part of the prefix, with no ..', function () {
+    // Regression guard for fix round 2: a baseUrl genuinely inside the
+    // package's own tree, with no ".." anywhere, must still be accepted — the
+    // fix targets the climb-out, not baseUrl-provided prefixes in general.
+    ($this->write)(json_encode(['compilerOptions' => [
+        'baseUrl' => 'vendor/atram/laravel-nodeflow',
+        'paths' => [
+            '@nodeflow/editor' => ['resources/js'],
+            '@nodeflow/editor/*' => ['resources/js/*'],
+        ],
+    ]]));
+
+    expect($this->step->check())->toBe(InstallOutcome::AlreadyPresent);
+});
+
 it('never writes to the tsconfig', function () {
     // E20: a JSON round-trip destroys the starter kit's ninety-line comment
     // block, which is documentation the host owns.
