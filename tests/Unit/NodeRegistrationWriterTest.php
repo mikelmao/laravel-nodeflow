@@ -642,3 +642,35 @@ it('does not let a nested array argument in an earlier call truncate the attribu
     expect($outcome)->toBe(NodeRegistrationOutcome::AlreadyPresent);
     expect(substr_count(file_get_contents($path), "make('clicked',"))->toBe(1);
 });
+
+it('does not treat a commented-out attribute registration as already present', function () {
+    // Important #3 (round 3). E22's whole point: a debugged-out entry must
+    // not read as live. isAlreadyPresent()'s substring branch builds its
+    // search body by skipping T_COMMENT/T_DOC_COMMENT tokens specifically
+    // so a commented-out `SubjectAttribute::make('clicked', ...)` cannot
+    // satisfy the presence check. Counterfactual: drop that comment skip
+    // and this reports AlreadyPresent for a 'clicked' attribute that was
+    // never actually registered — the attribute is then silently never
+    // added, forever, because every future run reads the comment as proof
+    // it is already there.
+    $path = providerWithThreeHomes(str_replace(
+        "        return [\n        ];",
+        "        return [\n"
+            ."            // \Nodeflow\Schema\SubjectAttribute::make('clicked', 'Old', 'boolean', fn (\$subject) => null),\n"
+            .'        ];',
+        threeHomesSource(),
+    ));
+
+    $outcome = (new NodeRegistrationWriter(new Filesystem))->appendTo(
+        $path,
+        NodeRegistrationWriter::ATTRIBUTE_ANCHOR,
+        "SubjectAttribute::make('clicked'",
+        "\Nodeflow\Schema\SubjectAttribute::make('clicked', 'Clicked', 'boolean', fn (\$subject) => null)",
+        '            ',
+    );
+
+    expect($outcome)->toBe(NodeRegistrationOutcome::Appended);
+    expect(file_get_contents($path))->toContain("make('clicked', 'Clicked'");
+    expectParseablePhp($path);
+});
+

@@ -231,30 +231,79 @@ class NodeRegistrationWriter
         $target = ltrim($nodeClass, '\\');
         $resolver = PhpNameResolver::forSource($contents);
 
-        $matches = array_values(array_filter(
-            $parsed['elements'],
-            static fn (array $element) => $resolver->resolve($element['writtenName']) === $target,
-        ));
+        $matches = [];
+
+        foreach ($parsed['elements'] as $index => $element) {
+            if ($resolver->resolve($element['writtenName']) === $target) {
+                $matches[] = [$index, $element];
+            }
+        }
 
         if ($matches === []) {
             return NodeRemovalOutcome::NotPresent;
         }
 
-        $totalElementCount = count($parsed['elements']);
+        $removedIndexes = [];
         $deletions = [];
 
-        foreach ($matches as $element) {
-            $deletion = $this->entryDeletionRange($contents, $parsed['tokens'], $element, $totalElementCount, $parsed);
+        foreach ($matches as [$index, $element]) {
+            $removedIndexes[$index] = true;
 
-            if ($deletion === null) {
+            $ranges = $this->elementDeletionRanges($contents, $parsed['tokens'], $element, $index, $parsed['elements'], $parsed);
+
+            if ($ranges === null) {
                 return NodeRemovalOutcome::EntryAmbiguous;
             }
 
-            $deletions[] = $deletion;
+            array_push($deletions, ...$ranges);
         }
 
-        // Last match backwards, so earlier byte offsets in $updated stay valid
-        // as each substr_replace() below runs.
+        // A REMOVED PREFIX needs one more fix-up elementDeletionRanges()
+        // cannot see on its own, because it only ever looks at a single
+        // element's IMMEDIATE neighbour: if element 0 is removed and the
+        // very next element is ALSO removed (both matches), element 0's
+        // "reach forward" targets that next element's own leading comma —
+        // correct if that neighbour survived alone, but redundant here,
+        // because the neighbour is being deleted too. The comma that
+        // actually needs stripping is the one leading the FIRST element
+        // that survives the whole removed run, wherever that ends up being
+        // — otherwise IT starts the array with a comma once everything
+        // before it is gone.  A removed SUFFIX has no equivalent problem: a
+        // comma left before the closing bracket is always a legal trailing
+        // comma.
+        if (isset($removedIndexes[0])) {
+            $firstSurvivorIndex = null;
+
+            foreach ($parsed['elements'] as $index => $element) {
+                if (! isset($removedIndexes[$index])) {
+                    $firstSurvivorIndex = $index;
+
+                    break;
+                }
+            }
+
+            if ($firstSurvivorIndex !== null && $firstSurvivorIndex > 0) {
+                $leadingCommaIndex = $parsed['elements'][$firstSurvivorIndex - 1]['endComma'];
+
+                if ($leadingCommaIndex !== null) {
+                    $fixup = $this->delimiterDeletionRange($contents, $parsed['tokens'], $leadingCommaIndex, 'forward');
+
+                    if ($fixup !== null) {
+                        $deletions[] = $fixup;
+                    }
+                }
+            }
+        }
+
+        // Merge before reversing: elements removed together (or the prefix
+        // fix-up above, together with the element it borrows from) can
+        // produce ranges that legitimately overlap (mergeRanges()'s
+        // docblock), and substr_replace()'ing the same bytes twice would
+        // corrupt the result. Last range backwards after that, so earlier
+        // byte offsets in $updated stay valid as each substr_replace()
+        // below runs.
+        $deletions = $this->mergeRanges($deletions);
+
         usort($deletions, static fn (array $a, array $b) => $b['start'] <=> $a['start']);
 
         $updated = $contents;
@@ -266,12 +315,14 @@ class NodeRegistrationWriter
         $this->files->put($providerPath, $updated);
 
         // Re-verify rather than trust the write (E11's rule, applied to a
-        // deletion): the result must still parse, the array's remaining
-        // content must still be fully understood (not EntryUnsupported), AND
-        // no resolved reference to the target may remain anywhere in it.
-        // Any failure restores the original bytes rather than report a
-        // removal that left the host's provider still naming a class that
-        // may no longer exist.
+        // deletion): the result must still COMPILE — not merely parse; see
+        // compiles()'s docblock for why token_get_all(TOKEN_PARSE) is not
+        // enough here even though it remains enough for appendTo() — the
+        // array's remaining content must still be fully understood (not
+        // EntryUnsupported), AND no resolved reference to the target may
+        // remain anywhere in it. Any failure restores the original bytes
+        // rather than report a removal that left the host's provider still
+        // naming a class that may no longer exist.
         $written = $this->files->get($providerPath);
         $remainingParsed = $this->spanElements($written, $anchor);
 
@@ -286,7 +337,7 @@ class NodeRegistrationWriter
             ));
         }
 
-        if (! $this->parses($written) || $remaining === null || $remaining !== []) {
+        if (! $this->compiles($providerPath) || $remaining === null || $remaining !== []) {
             $this->files->put($providerPath, $contents);
 
             return NodeRemovalOutcome::WriteFailed;
@@ -296,23 +347,108 @@ class NodeRegistrationWriter
     }
 
     /**
-     * The RAW byte range to delete for one matched element, or null when the
-     * element cannot be removed without touching a sibling's content
+     * The RAW byte range(s) to delete for one matched element, or null when
+     * the element cannot be removed without touching a sibling's content
      * (EntryAmbiguous).
      *
-     * A match's own physical line "belongs to it alone" when every non-
-     * whitespace, non-comment token on that line is either one of the
-     * element's own tokens or a single trailing comma — computed from the
-     * TOKEN stream rather than a trimmed string comparison, so a same-line
-     * trailing comment (whose text might coincidentally look like more
-     * entry text) can never confuse the check.
+     * Usually one range: the element's own physical line, absorbing
+     * whichever delimiting comma sits on that SAME line — trailing-comma
+     * style puts it after the element, comma-FIRST style puts it before,
+     * and either is safely absorbed by deleting the whole line, because the
+     * comma and the element it delimits leave together.
+     *
+     * When NEITHER a leading nor a trailing comma sits on the element's own
+     * line — comma-first's very first element, which has nothing before it
+     * to carry a comma, or a comma stranded entirely on its own dedicated
+     * line — deleting only the element's own line would leave that comma
+     * BEHIND, now leading nothing: `[` / `    , Foo::class` / `]`. That is
+     * not a syntax error token_get_all(TOKEN_PARSE) can see (parses()
+     * waves it through); it is a POST-parse COMPILE error, "Cannot use
+     * empty array elements in arrays" — which is exactly why removeFrom()'s
+     * post-write check shells out to `php -l` instead (see compiles()).
+     * This method is the CORRECTNESS half of that fix: it finds the comma
+     * that belongs to the removed element even when it lives on a
+     * different physical line, and adds a second range to remove it too —
+     * the whole line, if the comma is stranded alone on one, or just the
+     * comma token, if it leads the next SURVIVING element's own line.
      *
      * @param  list<array{id: int|null, text: string, start: int, end: int}>  $tokens
-     * @param  array{writtenName: string, tokenIndexes: list<int>, rawStart: int, rawEnd: int}  $element
+     * @param  array{writtenName: string, tokenIndexes: list<int>, rawStart: int, rawEnd: int, endComma: int|null}  $element
+     * @param  list<array{writtenName: string, tokenIndexes: list<int>, rawStart: int, rawEnd: int, endComma: int|null}>  $allElements
      * @param  array{tokens: list<mixed>, openRaw: int, closeRaw: int, bodyStart: int, bodyEnd: int}  $span
-     * @return array{start: int, end: int}|null
+     * @return list<array{start: int, end: int}>|null
      */
-    private function entryDeletionRange(string $contents, array $tokens, array $element, int $totalElementCount, array $span): ?array
+    private function elementDeletionRanges(
+        string $contents,
+        array $tokens,
+        array $element,
+        int $elementIndex,
+        array $allElements,
+        array $span,
+    ): ?array {
+        $totalElementCount = count($allElements);
+        $match = $this->ownLineMatch($contents, $tokens, $element);
+
+        if ($match === null) {
+            // Something else — a sibling — shares this line, unless the
+            // element is the array's entire content (no sibling exists).
+            return $totalElementCount === 1
+                ? [['start' => $span['openRaw'] + 1, 'end' => $span['closeRaw']]]
+                : null;
+        }
+
+        if ($match['type'] === 'line') {
+            return [$match['range']];
+        }
+
+        // 'neither': the element's own line carries no comma at all.
+        if ($totalElementCount === 1) {
+            return [['start' => $span['openRaw'] + 1, 'end' => $span['closeRaw']]];
+        }
+
+        $ownRange = $match['range'];
+        $isLast = $elementIndex === $totalElementCount - 1;
+
+        $delimiterIndex = $isLast
+            ? ($elementIndex > 0 ? $allElements[$elementIndex - 1]['endComma'] : null)
+            : $element['endComma'];
+
+        if ($delimiterIndex === null) {
+            return [$ownRange];
+        }
+
+        $delimiterRange = $this->delimiterDeletionRange(
+            $contents,
+            $tokens,
+            $delimiterIndex,
+            $isLast ? 'backward' : 'forward',
+        );
+
+        return $delimiterRange === null ? [$ownRange] : [$ownRange, $delimiterRange];
+    }
+
+    /**
+     * Classifies $element's relationship to its own physical line:
+     * - `['type' => 'line', 'range' => ...]` — the line is exactly the
+     *   element plus one adjacent comma (leading OR trailing); delete the
+     *   whole line.
+     * - `['type' => 'neither', 'range' => ...]` — the line is exactly the
+     *   element and NOTHING else, not even a comma; the caller must find
+     *   the element's comma elsewhere.
+     * - `null` — the line contains something else too (a sibling entry);
+     *   ambiguous, unless the caller determines the element is the array's
+     *   sole content.
+     *
+     * Computed from the TOKEN stream rather than a trimmed string
+     * comparison, so a same-line trailing comment (whose text might
+     * coincidentally look like more entry text) can never confuse the
+     * check.
+     *
+     * @param  list<array{id: int|null, text: string, start: int, end: int}>  $tokens
+     * @param  array{tokenIndexes: list<int>, rawStart: int, rawEnd: int}  $element
+     * @return array{type: string, range: array{start: int, end: int}}|null
+     */
+    private function ownLineMatch(string $contents, array $tokens, array $element): ?array
     {
         $rawStart = $element['rawStart'];
         $rawEnd = $element['rawEnd'];
@@ -321,46 +457,142 @@ class NodeRegistrationWriter
         $lineStart = $previousNewline === false ? 0 : $previousNewline + 1;
 
         $nextNewline = strpos($contents, "\n", $rawEnd);
-        $lineEnd = $nextNewline === false ? strlen($contents) : $nextNewline;
+        $lineEndExclusive = $nextNewline === false ? strlen($contents) : $nextNewline;
+        $rangeEnd = $nextNewline === false ? strlen($contents) : $nextNewline + 1;
 
         $meaningfulIndexes = [];
 
         foreach ($tokens as $index => $token) {
-            if ($token['start'] >= $lineStart && $token['end'] <= $lineEnd
+            if ($token['start'] >= $lineStart && $token['end'] <= $lineEndExclusive
                 && ! in_array($token['id'], self::INSIGNIFICANT_TOKEN_IDS, true)) {
                 $meaningfulIndexes[] = $index;
             }
         }
 
         $elementIndexes = $element['tokenIndexes'];
-        $matchesLine = $meaningfulIndexes === $elementIndexes;
 
-        if (! $matchesLine && count($meaningfulIndexes) === count($elementIndexes) + 1) {
+        if ($meaningfulIndexes === $elementIndexes) {
+            return ['type' => 'neither', 'range' => ['start' => $lineStart, 'end' => $rangeEnd]];
+        }
+
+        if (count($meaningfulIndexes) === count($elementIndexes) + 1) {
             $withoutLast = array_slice($meaningfulIndexes, 0, -1);
             $lastIndex = end($meaningfulIndexes);
 
-            $matchesLine = $withoutLast === $elementIndexes
-                && $tokens[$lastIndex]['id'] === null
-                && $tokens[$lastIndex]['text'] === ',';
+            if ($withoutLast === $elementIndexes && $tokens[$lastIndex]['id'] === null && $tokens[$lastIndex]['text'] === ',') {
+                return ['type' => 'line', 'range' => ['start' => $lineStart, 'end' => $rangeEnd]];
+            }
+
+            $withoutFirst = array_slice($meaningfulIndexes, 1);
+            $firstIndex = $meaningfulIndexes[0];
+
+            if ($withoutFirst === $elementIndexes && $tokens[$firstIndex]['id'] === null && $tokens[$firstIndex]['text'] === ',') {
+                return ['type' => 'line', 'range' => ['start' => $lineStart, 'end' => $rangeEnd]];
+            }
         }
 
-        if ($matchesLine) {
+        return null;
+    }
+
+    /**
+     * The extra RAW range to delete for the comma at $delimiterIndex, when
+     * an element being removed has no comma of its own to absorb — or null
+     * when that comma should be left alone.
+     *
+     * Reaching 'backward' (only tried for the LAST element, when its own
+     * line has neither comma) ONLY deletes a comma stranded entirely alone
+     * on its own line. If instead it is co-located with the PRECEDING
+     * element's own content — the ordinary case, a trailing comma before
+     * what is now the new last element — leaving it produces a perfectly
+     * legal trailing comma, so this returns null and the caller deletes
+     * nothing more. Reaching backward is never asked to touch that
+     * preceding element's real content.
+     *
+     * Reaching 'forward' additionally handles the comma leading the NEXT
+     * surviving element's own line (comma-first style): only the comma
+     * token itself is removed — plus immediately trailing horizontal
+     * whitespace, so the surviving line does not start with a stray gap —
+     * never that line's real content.
+     *
+     * @param  list<array{id: int|null, text: string, start: int, end: int}>  $tokens
+     * @return array{start: int, end: int}|null
+     */
+    private function delimiterDeletionRange(string $contents, array $tokens, int $delimiterIndex, string $direction): ?array
+    {
+        $delimiter = $tokens[$delimiterIndex];
+
+        $previousNewline = strrpos(substr($contents, 0, $delimiter['start']), "\n");
+        $lineStart = $previousNewline === false ? 0 : $previousNewline + 1;
+
+        $nextNewline = strpos($contents, "\n", $delimiter['end']);
+        $lineEndExclusive = $nextNewline === false ? strlen($contents) : $nextNewline;
+
+        $othersOnLine = [];
+
+        foreach ($tokens as $index => $token) {
+            if ($index === $delimiterIndex) {
+                continue;
+            }
+
+            if ($token['start'] >= $lineStart && $token['end'] <= $lineEndExclusive
+                && ! in_array($token['id'], self::INSIGNIFICANT_TOKEN_IDS, true)) {
+                $othersOnLine[] = $index;
+            }
+        }
+
+        if ($othersOnLine === []) {
             return [
                 'start' => $lineStart,
                 'end' => $nextNewline === false ? strlen($contents) : $nextNewline + 1,
             ];
         }
 
-        // No "own line" to delete without touching a sibling — but if this
-        // element is the array's ONLY element, there is no sibling, and the
-        // whole span between the brackets can be cleared instead. This is the
-        // path a single-line array (`$nodes = [Foo::class];`) takes, because
-        // its "line" also contains the anchor and the closing bracket.
-        if ($totalElementCount === 1) {
-            return ['start' => $span['openRaw'] + 1, 'end' => $span['closeRaw']];
+        if ($direction === 'backward') {
+            return null;
         }
 
-        return null;
+        $end = $delimiter['end'];
+
+        while ($end < strlen($contents) && ($contents[$end] === ' ' || $contents[$end] === "\t")) {
+            $end++;
+        }
+
+        return ['start' => $delimiter['start'], 'end' => $end];
+    }
+
+    /**
+     * Collapses overlapping or touching [start, end) ranges into the
+     * minimal disjoint set covering the same bytes. Needed because two
+     * elements removed together can generate ranges that legitimately
+     * overlap or touch — one element's "reach forward" range for a stray
+     * comma can coincide with its NEXT sibling's own-line range, when that
+     * sibling is ALSO being removed — and substr_replace()'ing the same
+     * bytes twice would corrupt the result.
+     *
+     * @param  list<array{start: int, end: int}>  $ranges
+     * @return list<array{start: int, end: int}>
+     */
+    private function mergeRanges(array $ranges): array
+    {
+        if ($ranges === []) {
+            return [];
+        }
+
+        usort($ranges, static fn (array $a, array $b) => $a['start'] <=> $b['start']);
+
+        $merged = [$ranges[0]];
+
+        for ($i = 1, $count = count($ranges); $i < $count; $i++) {
+            $lastIndex = count($merged) - 1;
+
+            if ($ranges[$i]['start'] <= $merged[$lastIndex]['end']) {
+                $merged[$lastIndex]['end'] = max($merged[$lastIndex]['end'], $ranges[$i]['end']);
+            } else {
+                $merged[] = $ranges[$i];
+            }
+        }
+
+        return $merged;
     }
 
     /**
@@ -406,6 +638,11 @@ class NodeRegistrationWriter
         $current = [];
         $depth = 0;
 
+        // Each group carries the token index of the COMMA that ended it —
+        // null only for a final group with no trailing comma — so a
+        // removed element's own delimiter can be found later even when it
+        // does not sit on the element's own physical line (comma-first
+        // list style, or a comma stranded alone on its own line).
         for ($i = $span['bodyStart']; $i < $span['bodyEnd']; $i++) {
             $token = $tokens[$i];
             $isBoundary = $token['id'] === null;
@@ -415,7 +652,7 @@ class NodeRegistrationWriter
             } elseif ($isBoundary && in_array($token['text'], [')', ']', '}'], true)) {
                 $depth--;
             } elseif ($isBoundary && $token['text'] === ',' && $depth === 0) {
-                $groups[] = $current;
+                $groups[] = ['tokens' => $current, 'endComma' => $i];
                 $current = [];
 
                 continue;
@@ -425,14 +662,14 @@ class NodeRegistrationWriter
         }
 
         if ($current !== []) {
-            $groups[] = $current;
+            $groups[] = ['tokens' => $current, 'endComma' => null];
         }
 
         $elements = [];
 
         foreach ($groups as $group) {
             $significant = array_values(array_filter(
-                $group,
+                $group['tokens'],
                 static fn (int $index) => ! in_array($tokens[$index]['id'], self::INSIGNIFICANT_TOKEN_IDS, true),
             ));
 
@@ -446,6 +683,7 @@ class NodeRegistrationWriter
                 return ['unsupported' => true, 'elements' => [], 'tokens' => $tokens] + $span;
             }
 
+            $classified['endComma'] = $group['endComma'];
             $elements[] = $classified;
         }
 
@@ -777,6 +1015,12 @@ class NodeRegistrationWriter
      * statement at class-body level, which is exactly what an insertion into a
      * commented-out property declaration produces), and staying in-process
      * avoids a second `php` invocation for every write this writer performs.
+     *
+     * Used by appendTo() only. That reasoning does not transfer to
+     * removeFrom() — see compiles() — so this method is deliberately left
+     * alone rather than "fixed" for both call sites: appendTo() ships in
+     * make-node, called once per generated node, and no shipped command's
+     * behaviour should change here.
      */
     private function parses(string $source): bool
     {
@@ -787,5 +1031,39 @@ class NodeRegistrationWriter
         } catch (\ParseError) {
             return false;
         }
+    }
+
+    /**
+     * Whether $path is valid PHP by shelling out to `php -l` — a full
+     * COMPILE, not merely a parse. Reserved for removeFrom()'s post-write
+     * check specifically.
+     *
+     * token_get_all(..., TOKEN_PARSE) (parses(), above) only raises
+     * \ParseError for a SYNTAX error. An empty array element left behind by
+     * an incomplete deletion — `[
+    , Foo::class
+]`, a stray comma with
+     * nothing before it — is a separate, POST-parse COMPILE error ("Cannot
+     * use empty array elements in arrays") that token_get_all() never sees
+     * at all: it tokenises and "parses" that array without complaint. A
+     * post-write verification that cannot see the exact class of breakage
+     * it exists to catch is worse than none, because it reports success.
+     *
+     * This writer's own docblock elsewhere argues against a subprocess call
+     * "for every write" — that reasoning was about appendTo() inside
+     * make-node, called once per generated node. It does not transfer here:
+     * a removal runs once per extraction, in a developer-invoked command,
+     * and its failure mode is deleting a user's class file out from under a
+     * host that still references it. appendTo()'s parses() is left as-is
+     * so no shipped command's behaviour changes; this stricter check is
+     * added on the removal path only.
+     */
+    private function compiles(string $path): bool
+    {
+        $output = [];
+
+        exec('php -l '.escapeshellarg($path).' 2>&1', $output, $exitCode);
+
+        return $exitCode === 0;
     }
 }

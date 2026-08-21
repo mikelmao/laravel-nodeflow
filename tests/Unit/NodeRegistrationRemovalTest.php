@@ -527,3 +527,192 @@ it('refuses rather than reporting NotPresent when the array contains a spread el
     expect($outcome)->toBe(NodeRemovalOutcome::EntryUnsupported);
     expect(file_get_contents($path))->toBe($before);
 });
+
+it('produces valid PHP when removing the first entry of a comma-first list', function () {
+    // CRITICAL (round 3). Comma-first style puts the delimiter BEFORE the
+    // next entry rather than after this one, so this entry's own physical
+    // line carries NEITHER a leading nor a trailing comma. Deleting only
+    // this line — the pre-fix behaviour — would strand the following
+    // entry's leading comma with nothing before it: "[\n    , TagUser::class\n]",
+    // which `php -l` rejects with "Cannot use empty array elements in
+    // arrays" — a COMPILE error token_get_all(TOKEN_PARSE) never sees, so
+    // the pre-fix post-write check waved it through and reported Removed
+    // for a file that no longer compiles. Counterfactual: revert
+    // elementDeletionRanges() to the single-range version and this either
+    // fails outright, or — worse — silently passes as Removed while the
+    // file stops compiling.
+    $path = providerForRemoval(
+        "        SendMessage::class\n        , TagUser::class",
+        'use App\Nodeflow\Nodes\SendMessage;',
+    );
+
+    expect(remove($path, 'App\Nodeflow\Nodes\SendMessage'))->toBe(NodeRemovalOutcome::Removed);
+
+    $contents = file_get_contents($path);
+
+    // The `use` import naming SendMessage is untouched (removeFrom() only
+    // edits the array); the ARRAY ENTRY and its stranded delimiter are gone.
+    expect($contents)->not->toContain('SendMessage::class');
+    expect($contents)->toContain('TagUser::class');
+    expect(substr_count($contents, ','))->toBe(0);
+    expectParseablePhp($path);
+});
+
+it('produces valid PHP when removing a middle entry of a comma-first list', function () {
+    // Same style, removing the MIDDLE entry: its own leading comma (the
+    // delimiter between the first entry and this one) is absorbed by the
+    // whole-line deletion, and the FOLLOWING entry's own leading comma
+    // remains untouched, now correctly separating the first entry from the
+    // third.
+    $path = providerForRemoval(
+        "        TagUser::class\n        , SendMessage::class\n        , UserTagged::class",
+        "use App\Nodeflow\Nodes\TagUser;\nuse App\Nodeflow\Nodes\SendMessage;\nuse App\Nodeflow\Nodes\UserTagged;",
+    );
+
+    expect(remove($path, 'App\Nodeflow\Nodes\SendMessage'))->toBe(NodeRemovalOutcome::Removed);
+
+    $contents = file_get_contents($path);
+
+    expect($contents)->not->toContain('SendMessage::class');
+    expect($contents)->toContain('TagUser::class');
+    expect($contents)->toContain('UserTagged::class');
+    expectParseablePhp($path);
+});
+
+it('produces valid PHP when removing an entry separated by a comma stranded on its own line', function () {
+    // A third list style: the comma belongs to neither neighbour's line,
+    // sitting entirely alone on a dedicated line between them. Removing the
+    // first entry must also remove that lone-comma line, or the survivor
+    // is left with a leading comma and nothing before it.
+    $directory = removalFixtureDirectory();
+
+    if (! is_dir($directory)) {
+        mkdir($directory, 0777, true);
+    }
+
+    $path = $directory.'/lone-comma-'.bin2hex(random_bytes(6)).'.php';
+    file_put_contents($path, <<<'PHP'
+    <?php
+
+    namespace App\Providers;
+
+    use Illuminate\Support\ServiceProvider;
+    use App\Nodeflow\Nodes\SendMessage;
+    use App\Nodeflow\Nodes\TagUser;
+
+    class NodeflowServiceProvider extends ServiceProvider
+    {
+        protected array $nodes = [
+            SendMessage::class
+            ,
+            TagUser::class
+        ];
+    }
+    PHP);
+
+    expect(remove($path, 'App\Nodeflow\Nodes\SendMessage'))->toBe(NodeRemovalOutcome::Removed);
+
+    $contents = file_get_contents($path);
+
+    expect($contents)->not->toContain('SendMessage::class');
+    expect($contents)->toContain('TagUser::class');
+    expectParseablePhp($path);
+});
+
+it('refuses rather than reporting NotPresent for a dynamic class reference', function () {
+    // Important #1. `$this->sms::class` is a live, dynamic class-constant
+    // fetch this writer cannot resolve without evaluating a property at
+    // runtime — refusing is the only honest answer, mirroring the
+    // self::SMS class-constant case. Counterfactual: classifyElement()'s
+    // name-token check replacing `return null` with `continue` lets the
+    // bad token slip through unclassified, `$this->sms` gets concatenated
+    // into a bogus "writtenName" that resolves to nothing real, and this
+    // reports NotPresent instead — the exact false absence the rewrite
+    // exists to kill, now for a variable class reference instead of a
+    // string literal or a class constant.
+    $path = providerForRemoval(
+        "        \$this->sms::class,\n        \App\Nodeflow\Nodes\TagUser::class,",
+    );
+
+    $before = file_get_contents($path);
+    $outcome = remove($path, 'App\Nodeflow\Nodes\SendMessage');
+
+    expect($outcome)->not->toBe(NodeRemovalOutcome::NotPresent);
+    expect($outcome)->toBe(NodeRemovalOutcome::EntryUnsupported);
+    expect(file_get_contents($path))->toBe($before);
+});
+
+it('refuses rather than reporting NotPresent for a bare ::class with no name at all', function () {
+    // Important #2. `::class` with nothing before the `::` is not a real
+    // class reference — refusing is correct. This is also the fixture that
+    // makes classifyElement()'s `$count < 3` guard load-bearing: it is the
+    // ONLY thing that keeps `$nameIndexes` (computed as `array_slice($significant,
+    // 0, $count - 2)`) from ever being empty, which is why that empty-check
+    // was removed as dead code rather than kept. If this guard is ever
+    // weakened, $writtenName silently becomes '', is "classified" as valid,
+    // and this reports NotPresent instead of refusing.
+    $path = providerForRemoval(
+        "        ::class,\n        \App\Nodeflow\Nodes\TagUser::class,",
+    );
+
+    $before = file_get_contents($path);
+    $outcome = remove($path, 'App\Nodeflow\Nodes\SendMessage');
+
+    expect($outcome)->not->toBe(NodeRemovalOutcome::NotPresent);
+    expect($outcome)->toBe(NodeRemovalOutcome::EntryUnsupported);
+    expect(file_get_contents($path))->toBe($before);
+});
+
+it('produces valid PHP when removing a comma-first prefix of two duplicate registrations', function () {
+    // A DEEPER version of the comma-first-first-element bug: here the
+    // array's first TWO elements are both the removal target (a duplicate
+    // registration under two spellings), so they are removed TOGETHER.
+    // Element 0's own "reach forward" targets element 1's leading comma —
+    // correct if element 1 alone survived, but element 1 is ALSO being
+    // removed, so that reach is redundant (merged away harmlessly). The
+    // comma that actually needs stripping is the one leading TagUser, the
+    // element that survives the whole removed run — a fix elementDeletionRanges()
+    // cannot make on its own because it only ever looks at ONE element's
+    // immediate neighbour, never at what actually survives once multiple
+    // adjacent removals are combined. Counterfactual: drop the removed-
+    // prefix fix-up in removeFrom() and this leaves "[\n    , TagUser::class\n]",
+    // which does not compile — caught safely as WriteFailed rather than a
+    // false Removed, but the removal that SHOULD have succeeded is refused.
+    $path = providerForRemoval(
+        "        SendMessage::class\n        , \App\Nodeflow\Nodes\SendMessage::class\n        , TagUser::class",
+        'use App\Nodeflow\Nodes\SendMessage;',
+    );
+
+    expect(remove($path, 'App\Nodeflow\Nodes\SendMessage'))->toBe(NodeRemovalOutcome::Removed);
+
+    $contents = file_get_contents($path);
+
+    expect($contents)->not->toContain('SendMessage::class');
+    expect($contents)->toContain('TagUser::class');
+    expectParseablePhp($path);
+});
+
+it('does not strip the new last entry\'s own trailing comma when removing the entry after it', function () {
+    // delimiterDeletionRange()'s 'backward' direction must leave a comma
+    // alone when it is co-located with a SURVIVING neighbour's own
+    // content (the ordinary case: that neighbour's own trailing comma).
+    // Counterfactual: drop the `$direction === 'backward'` guard and this
+    // still reports Removed with valid PHP either way (a trailing comma is
+    // always optional) — so only a byte-exact assertion on the SURVIVOR's
+    // own line catches it. Without the guard, TagUser's own trailing comma
+    // is stripped as an unwanted side effect of removing SendMessage,
+    // touching a line this writer had no reason to touch.
+    $path = providerForRemoval(
+        "        TagUser::class,\n        SendMessage::class",
+        "use App\Nodeflow\Nodes\TagUser;\nuse App\Nodeflow\Nodes\SendMessage;",
+    );
+
+    expect(remove($path, 'App\Nodeflow\Nodes\SendMessage'))->toBe(NodeRemovalOutcome::Removed);
+
+    $contents = file_get_contents($path);
+
+    expect($contents)->not->toContain('SendMessage::class');
+    expect($contents)->toContain("TagUser::class,\n");
+    expectParseablePhp($path);
+});
+
