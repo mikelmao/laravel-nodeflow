@@ -4,6 +4,7 @@ namespace Nodeflow\Console\Install;
 
 use Illuminate\Filesystem\Filesystem;
 use Nodeflow\Console\NodeRegistrationWriter;
+use Nodeflow\Console\SourceText;
 
 /**
  * The registration home every generator writes into.
@@ -91,9 +92,16 @@ final class ProviderStep implements InstallStep
 
         $contents = $this->files->get($this->path());
 
+        // Comment-stripped (E22): a host who commented out one of the three
+        // boot() registration calls while debugging must be told the truth
+        // rather than told they are wired — the array anchors can be genuinely
+        // present while nothing actually registers. Anchor counts just below
+        // stay on the RAW bytes; only the needle match is stripped.
+        $stripped = SourceText::withoutPhpComments($contents);
+
         $missing = array_filter(
             $this->homes(),
-            fn (array $home) => ! str_contains($contents, $home['needle']),
+            fn (array $home) => ! str_contains($stripped, $home['needle']),
         );
 
         if ($missing === []) {
@@ -129,7 +137,10 @@ final class ProviderStep implements InstallStep
         foreach ($this->homes() as $home) {
             $contents = $this->files->get($this->path());
 
-            if (str_contains($contents, $home['needle'])) {
+            // Same comment-stripped needle match as check(): otherwise a home
+            // commented out is read as already there and this step skips it,
+            // leaving the commented-out call the only one in the file.
+            if (str_contains(SourceText::withoutPhpComments($contents), $home['needle'])) {
                 continue;
             }
 

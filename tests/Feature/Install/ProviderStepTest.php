@@ -220,6 +220,73 @@ it('refuses a provider with no boot method and offers the snippet', function () 
     expect(file_get_contents($this->path))->toBe($before);
 });
 
+/**
+ * C4. All three registration homes exist, but every boot() call is commented
+ * out — the exact host where nothing registers and the palette is empty.
+ */
+function providerWithCommentedOutBootCalls(): string
+{
+    return <<<'PHP'
+    <?php
+
+    namespace App\Providers;
+
+    use Illuminate\Support\ServiceProvider;
+    use Nodeflow\Nodeflow;
+
+    class NodeflowServiceProvider extends ServiceProvider
+    {
+        protected array $nodes = [
+        ];
+
+        protected array $triggers = [
+        ];
+
+        public function boot(): void
+        {
+            // Nodeflow::register($this->nodes);
+            // app(TriggerRegistry::class)->register(...$this->triggers);
+            // app(SubjectAttributeRegistry::class)->register(...$this->subjectAttributes());
+        }
+
+        /** @return \Nodeflow\Schema\SubjectAttribute[] */
+        protected function subjectAttributes(): array
+        {
+            return [
+            ];
+        }
+    }
+    PHP;
+}
+
+it('reports a provider with every boot() call commented out as writable, not already present', function () {
+    // Counterfactual: match the boot() needles against raw text and this fails
+    // — the commented-out calls are found "raw" and check() reports
+    // AlreadyPresent, which is `install` exit 0 on a host where nothing
+    // registers and the palette is empty (E22).
+    file_put_contents($this->path, providerWithCommentedOutBootCalls());
+
+    expect($this->step->check())->toBe(InstallOutcome::Writable);
+});
+
+it('adds real boot() calls next to the commented-out ones and ends up wired', function () {
+    file_put_contents($this->path, providerWithCommentedOutBootCalls());
+
+    expect($this->step->apply())->toBe(InstallOutcome::Wired);
+
+    $contents = file_get_contents($this->path);
+
+    expect($contents)->toContain('\Nodeflow\Nodeflow::register($this->nodes);')
+        ->toContain('app(\Nodeflow\Triggers\TriggerRegistry::class)->register(...$this->triggers);')
+        ->toContain('app(\Nodeflow\Schema\SubjectAttributeRegistry::class)->register(...$this->subjectAttributes());')
+        // The commented-out calls survive untouched alongside the real ones.
+        ->toContain('// Nodeflow::register($this->nodes);');
+
+    expectParseablePhp($this->path);
+
+    expect($this->step->check())->toBe(InstallOutcome::AlreadyPresent);
+});
+
 it('refuses a provider with two boot methods and writes nothing', function () {
     // A duplicated anchor means the step cannot know which boot() the host runs.
     file_put_contents($this->path, str_replace(

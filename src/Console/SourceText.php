@@ -91,4 +91,46 @@ final class SourceText
     {
         return (string) preg_replace('#/\*.*?\*/#s', '', $source);
     }
+
+    /**
+     * PHP, unlike TypeScript, has a real tokeniser, so this uses it rather than
+     * scanning characters — the same tool tests/Support/RequestContextScanner.php
+     * already uses for the same reason, applied to production code that verifies
+     * `app/Providers/NodeflowServiceProvider.php` and `bootstrap/providers.php`
+     * rather than scanning for a forbidden pattern.
+     *
+     * token_get_all() without the TOKEN_PARSE flag is a lenient lexer: it does
+     * not validate PHP grammar and in practice does not throw for any string
+     * input, so the try/catch below is defensive rather than expected to fire.
+     * On failure it returns the input unchanged — which, unlike
+     * RequestContextScanner's identical-looking fallback, is NOT the safe
+     * direction here (it makes a commented-out needle match again) but is kept
+     * for symmetry with that precedent given the near-zero odds of reaching it.
+     */
+    public static function withoutPhpComments(string $source): string
+    {
+        try {
+            $tokens = token_get_all($source);
+        } catch (\Throwable) {
+            return $source;
+        }
+
+        $out = '';
+
+        foreach ($tokens as $token) {
+            if (! is_array($token)) {
+                $out .= $token;
+
+                continue;
+            }
+
+            if ($token[0] === T_COMMENT || $token[0] === T_DOC_COMMENT) {
+                continue;
+            }
+
+            $out .= $token[1];
+        }
+
+        return $out;
+    }
 }
