@@ -124,8 +124,11 @@ class InstallCommand extends Command
     /**
      * Non-zero iff something is not wired.
      *
-     * Under --check, Writable counts as unwired: the host asked whether this
-     * application is installed, and "it would be if you let me write" is a no.
+     * A residual Writable fails in BOTH modes, not only under --check: under
+     * --check it means "would be written", and in a normal run it means a
+     * verify-only step's apply() re-ran check() and got Writable back again —
+     * nobody ever wrote it. Either way that is unwired, so "it would be if you
+     * let me write" is a no regardless of which mode asked.
      */
     private function exitCode(array $outcomes): int
     {

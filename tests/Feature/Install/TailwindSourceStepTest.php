@@ -158,6 +158,33 @@ it('accepts the correct computed line outright', function () {
     expect($this->step->check())->toBe(InstallOutcome::AlreadyPresent);
 });
 
+/**
+ * I3 (this fix). C3's exact-string comparison closed the false ACCEPT on a
+ * wrong '../' prefix, but it also opened a false REJECT: it demanded the
+ * single-quoted, no-trailing-slash spelling apply() itself writes, and
+ * rejected anything lexically different even when Tailwind treats it
+ * identically. Tailwind's own docs use double quotes for `@source`, so a host
+ * who copied the upstream example verbatim got `--check` failing on a
+ * correctly wired install.
+ */
+it('accepts the correct computed line written with double quotes', function () {
+    file_put_contents($this->entry, "@import 'tailwindcss';\n\n@source \"../../vendor/atram/laravel-nodeflow/resources/js\";\n");
+
+    expect($this->step->check())->toBe(InstallOutcome::AlreadyPresent);
+});
+
+it('accepts the correct computed line with a trailing slash', function () {
+    file_put_contents($this->entry, "@import 'tailwindcss';\n\n@source '../../vendor/atram/laravel-nodeflow/resources/js/';\n");
+
+    expect($this->step->check())->toBe(InstallOutcome::AlreadyPresent);
+});
+
+it('accepts the correct computed line with double quotes AND a trailing slash', function () {
+    file_put_contents($this->entry, "@import 'tailwindcss';\n\n@source \"../../vendor/atram/laravel-nodeflow/resources/js/\";\n");
+
+    expect($this->step->check())->toBe(InstallOutcome::AlreadyPresent);
+});
+
 it('cannot wire when no css entry contains the tailwind import', function () {
     file_put_contents($this->entry, "body { color: red }\n");
 
