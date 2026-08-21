@@ -721,3 +721,31 @@ it('renders a group containing a placeholder literally instead of re-substitutin
     // what reported success on the broken version.
     expectParseablePhp($path);
 });
+
+it('validates each invocation independently, even when the command instance is reused', function () {
+    // Symfony's Application resolves one command object per command name and
+    // keeps it for the process's lifetime, so a second artisan() call of
+    // nodeflow:make-node reuses this exact same MakeNodeCommand instance
+    // rather than a fresh one. Counterfactual: without resetting
+    // $resolvedType at the top of handle(), nodeType() would short-circuit
+    // on its memoized-not-null guard and return the FIRST call's already-
+    // validated type, silently rendering the first node's type into the
+    // second file while still reporting success — and published flow
+    // versions resolve through that string forever, so the wrong value is
+    // permanent, not cosmetic.
+    $this->artisan('nodeflow:make-node', [
+        'name' => 'FirstLeakProbeNode',
+        '--type' => 'yaya.first_leak_probe',
+    ])->assertExitCode(0);
+
+    $this->artisan('nodeflow:make-node', [
+        'name' => 'SecondLeakProbeNode',
+        '--type' => 'yaya.second_leak_probe',
+    ])->assertExitCode(0);
+
+    $secondFile = file_get_contents($this->root.'/app/Nodeflow/Nodes/SecondLeakProbeNode.php');
+
+    expect($secondFile)
+        ->toContain("return 'yaya.second_leak_probe';")
+        ->not->toContain("return 'yaya.first_leak_probe';");
+});

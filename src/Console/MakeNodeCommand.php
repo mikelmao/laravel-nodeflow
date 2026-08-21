@@ -21,6 +21,23 @@ class MakeNodeCommand extends GeneratorCommand
 
     public function handle(): int
     {
+        // Symfony's Application resolves one command object per name and keeps
+        // it for the process's lifetime, so a second Artisan::call() of this
+        // same command (from a host script, a queued job, or a test's own
+        // artisan() call run twice) reuses this exact instance rather than a
+        // fresh one. Without this reset, $resolvedType from a first, unrelated
+        // invocation would still be set on the second call, and nodeType()
+        // would return the stale value straight from cache — skipping
+        // validation entirely and rendering the first node's type into the
+        // second file while still reporting success. Published flow versions
+        // resolve through that string forever, so a leaked type here is a
+        // permanent defect, not a cosmetic one. Resetting here keeps the
+        // memoization useful within one handle() (nodeType() is called
+        // several times per run: once here, again inside buildClass(), again
+        // inside writeTest() when --test is passed) without letting it survive
+        // across separate runs.
+        $this->resolvedType = null;
+
         // All three are resolved before parent::handle() writes anything, so a
         // usage error never leaves a half-generated file behind.
         try {
@@ -247,8 +264,17 @@ class MakeNodeCommand extends GeneratorCommand
 
         // Guarded on isInteractive() rather than on the --no-interaction option:
         // a Testbench PendingCommand does not necessarily pass that flag, and an
-        // unguarded prompt in a test suite hangs rather than fails.
-        if ($type === '' && $this->input->isInteractive()) {
+        // unguarded prompt in a test suite hangs rather than fails. Also guarded
+        // on ! runningUnitTests(): Laravel's own ConfiguresPrompts unconditionally
+        // enables the Prompts fallback under tests (Prompt::fallbackWhen(...  ||
+        // $this->laravel->runningUnitTests())), and that fallback calls the
+        // console output's askQuestion() — which Testbench's mocked output has no
+        // expectation for unless a test opts in with expectsQuestion(). Without
+        // this second check, a bare artisan() call reaching this branch crashes
+        // ugly instead of falling through to the derived-type warning below.
+        // runningUnitTests() is true only when APP_ENV === 'testing', so this
+        // cannot suppress the prompt for a real interactive user.
+        if ($type === '' && $this->input->isInteractive() && ! $this->laravel->runningUnitTests()) {
             $type = trim(text(
                 label: 'Stable type identifier for this node',
                 placeholder: 'yaya.send_message',
