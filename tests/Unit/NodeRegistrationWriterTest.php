@@ -202,3 +202,165 @@ it('refuses to guess when the anchor is ambiguous', function () {
     expect($outcome)->toBe(NodeRegistrationOutcome::AnchorAmbiguous);
     expect(file_get_contents($path))->toBe($before);
 });
+
+/**
+ * A provider with all three registration homes, as `nodeflow:install` generates
+ * it. Returns the *path*, matching this file's existing providerWithAnchor().
+ */
+function providerWithThreeHomes(string $body = null): string
+{
+    return writeProviderFixture($body ?? threeHomesSource());
+}
+
+function threeHomesSource(): string
+{
+    return <<<'PHP'
+    <?php
+
+    namespace App\Providers;
+
+    use Illuminate\Support\ServiceProvider;
+    use Nodeflow\Nodeflow;
+    use Nodeflow\Schema\SubjectAttributeRegistry;
+    use Nodeflow\Triggers\TriggerRegistry;
+
+    class NodeflowServiceProvider extends ServiceProvider
+    {
+        protected array $nodes = [
+        ];
+
+        protected array $triggers = [
+        ];
+
+        public function boot(): void
+        {
+            Nodeflow::register($this->nodes);
+
+            app(TriggerRegistry::class)->register(...$this->triggers);
+
+            app(SubjectAttributeRegistry::class)->register(...$this->subjectAttributes());
+        }
+
+        /** @return \Nodeflow\Schema\SubjectAttribute[] */
+        protected function subjectAttributes(): array
+        {
+            return [
+            ];
+        }
+    }
+    PHP;
+}
+
+it('appends a trigger class through the trigger anchor', function () {
+    // Counterfactual: point TRIGGER_ANCHOR at the $nodes anchor and this fails,
+    // because the trigger lands in the node array — where NodeRegistry::register()
+    // would reject it for implementing neither cardinality interface.
+    $path = providerWithThreeHomes();
+
+    $outcome = (new NodeRegistrationWriter(new Filesystem))->appendTo(
+        $path,
+        NodeRegistrationWriter::TRIGGER_ANCHOR,
+        'App\Nodeflow\Triggers\OrderPlaced::class',
+        '\App\Nodeflow\Triggers\OrderPlaced::class',
+    );
+
+    expect($outcome)->toBe(NodeRegistrationOutcome::Appended);
+
+    $contents = file_get_contents($path);
+
+    // In the $triggers array, and provably not in the $nodes one.
+    expect($contents)->toContain("protected array \$triggers = [\n        \\App\Nodeflow\Triggers\OrderPlaced::class,");
+    expect($contents)->toContain("protected array \$nodes = [\n    ];");
+});
+
+it('appends a subject attribute inside the method body, at the method indent', function () {
+    // Counterfactual: return the end of the anchor as the insertion point (the
+    // rule the two array anchors use) and this fails — the entry lands in the
+    // method signature line rather than inside its return array, which does not
+    // parse.
+    $path = providerWithThreeHomes();
+
+    $outcome = (new NodeRegistrationWriter(new Filesystem))->appendTo(
+        $path,
+        NodeRegistrationWriter::ATTRIBUTE_ANCHOR,
+        "SubjectAttribute::make('clicked'",
+        "\Nodeflow\Schema\SubjectAttribute::make('clicked', 'Clicked', 'boolean', fn (\$subject) => null)",
+        '            ',
+    );
+
+    expect($outcome)->toBe(NodeRegistrationOutcome::Appended);
+
+    $contents = file_get_contents($path);
+
+    expect($contents)->toContain("        return [\n            \\Nodeflow\Schema\SubjectAttribute::make('clicked', 'Clicked', 'boolean', fn (\$subject) => null),");
+
+    // The whole point of appending into a method: the result must still parse.
+    expectParseablePhp($path);
+});
+
+it('recognises an attribute already present by its key alone', function () {
+    // Counterfactual: make the presence needle the whole entry and this fails —
+    // a re-run with a different label appends a second entry under the same key,
+    // and SubjectAttributeRegistry::register() keys by $attribute->key, so the
+    // second silently replaces the first.
+    $path = providerWithThreeHomes(str_replace(
+        "        return [\n",
+        "        return [\n            \\Nodeflow\Schema\SubjectAttribute::make('clicked', 'Old label', 'boolean', fn (\$subject) => null),\n",
+        threeHomesSource(),
+    ));
+
+    $before = file_get_contents($path);
+
+    $outcome = (new NodeRegistrationWriter(new Filesystem))->appendTo(
+        $path,
+        NodeRegistrationWriter::ATTRIBUTE_ANCHOR,
+        "SubjectAttribute::make('clicked'",
+        "\Nodeflow\Schema\SubjectAttribute::make('clicked', 'New label', 'boolean', fn (\$subject) => null)",
+        '            ',
+    );
+
+    expect($outcome)->toBe(NodeRegistrationOutcome::AlreadyPresent);
+    expect(file_get_contents($path))->toBe($before);
+});
+
+it('refuses an attribute method whose body is not a bare return array', function () {
+    // The bounded-window rule. Counterfactual: search the whole remainder of the
+    // file for `return [` and this fails — the entry lands in some unrelated
+    // later method's return array, silently, in host code.
+    $path = providerWithThreeHomes(str_replace(
+        "    protected function subjectAttributes(): array\n    {\n        return [\n        ];\n    }",
+        "    protected function subjectAttributes(): array\n    {\n        \$extra = \$this->somethingElse();\n\n        \$more = \$this->andAnother();\n\n        \$yetMore = \$this->stillGoing();\n\n        return [\n        ];\n    }",
+        threeHomesSource(),
+    ));
+
+    $before = file_get_contents($path);
+
+    $outcome = (new NodeRegistrationWriter(new Filesystem))->appendTo(
+        $path,
+        NodeRegistrationWriter::ATTRIBUTE_ANCHOR,
+        "SubjectAttribute::make('clicked'",
+        "\Nodeflow\Schema\SubjectAttribute::make('clicked', 'Clicked', 'boolean', fn (\$subject) => null)",
+        '            ',
+    );
+
+    expect($outcome)->toBe(NodeRegistrationOutcome::AnchorMissing);
+    expect(file_get_contents($path))->toBe($before);
+});
+
+it('refuses a duplicated trigger anchor and writes nothing', function () {
+    // Counterfactual: drop the >1 check and this fails — two $triggers arrays
+    // means the writer cannot know which one the boot() call spreads.
+    $path = providerWithThreeHomes(threeHomesSource().PHP_EOL.'// protected array $triggers = [');
+
+    $before = file_get_contents($path);
+
+    $outcome = (new NodeRegistrationWriter(new Filesystem))->appendTo(
+        $path,
+        NodeRegistrationWriter::TRIGGER_ANCHOR,
+        'App\Nodeflow\Triggers\OrderPlaced::class',
+        '\App\Nodeflow\Triggers\OrderPlaced::class',
+    );
+
+    expect($outcome)->toBe(NodeRegistrationOutcome::AnchorAmbiguous);
+    expect(file_get_contents($path))->toBe($before);
+});
