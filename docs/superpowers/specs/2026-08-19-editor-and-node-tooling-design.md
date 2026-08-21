@@ -508,10 +508,11 @@ before implementation started, lives in
 > and retrying forever is noise — and keep polling on 5xx and network failures while surfacing the
 > last error, rather than freezing a stale overlay silently.
 >
-> Acceptance: **356 package Pest tests** (5820 assertions) and **157 package Vitest tests** — the
-> plan predicted 151; six additional tests were required during execution, each covering a guard
-> that otherwise had none — plus a silent package `tsc`. Browser acceptance against the real demo
-> is Task 13's work; see `docs/superpowers/open-issues.md` for its placeholder.
+> Acceptance: **358 package Pest tests** (5832 assertions) and **160 package Vitest tests** — the
+> plan predicted 151 Vitest tests; nine additional were required, six during execution and three
+> more during the final whole-branch fix wave, each covering a guard that otherwise had none —
+> plus a silent package `tsc`. Browser acceptance against the real demo has since run and passed;
+> see `docs/superpowers/open-issues.md` for the six checks.
 
 `GET runs/{run}` renders a page carrying the run, **the graph from the run's pinned
 `flow_version`** — never `draft_graph` — and an overlay snapshot. `GET runs/{run}/overlay` returns

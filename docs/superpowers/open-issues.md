@@ -10,9 +10,9 @@ coverage or missing code · `DRIFT` is documentation disagreeing with code.
 Last updated 2026-08-21 after Plan 4 package work (`8e79b99..d6c7a59`): **157 package Vitest
 tests, 356 package Pest tests (5820 assertions)** passing, silent package `tsc`. Demo integration
 has landed: **49 demo Pest tests (191 assertions)**, silent demo `tsc`, a successful demo
-`npm run build`. Real-browser acceptance for Plan 4 has **not** run yet — see "Plan 4 acceptance
-evidence" below, which remains an unfilled placeholder pending Task 13. (A final whole-branch fix
-wave landed after this entry; see the fix-wave report for its own totals and commits.)
+`npm run build`. Real-browser acceptance for Plan 4 has since run and passed — see "Plan 4
+acceptance evidence" below for the six checks. (A final whole-branch fix wave landed after this
+entry; see the fix-wave report for its own totals and commits.)
 
 ---
 
@@ -86,20 +86,62 @@ Tailwind output containing `min-h-[32rem]`.
 
 ## Plan 4 acceptance evidence
 
-**PLACEHOLDER — not yet filled in. Do not read this section as accepted.** The demo integration
-this evidence depends on has landed — see below — but Plan 4's real-browser acceptance against
-the symlinked demo, Task 13's remaining work, has not run as of this entry. This section exists so
-Task 13 has a fixed place to record that evidence rather than inventing one later; it will be
-replaced wholesale once the six checks in
-`docs/superpowers/specs/2026-08-21-run-view-design.md` §9 have actually been run.
+All gates below are measured on merged `main`. Package (`f5b2e31`): **358 Pest tests (5832
+assertions)**, **160 Vitest tests**, silent `npx tsc --noEmit`. Demo (`~/Sites/test-workflow`,
+`main` at `bb0f7d8`): **49 Pest tests (191 assertions)**, silent `tsc`, a passing Vite build.
 
-Package-only gates already measured, ahead of that browser pass: **356 package Pest tests (5820
-assertions)**, **157 package Vitest tests** (the design predicted 151; six extra tests were added
-during execution, each covering a guard that otherwise had none), and a silent package `tsc`.
+Three further checks ran against the demo's *compiled* bundle, not its source, because a
+host-wiring or build-pipeline regression is invisible to both suites above: the failure badge
+ships as `label: "errors"`, never `label: "failed"` — a deliberate override of spec §4.2, forced
+by the demo's own `demo.send` node declaring an output literally named `failed`, which without
+the override would render two badges both reading "failed" for two different meanings;
+`opacity-40` appears in the built JS **and is emitted in the built CSS**, which is the Tailwind
+`@source` host-wiring requirement actually verified rather than assumed; `hasOwnProperty.call`
+appears three times, the collision-hardened read path intact through the bundler; and exactly one
+chunk carries React's client-internals marker despite two `node_modules/react` trees on disk,
+proving `resolve.dedupe` (G-4) holds in the built artifact and not only in `vite.config.ts`.
 
-Demo integration gates, also already measured: **49 demo Pest tests (191 assertions)**, silent
-demo `tsc`, and a successful demo `npm run build`. Still missing before this section can be filled
-in for real: the six real-browser checks themselves.
+Real-browser acceptance then ran against `http://test-workflow.test/`, with a real queue worker
+running: six checks, all passed.
+
+1. **Pinned version.** Run 1 rendered 10 nodes — exactly v1 — while its flow had advanced to v2
+   (11 nodes, including `v2only`) and its draft held 12 (including `draftonly`). Neither appeared.
+   Run 4, started after the advance, correctly pinned v2 and does render `v2only`. This single
+   observation excludes both wrong implementations at once: reading `draft_graph`, and reading
+   `flow->currentVersion`.
+2. **Overlay refresh.** Zero requests on page load — the initial snapshot travels as an Inertia
+   prop, not a fetch — then exactly one request per 5000 ms, matching the configured interval. The
+   sidebar status moved from `running` to `completed` with no reload.
+3. **Reached-zero versus never-reached, rendered.** `segment` undimmed with badges `matched 4` and
+   `unmatched 0`; `unmatchedexit`, `upgrade`, `done` and `v2only` all dimmed with no badge at all.
+   Separately, a run parked at a one-day wait rendered `wait1d` undimmed with a `waiting 4` badge
+   while holding the entire audience and having **no** `node_executions` row — the on-screen proof
+   that deriving `reached` from row existence alone would dim the single most important state this
+   view exists to show. **C-5 is visible on screen here:** `done` renders dimmed even though every
+   subject exited through it.
+4. **Subject drill-down.** Clicking `wait1d` listed `user #30` and `user #31` behind a "Load more"
+   control; activating it appended `user #32` and `user #33`, and the control disappeared. Two
+   requests were issued — the base URL, then `?cursor=…` — so sentinel substitution and cursor
+   paging both work through the host's own route prefix. Nobody repeated, nobody lost.
+5. **Polling stops at a terminal run.** A fast run watched for 45 seconds issued requests 1 through
+   7 at five-second intervals while `running`; status flipped to `completed` at t+35s; the count
+   held at 7 through t+40s and t+45s. A run already terminal when the page opened issued **zero**
+   requests.
+6. **Console clean.** No errors of any kind across every interaction — no "Invalid hook call", no
+   unhandled rejection.
+
+Both empty-state sentences were read live and confirmed distinct and individually true: the
+never-reached branch names `core.exit` as the caveat; the reached-then-empty branch says the
+card's counts are the only record and "not always a complete one". Worth recording in the same
+breath: this copy took **four** review rounds to land — each of the first three fixed one false
+sentence and introduced another, and the fourth was caught only because a reviewer was told to
+assume a fourth existed.
+
+**One caveat, stated rather than buried:** browser acceptance ran in an isolated Chrome instance —
+a temporary profile with remote debugging enabled — rather than the developer's day-to-day
+browser, because enabling remote debugging on that browser needs a manual toggle. Everything
+exercised was the real merged app over HTTP with a real queue worker; only the browser profile was
+disposable.
 
 ---
 
