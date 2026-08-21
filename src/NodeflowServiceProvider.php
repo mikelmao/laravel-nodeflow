@@ -71,6 +71,7 @@ class NodeflowServiceProvider extends ServiceProvider
                 \Nodeflow\Console\CheckNodeTypesCommand::class,
                 \Nodeflow\Console\InstallCommand::class,
                 \Nodeflow\Console\MakeNodeCommand::class,
+                \Nodeflow\Console\MakeSubjectAttributeCommand::class,
                 \Nodeflow\Console\MakeTriggerCommand::class,
                 \Nodeflow\Console\PruneCommand::class,
             ]);
