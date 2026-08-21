@@ -16,17 +16,27 @@ use Nodeflow\Console\SourceText;
  *
  * WHY STRUCTURAL AND NOT TEXTUAL. That host maps @nodeflow/editor to
  * ".../resources/js/index.ts"; docs/08-editor-client.md prints
- * ".../resources/js". Both are correct, so the check resolves the value and asks
- * whether it lands inside the package's resources/js — not whether it equals a
- * string we chose.
+ * ".../resources/js". Both are correct, so the check does NOT compare strings —
+ * it splits the mapped path and baseUrl into path segments, drops empty and "."
+ * segments, and asks whether the resulting sequence starts with this package's
+ * own vendor/atram/laravel-nodeflow/resources/js segments. Comparing segments
+ * (not the raw string, and not a naive ltrim()/str_starts_with() pair — both
+ * were tried and both silently accepted a broken host; see the fix-round 1 note
+ * in the project's task-9 report) is what stops "resources/jsx" from passing as
+ * a prefix of "resources/js", and what stops a leading "../" from being read as
+ * an ordinary "./" instead of an instruction to climb out of the project.
+ *
+ * A target whose segments contain a literal ".." is refused outright rather than
+ * resolved: normalizing it away would silently accept a mapping that points
+ * above the project root, which is worse than reporting it unwired.
  *
  * VERIFY-ONLY (E20). A JSON round-trip would write the file back without those
  * ninety lines of comments, which are documentation the host owns.
  *
- * KNOWN LIMIT: baseUrl is honoured only as a literal prefix. A tsconfig using
- * "extends" to inherit its paths from another file reads as unwired here, because
- * this does not follow the chain. The failure direction is safe — a message, not
- * a silent pass.
+ * KNOWN LIMIT: baseUrl is honoured only as a literal segment prefix. A tsconfig
+ * using "extends" to inherit its paths from another file reads as unwired here,
+ * because this does not follow the chain. The failure direction is safe — a
+ * message, not a silent pass.
  */
 final class TsconfigPathsStep implements InstallStep
 {
@@ -51,12 +61,15 @@ final class TsconfigPathsStep implements InstallStep
             return InstallOutcome::CannotWire;
         }
 
-        $baseUrl = trim((string) ($config['compilerOptions']['baseUrl'] ?? '.'), './');
+        $baseUrl = (string) ($config['compilerOptions']['baseUrl'] ?? '.');
         $paths = $config['compilerOptions']['paths'] ?? [];
 
         if (! is_array($paths)) {
             return InstallOutcome::CannotWire;
         }
+
+        $expected = self::segments(self::PACKAGE_SOURCE);
+        $baseSegments = self::segments($baseUrl);
 
         foreach (self::MAPPINGS as $mapping) {
             $targets = $paths[$mapping] ?? null;
@@ -65,18 +78,42 @@ final class TsconfigPathsStep implements InstallStep
                 return InstallOutcome::CannotWire;
             }
 
-            $resolved = ltrim(trim((string) $targets[0]), './');
+            $targetSegments = self::segments((string) $targets[0]);
 
-            if ($baseUrl !== '') {
-                $resolved = $baseUrl.'/'.$resolved;
+            // A literal ".." segment climbs out of the project. Refuse it
+            // outright rather than resolve it: ltrim($value, './') used to strip
+            // it as if it were just another "./" (it strips a run of "." and "/"
+            // characters, not the two-character sequence "./"), which silently
+            // accepted a mapping pointing above the project root.
+            if (in_array('..', $targetSegments, true)) {
+                return InstallOutcome::CannotWire;
             }
 
-            if (! str_starts_with($resolved, self::PACKAGE_SOURCE)) {
+            $resolved = array_merge($baseSegments, $targetSegments);
+
+            // A segment-wise prefix compare, not str_starts_with() on the raw
+            // string: str_starts_with() would accept "resources/jsx" as a prefix
+            // match against "resources/js" because the substring "js" is itself a
+            // prefix of "jsx" — a second false accept from the same line.
+            if (array_slice($resolved, 0, count($expected)) !== $expected) {
                 return InstallOutcome::CannotWire;
             }
         }
 
         return InstallOutcome::AlreadyPresent;
+    }
+
+    /**
+     * Splits a tsconfig path (or baseUrl) into path segments, dropping empty and
+     * "." segments. A literal ".." segment is deliberately kept, not dropped —
+     * check() must see it in order to refuse it.
+     */
+    private static function segments(string $path): array
+    {
+        return array_values(array_filter(
+            explode('/', $path),
+            static fn (string $segment): bool => $segment !== '' && $segment !== '.',
+        ));
     }
 
     /** Verify-only: check() never returns Writable, so this is unreachable. */

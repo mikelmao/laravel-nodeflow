@@ -99,6 +99,64 @@ it('cannot wire a missing or unparseable tsconfig', function () {
     expect($this->step->check())->toBe(InstallOutcome::CannotWire);
 });
 
+it('rejects a mapping that climbs one level out of the project', function () {
+    // Fix round 1, finding 1: ltrim($value, './') strips a RUN of "." and "/"
+    // characters, not the literal two-character sequence "./", so
+    // ltrim('../vendor/...', './') collapsed to the same string as
+    // ltrim('./vendor/...', './'). That made check() return AlreadyPresent for
+    // a mapping pointing one directory above the project root — a false accept
+    // in the direction the brief itself named as dangerous.
+    ($this->write)(json_encode(['compilerOptions' => ['paths' => [
+        '@nodeflow/editor' => ['../vendor/atram/laravel-nodeflow/resources/js'],
+        '@nodeflow/editor/*' => ['../vendor/atram/laravel-nodeflow/resources/js/*'],
+    ]]]));
+
+    expect($this->step->check())->toBe(InstallOutcome::CannotWire);
+});
+
+it('rejects a mapping that climbs two levels out of the project', function () {
+    ($this->write)(json_encode(['compilerOptions' => ['paths' => [
+        '@nodeflow/editor' => ['../../vendor/atram/laravel-nodeflow/resources/js'],
+        '@nodeflow/editor/*' => ['../../vendor/atram/laravel-nodeflow/resources/js/*'],
+    ]]]));
+
+    expect($this->step->check())->toBe(InstallOutcome::CannotWire);
+});
+
+it('still accepts both real-world forms after the climb-out fix', function () {
+    // Regression guard for fix round 1: the segment-wise rewrite must not
+    // disturb either of the two forms that are known to occur in practice —
+    // the accepted host's "index.ts" form and the directory form the docs
+    // print — even though both are now compared by segment rather than by
+    // ltrim()+str_starts_with().
+    ($this->write)(json_encode(['compilerOptions' => ['paths' => [
+        '@nodeflow/editor' => ['./vendor/atram/laravel-nodeflow/resources/js/index.ts'],
+        '@nodeflow/editor/*' => ['./vendor/atram/laravel-nodeflow/resources/js/*'],
+    ]]]));
+
+    expect($this->step->check())->toBe(InstallOutcome::AlreadyPresent);
+
+    ($this->write)(json_encode(['compilerOptions' => ['paths' => [
+        '@nodeflow/editor' => ['./vendor/atram/laravel-nodeflow/resources/js'],
+        '@nodeflow/editor/*' => ['./vendor/atram/laravel-nodeflow/resources/js/*'],
+    ]]]));
+
+    expect($this->step->check())->toBe(InstallOutcome::AlreadyPresent);
+});
+
+it('rejects a mapping to a sibling directory whose name merely starts with js', function () {
+    // Fix round 1, finding 1 (second false accept, same line): str_starts_with()
+    // compares raw strings, so "resources/jsx" textually starts with
+    // "resources/js" and used to pass. A segment-wise compare treats "jsx" and
+    // "js" as distinct whole segments.
+    ($this->write)(json_encode(['compilerOptions' => ['paths' => [
+        '@nodeflow/editor' => ['./vendor/atram/laravel-nodeflow/resources/jsx'],
+        '@nodeflow/editor/*' => ['./vendor/atram/laravel-nodeflow/resources/jsx/*'],
+    ]]]));
+
+    expect($this->step->check())->toBe(InstallOutcome::CannotWire);
+});
+
 it('never writes to the tsconfig', function () {
     // E20: a JSON round-trip destroys the starter kit's ninety-line comment
     // block, which is documentation the host owns.

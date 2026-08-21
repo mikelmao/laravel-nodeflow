@@ -44,9 +44,17 @@ final class XyflowDependencyStep implements InstallStep
             return InstallOutcome::CannotWire;
         }
 
+        // A malformed-but-valid manifest can have "dependencies" as a string or
+        // number instead of an object (e.g. {"dependencies": "oops"}).
+        // array_merge() would throw a TypeError on that, and a step contracted to
+        // return an InstallOutcome must not crash the install command — so a
+        // non-array value here is treated the same as a missing one.
+        $dependencies = $manifest['dependencies'] ?? [];
+        $devDependencies = $manifest['devDependencies'] ?? [];
+
         $declared = array_merge(
-            $manifest['dependencies'] ?? [],
-            $manifest['devDependencies'] ?? [],
+            is_array($dependencies) ? $dependencies : [],
+            is_array($devDependencies) ? $devDependencies : [],
         );
 
         return array_key_exists(self::PACKAGE, $declared)

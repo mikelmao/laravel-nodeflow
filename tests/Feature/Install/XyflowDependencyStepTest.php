@@ -49,6 +49,17 @@ it('cannot wire a missing manifest', function () {
     expect($this->step->check())->toBe(InstallOutcome::CannotWire);
 });
 
+it('cannot wire a manifest whose dependencies key is not an object, instead of crashing', function () {
+    // Fix round 1, finding 2: a malformed-but-valid manifest like
+    // {"dependencies": "oops"} used to make array_merge() throw a TypeError,
+    // because "oops" is a string, not an array. A step contracted to return an
+    // InstallOutcome must not crash the install command over an input this
+    // ordinary — CannotWire, not a fatal error, is the correct report.
+    ($this->write)(['dependencies' => 'oops']);
+
+    expect($this->step->check())->toBe(InstallOutcome::CannotWire);
+});
+
 it('never writes to the manifest', function () {
     ($this->write)(['dependencies' => ['react' => '^19.0.0']]);
 
