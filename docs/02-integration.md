@@ -6,15 +6,28 @@ Four steps: install, implement two contracts, register your domain surface, run 
 
 ```bash
 composer require atram/laravel-nodeflow
-php artisan vendor:publish --tag=nodeflow-migrations
+php artisan nodeflow:install
 php artisan migrate
 ```
 
-Optionally publish the config:
+`nodeflow:install` publishes `config/nodeflow.php`, creates
+`app/Providers/NodeflowServiceProvider.php` with the three registration homes the
+generators write into, lists that provider in `bootstrap/providers.php`, adds the
+Tailwind `@source` line, and then **verifies** the four client settings it cannot
+safely write — printing the exact snippet for each one and **exiting non-zero** if
+anything is missing. Run it again any time; it reports "already wired" and changes
+nothing. `nodeflow:install --check` verifies without writing, which is the form to
+put in CI.
 
-```bash
-php artisan vendor:publish --tag=nodeflow-config
-```
+**It does not publish the migrations, and you should not either unless you mean
+to own them.** The package loads its own migrations, so `php artisan migrate`
+already finds them. If you publish a copy, that copy **permanently shadows the
+package's own file for every `migrate` run** — Laravel resolves migrations by
+name and the application's own directory is searched last, so your copy wins and
+nothing warns you. A package upgrade then changes the file you are not using.
+Publish with `nodeflow:install --publish-migrations` only if you intend to
+maintain the schema yourself; `install` will hash any copy you have against ours
+on every run and exit non-zero when they diverge.
 
 Requirements: PHP `^8.3`, Laravel `^12.0|^13.0`, and a queue driver other than `sync` — the engine
 needs real queued jobs to hibernate and resume. It also needs a cache driver supporting atomic locks.
@@ -187,36 +200,53 @@ resolver may of course *return* null in those contexts; it just has to be the on
 
 ## Step 3 — Register your domain surface
 
-In a service provider's `boot()`:
+`nodeflow:install` created `app/Providers/NodeflowServiceProvider.php` with three
+registration homes. The generators append into them, and you can edit them by
+hand:
 
 ```php
-use Nodeflow\Nodeflow;
-use Nodeflow\Schema\SubjectAttribute;
-use Nodeflow\Schema\SubjectAttributeRegistry;
-use Nodeflow\Triggers\TriggerRegistry;
-
-public function boot(): void
+class NodeflowServiceProvider extends ServiceProvider
 {
-    // Nodes — the things that do work.
-    Nodeflow::register([
+    /** Nodes — the things that do work. `nodeflow:make-node` appends here. */
+    protected array $nodes = [
         \App\Nodeflow\Nodes\SendMessage::class,
-        \App\Nodeflow\Nodes\CheckEligibility::class,
-    ]);
+    ];
 
-    // Triggers — which of your events start journeys.
-    app(TriggerRegistry::class)->register(
+    /** Triggers — which of your events start journeys. `nodeflow:make-trigger` appends here. */
+    protected array $triggers = [
         \App\Nodeflow\Triggers\OrderPlaced::class,
-    );
+    ];
 
-    // Subject attributes — what a non-technical author may build conditions on.
-    app(SubjectAttributeRegistry::class)->register(
-        SubjectAttribute::make('clicked', 'Has clicked', 'boolean',
-            fn ($subject) => $subject->clicked_at !== null),
-        SubjectAttribute::make('plan', 'Plan', 'text',
-            fn ($subject) => $subject->plan),
-    );
+    public function boot(): void
+    {
+        Nodeflow::register($this->nodes);
+        app(TriggerRegistry::class)->register(...$this->triggers);
+        app(SubjectAttributeRegistry::class)->register(...$this->subjectAttributes());
+    }
+
+    /**
+     * What a non-technical author may build conditions on.
+     * `nodeflow:make-subject-attribute` appends here.
+     *
+     * @return \Nodeflow\Schema\SubjectAttribute[]
+     */
+    protected function subjectAttributes(): array
+    {
+        return [
+            \Nodeflow\Schema\SubjectAttribute::make('clicked', 'Has clicked', 'boolean',
+                fn ($subject) => $subject->clicked_at !== null),
+        ];
+    }
 }
 ```
+
+**Keep those three declarations exactly as written.** The generators match the
+property and method lines literally: they append only when they can prove where
+the entry belongs, and otherwise print a line for you to paste rather than guess.
+
+Registering in any other provider's `boot()` still works at runtime — nothing in
+the package cares which provider called `Nodeflow::register()` — but the
+generators cannot find it there, so you would be pasting every entry by hand.
 
 Three things worth knowing:
 
@@ -231,6 +261,13 @@ chose to expose. The `type` (`boolean`, `text`, `number`) drives how comparisons
 
 **The registries are singletons**, so registration order across providers doesn't matter, but a
 `SubjectAttribute` referenced by a published graph must be registered before a run reaches that node.
+
+**Subject attributes have a generator.** `php artisan nodeflow:make-subject-attribute
+clicked_offer --label='Has clicked the offer' --type=boolean` appends one entry to
+`subjectAttributes()` with a `// TODO` on the resolver closure. `--type` accepts
+`boolean`, `text` or `number` and nothing else: the type is what a `core.condition`
+uses to coerce its comparison, so a value outside that set produces comparisons that
+behave arbitrarily inside an already-published graph.
 
 ## Step 4 — Run queue workers
 
@@ -320,6 +357,28 @@ receives a `Flow` or a `Run`.
 
 So: the scope decides "is this row reachable at all", and your gate decides "may
 this person do this" — plus, cheaply, "is this row theirs".
+
+### `tenant_id` is fixed at creation
+
+A row's tenant never changes. `Flow`, `FlowVersion`, `Run` and `Template` all
+refuse an update that changes `tenant_id`, throwing
+`Nodeflow\Models\CrossTenantWriteException`. Two ways to meet it by accident:
+
+```php
+$flow->update($request->all());        // if the request carries a tenant_id
+$template->update(['tenant_id' => $org->id]);   // promoting a global template into a tenant's
+```
+
+Re-sending the row's *existing* `tenant_id` is fine — an unchanged value is not a
+change. The exception exists because `$guarded` is empty on these models, so
+without it a request field would silently reassign a row and take every child row
+reachable through it: `RunSubject` and `NodeExecution` carry no `tenant_id` of
+their own and rely entirely on their parent being scoped.
+
+**The guard sees model writes only.** It is an `updating` model event, so
+`Flow::withoutTenancy()->where(...)->update(['tenant_id' => ...])` bypasses it
+completely — no model events fire for a query-builder update. If you write
+`tenant_id` through the query builder, nothing will stop you. Don't.
 
 ## The editor's routes
 
@@ -605,18 +664,29 @@ php artisan nodeflow:check-node-types
 Exits 0 when every node type referenced by a flow version with live runs still resolves. Useful as a
 deploy gate — see [Operations](06-operations.md).
 
-There is no `nodeflow:install` command. Nothing scaffolds the two contracts, the bindings or a
-`NodeflowServiceProvider` for you: the four steps above are the install, and four explicit steps beat
-a generator whose output you then have to understand.
+`nodeflow:install --check` verifies a host without writing anything, and exits
+non-zero if any requirement is unwired. That is the form for CI, because three of
+the client-side requirements fail quietly: a missing tsconfig path lets Vite build
+while your `tsc` fails, a missing Tailwind `@source` line lets the build succeed
+with every package utility absent, and a missing `resolve.dedupe` mounts two React
+copies and reports "Invalid hook call" as though React were at fault.
 
-The one thing that *is* generated is the file you write over and over — a node class:
+It also reports two things it will never fail on, because both are legitimate
+states right after installing: which of the four authorization gates you have not
+defined yet, and what `nodeflow.tenancy` currently resolves to — including, under
+`auto`, which `TenantResolver` is bound, since that is what decides what a null
+tenant means.
+
+The one thing that *is* generated on every project, over and over, is the file you
+write most often — a node class:
 
 ```bash
 php artisan nodeflow:make-node SendSms --type=yaya.send_sms --outputs='sent, failed' --test
 ```
 
 That writes a single class (optionally with a test), and appends it to
-`app/Providers/NodeflowServiceProvider.php` when you have one — otherwise it prints the
+`app/Providers/NodeflowServiceProvider.php` — which `nodeflow:install` creates —
+when the anchor is there to append to; otherwise it prints the
 `Nodeflow::register([...])` line for you to paste. See [Writing nodes](03-writing-nodes.md).
 
 ## Wiring the editor's front end

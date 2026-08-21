@@ -15,6 +15,12 @@ has landed: **49 demo Pest tests (191 assertions)**, silent demo `tsc`, a succes
 acceptance evidence" below for the six checks. (A final whole-branch fix wave landed after this
 entry; see the fix-wave report for its own totals and commits.)
 
+<!-- TASK-17-TODO: Plan 5 has since merged and closed F-1, F-2, G-2 and G-4, cut G-3 (E26),
+     verified R-2, and added the demo tenant-switcher and MakeNodeCommand/MakeTriggerCommand
+     caching-bug entries. Update this "Last updated" paragraph with Plan 5's merge commit, its
+     accepted-branch range, and its own measured package Pest/Vitest counts once Task 17 has run
+     and measured them on merged main. Do not guess the numbers here in the meantime. -->
+
 ---
 
 ## Decisions and scheduled follow-ups
@@ -149,28 +155,57 @@ disposable.
 ## Proven defects
 
 ### F-1 · `--group='{{ outputs }}'` renders an unparseable file and exits 0
-**Status:** DEFECT · **Raised by:** Plan 1 fix-wave re-review, reproduced by execution · **Cost:** ~2 lines
+**Status:** ✅ **RESOLVED, Plan 5.** · **Raised by:** Plan 1 fix-wave re-review, reproduced by execution · **Cost:** ~2 lines
 
-`MakeNodeCommand::buildClass()` substitutes `{{ group }}` at array index 2, before `{{ outputs }}`
+`MakeNodeCommand::buildClass()` substituted `{{ group }}` at array index 2, before `{{ outputs }}`
 and `{{ firstOutput }}`, and `str_replace` with array arguments is sequential. So a `--group` value
-containing a later placeholder is re-substituted: `->group(''sent', 'failed'')`, which fails `php -l`
-while the command reports success.
+containing a later placeholder was re-substituted: `->group(''sent', 'failed'')`, which failed
+`php -l` while the command reported success.
 
-Worse than the bug: `paletteGroup()`'s docblock claims a backslash and a single quote "are the only
-two characters that can end it early", which is now demonstrably false. **Fix the comment first** — a
-wrong comment outlives the bug it describes.
+Worse than the bug: `paletteGroup()`'s docblock claimed a backslash and a single quote "are the only
+two characters that can end it early", which was demonstrably false.
 
-Fix: render `{{ group }}` last in `buildClass()`, or reject `{{` in `paletteGroup()`.
+**Fix.** Both renderers (`MakeNodeCommand::buildClass()` and `MakeTriggerCommand::buildClass()`) now
+substitute with `strtr()`, which replaces all keys in one simultaneous pass rather than sequentially —
+so a value containing another placeholder's literal text can no longer be re-substituted. The
+`paletteGroup()` docblock is corrected to describe what `strtr()` actually guarantees, rather than the
+disproved "only two characters" claim.
 
 ### F-2 · Nothing but `php -l` watches `stubs/node.both.stub`
-**Status:** GAP · **Raised by:** Plan 1 fix-wave re-review, proven by mutation · **Cost:** ~15 lines
+**Status:** ✅ **RESOLVED, Plan 5.** · **Raised by:** Plan 1 fix-wave re-review, proven by mutation · **Cost:** ~15 lines
 
-Renaming `->help(` to `->helpText(` in `node.both.stub` alone leaves **all 203 tests green** while
-that stub fatals in every host that generates from it. The three stubs are three independent copies
-of the same call chain; the `require`-and-execute tests cover the subject and audience stubs only.
+Renaming `->help(` to `->helpText(` in `node.both.stub` alone left **all 203 tests green** while
+that stub fatalled in every host that generated from it. The three stubs are three independent copies
+of the same call chain; the `require`-and-execute tests covered the subject and audience stubs only.
 
-Fix: a third require-and-execute test mirroring the `SendBlast` one, under a fourth distinct class
-name (two generated classes of the same name in one process fatals).
+**Fix, and the measurement that proves it closes the gap.** A third require-and-execute test now
+mirrors the `SendBlast` one, under a fourth distinct class name (`SendDigest` — two generated classes
+of the same name in one process fatals). Re-running the same mutation — renaming `->help(` to
+`->helpText(` in `node.both.stub` alone — with the new test in place: the `SendSms` and `SendBlast`
+execute tests both still pass, and only the new `SendDigest` test fails. That is the coverage gap
+closing exactly where it was open.
+
+### F-3 · `--type` leaked across reused generator command instances
+**Status:** ✅ **RESOLVED, Plan 5 (ruling R16).** · **Raised by:** scope-expansion probe during Plan 5
+· **Cost:** ~30 lines each, across two commands
+
+Symfony's `Application` resolves one command object per command name and keeps it for the process's
+lifetime, so two `Artisan::call('nodeflow:make-node', ...)` invocations in one process reuse the exact
+same `MakeNodeCommand` instance rather than a fresh one. `handle()` never reset `$resolvedType`
+between calls, so `nodeType()`'s memoized-not-null guard returned the **first** call's already-
+validated type on the **second** call — skipping validation, including the `NodeRegistry` collision
+check, entirely. Reproduced by probe: two invocations in one process, the second passing a distinct,
+explicit `--type`, generated a class whose `type()` still returned the first call's type, at **exit
+code 0**. Published flow versions resolve through that string forever, so the leaked value is a
+permanent defect, not a cosmetic one.
+
+**Fix.** `MakeNodeCommand::handle()` now resets `$resolvedType` at its start, mirroring a fix already
+shipped in `MakeTriggerCommand::handle()` — the same class of bug (`$resolvedType` / `$resolvedEvent`
+surviving across reused invocations) was found and fixed there in this same plan, for the same reason.
+Both commands ship a persisted test asserting that two invocations in one process, with different
+`--type` (or `--type`/`--event`), each produce their own file with their own value and never the
+other's — `MakeNodeCommandTest`'s "validates each invocation independently, even when the command
+instance is reused" and its `MakeTriggerCommandTest` counterpart.
 
 ---
 
@@ -210,20 +245,28 @@ the over-matching guard: a comment or docblock naming the model or the table is 
 be a violation, so the fix cannot be "solved" by deleting a comment worth keeping.
 
 ### G-2 · `tenant_id` immutability is undocumented, and query-builder updates bypass it
-**Status:** GAP · **Raised by:** Plan 2 fix-wave re-review
+**Status:** ✅ **RESOLVED, Plan 5.** · **Raised by:** Plan 2 fix-wave re-review
 
-`tenant_id` is now immutable on update for `Flow`, `FlowVersion`, `Run` and `Template`, and nothing in
-`docs/` says so. A host doing `$flow->update($request->all())` with a changed `tenant_id`, or
-promoting a global `Template` into a tenant's, meets a `CrossTenantWriteException` with no
+`tenant_id` is immutable on update for `Flow`, `FlowVersion`, `Run` and `Template`, and until now
+nothing in `docs/` said so. A host doing `$flow->update($request->all())` with a changed `tenant_id`,
+or promoting a global `Template` into a tenant's, meets a `CrossTenantWriteException` with no
 integration-doc coverage.
 
 Separately, the guard is an `updating` model hook, so `Flow::withoutTenancy()->where(...)->update([...])`
 fires no model events and bypasses it entirely. Inherent to the approach, and the codebase already
 uses query-builder updates for status writes (`CompleteRunActivity`) — so it's a pattern a future
-author may copy. Worth stating in the guard's own comment.
+author may copy.
+
+**Fix.** `docs/02-integration.md` gained the "`tenant_id` is fixed at creation" subsection, right
+after "Tenant isolation and your gate": it names `CrossTenantWriteException`, shows both accidental
+triggers (`$flow->update($request->all())` and promoting a global `Template`), and states the
+query-builder bypass explicitly rather than leaving it to be discovered. The bypass itself is
+pinned by a covering test asserting `Flow::withoutTenancy()->where(...)->update(['tenant_id' => ...])`
+changes the row with no exception thrown — the guard's blind spot, proven rather than only described.
 
 ### G-3 · The FK invariant behind the unscoped relations is documented, not enforced
-**Status:** GAP · **Raised by:** Plan 2 whole-branch review, proven by probe
+**Status:** DECISION — **cut and reassigned, Plan 5 (E26).** · **Raised by:** Plan 2 whole-branch
+review, proven by probe
 
 `Run::flowVersion()`, `Flow::currentVersion()` and `Flow::versions()` are unscoped on the reasoning
 that reaching a `Run` or `Flow` already proves entitlement. That holds only while `flow_version_id`
@@ -231,21 +274,48 @@ and `current_version_id` point inside the parent's tenant. Plan 2 added an `upda
 `tenant_id` and wrote the invariant into all three relation comments, but there is still no composite
 FK constraint and both models have `$guarded = []`.
 
-**Plan 3's controllers must never accept `current_version_id` or `flow_version_id` from request
-input.** That is the whole mitigation.
+**Two enforcement mechanisms were considered for Plan 5 and both die on measurement.** A composite
+foreign key is unverifiable in this suite: `tests/TestCase.php` sets no `foreign_key_constraints` key
+on its SQLite connection, so `SQLiteConnector` never issues `pragma foreign_keys`. Probed directly,
+`pragma foreign_keys` returns `0`, and `Run::create(['flow_version_id' => 999999, …])` **succeeds** —
+no foreign key in this package is enforced by any test today, so a composite FK would ship as an
+invariant the suite cannot exercise. A `$guarded` mass-assignment block fails silently at scale
+instead: measured cost is four production call sites (`PublishFlow.php:40,67`, `StartRun.php:59,60`)
+plus 27 call sites across 16 test files, and `Model::preventSilentlyDiscardingAttributes()` is off by
+default — so `fill()` *silently discards* a guarded attribute rather than throwing, meaning those 27
+sites would start writing null foreign keys without any test noticing, and since foreign keys are not
+enforced the rows insert cleanly anyway. A change whose failure mode is 27 silently-broken fixtures is
+not a safety improvement.
+
+**What survives belongs with D-2, not this plan.** A `saving` guard on `Flow.current_version_id` and
+`Run.flow_version_id` that resolves the target `FlowVersion` unscoped and throws
+`CrossTenantWriteException` on a tenant mismatch is testable and cheap — one query per publish and
+per run creation — but it is a tenant assertion on a write path, the same family as D-2's assertion in
+`RunNodeActivity`. Plan 5's handoff explicitly forbids absorbing that work; splitting one coherent
+piece of security hardening across a tooling plan and a security plan would produce two half-defences.
+
+So G-3 stays open, its documented invariant and three relation comments stand unchanged, and it is
+reassigned to the security-hardening plan alongside **D-1** and **D-2**.
 
 ### G-4 · Host wiring omits Vite dependency deduplication
-**Status:** GAP · **Raised by:** Plan 3 real-app acceptance, proven by the symlinked demo
+**Status:** ✅ **RESOLVED, Plan 5, by `ViteDedupeStep`.** · **Raised by:** Plan 3 real-app acceptance,
+proven by the symlinked demo
 
 Spec §5.6 lists four host wiring requirements, but the accepted app proved there are five. Vite must
 set `resolve.dedupe` for `react`, `react-dom`, and `@xyflow/react`; otherwise a symlinked source
 package can load duplicate client runtimes and fail at runtime with an invalid hook call even while
-the build succeeds. Plan 5's `nodeflow:install` must verify this fifth requirement with the other
-four.
+the build succeeds.
 
 **Untouched by Plan 4.** `FlowRun` shares the same five host-wiring requirements as `FlowEditor`
 and adds no sixth; it relies on the `dedupe` setting the demo already carries rather than needing a
-new one. Verifying all five, including this one, remains `nodeflow:install`'s Plan 5 work.
+new one.
+
+**Fix.** `nodeflow:install` (and `--check`) now verifies this fifth requirement alongside the other
+four, via `src/Console/Install/ViteDedupeStep.php`. The check is bounded to the `dedupe` array's own
+text, not a whole-file search: every React application's `vite.config.ts` mentions `react` somewhere
+— a `@vitejs/plugin-react` import, an `optimizeDeps.include` list — so a whole-file match would report
+essentially every host as already wired. Matching only inside the `dedupe` array's own substring is
+what makes the check mean anything.
 
 ---
 
@@ -263,12 +333,24 @@ author reads §4 as the binding authority.**
 Fixed in the same commit that created this file; kept here as the record of why.
 
 ### R-2 · Minor docs imprecision on `disabled` vs `resolver`
-**Status:** DRIFT · **Raised by:** Plan 2 fix-wave re-review
+**Status:** ✅ **RESOLVED — already corrected before Plan 5, verified during Plan 5.**
+· **Raised by:** Plan 2 fix-wave re-review
 
-`docs/02-integration.md` warns that on a path where the resolver returns null "the read is **not**
-scoped and the row comes back". True under `disabled`, but under `resolver` those paths throw. It
-over-warns rather than under-warns, so it errs safe, but it's imprecise about the mode the docs have
-just told the reader to select.
+`docs/02-integration.md` warned that on a path where the resolver returns null "the read is **not**
+scoped and the row comes back". True under `disabled`, but under `resolver` those paths throw — the
+concern was that the sentence over-warned without naming which mode it meant.
+
+**Verified during Plan 5** by reading `docs/02-integration.md` ("Tenant isolation and your gate") as
+it stands. It is already mode-precise: "Under the shipped default (`auto`), a null tenant is unscoped
+only if you never bound a `TenantResolver`; once you bind one, `auto` throws on a null instead of
+reading every tenant's rows. The gap opens only if you explicitly set `nodeflow.tenancy` to `disabled`
+while a resolver is bound — a queue-dispatched preview, an API token that has not selected an
+organisation yet, a console command — the read is **not** scoped and the row comes back." That names
+`disabled` explicitly as the mode where the row comes back unscoped, and says nothing that would apply
+to `resolver` (which the surrounding text elsewhere says always throws) — so the imprecision this
+issue named is gone. `git log -p --follow docs/02-integration.md` traces the sentence to commit
+`2962427c3ae2c59318389e4bf593ccbeb4588e4c` ("docs: document the editor routes, drafts and option
+sources", 2026-08-20), which is Plan 3a's docs pass — corrected there and never struck through since.
 
 ---
 
@@ -321,3 +403,12 @@ Listed so they aren't re-litigated:
 - `CrossTenantWriteException`'s constructor is private — clean for an unreleased package.
 - A host `Gate::before` hook returning true overrides default deny for every package ability. Laravel
   semantics, the host's explicit choice, now documented.
+- **The demo's tenant switcher lets an authenticated user act as another organisation, on purpose.**
+  The next task (Task 16, E27) fixes the demo's route binding — `runs/{run}/subjects/{subject}/...`
+  bound through the tenant-scoped `Run` so a cross-tenant id is a 404, `Run::withoutTenancy()` deleted
+  from both actions, the `User` write scoped to `$run->tenant_id`, the route group gaining
+  `->middleware(['auth'])`, and `switchTenant` validating the posted `tenant_id` against `Organization`
+  before it reaches the session. None of that removes the switcher itself: any authenticated demo user
+  can still `POST /nodeflow/tenant` and deliberately switch to another organisation, because letting a
+  demo visitor explore every tenant's flows is the switcher's entire purpose. This is not a closed
+  hole and must not be read as one — it is the demo behaving as designed.

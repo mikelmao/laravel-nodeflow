@@ -106,6 +106,33 @@ A normal Composer install has no `node_modules` inside
 `dedupe` setting is harmless in that case and makes both installations work.
 **Quiet, because it looks like a React bug rather than a configuration error.**
 
+### Check all five
+
+```bash
+php artisan nodeflow:install --check
+```
+
+Reports each requirement as wired or not, prints the exact snippet for anything
+missing, and exits non-zero if any of them is. `install` **writes** the Tailwind
+`@source` line — computing the relative path from wherever your CSS entry actually
+lives — and **verifies but does not write** the other three plus the provider
+wiring:
+
+| Requirement | `install` |
+|---|---|
+| 1. Vite alias | verifies |
+| 2. tsconfig paths | verifies — structurally, so both `resources/js` and `resources/js/index.ts` are accepted |
+| 3. Tailwind `@source` | **writes** |
+| 4. `@xyflow/react` | verifies, and tells you to `npm install` it |
+| 5. Vite `resolve.dedupe` | verifies |
+
+The three it does not write are files it cannot edit and then prove it edited
+correctly: `vite.config.ts` needs a TypeScript parser, `tsconfig.json` is usually
+JSONC whose comments a JSON round-trip would delete, and writing a dependency into
+`package.json` without running the installer would leave your lockfile disagreeing
+with your manifest. Verification is comment-stripped, so a setting you commented
+out while debugging reports as missing rather than as present.
+
 ## Add the thin Inertia page
 
 ```tsx
