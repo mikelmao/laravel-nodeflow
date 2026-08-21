@@ -507,3 +507,138 @@ it('refuses a write that would land inside a commented-out anchor, and restores 
     expect($outcome)->not->toBe(NodeRegistrationOutcome::Appended);
     expect(file_get_contents($path))->toBe($before);
 });
+
+it('treats a class hidden behind an unsupported element as already registered, refusing to add a duplicate', function () {
+    // The append-direction mirror of removeFrom()'s EntryUnsupported design
+    // decision: isAlreadyPresent()'s ::class branch treats an element it
+    // cannot classify (here, `self::SMS` aliasing SendSms through a class
+    // constant) as PRESENT, not absent — a false "not present" would let
+    // register() append a second, duplicate entry for a class that is, in
+    // fact, already registered under a spelling this writer cannot see
+    // through. Counterfactual: treat an unclassifiable element as though it
+    // simply were not there (skip it and keep scanning) and this reports
+    // Appended, leaving \App\Nodeflow\Nodes\SendSms registered twice under
+    // two different spellings.
+    $path = writeProviderFixture(<<<'PHP'
+    <?php
+
+    namespace App\Providers;
+
+    use Illuminate\Support\ServiceProvider;
+    use App\Nodeflow\Nodes\SendSms;
+
+    class NodeflowServiceProvider extends ServiceProvider
+    {
+        const SMS = SendSms::class;
+
+        protected array $nodes = [
+            self::SMS,
+        ];
+    }
+    PHP);
+
+    $before = file_get_contents($path);
+
+    $outcome = (new NodeRegistrationWriter(new Filesystem))
+        ->register($path, 'App\Nodeflow\Nodes\SendSms');
+
+    expect($outcome)->toBe(NodeRegistrationOutcome::AlreadyPresent);
+    expect(file_get_contents($path))->toBe($before);
+});
+
+it('does not let an earlier entry whose string argument contains "]" truncate the attribute return array', function () {
+    // Important finding: the same root cause (a `]` inside a string literal
+    // ending the span early under a character-based scan) regressed
+    // appendTo()'s attribute-presence branch too. The decoy entry's key
+    // contains a literal `]` and sits BEFORE the real 'clicked' entry. Under
+    // a character-based arraySpan(), that `]` was mistaken for the return
+    // array's own closing bracket, so the presence search never reached the
+    // real 'clicked' entry — appendTo() would report it "not present" and
+    // append a SECOND 'clicked' entry, which
+    // SubjectAttributeRegistry::register() (keyed by attribute key) would
+    // have made silently replace the first at runtime. The token-based span
+    // treats the decoy's whole string as ONE token, so its internal `]`
+    // never closes anything.
+    $path = providerWithThreeHomes(str_replace(
+        "        return [\n        ];",
+        "        return [\n"
+            ."            \Nodeflow\Schema\SubjectAttribute::make('other]key', 'Decoy', 'boolean', fn (\$subject) => null),\n"
+            ."            \Nodeflow\Schema\SubjectAttribute::make('clicked', 'Already here', 'boolean', fn (\$subject) => null),\n"
+            .'        ];',
+        threeHomesSource(),
+    ));
+
+    $outcome = (new NodeRegistrationWriter(new Filesystem))->appendTo(
+        $path,
+        NodeRegistrationWriter::ATTRIBUTE_ANCHOR,
+        "SubjectAttribute::make('clicked'",
+        "\Nodeflow\Schema\SubjectAttribute::make('clicked', 'New label', 'boolean', fn (\$subject) => null)",
+        '            ',
+    );
+
+    expect($outcome)->toBe(NodeRegistrationOutcome::AlreadyPresent);
+    expect(substr_count(file_get_contents($path), "make('clicked',"))->toBe(1);
+});
+
+it('does not read a mention outside the attribute return array as already registered', function () {
+    // M8: isAlreadyPresent()'s non-::class branch must be scoped to the
+    // ATTRIBUTE_ANCHOR's own return array, not the whole file — mirroring
+    // the whole-file str_contains defect Step 7 fixed for the ::class
+    // branch, but for the substring branch instead. Counterfactual: revert
+    // to str_contains(SourceText::withoutPhpComments($contents),
+    // $presenceNeedle) over the whole file, and this fails — the mention
+    // inside boot()'s string is found and appendTo() wrongly reports
+    // AlreadyPresent without ever adding the entry.
+    $path = providerWithThreeHomes(str_replace(
+        "    public function boot(): void\n    {",
+        "    public function boot(): void\n    {\n"
+            ."        \$documentation = \"see SubjectAttribute::make('clicked' for an example\";\n",
+        threeHomesSource(),
+    ));
+
+    $outcome = (new NodeRegistrationWriter(new Filesystem))->appendTo(
+        $path,
+        NodeRegistrationWriter::ATTRIBUTE_ANCHOR,
+        "SubjectAttribute::make('clicked'",
+        "\Nodeflow\Schema\SubjectAttribute::make('clicked', 'Clicked', 'boolean', fn (\$subject) => null)",
+        '            ',
+    );
+
+    expect($outcome)->toBe(NodeRegistrationOutcome::Appended);
+    expectParseablePhp($path);
+});
+
+it('does not let a nested array argument in an earlier call truncate the attribute return array', function () {
+    // Isolates arraySpan()'s own bracket/paren DEPTH tracking specifically,
+    // as distinct from token-atomicity: the decoy entry's second ARGUMENT is
+    // a literal nested array `['x']`, not a string, so this exercises the
+    // actual `[`/`]` depth counter rather than the "a string is one token"
+    // fix. On the ::class / removeFrom() side, a decoy shaped like this
+    // always ends up classified as EntryUnsupported regardless of whether
+    // the span is correctly bounded — the structural classifier masks a
+    // depth-tracking bug there. It does NOT mask it here: the attribute
+    // branch is a plain substring search with no structural classifier, so
+    // if the return array's span were truncated at the decoy's own `]`
+    // (before reaching it via depth-tracking), the real 'clicked' entry
+    // — which comes after the decoy — would fall outside the search and
+    // this would wrongly report Appended instead of AlreadyPresent.
+    $path = providerWithThreeHomes(str_replace(
+        "        return [\n        ];",
+        "        return [\n"
+            ."            \Nodeflow\Schema\SubjectAttribute::make('decoy', ['x'], 'boolean', fn (\$subject) => null),\n"
+            ."            \Nodeflow\Schema\SubjectAttribute::make('clicked', 'Already here', 'boolean', fn (\$subject) => null),\n"
+            .'        ];',
+        threeHomesSource(),
+    ));
+
+    $outcome = (new NodeRegistrationWriter(new Filesystem))->appendTo(
+        $path,
+        NodeRegistrationWriter::ATTRIBUTE_ANCHOR,
+        "SubjectAttribute::make('clicked'",
+        "\Nodeflow\Schema\SubjectAttribute::make('clicked', 'New label', 'boolean', fn (\$subject) => null)",
+        '            ',
+    );
+
+    expect($outcome)->toBe(NodeRegistrationOutcome::AlreadyPresent);
+    expect(substr_count(file_get_contents($path), "make('clicked',"))->toBe(1);
+});

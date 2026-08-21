@@ -37,13 +37,23 @@ class NodeRegistrationWriter
     private const METHOD_BODY_WINDOW = 120;
 
     /**
-     * Matches a written class-constant reference such as `Foo::class`,
-     * `\App\Foo::class`, or `App\Nodeflow\Nodes\Foo::class`. Captures the whole
-     * text including the `::class` suffix; callers strip that suffix themselves
-     * before handing the remainder to PhpNameResolver.
+     * Token IDs a class-reference element's NAME may be built from. PHP 8's
+     * tokeniser usually emits one of these per name (T_NAME_QUALIFIED for
+     * `App\Foo`, T_NAME_FULLY_QUALIFIED for `\App\Foo`, plain T_STRING for
+     * `Foo`); T_NS_SEPARATOR and T_NAME_RELATIVE are accepted too so an
+     * older-style token stream (alternating T_STRING/T_NS_SEPARATOR) is still
+     * recognised.
      */
-    private const CLASS_REFERENCE_PATTERN = '/\\\\?[A-Za-z_\x80-\xff][A-Za-z0-9_\x80-\xff]*'
-        .'(?:\\\\[A-Za-z_\x80-\xff][A-Za-z0-9_\x80-\xff]*)*::class/';
+    private const NAME_TOKEN_IDS = [
+        T_STRING,
+        T_NAME_QUALIFIED,
+        T_NAME_FULLY_QUALIFIED,
+        T_NAME_RELATIVE,
+        T_NS_SEPARATOR,
+    ];
+
+    /** Tokens that are legal ANYWHERE between a class-reference element's parts. */
+    private const INSIGNIFICANT_TOKEN_IDS = [T_WHITESPACE, T_COMMENT, T_DOC_COMMENT];
 
     public function __construct(private Filesystem $files) {}
 
@@ -144,7 +154,7 @@ class NodeRegistrationWriter
 
     /**
      * Removes every entry inside $anchor's array whose written name RESOLVES to
-     * $nodeClass (E38, E39).
+     * $nodeClass (E38, E39, E50).
      *
      * Matching is identity, not spelling: `<name>::class` is only a candidate,
      * and is only removed once PhpNameResolver::resolve() says its FQCN, under
@@ -153,14 +163,39 @@ class NodeRegistrationWriter
      * namespace turns into a different class, one sitting inside a comment —
      * is left alone.
      *
+     * The array's body is parsed STRUCTURALLY (spanElements(), token-based),
+     * not lexically: an earlier design matched `<name>::class` with a regex
+     * over comment-stripped text, which (a) let a `]` inside a STRING LITERAL
+     * close the span early — because a regex has no notion of "this character
+     * is inside a string" — and (b) had no way to notice a class-string
+     * literal, a class constant (`self::SMS`), or a spread (`...$more`) sitting
+     * where a class reference belongs. Both silently read as NotPresent, which
+     * authorises the caller to delete the class file the entry still, in fact,
+     * names. If ANY element in the array is not exactly `<name>::class` (a
+     * literal `class` keyword, not merely something ending in the text
+     * "class"), the whole operation refuses as EntryUnsupported rather than
+     * report on the elements it does understand — an unrecognised element
+     * might resolve to the target opaquely (a class constant aliasing it, as
+     * above), so partial understanding of the array is not enough to certify
+     * an absence.
+     *
+     * A class-string literal (`'App\…\SendMessage'`) is a REAL registration —
+     * it must never read NotPresent either — but this writer refuses it as
+     * EntryUnsupported rather than remove it. Parsing what a PHP string
+     * literal actually denotes (single- vs double-quoted escape rules,
+     * `\\`, variable interpolation) is a correctness-sensitive job
+     * PhpNameResolver was never built for, and refusing costs the host one
+     * manual edit; guessing wrong costs a fatal boot().
+     *
      * Every removal is line-scoped: a match is only deleted when its own
-     * comment-stripped line is exactly that entry (plus an optional trailing
-     * comma), or when the entry is the array's entire content — in which case
-     * the whole span between the brackets is cleared instead, because there is
-     * no "its own line" to delete without touching the anchor or the closing
-     * bracket. Anything else — most importantly, a match sharing its line with
-     * a sibling entry — refuses as EntryAmbiguous rather than attempt character
-     * surgery on a shared line, and leaves the file untouched.
+     * physical line contains nothing else but that entry (plus an optional
+     * trailing comma and, harmlessly, a comment), or when the entry is the
+     * array's entire content — in which case the whole span between the
+     * brackets is cleared instead, because there is no "its own line" to
+     * delete without touching the anchor or the closing bracket. Anything
+     * else — most importantly, a match sharing its line with a sibling entry
+     * — refuses as EntryAmbiguous rather than attempt character surgery on a
+     * shared line, and leaves the file untouched.
      */
     public function removeFrom(string $providerPath, string $anchor, string $nodeClass): NodeRemovalOutcome
     {
@@ -183,29 +218,33 @@ class NodeRegistrationWriter
             return NodeRemovalOutcome::AnchorAmbiguous;
         }
 
-        $span = $this->arraySpan($contents, $anchor);
+        $parsed = $this->spanElements($contents, $anchor);
 
-        if ($span === null) {
+        if ($parsed === null) {
             return NodeRemovalOutcome::AnchorMissing;
         }
 
-        $target = ltrim($nodeClass, '\\');
-        $matches = $this->targetEntriesInSpan($contents, $anchor, $target);
+        if ($parsed['unsupported']) {
+            return NodeRemovalOutcome::EntryUnsupported;
+        }
 
-        if ($matches === null || $matches === []) {
+        $target = ltrim($nodeClass, '\\');
+        $resolver = PhpNameResolver::forSource($contents);
+
+        $matches = array_values(array_filter(
+            $parsed['elements'],
+            static fn (array $element) => $resolver->resolve($element['writtenName']) === $target,
+        ));
+
+        if ($matches === []) {
             return NodeRemovalOutcome::NotPresent;
         }
 
-        $bodyStrippedTrimmed = trim(substr(
-            $span['code'],
-            $span['bodyStart'],
-            $span['bodyEnd'] - $span['bodyStart'],
-        ));
-
+        $totalElementCount = count($parsed['elements']);
         $deletions = [];
 
-        foreach ($matches as $match) {
-            $deletion = $this->entryDeletionRange($contents, $span, $match, $bodyStrippedTrimmed);
+        foreach ($matches as $element) {
+            $deletion = $this->entryDeletionRange($contents, $parsed['tokens'], $element, $totalElementCount, $parsed);
 
             if ($deletion === null) {
                 return NodeRemovalOutcome::EntryAmbiguous;
@@ -227,12 +266,25 @@ class NodeRegistrationWriter
         $this->files->put($providerPath, $updated);
 
         // Re-verify rather than trust the write (E11's rule, applied to a
-        // deletion): the result must still parse, AND no resolved reference to
-        // the target may remain anywhere in the anchor's array. Either failure
-        // restores the original bytes rather than report a removal that left
-        // the host's provider still naming a class that may no longer exist.
+        // deletion): the result must still parse, the array's remaining
+        // content must still be fully understood (not EntryUnsupported), AND
+        // no resolved reference to the target may remain anywhere in it.
+        // Any failure restores the original bytes rather than report a
+        // removal that left the host's provider still naming a class that
+        // may no longer exist.
         $written = $this->files->get($providerPath);
-        $remaining = $this->targetEntriesInSpan($written, $anchor, $target);
+        $remainingParsed = $this->spanElements($written, $anchor);
+
+        $remaining = null;
+
+        if ($remainingParsed !== null && ! $remainingParsed['unsupported']) {
+            $remainingResolver = PhpNameResolver::forSource($written);
+
+            $remaining = array_values(array_filter(
+                $remainingParsed['elements'],
+                static fn (array $element) => $remainingResolver->resolve($element['writtenName']) === $target,
+            ));
+        }
 
         if (! $this->parses($written) || $remaining === null || $remaining !== []) {
             $this->files->put($providerPath, $contents);
@@ -244,44 +296,67 @@ class NodeRegistrationWriter
     }
 
     /**
-     * The RAW byte range to delete for one matched entry, or null when the
-     * entry cannot be removed without touching a sibling's content
+     * The RAW byte range to delete for one matched element, or null when the
+     * element cannot be removed without touching a sibling's content
      * (EntryAmbiguous).
      *
-     * @param  array{text: string, codeStart: int, codeEnd: int}  $match
-     * @param  array{code: string, offsets: list<int>, bodyStart: int, bodyEnd: int, openRaw: int, closeRaw: int}  $span
+     * A match's own physical line "belongs to it alone" when every non-
+     * whitespace, non-comment token on that line is either one of the
+     * element's own tokens or a single trailing comma — computed from the
+     * TOKEN stream rather than a trimmed string comparison, so a same-line
+     * trailing comment (whose text might coincidentally look like more
+     * entry text) can never confuse the check.
+     *
+     * @param  list<array{id: int|null, text: string, start: int, end: int}>  $tokens
+     * @param  array{writtenName: string, tokenIndexes: list<int>, rawStart: int, rawEnd: int}  $element
+     * @param  array{tokens: list<mixed>, openRaw: int, closeRaw: int, bodyStart: int, bodyEnd: int}  $span
      * @return array{start: int, end: int}|null
      */
-    private function entryDeletionRange(string $contents, array $span, array $match, string $bodyStrippedTrimmed): ?array
+    private function entryDeletionRange(string $contents, array $tokens, array $element, int $totalElementCount, array $span): ?array
     {
-        $code = $span['code'];
-        $offsets = $span['offsets'];
-        $entryText = $match['text'];
-        $withComma = $entryText.',';
+        $rawStart = $element['rawStart'];
+        $rawEnd = $element['rawEnd'];
 
-        $previousNewline = strrpos(substr($code, 0, $match['codeStart']), "\n");
-        $lineStartCode = $previousNewline === false ? 0 : $previousNewline + 1;
+        $previousNewline = strrpos(substr($contents, 0, $rawStart), "\n");
+        $lineStart = $previousNewline === false ? 0 : $previousNewline + 1;
 
-        $nextNewline = strpos($code, "\n", $match['codeEnd']);
-        $lineEndCode = $nextNewline === false ? strlen($code) : $nextNewline;
+        $nextNewline = strpos($contents, "\n", $rawEnd);
+        $lineEnd = $nextNewline === false ? strlen($contents) : $nextNewline;
 
-        $line = trim(substr($code, $lineStartCode, $lineEndCode - $lineStartCode));
+        $meaningfulIndexes = [];
 
-        if ($line === $entryText || $line === $withComma) {
-            $rawStart = $offsets[$lineStartCode];
-            $rawEnd = $nextNewline === false
-                ? strlen($contents)
-                : $offsets[$lineEndCode] + 1;
+        foreach ($tokens as $index => $token) {
+            if ($token['start'] >= $lineStart && $token['end'] <= $lineEnd
+                && ! in_array($token['id'], self::INSIGNIFICANT_TOKEN_IDS, true)) {
+                $meaningfulIndexes[] = $index;
+            }
+        }
 
-            return ['start' => $rawStart, 'end' => $rawEnd];
+        $elementIndexes = $element['tokenIndexes'];
+        $matchesLine = $meaningfulIndexes === $elementIndexes;
+
+        if (! $matchesLine && count($meaningfulIndexes) === count($elementIndexes) + 1) {
+            $withoutLast = array_slice($meaningfulIndexes, 0, -1);
+            $lastIndex = end($meaningfulIndexes);
+
+            $matchesLine = $withoutLast === $elementIndexes
+                && $tokens[$lastIndex]['id'] === null
+                && $tokens[$lastIndex]['text'] === ',';
+        }
+
+        if ($matchesLine) {
+            return [
+                'start' => $lineStart,
+                'end' => $nextNewline === false ? strlen($contents) : $nextNewline + 1,
+            ];
         }
 
         // No "own line" to delete without touching a sibling — but if this
-        // entry IS the array's entire content, there is no sibling, and the
+        // element is the array's ONLY element, there is no sibling, and the
         // whole span between the brackets can be cleared instead. This is the
         // path a single-line array (`$nodes = [Foo::class];`) takes, because
         // its "line" also contains the anchor and the closing bracket.
-        if ($bodyStrippedTrimmed === $entryText || $bodyStrippedTrimmed === $withComma) {
+        if ($totalElementCount === 1) {
             return ['start' => $span['openRaw'] + 1, 'end' => $span['closeRaw']];
         }
 
@@ -289,14 +364,36 @@ class NodeRegistrationWriter
     }
 
     /**
-     * Every `<name>::class` occurrence inside $anchor's array span whose
-     * resolved FQCN equals $target. Null means the anchor's array span could
-     * not be located at all (callers treat that as "could not verify" rather
-     * than "definitely absent").
+     * Parses $anchor's array body into its class-reference elements —
+     * `<name> :: class`, tolerating whitespace and comments between the
+     * three parts — or reports that at least one element is not that shape.
      *
-     * @return list<array{text: string, codeStart: int, codeEnd: int}>|null
+     * Elements are found by splitting the body's tokens on top-level commas
+     * (bracket/paren/brace depth tracked so a nested array's or a function
+     * call's own commas are never mistaken for one), which is what keeps a
+     * class-string literal's `]` (absorbed whole into ONE
+     * T_CONSTANT_ENCAPSED_STRING token, never a bracket token in its own
+     * right) from ever being mistaken for the array's own closing bracket —
+     * the exact defect a character-by-character scan had.
+     *
+     * Any element failing classifyElement() makes the WHOLE result
+     * `unsupported`, not just that element: an element this parser cannot
+     * read (a class constant, a spread, a nested array, a string literal, a
+     * call) might resolve, opaquely, to the very class a caller is searching
+     * for, so reporting on the elements that DO parse and staying silent
+     * about the rest would risk the same false "not registered" this replaces.
+     *
+     * @return array{
+     *     unsupported: bool,
+     *     elements: list<array{writtenName: string, tokenIndexes: list<int>, rawStart: int, rawEnd: int}>,
+     *     tokens: list<array{id: int|null, text: string, start: int, end: int}>,
+     *     openRaw: int,
+     *     closeRaw: int,
+     *     bodyStart: int,
+     *     bodyEnd: int,
+     * }|null
      */
-    private function targetEntriesInSpan(string $contents, string $anchor, string $target): ?array
+    private function spanElements(string $contents, string $anchor): ?array
     {
         $span = $this->arraySpan($contents, $anchor);
 
@@ -304,32 +401,99 @@ class NodeRegistrationWriter
             return null;
         }
 
-        $body = substr($span['code'], $span['bodyStart'], $span['bodyEnd'] - $span['bodyStart']);
+        $tokens = $span['tokens'];
+        $groups = [];
+        $current = [];
+        $depth = 0;
 
-        if (! preg_match_all(self::CLASS_REFERENCE_PATTERN, $body, $matches, PREG_OFFSET_CAPTURE)) {
-            return [];
-        }
+        for ($i = $span['bodyStart']; $i < $span['bodyEnd']; $i++) {
+            $token = $tokens[$i];
+            $isBoundary = $token['id'] === null;
 
-        $resolver = PhpNameResolver::forSource($contents);
-        $found = [];
+            if ($isBoundary && in_array($token['text'], ['(', '[', '{'], true)) {
+                $depth++;
+            } elseif ($isBoundary && in_array($token['text'], [')', ']', '}'], true)) {
+                $depth--;
+            } elseif ($isBoundary && $token['text'] === ',' && $depth === 0) {
+                $groups[] = $current;
+                $current = [];
 
-        foreach ($matches[0] as [$text, $offsetInBody]) {
-            $writtenName = substr($text, 0, -strlen('::class'));
-
-            if ($resolver->resolve($writtenName) !== $target) {
                 continue;
             }
 
-            $codeStart = $span['bodyStart'] + $offsetInBody;
-
-            $found[] = [
-                'text' => $text,
-                'codeStart' => $codeStart,
-                'codeEnd' => $codeStart + strlen($text),
-            ];
+            $current[] = $i;
         }
 
-        return $found;
+        if ($current !== []) {
+            $groups[] = $current;
+        }
+
+        $elements = [];
+
+        foreach ($groups as $group) {
+            $significant = array_values(array_filter(
+                $group,
+                static fn (int $index) => ! in_array($tokens[$index]['id'], self::INSIGNIFICANT_TOKEN_IDS, true),
+            ));
+
+            if ($significant === []) {
+                continue; // A trailing comma before the closing bracket — not an element.
+            }
+
+            $classified = $this->classifyElement($tokens, $significant);
+
+            if ($classified === null) {
+                return ['unsupported' => true, 'elements' => [], 'tokens' => $tokens] + $span;
+            }
+
+            $elements[] = $classified;
+        }
+
+        return ['unsupported' => false, 'elements' => $elements, 'tokens' => $tokens] + $span;
+    }
+
+    /**
+     * Whether $significant (a comma-delimited element's tokens, comments and
+     * whitespace already excluded) is exactly a name followed by `::`
+     * followed by the literal `class` keyword — PHP's own class-constant-
+     * fetch syntax, not merely text that happens to contain the word "class".
+     *
+     * @param  list<array{id: int|null, text: string, start: int, end: int}>  $tokens
+     * @param  list<int>  $significant  token indexes into $tokens, in order
+     * @return array{writtenName: string, tokenIndexes: list<int>, rawStart: int, rawEnd: int}|null
+     */
+    private function classifyElement(array $tokens, array $significant): ?array
+    {
+        $count = count($significant);
+
+        if ($count < 3) {
+            return null;
+        }
+
+        $classIndex = $significant[$count - 1];
+        $colonIndex = $significant[$count - 2];
+
+        if ($tokens[$classIndex]['id'] !== T_CLASS || $tokens[$colonIndex]['id'] !== T_DOUBLE_COLON) {
+            return null;
+        }
+
+        // Always non-empty: $count >= 3 here, so $count - 2 >= 1.
+        $nameIndexes = array_slice($significant, 0, $count - 2);
+
+        foreach ($nameIndexes as $index) {
+            if (! in_array($tokens[$index]['id'], self::NAME_TOKEN_IDS, true)) {
+                return null;
+            }
+        }
+
+        $writtenName = implode('', array_map(static fn (int $index) => $tokens[$index]['text'], $nameIndexes));
+
+        return [
+            'writtenName' => $writtenName,
+            'tokenIndexes' => $significant,
+            'rawStart' => $tokens[$significant[0]]['start'],
+            'rawEnd' => $tokens[$classIndex]['end'],
+        ];
     }
 
     /**
@@ -339,17 +503,39 @@ class NodeRegistrationWriter
      * registered.
      *
      * A needle ending in `::class` is a class reference and is matched by
-     * resolved identity, the same rule removeFrom() uses. Any other needle (the
-     * `SubjectAttribute::make('key'` case) is not a class reference at all, so
-     * it is matched as a literal substring of the span's comment-stripped text.
+     * resolved identity, the same structural parser removeFrom() uses. If that
+     * parser finds an element it cannot classify, this reports "present" —
+     * the conservative direction, since an unrecognised element (a class
+     * constant, say) might itself resolve to the target, and a false
+     * "not present" here risks appendTo() adding a duplicate registration.
+     *
+     * Any other needle (the `SubjectAttribute::make('key'` case) is not a
+     * class reference at all, so it is matched as a literal substring of the
+     * span's comment-stripped text.
      */
     private function isAlreadyPresent(string $contents, string $anchor, string $presenceNeedle): bool
     {
         if (str_ends_with($presenceNeedle, '::class')) {
             $target = ltrim(substr($presenceNeedle, 0, -strlen('::class')), '\\');
-            $matches = $this->targetEntriesInSpan($contents, $anchor, $target);
+            $parsed = $this->spanElements($contents, $anchor);
 
-            return $matches !== null && $matches !== [];
+            if ($parsed === null) {
+                return false;
+            }
+
+            if ($parsed['unsupported']) {
+                return true;
+            }
+
+            $resolver = PhpNameResolver::forSource($contents);
+
+            foreach ($parsed['elements'] as $element) {
+                if ($resolver->resolve($element['writtenName']) === $target) {
+                    return true;
+                }
+            }
+
+            return false;
         }
 
         $span = $this->arraySpan($contents, $anchor);
@@ -358,23 +544,40 @@ class NodeRegistrationWriter
             return false;
         }
 
-        $body = substr($span['code'], $span['bodyStart'], $span['bodyEnd'] - $span['bodyStart']);
+        $body = '';
+
+        for ($i = $span['bodyStart']; $i < $span['bodyEnd']; $i++) {
+            $token = $span['tokens'][$i];
+
+            if ($token['id'] === T_COMMENT || $token['id'] === T_DOC_COMMENT) {
+                continue;
+            }
+
+            $body .= $token['text'];
+        }
 
         return str_contains($body, $presenceNeedle);
     }
 
     /**
-     * The array span $anchor opens: comment-stripped code and its raw-offset
-     * map (shared, so callers do not each re-tokenise the file), the code-index
-     * bounds of the array's BODY (between the brackets, exclusive), and the RAW
-     * byte offsets of the brackets themselves.
+     * The array span $anchor opens: every PHP token in the file alongside its
+     * own raw byte range (shared, so callers do not each re-tokenise the
+     * file), the token-index bounds of the array's BODY (between the
+     * brackets, exclusive), and the RAW byte offsets of the brackets
+     * themselves.
      *
-     * Found by brace/bracket matching from the anchor's own `[` to its partner
-     * — not by searching for the next `]`, which a nested array would close
-     * early — walked over the comment-stripped text so a `[` or `]` sitting
-     * inside a comment cannot shift the count.
+     * Found by brace/bracket matching from the anchor's own `[` to its
+     * partner — not by searching for the next `]`, which a nested array
+     * would close early — walked over the TOKEN stream, not raw characters:
+     * a comment or a string literal is exactly ONE token regardless of what
+     * `[` or `]` characters its own text contains, so a bracket sitting
+     * inside either can never be mistaken for a real one. A character-based
+     * scan over comment-STRIPPED text (this method's previous shape) caught
+     * the comment case but not the string-literal one — a class-string entry
+     * placed before the real target inside a nested array, such as
+     * `['x]'],`, closed the span at that literal's OWN internal `]`.
      *
-     * @return array{code: string, offsets: list<int>, bodyStart: int, bodyEnd: int, openRaw: int, closeRaw: int}|null
+     * @return array{tokens: list<array{id: int|null, text: string, start: int, end: int}>, bodyStart: int, bodyEnd: int, openRaw: int, closeRaw: int}|null
      */
     private function arraySpan(string $contents, string $anchor): ?array
     {
@@ -384,43 +587,81 @@ class NodeRegistrationWriter
             return null;
         }
 
-        [$code, $offsets] = $this->codeWithOffsets($contents);
+        $tokens = $this->tokens($contents);
+        $openIndex = null;
 
-        $openCode = array_search($openRaw, $offsets, true);
+        foreach ($tokens as $index => $token) {
+            if ($token['start'] === $openRaw && $token['id'] === null && $token['text'] === '[') {
+                $openIndex = $index;
 
-        if ($openCode === false) {
+                break;
+            }
+        }
+
+        if ($openIndex === null) {
             return null;
         }
 
         $depth = 0;
-        $closeCode = null;
+        $closeIndex = null;
 
-        for ($i = $openCode, $length = strlen($code); $i < $length; $i++) {
-            if ($code[$i] === '[') {
+        for ($i = $openIndex, $count = count($tokens); $i < $count; $i++) {
+            $token = $tokens[$i];
+
+            if ($token['id'] !== null) {
+                continue; // A named token (identifier, keyword, STRING, comment...) is never a bracket character itself.
+            }
+
+            if ($token['text'] === '[') {
                 $depth++;
-            } elseif ($code[$i] === ']') {
+            } elseif ($token['text'] === ']') {
                 $depth--;
 
                 if ($depth === 0) {
-                    $closeCode = $i;
+                    $closeIndex = $i;
 
                     break;
                 }
             }
         }
 
-        if ($closeCode === null) {
+        if ($closeIndex === null) {
             return null;
         }
 
         return [
-            'code' => $code,
-            'offsets' => $offsets,
-            'bodyStart' => $openCode + 1,
-            'bodyEnd' => $closeCode,
+            'tokens' => $tokens,
+            'bodyStart' => $openIndex + 1,
+            'bodyEnd' => $closeIndex,
             'openRaw' => $openRaw,
-            'closeRaw' => $offsets[$closeCode],
+            'closeRaw' => $tokens[$closeIndex]['start'],
         ];
+    }
+
+    /**
+     * Every PHP token in $contents, alongside its own raw byte range.
+     * token_get_all() is a lossless lexer — concatenating every token's text
+     * in order reproduces $contents exactly — so each token's raw start is
+     * just the running length of every token before it.
+     *
+     * @return list<array{id: int|null, text: string, start: int, end: int}>
+     */
+    private function tokens(string $contents): array
+    {
+        $tokens = [];
+        $raw = 0;
+
+        foreach (token_get_all($contents) as $token) {
+            $text = is_array($token) ? $token[1] : $token;
+            $id = is_array($token) ? $token[0] : null;
+            $length = strlen($text);
+
+            $tokens[] = ['id' => $id, 'text' => $text, 'start' => $raw, 'end' => $raw + $length];
+
+            $raw += $length;
+        }
+
+        return $tokens;
     }
 
     /**

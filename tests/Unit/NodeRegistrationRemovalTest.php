@@ -173,6 +173,31 @@ it('removes the last entry when it carries no trailing comma', function () {
     expect($contents)->toContain('TagUser::class');
 });
 
+it('leaves no orphan blank line where a middle entry used to be', function () {
+    // M5: entryDeletionRange()'s "own line" deletion must consume the entry's
+    // OWN trailing newline (the `+ 1` on rawEnd), not stop one byte short —
+    // otherwise the entry's text is gone but an empty line survives where it
+    // used to be. That defect makes the file no less valid PHP and leaves no
+    // resolved reference behind, so neither parses() nor the remaining-
+    // reference check would ever catch it; only asserting the surviving
+    // file's exact shape does. Counterfactual: drop the `+ 1` and this fails
+    // — the array reads "TagUser::class,\n\n        UserTagged::class," with
+    // a blank line where SendMessage::class used to be.
+    $path = providerForRemoval(
+        "        TagUser::class,\n        SendMessage::class,\n        UserTagged::class,",
+        "use App\Nodeflow\Nodes\TagUser;\nuse App\Nodeflow\Nodes\SendMessage;\nuse App\Nodeflow\Nodes\UserTagged;",
+    );
+
+    expect(remove($path, 'App\Nodeflow\Nodes\SendMessage'))->toBe(NodeRemovalOutcome::Removed);
+    expectParseablePhp($path);
+
+    $contents = file_get_contents($path);
+
+    expect($contents)->not->toContain('SendMessage::class');
+    expect($contents)->toContain("TagUser::class,\n        UserTagged::class,");
+    expect($contents)->not->toContain("TagUser::class,\n\n");
+});
+
 it('removes an entry carrying a trailing same-line comment', function () {
     $path = providerForRemoval('        SendMessage::class, // the sms node',
         'use App\Nodeflow\Nodes\SendMessage;');
@@ -280,6 +305,21 @@ it('refuses to guess when the anchor is absent from an existing file', function 
     expect(file_get_contents($path))->toBe($before);
 });
 
+it('removes the target when the caller passes it with a leading backslash', function () {
+    // M7: removeFrom()'s $nodeClass argument is ltrim'd of a leading `\`
+    // before comparison, matching PhpNameResolver::resolve()'s own contract
+    // (no leading backslash in its return value) and register()'s existing
+    // convention of accepting either spelling. Counterfactual: drop that
+    // ltrim and this fails, because `\App\Nodeflow\Nodes\SendMessage` (with
+    // the caller's leading backslash) never equals the resolver's
+    // backslash-free `App\Nodeflow\Nodes\SendMessage`.
+    $path = providerForRemoval('        \App\Nodeflow\Nodes\SendMessage::class,');
+
+    expect(remove($path, '\App\Nodeflow\Nodes\SendMessage'))->toBe(NodeRemovalOutcome::Removed);
+    expect(file_get_contents($path))->not->toContain('SendMessage');
+    expectParseablePhp($path);
+});
+
 it('reports ProviderMissing for a path that does not exist', function () {
     expect(remove('/nonexistent/Provider.php', 'App\Nodeflow\Nodes\SendMessage'))
         ->toBe(NodeRemovalOutcome::ProviderMissing);
@@ -308,19 +348,23 @@ it('does not end the array span early at a nested array literal that closes befo
     // them puts a nested array ahead of the target — this is the one that
     // catches it. With the bug, the span is truncated at `['unused']`'s own
     // `]`, the target entry (which comes after) falls outside the
-    // (wrongly narrowed) span, and this reports NotPresent instead of
-    // Removed.
+    // (wrongly narrowed) span, and this reports NotPresent.
+    //
+    // Once the span is correctly found to extend past the nested array, that
+    // element itself is not `<name>::class` shaped — a nested array is not a
+    // class reference — so the CORRECT outcome is EntryUnsupported, not
+    // Removed: this writer cannot certify the target absent (or present) from
+    // an array it does not fully understand, so it refuses the whole
+    // operation rather than remove the one entry it does recognise and stay
+    // silent about the one it does not. The file must be untouched either way.
     $path = providerForRemoval(
         "        ['unused'],\n        \App\Nodeflow\Nodes\SendMessage::class,",
     );
 
-    expect(remove($path, 'App\Nodeflow\Nodes\SendMessage'))->toBe(NodeRemovalOutcome::Removed);
+    $before = file_get_contents($path);
 
-    $contents = file_get_contents($path);
-
-    expect($contents)->not->toContain('SendMessage');
-    expect($contents)->toContain("['unused'],");
-    expectParseablePhp($path);
+    expect(remove($path, 'App\Nodeflow\Nodes\SendMessage'))->toBe(NodeRemovalOutcome::EntryUnsupported);
+    expect(file_get_contents($path))->toBe($before);
 });
 
 it('clears the body of a single-line array where the entry is not on its own line', function () {
@@ -357,4 +401,129 @@ it('clears the body of a single-line array where the entry is not on its own lin
     expect($contents)->not->toContain('SendMessage');
     expect($contents)->toContain('protected array $nodes = [];');
     expectParseablePhp($path);
+});
+
+it('removes an entry with legal whitespace around the :: operator', function () {
+    // Review Critical, row 2. `SendMessage :: class` and `SendMessage::class`
+    // are the SAME token sequence with T_WHITESPACE tokens interposed — PHP
+    // does not care, and neither should this. Counterfactual: match by
+    // trimmed string equality against a fixed "Name::class" literal instead
+    // of by token sequence, and this fails.
+    $path = providerForRemoval(
+        '        SendMessage :: class,',
+        'use App\Nodeflow\Nodes\SendMessage;',
+    );
+
+    expect(remove($path, 'App\Nodeflow\Nodes\SendMessage'))->toBe(NodeRemovalOutcome::Removed);
+
+    $contents = file_get_contents($path);
+
+    // Exactly one surviving mention: the `use` import. The array entry itself
+    // is gone.
+    expect(substr_count($contents, 'SendMessage'))->toBe(1);
+    expect($contents)->not->toContain('::');
+    expectParseablePhp($path);
+});
+
+it('removes an entry with a newline between the name and ::class', function () {
+    // Review Critical, row 3. Same reasoning as the spaced-colon test above,
+    // with the whitespace token being a newline rather than a space.
+    $path = providerForRemoval(
+        "        SendMessage\n        ::class,",
+        'use App\Nodeflow\Nodes\SendMessage;',
+    );
+
+    expect(remove($path, 'App\Nodeflow\Nodes\SendMessage'))->toBe(NodeRemovalOutcome::Removed);
+
+    $contents = file_get_contents($path);
+
+    expect(substr_count($contents, 'SendMessage'))->toBe(1);
+    expect($contents)->not->toContain('::');
+    expectParseablePhp($path);
+});
+
+it('refuses rather than reporting NotPresent when a live registration is written as a class-string literal', function () {
+    // Review Critical, row 1, and the asymmetry note: a class-string literal
+    // `'App\…\SendMessage'` IS a real, live registration — a caller seeing
+    // NotPresent here would conclude it is safe to delete the SendMessage
+    // class file, and it is not. This writer's chosen resolution is to
+    // REFUSE it as EntryUnsupported rather than attempt to remove it: parsing
+    // what a PHP string literal actually denotes (single- vs double-quoted
+    // escape rules, `\\`, interpolation) is a correctness-sensitive job
+    // PhpNameResolver was never built for, and a wrong guess there is worse
+    // than a refusal a human can act on manually. Counterfactual: treat
+    // anything not matching `<name>::class` as simply skipped rather than
+    // unsupported, and this reports NotPresent instead, silently authorising
+    // the delete.
+    $path = providerForRemoval("        'App\\\\Nodeflow\\\\Nodes\\\\SendMessage',");
+
+    $before = file_get_contents($path);
+    $outcome = remove($path, 'App\Nodeflow\Nodes\SendMessage');
+
+    expect($outcome)->not->toBe(NodeRemovalOutcome::NotPresent);
+    expect($outcome)->toBe(NodeRemovalOutcome::EntryUnsupported);
+    expect(file_get_contents($path))->toBe($before);
+});
+
+it('refuses rather than reporting NotPresent when a live registration is aliased through a class constant', function () {
+    // Review Critical, row 4. `self::SMS` is a live registration whenever
+    // `const SMS = SendMessage::class;` exists — this writer cannot see
+    // through a class-constant fetch (that requires evaluating the
+    // constant's own initialiser, not just resolving a written name), so it
+    // refuses rather than guess. Counterfactual: accept any three-significant-
+    // token element as a class reference regardless of whether the LAST
+    // token is literally the `class` keyword, and this reports NotPresent
+    // (`SMS` is not `class`) after silently mis-treating `self::SMS` as some
+    // other, wrong resolution instead of refusing.
+    $directory = removalFixtureDirectory();
+
+    if (! is_dir($directory)) {
+        mkdir($directory, 0777, true);
+    }
+
+    $path = $directory.'/const-alias-'.bin2hex(random_bytes(6)).'.php';
+    file_put_contents($path, <<<'PHP'
+    <?php
+
+    namespace App\Providers;
+
+    use Illuminate\Support\ServiceProvider;
+    use App\Nodeflow\Nodes\SendMessage;
+
+    class NodeflowServiceProvider extends ServiceProvider
+    {
+        const SMS = SendMessage::class;
+
+        protected array $nodes = [
+            self::SMS,
+        ];
+    }
+    PHP);
+
+    $before = file_get_contents($path);
+    $outcome = remove($path, 'App\Nodeflow\Nodes\SendMessage');
+
+    expect($outcome)->not->toBe(NodeRemovalOutcome::NotPresent);
+    expect($outcome)->toBe(NodeRemovalOutcome::EntryUnsupported);
+    expect(file_get_contents($path))->toBe($before);
+});
+
+it('refuses rather than reporting NotPresent when the array contains a spread element', function () {
+    // Review Critical, row 5. `...$more` cannot resolve to anything at all
+    // without evaluating a runtime variable — refusing is the only honest
+    // answer. Counterfactual: a classifier that only checks "does the element
+    // end in a `class` keyword" without also requiring a `::` immediately
+    // before it and a name before that would let this 2-significant-token
+    // element slip through unclassified and silently skipped rather than
+    // flagged.
+    $path = providerForRemoval(
+        "        \App\Nodeflow\Nodes\TagUser::class,\n        ...\$more,",
+    );
+
+    $before = file_get_contents($path);
+    $outcome = remove($path, 'App\Nodeflow\Nodes\SendMessage');
+
+    expect($outcome)->not->toBe(NodeRemovalOutcome::NotPresent);
+    expect($outcome)->toBe(NodeRemovalOutcome::EntryUnsupported);
+    expect(file_get_contents($path))->toBe($before);
 });
