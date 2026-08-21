@@ -6,6 +6,13 @@ beforeEach(function () {
     $this->base = sys_get_temp_dir().'/nodeflow-hostpath-'.bin2hex(random_bytes(6));
     mkdir($this->base.'/app/Nodeflow/Nodes', 0777, true);
     mkdir($this->base.'/packages', 0777, true);
+
+    // Canonicalise once, here, rather than in each assertion: macOS aliases
+    // /var to /private/var, so sys_get_temp_dir()'s raw form would otherwise
+    // diverge from HostPath::root()'s own realpath()-canonicalised root on
+    // every comparison below, for a reason that has nothing to do with the
+    // behaviour under test.
+    $this->base = realpath($this->base);
 });
 
 afterEach(function () {
