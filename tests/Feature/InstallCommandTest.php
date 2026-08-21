@@ -1,6 +1,8 @@
 <?php
 
+use Illuminate\Console\Command;
 use Illuminate\Support\Facades\Gate;
+use Nodeflow\Console\Install\InstallOutcome;
 use Nodeflow\Console\Install\ProviderStep;
 
 beforeEach(function () {
@@ -184,6 +186,27 @@ it('reports the resolved tenancy mode and which resolver auto is reading', funct
     $this->artisan('nodeflow:install')
         ->expectsOutputToContain('no TenantResolver bound')
         ->assertExitCode(0);
+});
+
+it('fails on a residual Writable outcome in either mode, not only under --check', function () {
+    // I2. No shipped step's apply() actually LEAVES a Writable outcome behind
+    // today: every step whose check() can return Writable resolves it to Wired
+    // or CannotWire once apply() runs, and every verify-only step (whose
+    // apply() just re-returns check()) never returns Writable from check() in
+    // the first place. So this cannot be reproduced by running the real
+    // command against any fixture — there is no live bug to reproduce, only a
+    // fragile invariant ("no future step's apply() may ever return Writable")
+    // that nothing enforces. Testing exitCode() directly, by reflection, pins
+    // the hardening itself rather than a scenario that does not exist yet.
+    $command = $this->app->make(\Nodeflow\Console\InstallCommand::class);
+
+    $exitCode = new ReflectionMethod($command, 'exitCode');
+    $exitCode->setAccessible(true);
+
+    expect($exitCode->invoke($command, [InstallOutcome::AlreadyPresent, InstallOutcome::Writable]))
+        ->toBe(Command::FAILURE);
+    expect($exitCode->invoke($command, [InstallOutcome::AlreadyPresent, InstallOutcome::Wired]))
+        ->toBe(Command::SUCCESS);
 });
 
 it('prints the exact snippet for each requirement it cannot wire', function () {

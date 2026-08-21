@@ -129,9 +129,14 @@ class InstallCommand extends Command
      */
     private function exitCode(array $outcomes): int
     {
-        $failing = $this->option('check')
-            ? [InstallOutcome::CannotWire, InstallOutcome::Writable]
-            : [InstallOutcome::CannotWire];
+        // Writable fails in BOTH modes, not only under --check. Under --check it
+        // always means "would be written". In a normal run every step whose
+        // check() returned Writable had apply() called on it above, and a
+        // genuinely-fixable step resolves that to Wired or CannotWire — so a
+        // Writable that survives to here can only belong to a verify-only step
+        // (apply() just returns check() again), meaning nobody ever wrote it.
+        // That is unwired either way and must be red either way.
+        $failing = [InstallOutcome::CannotWire, InstallOutcome::Writable];
 
         foreach ($outcomes as $outcome) {
             if (in_array($outcome, $failing, true)) {
