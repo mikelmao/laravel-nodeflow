@@ -112,3 +112,125 @@ it('does not rewrite a provider that already exists', function () {
 
     expect(file_get_contents($this->path))->toBe($before);
 });
+
+/** A provider shaped the way docs/02-integration.md taught, which is what the demo has. */
+function handWrittenProvider(): string
+{
+    return <<<'PHP'
+    <?php
+
+    namespace App\Providers;
+
+    use Illuminate\Support\ServiceProvider;
+    use Nodeflow\Nodeflow;
+
+    class NodeflowServiceProvider extends ServiceProvider
+    {
+        public function boot(): void
+        {
+            Nodeflow::register([
+                \App\Nodeflow\Nodes\SendMessage::class,
+            ]);
+        }
+    }
+    PHP;
+}
+
+it('reports a provider without the anchors as writable', function () {
+    // Counterfactual: keep Task 4's `exists() ? AlreadyPresent : Writable` and
+    // this fails — the host who followed the docs is told everything is fine
+    // while make-node still cannot register into their file.
+    file_put_contents($this->path, handWrittenProvider());
+
+    expect($this->step->check())->toBe(InstallOutcome::Writable);
+});
+
+it('adds all three homes to a hand-written provider without touching its register call', function () {
+    file_put_contents($this->path, handWrittenProvider());
+
+    expect($this->step->apply())->toBe(InstallOutcome::Wired);
+
+    $contents = file_get_contents($this->path);
+
+    expect(substr_count($contents, NodeRegistrationWriter::ANCHOR))->toBe(1);
+    expect(substr_count($contents, NodeRegistrationWriter::TRIGGER_ANCHOR))->toBe(1);
+    expect(substr_count($contents, NodeRegistrationWriter::ATTRIBUTE_ANCHOR))->toBe(1);
+
+    // The host's own registration survives verbatim. Counterfactual: rewrite the
+    // existing list into $nodes instead of leaving it, and this fails.
+    expect($contents)->toContain('\App\Nodeflow\Nodes\SendMessage::class,');
+
+    // Fully-qualified, unlike the stub's own use-imported form: this file's
+    // existing imports are unknown, so the insertion cannot rely on one.
+    expect($contents)->toContain('\Nodeflow\Nodeflow::register($this->nodes);')
+        ->toContain('app(\Nodeflow\Triggers\TriggerRegistry::class)->register(...$this->triggers);')
+        ->toContain('app(\Nodeflow\Schema\SubjectAttributeRegistry::class)->register(...$this->subjectAttributes());');
+
+    expectParseablePhp($this->path);
+});
+
+it('adds only the missing home when one is already there', function () {
+    // Counterfactual: insert unconditionally rather than per-home, and this fails
+    // with two $nodes arrays — which is exactly the AnchorAmbiguous state that
+    // makes the writer refuse every future make-node.
+    file_put_contents($this->path, str_replace(
+        "    public function boot(): void",
+        "    protected array \$nodes = [\n    ];\n\n    public function boot(): void",
+        handWrittenProvider(),
+    ));
+
+    expect($this->step->apply())->toBe(InstallOutcome::Wired);
+
+    $contents = file_get_contents($this->path);
+
+    expect(substr_count($contents, NodeRegistrationWriter::ANCHOR))->toBe(1);
+    expect(substr_count($contents, NodeRegistrationWriter::TRIGGER_ANCHOR))->toBe(1);
+});
+
+it('is idempotent on a provider it already wired', function () {
+    file_put_contents($this->path, handWrittenProvider());
+
+    $this->step->apply();
+    $before = file_get_contents($this->path);
+
+    expect($this->step->check())->toBe(InstallOutcome::AlreadyPresent);
+    expect($this->step->apply())->toBe(InstallOutcome::AlreadyPresent);
+    expect(file_get_contents($this->path))->toBe($before);
+});
+
+it('refuses a provider with no boot method and offers the snippet', function () {
+    // Counterfactual: synthesise a boot() method and this fails — writing a new
+    // method into someone else's class is the one edit this step will not make,
+    // because there is no anchor that proves where it belongs.
+    file_put_contents($this->path, <<<'PHP'
+    <?php
+
+    namespace App\Providers;
+
+    use Illuminate\Support\ServiceProvider;
+
+    class NodeflowServiceProvider extends ServiceProvider
+    {
+    }
+    PHP);
+
+    $before = file_get_contents($this->path);
+
+    expect($this->step->check())->toBe(InstallOutcome::CannotWire);
+    expect($this->step->snippet())->toContain('protected array $nodes = [');
+    expect(file_get_contents($this->path))->toBe($before);
+});
+
+it('refuses a provider with two boot methods and writes nothing', function () {
+    // A duplicated anchor means the step cannot know which boot() the host runs.
+    file_put_contents($this->path, str_replace(
+        '    public function boot(): void',
+        "    public function boot(): void\n    {\n    }\n\n    public function boot(): void",
+        handWrittenProvider(),
+    ));
+
+    $before = file_get_contents($this->path);
+
+    expect($this->step->check())->toBe(InstallOutcome::CannotWire);
+    expect(file_get_contents($this->path))->toBe($before);
+});
