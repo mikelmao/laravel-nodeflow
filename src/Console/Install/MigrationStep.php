@@ -27,7 +27,12 @@ final class MigrationStep implements InstallStep
         private string $basePath,
         private bool $publish = false,
         private bool $force = false,
-    ) {}
+    ) {
+        // --force-migrations implies --publish-migrations: re-publishing over a
+        // drifted copy IS publishing. Enforced here rather than in the command,
+        // because a constructor invariant cannot be bypassed by a future caller.
+        $this->publish = $publish || $force;
+    }
 
     public function describe(): string
     {
@@ -74,8 +79,20 @@ final class MigrationStep implements InstallStep
             return null;
         }
 
+        // Spec §3.2.1 and §10 both require the drift report to name both paths:
+        // the host's published copy and the package's own source, side by side,
+        // so a reader can diff them without hunting for either one. realpath()
+        // collapses the `__DIR__.'/../../../...'` glob prefix into a canonical
+        // absolute path — both for readability and because the raw prefix is not
+        // a path a host would recognise as their own package's copy.
+        $pairs = array_map(
+            fn (string $source) => $this->hostDirectory().'/'.basename($source).' (published) differs from '
+                .(realpath($source) ?: $source).' (package)',
+            $drifted,
+        );
+
         return 'These published migrations differ from the package\'s own copies: '
-            .implode(', ', array_map('basename', $drifted)).'. '
+            .implode('; ', $pairs).'. '
             .'A published copy shadows the package\'s file for every `migrate` run, so the '
             .'difference is what your database will be built from. Re-publish with '
             .'`--force-migrations`, or delete your copies and let the package\'s own '

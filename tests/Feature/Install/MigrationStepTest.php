@@ -62,8 +62,30 @@ it('cannot wire a published copy that has drifted, and names both paths', functi
     $step = new MigrationStep(new Filesystem, $this->root);
 
     expect($step->check())->toBe(InstallOutcome::CannotWire);
-    expect($step->snippet())->toContain('2026_08_18_000001_create_nodeflow_tables.php')
+    expect($step->snippet())
+        ->toContain($this->hostCopy)
+        ->toContain($this->packageMigration)
         ->toContain('--force-migrations');
+});
+
+it('treats --force-migrations as implying --publish-migrations, so apply() never hands back Writable', function () {
+    // Fix round 1, Finding 1. The brief asserted "--force-migrations implies
+    // --publish-migrations" and enforced it nowhere: apply() short-circuited on
+    // `! $this->publish` and handed back check()'s own Writable, a value
+    // InstallOutcome's docblock says apply() must never return.
+    //
+    // Counterfactual: drop the `$this->publish = $publish || $force;` line from
+    // the constructor and this fails, with apply() returning Writable instead of
+    // Wired.
+    copy($this->packageMigration, $this->hostCopy);
+    file_put_contents($this->hostCopy, file_get_contents($this->hostCopy)."\n// host edit\n");
+
+    $step = new MigrationStep(new Filesystem, $this->root, publish: false, force: true);
+
+    expect($step->check())->toBe(InstallOutcome::Writable);
+    expect($step->apply())->toBe(InstallOutcome::Wired)
+        ->not->toBe(InstallOutcome::Writable);
+    expect(sha1_file($this->hostCopy))->toBe(sha1_file($this->packageMigration));
 });
 
 it('re-publishes over a drifted copy under --force-migrations', function () {
