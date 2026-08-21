@@ -207,7 +207,7 @@ it('refuses to guess when the anchor is ambiguous', function () {
  * A provider with all three registration homes, as `nodeflow:install` generates
  * it. Returns the *path*, matching this file's existing providerWithAnchor().
  */
-function providerWithThreeHomes(string $body = null): string
+function providerWithThreeHomes(?string $body = null): string
 {
     return writeProviderFixture($body ?? threeHomesSource());
 }
