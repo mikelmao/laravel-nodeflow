@@ -105,6 +105,11 @@ class MakeSubjectAttributeCommand extends Command
                 'app/Providers/NodeflowServiceProvider.php has more than one `'
                 .NodeRegistrationWriter::ATTRIBUTE_ANCHOR.'` line.'
             ),
+            NodeRegistrationOutcome::WriteFailed => $this->manual($entry,
+                'The automatic edit to app/Providers/NodeflowServiceProvider.php did not '
+                .'produce valid PHP — the `'.NodeRegistrationWriter::ATTRIBUTE_ANCHOR.'` method '
+                .'may be commented out.'
+            ),
         };
 
         // Generating nothing is still success: the command's contract is "register

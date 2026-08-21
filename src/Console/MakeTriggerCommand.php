@@ -100,6 +100,11 @@ class MakeTriggerCommand extends GeneratorCommand
             NodeRegistrationOutcome::AnchorAmbiguous => $this->manualRegistration($triggerClass,
                 'app/Providers/NodeflowServiceProvider.php has more than one `'.NodeRegistrationWriter::TRIGGER_ANCHOR.'` line.'
             ),
+            NodeRegistrationOutcome::WriteFailed => $this->manualRegistration($triggerClass,
+                'The automatic edit to app/Providers/NodeflowServiceProvider.php did not '
+                .'produce valid PHP — the `'.NodeRegistrationWriter::TRIGGER_ANCHOR.'` line may be '
+                .'commented out.'
+            ),
         };
     }
 

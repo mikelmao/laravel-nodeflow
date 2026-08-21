@@ -90,13 +90,18 @@ class MakeNodeCommand extends GeneratorCommand
                 'Already registered in app/Providers/NodeflowServiceProvider.php.'
             ),
             NodeRegistrationOutcome::ProviderMissing => $this->manualRegistration($nodeClass,
-                'No app/Providers/NodeflowServiceProvider.php found.'
+                'No app/Providers/NodeflowServiceProvider.php found. Run `php artisan nodeflow:install`.'
             ),
             NodeRegistrationOutcome::AnchorMissing => $this->manualRegistration($nodeClass,
                 'app/Providers/NodeflowServiceProvider.php has no `'.NodeRegistrationWriter::ANCHOR.'` line.'
             ),
             NodeRegistrationOutcome::AnchorAmbiguous => $this->manualRegistration($nodeClass,
                 'app/Providers/NodeflowServiceProvider.php has more than one `'.NodeRegistrationWriter::ANCHOR.'` line.'
+            ),
+            NodeRegistrationOutcome::WriteFailed => $this->manualRegistration($nodeClass,
+                'The automatic edit to app/Providers/NodeflowServiceProvider.php did not '
+                .'produce valid PHP — the `'.NodeRegistrationWriter::ANCHOR.'` line may be '
+                .'commented out.'
             ),
         };
     }

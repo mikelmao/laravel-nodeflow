@@ -364,3 +364,79 @@ it('refuses a duplicated trigger anchor and writes nothing', function () {
     expect($outcome)->toBe(NodeRegistrationOutcome::AnchorAmbiguous);
     expect(file_get_contents($path))->toBe($before);
 });
+
+it('appends after a docblock example that itself contains "return [", not into it', function () {
+    // C2. insertionPoint()'s method-body search used to be a plain substring
+    // match over the raw window, so a docblock example like this one — placed
+    // before the REAL return statement, well within reach either way — matched
+    // first and the entry landed inside the comment. Counterfactual: search the
+    // raw window instead of the comment-stripped one and this fails, with the
+    // entry appearing before "return [" rather than after it and the file
+    // failing php -l.
+    $path = providerWithThreeHomes(str_replace(
+        "    protected function subjectAttributes(): array\n    {\n        return [\n        ];\n    }",
+        "    protected function subjectAttributes(): array\n    {\n        // e.g. return [ SubjectAttribute::make(...) ];\n        return [\n        ];\n    }",
+        threeHomesSource(),
+    ));
+
+    $outcome = (new NodeRegistrationWriter(new Filesystem))->appendTo(
+        $path,
+        NodeRegistrationWriter::ATTRIBUTE_ANCHOR,
+        "SubjectAttribute::make('clicked'",
+        "\Nodeflow\Schema\SubjectAttribute::make('clicked', 'Clicked', 'boolean', fn (\$subject) => null)",
+        '            ',
+    );
+
+    expect($outcome)->toBe(NodeRegistrationOutcome::Appended);
+
+    $contents = file_get_contents($path);
+
+    // The comment survives untouched, and the entry sits in the REAL return
+    // array that follows it, not inside the comment.
+    expect($contents)->toContain('// e.g. return [ SubjectAttribute::make(...) ];');
+
+    $commentEnd = strpos($contents, '// e.g. return [ SubjectAttribute::make(...) ];')
+        + strlen('// e.g. return [ SubjectAttribute::make(...) ];');
+    $entryPos = strpos($contents, "\Nodeflow\Schema\SubjectAttribute::make('clicked'");
+
+    expect($entryPos)->toBeGreaterThan($commentEnd);
+
+    expectParseablePhp($path);
+});
+
+it('refuses a write that would land inside a commented-out anchor, and restores the original bytes', function () {
+    // C2 / E11. The `$nodes` home's own declaration line is commented out, so
+    // ANCHOR still matches once, raw, and the insertion point still looks
+    // valid right up until the result is read back — the array it appears to
+    // open was never actually declared. Counterfactual: skip the post-write
+    // re-verification and this fails, reporting Appended for a file that does
+    // not parse.
+    $path = writeProviderFixture(<<<'PHP'
+    <?php
+
+    namespace App\Providers;
+
+    use Illuminate\Support\ServiceProvider;
+    use Nodeflow\Nodeflow;
+
+    class NodeflowServiceProvider extends ServiceProvider
+    {
+        // protected array $nodes = [
+        ];
+
+        public function boot(): void
+        {
+            Nodeflow::register($this->nodes);
+        }
+    }
+    PHP);
+
+    $before = file_get_contents($path);
+
+    $outcome = (new NodeRegistrationWriter(new Filesystem))
+        ->register($path, 'App\Nodeflow\Nodes\SendSms');
+
+    expect($outcome)->toBe(NodeRegistrationOutcome::WriteFailed);
+    expect($outcome)->not->toBe(NodeRegistrationOutcome::Appended);
+    expect(file_get_contents($path))->toBe($before);
+});
