@@ -61,13 +61,38 @@ export function SubjectPanel({ template, nodeId, reached }: SubjectPanelProps) {
     const currentNodeId = useRef(nodeId)
     currentNodeId.current = nodeId
 
+    // Guards "Load more" against a double click issuing two requests for the
+    // same cursor: without it, both replies append and page 2 lands twice
+    // (duplicated rows, duplicate React keys). Scoped to paged loads only
+    // (cursor !== null) — the initial per-node load below must never be
+    // blocked by a still-in-flight page request left over from switching
+    // nodes quickly, since that request's own stale reply is already handled
+    // by the currentNodeId check.
+    const pagingInFlight = useRef(false)
+
     const load = useCallback((cursor: string | null) => {
+        if (cursor !== null && pagingInFlight.current) {
+            return
+        }
+
         const requestedFor = nodeId
+
+        if (cursor !== null) {
+            pagingInFlight.current = true
+        }
+
+        // Set loading before the request starts, not just on the initial
+        // mount's EMPTY state: "Load more" has no other feedback otherwise,
+        // and the button below disables from this same flag.
+        setState((previous) => ({ ...previous, loading: true, error: null }))
+
         let url: string
 
         try {
             url = pageUrl(template, requestedFor, cursor)
         } catch (reason: unknown) {
+            pagingInFlight.current = false
+
             if (currentNodeId.current !== requestedFor) {
                 return
             }
@@ -77,33 +102,53 @@ export function SubjectPanel({ template, nodeId, reached }: SubjectPanelProps) {
             return
         }
 
-        void send('GET', url).then((result) => {
-            // Drop a reply for a node that is no longer selected rather than
-            // writing its rows into the panel now showing a different node.
-            if (currentNodeId.current !== requestedFor) {
-                return
-            }
+        void send('GET', url)
+            .then((result) => {
+                // Drop a reply for a node that is no longer selected rather than
+                // writing its rows into the panel now showing a different node.
+                if (currentNodeId.current !== requestedFor) {
+                    return
+                }
 
-            if (!result.ok) {
+                if (!result.ok) {
+                    setState((previous) => ({
+                        ...previous,
+                        loading: false,
+                        error: `Could not load the subjects at this node (HTTP ${result.status}).`,
+                    }))
+
+                    return
+                }
+
+                const rows = rowsFrom(result.data)
+                const next = typeof result.data?.next_cursor === 'string' ? result.data.next_cursor : null
+
+                setState((previous) => ({
+                    rows: cursor === null ? rows : [...previous.rows, ...rows],
+                    nextCursor: next,
+                    loading: false,
+                    error: null,
+                }))
+            })
+            .catch((reason: unknown) => {
+                // send()'s own contract (http.ts): only a network failure
+                // rejects here, an HTTP error status resolves and is handled
+                // above. With no .catch() this rejection went unhandled and
+                // `loading` stayed true forever — "Loading…" wedged on screen
+                // with no way out short of reselecting the node.
+                if (currentNodeId.current !== requestedFor) {
+                    return
+                }
+
                 setState((previous) => ({
                     ...previous,
                     loading: false,
-                    error: `Could not load the subjects at this node (HTTP ${result.status}).`,
+                    error: `Could not load the subjects at this node: ${String(reason)}`,
                 }))
-
-                return
-            }
-
-            const rows = rowsFrom(result.data)
-            const next = typeof result.data?.next_cursor === 'string' ? result.data.next_cursor : null
-
-            setState((previous) => ({
-                rows: cursor === null ? rows : [...previous.rows, ...rows],
-                nextCursor: next,
-                loading: false,
-                error: null,
-            }))
-        })
+            })
+            .finally(() => {
+                pagingInFlight.current = false
+            })
     }, [nodeId, template])
 
     useEffect(() => {
@@ -119,8 +164,8 @@ export function SubjectPanel({ template, nodeId, reached }: SubjectPanelProps) {
             {!state.loading && state.error === null && state.rows.length === 0 && (
                 <p className="text-[11px] text-muted-foreground">
                     {reached
-                        ? 'No subjects are here now. This node was reached earlier in the run; the counts on its card show what happened to the subjects that were here.'
-                        : 'This node was never reached by this run, so no subject has ever been here.'}
+                        ? "No subjects are here now. This node was reached earlier in the run; the counts on its card are the only record of what happened to the subjects that were here — not always a complete one."
+                        : 'No subjects are here now, and this run has no record of any subject having been here. Some nodes leave no record even when subjects passed through — core.exit is the common one.'}
                 </p>
             )}
             <ul className="space-y-1">
@@ -135,9 +180,10 @@ export function SubjectPanel({ template, nodeId, reached }: SubjectPanelProps) {
                 <button
                     type="button"
                     onClick={() => load(state.nextCursor)}
-                    className="rounded border border-border px-2 py-1 text-[11px]"
+                    disabled={state.loading}
+                    className="rounded border border-border px-2 py-1 text-[11px] disabled:opacity-50"
                 >
-                    Load more
+                    {state.loading ? 'Loading…' : 'Load more'}
                 </button>
             )}
         </div>

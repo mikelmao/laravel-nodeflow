@@ -154,13 +154,18 @@ describe('FlowRun', () => {
         await waitFor(() => expect(screen.getByText(/no subjects are here now/i)).toBeInTheDocument())
     })
 
-    it('says a node was never reached rather than implying it ran and emptied', async () => {
-        // The mirror image of the previous test, and the one my brief itself
-        // got wrong: a never-reached node must not tell the operator it
-        // "already released everyone" — that node never ran at all.
-        // Counterfactual: reuse the reached-then-emptied sentence for both
-        // states and this fails, because both branches would say the same
-        // (false, for 'nobody') thing.
+    it('says this run has no record here rather than asserting the node was never reached', async () => {
+        // The mirror image of the previous test, and the one the original
+        // brief itself got wrong: asserting a never-reached node was "never
+        // reached by this run" is false in the most common case there is —
+        // core.exit returns NodeResult::empty(), so it writes no
+        // node_executions row, and once its subjects have moved on this
+        // branch is exactly what every completed demo run hits for the node
+        // every subject exited through. The fix is to say what the run has a
+        // record of, not what happened: this must hold even when subjects
+        // did pass through and left no trace, so it must not claim "never
+        // reached" or "already released everyone" — both assert more than an
+        // absent record supports.
         const fetchMock = vi.fn().mockImplementation((requested: string) => requested.includes('/subjects')
             ? Promise.resolve(subjectsPage([], null))
             : Promise.resolve(Response.json(overlay())))
@@ -169,8 +174,9 @@ describe('FlowRun', () => {
         render(<FlowRun run={run} graph={graph} palette={palette} overlay={overlay()} urls={urls} />)
 
         await act(async () => { screen.getByText('nobody').click() })
-        await waitFor(() => expect(screen.getByText(/never reached/i)).toBeInTheDocument())
+        await waitFor(() => expect(screen.getByText(/no record of any subject having been here/i)).toBeInTheDocument())
         expect(screen.queryByText(/already released everyone/i)).toBeNull()
+        expect(screen.queryByText(/never reached/i)).toBeNull()
     })
 
     it('says only that a reached node is now empty, not how the subjects left', async () => {
@@ -249,6 +255,68 @@ describe('FlowRun', () => {
 
         expect(screen.getByText('user #9')).toBeInTheDocument()
         expect(screen.queryByText('user #999')).toBeNull()
+    })
+
+    it('surfaces a network failure instead of leaving the panel stuck on "Loading…"', async () => {
+        // Counterfactual: remove SubjectPanel's .catch() (there wasn't one)
+        // and this fails — send() rejects only on a network failure
+        // (http.ts's own contract), so a dropped connection here left
+        // `loading: true`, `error: null`, and "Loading…" on screen forever,
+        // plus an unhandled rejection in the console. useOverlayPolling.ts
+        // already guards its own request this same way; this is the same
+        // guard for the subject drill-down's request.
+        const fetchMock = vi.fn().mockImplementation((requested: string) => requested.includes('/subjects')
+            ? Promise.reject(new Error('network down'))
+            : Promise.resolve(Response.json(overlay())))
+        vi.stubGlobal('fetch', fetchMock)
+
+        render(<FlowRun run={run} graph={graph} palette={palette} overlay={overlay()} urls={urls} />)
+
+        await act(async () => { screen.getByText('segment').click() })
+
+        await waitFor(() => expect(screen.getByRole('alert')).toHaveTextContent(/could not load the subjects/i))
+        expect(screen.queryByText('Loading…')).toBeNull()
+    })
+
+    it('does not double-fetch a page when "Load more" is clicked twice before it disables', async () => {
+        // Counterfactual: remove the pagingInFlight guard in
+        // SubjectPanel.tsx's load() and this fails — two clicks issued before
+        // React commits the disabled button both fire a request for the same
+        // cursor, and both replies append, landing page 2 twice (duplicated
+        // rows, duplicate React key warnings).
+        let pageTwoRequests = 0
+        const fetchMock = vi.fn().mockImplementation((requested: string) => {
+            if (requested.includes('/subjects') && requested.includes('cursor=')) {
+                pageTwoRequests += 1
+
+                return Promise.resolve(subjectsPage(['3'], null))
+            }
+            if (requested.includes('/subjects')) {
+                return Promise.resolve(subjectsPage(['1', '2'], 'cur2'))
+            }
+
+            return Promise.resolve(Response.json(overlay()))
+        })
+        vi.stubGlobal('fetch', fetchMock)
+
+        render(<FlowRun run={run} graph={graph} palette={palette} overlay={overlay()} urls={urls} />)
+
+        await act(async () => { screen.getByText('segment').click() })
+        await waitFor(() => expect(screen.getByText('user #1')).toBeInTheDocument())
+
+        const button = screen.getByRole('button', { name: /load more/i })
+
+        // Both clicks fire within the same synchronous pass, before the
+        // button's `disabled` attribute could possibly have committed —
+        // exactly the race a double click produces.
+        await act(async () => {
+            fireEvent.click(button)
+            fireEvent.click(button)
+        })
+
+        await waitFor(() => expect(screen.getByText('user #3')).toBeInTheDocument())
+        expect(pageTwoRequests).toBe(1)
+        expect(screen.getAllByText('user #3')).toHaveLength(1)
     })
 
     it('lets a host restyle a run card without losing its badges or errors', () => {
