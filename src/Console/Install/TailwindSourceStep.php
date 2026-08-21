@@ -47,8 +47,14 @@ final class TailwindSourceStep implements InstallStep
         $raw = $this->files->get($entry);
 
         // Comment-stripped, so a host who commented the line out while debugging
-        // is told the truth rather than told they are wired.
-        if (str_contains(SourceText::withoutCssComments($raw), self::PACKAGE_SOURCE)) {
+        // is told the truth rather than told they are wired. Compared against the
+        // FULL computed line — the quoted, entry-relative path apply() would
+        // itself write — not merely its PACKAGE_SOURCE tail: the '../' prefix is
+        // what decides whether Tailwind resolves anything at all, and a tail-only
+        // match reads a host with the wrong number of '../' (or none, or an
+        // absolute-looking path) as correctly wired while Tailwind matches
+        // nothing.
+        if (str_contains(SourceText::withoutCssComments($raw), "'".$this->relativePath($entry)."'")) {
             return InstallOutcome::AlreadyPresent;
         }
 
@@ -80,10 +86,11 @@ final class TailwindSourceStep implements InstallStep
             0,
         ));
 
-        // E11: re-read and prove it.
+        // E11: re-read and prove it. Same full-line comparison as check(), not
+        // the PACKAGE_SOURCE tail alone — see the comment there.
         return str_contains(
             SourceText::withoutCssComments($this->files->get($entry)),
-            self::PACKAGE_SOURCE,
+            "'".$this->relativePath($entry)."'",
         ) ? InstallOutcome::Wired : InstallOutcome::CannotWire;
     }
 
