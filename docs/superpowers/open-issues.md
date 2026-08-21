@@ -7,8 +7,9 @@ most were proven by probe during a review rather than suspected.
 **Status key:** `DECISION` needs a human call · `DEFECT` is proven and unfixed · `GAP` is missing
 coverage or missing code · `DRIFT` is documentation disagreeing with code.
 
-Last updated 2026-08-21 after Plan 4 package work (`8e79b99..d6c7a59`): **157 package Vitest
-tests, 356 package Pest tests (5820 assertions)** passing, silent package `tsc`. Demo integration
+Last updated 2026-08-21 after Plan 4 was merged and accepted (branch `8e79b99..f36f54f`, merged
+as `f5b2e31`, acceptance recorded in `627cdf2`): **160 package Vitest
+tests, 358 package Pest tests (5832 assertions)** passing, silent package `tsc`. Demo integration
 has landed: **49 demo Pest tests (191 assertions)**, silent demo `tsc`, a successful demo
 `npm run build`. Real-browser acceptance for Plan 4 has since run and passed — see "Plan 4
 acceptance evidence" below for the six checks. (A final whole-branch fix wave landed after this
