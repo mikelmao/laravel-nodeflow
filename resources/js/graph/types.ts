@@ -41,3 +41,23 @@ export type CanvasNode = { id:string; type:'nodeflowNode'; position:{x:number;y:
 export type CanvasEdge = { id:string; source:string; sourceHandle:string|null; target:string; label?:string }
 
 // These graph contracts deliberately do not import xyflow; adapters own that boundary.
+
+// Source: Nodeflow\Runs\RunOverlay::snapshot(). One entry per node in the run's
+// pinned graph. `reached` is row existence or a subject sitting here, never a
+// count of subjects released — see the package spec's E13.
+export type NodeOverlay = { reached: boolean; byOutput: Record<string, number>; waiting: number; failed: number; error: string | null }
+
+// `terminal` is server-computed, so the client never hardcodes which run
+// statuses end a run. Today that is 'completed' alone (limitation C-1).
+export type OverlaySnapshot = { status: string; terminal: boolean; nodes: Record<string, NodeOverlay> }
+
+// Source: RunViewController::show(). `version` is the pinned version, which may
+// be older than the flow's current one.
+export type RunSummary = { id: number; status: string; terminal: boolean; strategy: string; is_test: boolean; started_at: string | null; ended_at: string | null; error: string | null; version: number; flow: { id: number; name: string } }
+
+// `subjects` carries the __NODEFLOW_NODE__ sentinel; the client substitutes it.
+export type RunUrls = { overlay: string; subjects: string }
+
+// Source: Nodeflow\Runs\RunSubjects::atNode(). Only active subjects at a node
+// are listable — every terminal status nulls current_node_id.
+export type RunSubjectRow = { id: number; subject_type: string; subject_id: string; status: string; current_node_id: string | null; last_error: string | null; exited_at: string | null }

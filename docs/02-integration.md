@@ -341,9 +341,26 @@ Route::middleware(['web', 'auth'])->prefix('admin')->group(
 | `PUT` | `flows/{flow}/draft` | `nodeflow.flows.draft` | `nodeflow.update` |
 | `POST` | `flows/{flow}/publish` | `nodeflow.flows.publish` | `nodeflow.publish` |
 | `GET` | `flows/{flow}/nodes/{type}/fields/{field}/options` | `nodeflow.fields.options` | `nodeflow.update` |
+| `GET` | `runs/{run}` | `nodeflow.runs.show` | `nodeflow.viewAny` |
+| `GET` | `runs/{run}/overlay` | `nodeflow.runs.overlay` | `nodeflow.viewAny` |
+| `GET` | `runs/{run}/nodes/{node}/subjects` | `nodeflow.runs.subjects` | `nodeflow.viewAny` |
 
-`{flow}` binds through the tenant-scoped model, so another tenant's id is a **404**,
-not a 403 — a 403 would confirm the row exists.
+`{flow}` and `{run}` both bind through their tenant-scoped model, so another tenant's
+id is a **404**, not a 403 — a 403 would confirm the row exists. The three run-view
+routes are the read-only run view (see [Run view](08-editor-client.md#run-view)): one
+page and its polling endpoint, plus a per-node subject drill-down. `{node}` on the
+last route is a graph node id validated against that run's own pinned graph, never a
+record id.
+
+**Never route-bind `RunSubject` or `NodeExecution` directly in your own routes.**
+Both carry no `tenant_id` and no tenant scope of their own — see
+[Execution model](05-execution-model.md#three-models-carry-no-tenant-scope) — because
+they are meant to be reached only through an already-scoped `Run`. Laravel's implicit
+model binding, `function convert(RunSubject $subject)`, is the first tool a host
+reaches for, and it resolves the row by primary key alone: nothing in that binding
+checks tenancy, so it hands back another tenant's row as readily as your own. Reach
+both models only through a scoped `Run`'s relations — `$run->subjects()`,
+`$run->nodeExecutions()` — the way `RunOverlay` and `RunSubjects` do internally.
 
 **If you never call `Nodeflow::routes()`, none of this loads.** That is the
 engine-only setup: run flows from triggers and code, with no editor and no Inertia

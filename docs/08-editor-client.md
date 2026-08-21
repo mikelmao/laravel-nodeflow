@@ -248,9 +248,193 @@ Publish can return two different **422** bodies:
   The editor labels it as a client bug because its own graph serializer should not
   send malformed wire data; it is not presented as an authoring mistake.
 
-## Not here yet
+## Run view
 
-The run-inspection component, `FlowRun`, lands in Plan 4. The
-`nodeflow:install` command lands in Plan 5 and will verify all five host-wiring
-requirements. Until then these five steps are manual, and **three of the five fail
-quietly**.
+`FlowRun` renders a run's frozen graph with live per-node counts painted onto
+it. It ships as a second export alongside `FlowEditor`, reuses the same
+`Canvas`/`NodeCard`/`layout` primitives, and imports nothing from `editor/` —
+there is no autosave, no dirty state and no publish path here, because a run
+already executed and nothing about looking at it should be able to change it.
+
+Wire it with a second thin page, the same shape as the editor's:
+
+```tsx
+// resources/js/pages/nodeflow/run.tsx
+import { FlowRun } from '@nodeflow/editor'
+import type { FlowRunProps } from '@nodeflow/editor'
+
+export default function Page(props: FlowRunProps) {
+    return <FlowRun {...props} />
+}
+```
+
+`GET runs/{run}` renders the `nodeflow/run` Inertia component with that props
+shape:
+
+```ts
+type FlowRunProps = {
+    run: RunSummary
+    graph: Graph
+    palette: NodeTypePayload[]
+    overlay: OverlaySnapshot
+    urls: RunUrls
+    nodeRenderers?: NodeRendererMap
+    pollIntervalMs?: number
+    className?: string
+}
+```
+
+`graph` is `$run->flowVersion->graph` — **the run's pinned version, never
+`draft_graph` and never `flow->currentVersion`.** A run executed a frozen
+graph; the flow's draft or current version may have diverged from it since,
+and painting live counts onto a graph the run never executed is exactly the
+misreading this component exists to prevent. There is no way to ask `FlowRun`
+for the draft instead — the prop is the only graph it can render.
+
+### Authorization
+
+All three run-view routes — the page above, the overlay poll below, and the
+subject drill-down — authorize the same way: each calls
+`$this->authorize('view', $run)`, and `RunPolicy::view()` defers to the host's
+own `nodeflow.viewAny` gate, passed the `Run`. That gate is the one thing a
+host must define to use `FlowRun` at all; a host that has already wired the
+editor's authorization has already defined it, since the editor's policies
+default-deny the same way.
+
+Two response codes are deliberate rather than incidental:
+
+- A **cross-tenant `{run}` id is `404`, not `403`.** `{run}` binds through the
+  already tenant-scoped `Run` model, so a mismatched id never resolves and
+  never reaches the gate. Returning `403` instead would confirm to an
+  unauthorized caller that the row exists at all.
+- **An undefined `nodeflow.viewAny` gate is `403`** on all three routes — the
+  same default-deny the editor's own gates use when a host installs the
+  package and wires nothing.
+
+### The overlay
+
+`overlay` (and every polled response at `urls.overlay`) carries one entry per
+node in that pinned graph:
+
+```ts
+type NodeOverlay = {
+    reached: boolean
+    byOutput: Record<string, number>
+    waiting: number
+    failed: number
+    error: string | null
+}
+```
+
+A node reads as **reached** when the run recorded an execution against it, or
+when subjects are sitting on it right now. A node that ran, released nobody
+and is now empty — `core.exit` is the common case — reads as never reached,
+because the engine records no row for it. The counts are right; only that
+node's dimming is misleading.
+
+The same gap can also make a node flip from reached back to never-reached
+across two polls. If a subject was active at a node — the only thing making
+that node `reached` at the time — and is then cancelled out of the run
+without ever producing an output or a failure there, the node's next poll
+reports `reached: false`, even though the run genuinely held that subject at
+that node. The drill-down panel's never-reached wording ("no subject has ever
+been here") is not true in that state either; there is nothing in either the
+overlay or the drill-down that can tell the two states apart, because neither
+is backed by a durable record of the visit. See
+[Execution model](05-execution-model.md#known-limitations) for why, and open
+issue C-1 for the related caveat on when polling stops.
+
+### The subject drill-down
+
+Clicking a node on the canvas opens a panel — there is no prop to suppress
+this, and a host reading only the props table above would not otherwise learn
+it exists. The panel fetches `GET runs/{run}/nodes/{node}/subjects`,
+substituting the clicked node's id into `urls.subjects`.
+
+It answers **"who is at this node right now,"** not who ever passed through
+it. Every terminal status transition nulls a subject's `current_node_id`, and
+the package keeps no per-subject visit history, so a node's failures are
+**countable** — the overlay's `failed` count above is correct — but **not
+listable** here. The panel pages through active subjects behind a
+server-issued cursor, `config('nodeflow.limits.subject_page')` rows per page
+(default `50`), rather than an offset, so paging stays cheap at six-figure
+audiences.
+
+Each row is a `RunSubjectRow`, exported from the package root alongside
+`FlowRun`:
+
+```ts
+type RunSubjectRow = {
+    id: number
+    subject_type: string
+    subject_id: string
+    status: string
+    current_node_id: string | null
+    last_error: string | null
+    exited_at: string | null
+}
+```
+
+### Polling
+
+`FlowRun` polls `urls.overlay` on a 5-second interval and stops once the
+server reports the run as **terminal**. `terminal` travels in both the initial
+prop and every polled response, computed server-side rather than hardcoded on
+the client — today that means the run's status is `completed`, and nothing
+else, so a run that dies leaves the client polling until the page is closed.
+
+Failure policy: a 401, 403, 404 or 419 response halts polling — the run is
+gone or the viewer's access was revoked, and retrying forever would just be
+noise. A 5xx response or a network failure keeps polling while surfacing the
+last error, rather than silently freezing a stale overlay.
+
+### The canvas seam
+
+`nodeRenderers` behaves exactly as it does for `FlowEditor` — a host does not
+need it to use `FlowRun` at all. The one thing worth knowing in advance:
+run decoration (dimming and badges) reaches `NodeCard` through a separate,
+additive `nodeDecorations` prop on the canvas, keyed by node id rather than
+node type. A host overriding a node's appearance keeps that decoration for
+free; there is nothing to opt into or wire up.
+
+### Other exports from the package root
+
+`FlowRun`, `FlowRunProps`, `NodeOverlay` and `RunSubjectRow` above are what most
+hosts need. The package root also exports the pieces `FlowRun` is built from, for
+a host assembling its own run UI instead of using `FlowRun` directly:
+
+- `useOverlayPolling(url, initial)` — the polling hook described in
+  [Polling](#polling): starts from `initial`, polls `url` every 5 seconds, applies
+  the same terminal and failure-status stop rules, and returns the latest
+  `OverlaySnapshot` plus the last error string, if any.
+- `normalizeOverlay(raw)` — validates and re-keys a raw overlay payload (server
+  response or prop) into an `OverlaySnapshot`. **Throws synchronously on a
+  malformed payload rather than returning a recoverable error** — see the note
+  below.
+- `decorationsFor(nodeIds, snapshot)` — the per-node `{ dimmed, badges }` decision
+  described under [The overlay](#the-overlay), for a list of node ids against one
+  snapshot.
+- `overlayFor(snapshot, nodeId)` — looks up one node's `NodeOverlay` entry in a
+  snapshot, `undefined` if the snapshot has no entry for that id.
+- Types: `OverlaySnapshot`, `RunSummary`, `RunUrls`, `NodeBadge`, `NodeDecoration`,
+  `NodeDecorationMap` — the shapes the functions above consume and produce.
+- `Canvas`'s `nodeDecorations` prop (`NodeDecorationMap`, described under
+  [The canvas seam](#the-canvas-seam)) is host-reachable too, since `Canvas`
+  itself is exported from the package root for both the editor and the run view.
+
+**A malformed `overlay` prop throws during render, not as a recoverable error.**
+`FlowRunSession` calls `normalizeOverlay(overlay)` inside a `useMemo` with no error
+boundary anywhere in the package, so a payload that fails validation (not an
+object, `terminal` not a boolean, `nodes` not an object) throws synchronously out
+of render. A spec-driven expectation exists that this would surface as a named
+client error a host could catch and render around (see spec §6); the shipped
+behavior is a plain, uncaught `Error`. A host that wants to survive a malformed
+overlay needs its own error boundary around `FlowRun`.
+
+### What's still manual
+
+The five host-wiring requirements above are unchanged by any of this —
+`FlowRun` shares the same Vite alias, tsconfig path, Tailwind `@source`,
+`@xyflow/react` dependency and `dedupe` setting as `FlowEditor`, and adds no
+sixth. The `nodeflow:install` command that verifies all five is still Plan 5
+work.

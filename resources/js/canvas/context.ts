@@ -26,9 +26,23 @@ export type CanvasContextValue = {
     defs: Record<string, NodeTypePayload>
     renderers: NodeRendererMap
     nodeErrors: Record<string, string[]>
+    decorations: NodeDecorationMap
 }
 export const CanvasContext = createContext<CanvasContextValue>({
     defs: {},
     renderers: {},
     nodeErrors: {},
+    decorations: {},
 })
+
+/**
+ * Per-node presentation the canvas applies but does not interpret.
+ *
+ * Deliberately plain data rather than JSX or run vocabulary: the canvas is
+ * shared with the editor, so it should not learn what a "run" is, and a
+ * serialisable shape lets a test assert the derivation and the rendering
+ * separately instead of only through the DOM.
+ */
+export type NodeBadge = { key: string; label: string; value: number }
+export type NodeDecoration = { dimmed: boolean; badges: NodeBadge[] }
+export type NodeDecorationMap = Record<string, NodeDecoration>

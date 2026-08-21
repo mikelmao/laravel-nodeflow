@@ -8,6 +8,7 @@ export type HttpMethod = 'GET' | 'PUT' | 'POST'
 
 const TYPE_PLACEHOLDER = '__NODEFLOW_TYPE__'
 const FIELD_PLACEHOLDER = '__NODEFLOW_FIELD__'
+const NODE_PLACEHOLDER = '__NODEFLOW_NODE__'
 
 /**
  * Read CSRF from Laravel's decoded XSRF cookie, with the host page's meta tag
@@ -61,15 +62,40 @@ export async function send(
     return { ok: response.ok, status: response.status, data }
 }
 
-/** Substitute both required sentinels or throw a named contract error. */
-export function optionsUrl(template: string, nodeType: string, fieldKey: string): string {
-    if (!template.includes(TYPE_PLACEHOLDER) || !template.includes(FIELD_PLACEHOLDER)) {
-        throw new Error(
-            `The options URL template is missing ${TYPE_PLACEHOLDER} or ${FIELD_PLACEHOLDER}: received "${template}". The server's urls.options prop has changed shape.`,
-        )
+/**
+ * Substitute server-authored URL sentinels, url-encoding each value.
+ *
+ * A missing sentinel throws by name rather than returning the template: the
+ * server owns these URLs (E4), so an absent placeholder means its contract
+ * changed, and silently sending the unsubstituted template turns that into a
+ * mysterious 404 far from the cause.
+ */
+export function substituteSentinels(template: string, replacements: Record<string, string>): string {
+    let url = template
+
+    for (const [sentinel, value] of Object.entries(replacements)) {
+        if (!url.includes(sentinel)) {
+            throw new Error(
+                `The URL template is missing ${sentinel}: received "${template}". The server's urls prop has changed shape.`,
+            )
+        }
+
+        url = url.replace(sentinel, encodeURIComponent(value))
     }
 
-    return template
-        .replace(TYPE_PLACEHOLDER, encodeURIComponent(nodeType))
-        .replace(FIELD_PLACEHOLDER, encodeURIComponent(fieldKey))
+    return url
+}
+
+export function optionsUrl(template: string, nodeType: string, fieldKey: string): string {
+    // substituteSentinels checks its replacements in object key order, so when
+    // both sentinels are missing it throws naming this one first. A test
+    // pins that order; keep TYPE_PLACEHOLDER first if you ever reorder these keys.
+    return substituteSentinels(template, {
+        [TYPE_PLACEHOLDER]: nodeType,
+        [FIELD_PLACEHOLDER]: fieldKey,
+    })
+}
+
+export function subjectsUrl(template: string, nodeId: string): string {
+    return substituteSentinels(template, { [NODE_PLACEHOLDER]: nodeId })
 }

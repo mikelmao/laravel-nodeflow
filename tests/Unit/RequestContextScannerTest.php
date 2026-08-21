@@ -182,3 +182,75 @@ it('reports one violation per file even when both forms appear', function () {
     expect(RequestContextScanner::violations($this->root, ['/Execution/']))
         ->toBe(['Http/MixedController.php: RunSubject']);
 });
+
+it('catches an aliased raw table name, which the method-anchored pattern missed', function () {
+    // G-1's first evasion. Counterfactual: keep the exact-string pattern
+    // DB::table('nodeflow_run_subjects') and this returns [].
+    file_put_contents(
+        $this->root.'/Http/AliasController.php',
+        "<?php DB::table('nodeflow_run_subjects as rs')->where('rs.run_id', 1)->get();"
+    );
+
+    expect(RequestContextScanner::violations($this->root, ['/Execution/']))
+        ->toBe(['Http/AliasController.php: RunSubject']);
+});
+
+it('catches a joined table name', function () {
+    // G-1's second evasion.
+    file_put_contents(
+        $this->root.'/Http/JoinController.php',
+        "<?php DB::table('nodeflow_runs')->join('nodeflow_node_executions', 'a', '=', 'b')->get();"
+    );
+
+    expect(RequestContextScanner::violations($this->root, ['/Execution/']))
+        ->toBe(['Http/JoinController.php: NodeExecution']);
+});
+
+it('catches a from() table name', function () {
+    // G-1's third evasion.
+    file_put_contents(
+        $this->root.'/Http/FromController.php',
+        "<?php DB::query()->from('nodeflow_run_subjects')->count();"
+    );
+
+    expect(RequestContextScanner::violations($this->root, ['/Execution/']))
+        ->toBe(['Http/FromController.php: RunSubject']);
+});
+
+it('catches a table named only inside raw sql', function () {
+    // The evasion no list of builder method names can ever cover, which is why
+    // E18 stopped listing method names. Counterfactual: anchor the pattern to
+    // table()/join()/from() and this returns [].
+    file_put_contents(
+        $this->root.'/Http/RawController.php',
+        "<?php DB::select('select count(*) from nodeflow_node_executions where run_id = ?', [1]);"
+    );
+
+    expect(RequestContextScanner::violations($this->root, ['/Execution/']))
+        ->toBe(['Http/RawController.php: NodeExecution']);
+});
+
+it('does not flag a comment or docblock that merely names the model or the table', function () {
+    // The over-matching guard, and it protects real prose: GraphValidator.php
+    // legitimately explains nodeflow_run_subjects' unique constraint in a
+    // comment. Counterfactual: match the bright-line rule against raw source
+    // instead of comment-stripped source and this returns two violations,
+    // creating pressure to delete a useful comment to appease a test.
+    file_put_contents(
+        $this->root.'/Http/DocumentedController.php',
+        <<<'PHP'
+        <?php
+        /**
+         * Counts live in nodeflow_run_subjects, and RunSubject::where() is the
+         * thing this class deliberately does not do.
+         */
+        class DocumentedController
+        {
+            // nodeflow_node_executions is aggregated by the reader, not here.
+            public function __invoke($run) { return $run->subjects()->count(); }
+        }
+        PHP
+    );
+
+    expect(RequestContextScanner::violations($this->root, ['/Execution/']))->toBe([]);
+});

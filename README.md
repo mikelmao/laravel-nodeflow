@@ -7,11 +7,12 @@ The package owns the mechanism — storage, versioning, the node contract, the d
 Your application owns the domain — what a "subject" is, who the tenants are, and what the nodes
 actually do.
 
-> **Status: editor foundation.** The durable headless engine, node generator, opt-in editor routes
-> and React `FlowEditor` client ship. The run-inspection UI (`FlowRun`) is still Plan 4 work, and
-> domain-specific nodes remain yours to write. The package is verified by 325 PHP tests and 123
-> client Vitest tests, but the interpreter has not yet been exercised against a real queue worker. See
-> [Known limitations](docs/05-execution-model.md#known-limitations) before you depend on it.
+> **Status: editor and run view.** The durable headless engine, node generator, opt-in editor
+> routes, React `FlowEditor` client and the run-inspection `FlowRun` client all ship. The
+> `nodeflow:install` command (Plan 5) and the node-packaging commands (Plan 6) remain, and
+> domain-specific nodes remain yours to write. The package is verified by 356 PHP tests and 157
+> client Vitest tests, but the interpreter has not yet been exercised against a real queue worker.
+> See [Known limitations](docs/05-execution-model.md#known-limitations) before you depend on it.
 
 ## What it gives you
 
@@ -63,7 +64,7 @@ line to paste. See [Writing nodes](docs/03-writing-nodes.md).
 | [5. Execution model](docs/05-execution-model.md) | How a stored graph becomes a durable run. Waits, cancellation, limitations. |
 | [6. Operations](docs/06-operations.md) | Test mode, health checks, pruning, status lifecycles. |
 | [7. Worked example](docs/07-worked-example-rada-yaya.md) | A complete flood-alert journey, end to end. |
-| [8. Editor client](docs/08-editor-client.md) | The five host-wiring requirements, thin Inertia page and extension props. |
+| [8. Editor client](docs/08-editor-client.md) | The five host-wiring requirements, thin Inertia pages, extension props, and the run view's overlay and polling contract. |
 
 ## Design documents
 

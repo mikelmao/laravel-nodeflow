@@ -53,8 +53,32 @@ it('keeps RunSubject and NodeExecution out of everything but the execution inter
 
     $violations = Tests\Support\RequestContextScanner::violations(
         $src,
-        ['/src/Execution/', '/src/Console/PruneCommand.php'],
+        [
+            '/src/Execution/',
+            '/src/Console/PruneCommand.php',
+            // E18's bright-line rule matches a table name anywhere in code, and
+            // these two files legitimately declare `protected $table` for the
+            // very models the rule protects. Allowlisting the files is not a
+            // hole: a scope method added to either still has to be *called*
+            // somewhere, and the `Model::` rule catches that call site.
+            '/src/Models/RunSubject.php',
+            '/src/Models/NodeExecution.php',
+        ],
     );
 
     expect($violations)->toBe([]);
+});
+
+it('never lets the request-context trees be exempted from the RunSubject rule', function () {
+    // The case above passes an allowlist, and an allowlist can grow. This one
+    // passes none, over exactly the two trees that must never query the
+    // untenanted tables however the global allowlist evolves. Counterfactual:
+    // write RunSubject::where(...) into src/Runs/RunOverlay.php and this fails,
+    // naming the file, even if someone allowlists it in the case above.
+    foreach (['/../../src/Http', '/../../src/Runs'] as $relative) {
+        $tree = __DIR__.$relative;
+
+        expect(is_dir($tree))->toBeTrue("scanner root does not resolve to a directory: {$tree}");
+        expect(Tests\Support\RequestContextScanner::violations($tree, []))->toBe([]);
+    }
 });

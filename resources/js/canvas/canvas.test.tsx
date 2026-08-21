@@ -125,6 +125,7 @@ describe('NodeCard', () => {
                         defs: { 'app.send': def() },
                         renderers: { 'app.send': Mine },
                         nodeErrors: {},
+                        decorations: {},
                     }}
                 >
                     <NodeCard {...nodeProps} />
@@ -149,6 +150,7 @@ describe('NodeCard', () => {
                         defs: { 'app.send': def() },
                         renderers: { 'app.send': Mine },
                         nodeErrors: { n1: ['field [template]: required'], n2: ['not mine'] },
+                        decorations: {},
                     }}
                 >
                     <NodeCard {...nodeProps} />
@@ -165,7 +167,12 @@ describe('NodeCard', () => {
         view.rerender(
             <ReactFlowProvider>
                 <CanvasContext.Provider
-                    value={{ defs: inheritedDefs, renderers: inheritedRenderers, nodeErrors: inheritedErrors }}
+                    value={{
+                        defs: inheritedDefs,
+                        renderers: inheritedRenderers,
+                        nodeErrors: inheritedErrors,
+                        decorations: {},
+                    }}
                 >
                     <NodeCard
                         {...nodeProps}
@@ -180,6 +187,48 @@ describe('NodeCard', () => {
         expect(screen.queryByText('inherited definition')).toBeNull()
         expect(screen.queryByText('inherited renderer')).toBeNull()
         expect(screen.queryByText('inherited error')).toBeNull()
+    })
+
+    // E16: the run view's counts reach the shared card as data. Counterfactual:
+    // render badges from a run-specific context inside NodeCard and the editor
+    // imports run vocabulary it has no use for.
+    it('renders decoration badges and dims a node when told to', () => {
+        render(
+            <ReactFlowProvider>
+                <CanvasContext.Provider
+                    value={{
+                        defs: { 'app.send': def() },
+                        renderers: {},
+                        nodeErrors: {},
+                        decorations: {
+                            n1: { dimmed: false, badges: [{ key: 'out:sent', label: 'sent', value: 7 }] },
+                        },
+                    }}
+                >
+                    <NodeCard {...nodeProps} />
+                </CanvasContext.Provider>
+            </ReactFlowProvider>,
+        )
+
+        expect(screen.getByTestId('nodeflow-badges-n1')).toHaveTextContent('sent 7')
+    })
+
+    // The editor passes no decorations at all. Counterfactual: default the
+    // prop to a dimmed shape, or render an empty badge list unconditionally,
+    // and every editor card grows an empty row or fades.
+    it('renders no badge row and no dimming when there is no decoration', () => {
+        render(
+            <ReactFlowProvider>
+                <CanvasContext.Provider
+                    value={{ defs: { 'app.send': def() }, renderers: {}, nodeErrors: {}, decorations: {} }}
+                >
+                    <NodeCard {...nodeProps} />
+                </CanvasContext.Provider>
+            </ReactFlowProvider>,
+        )
+
+        expect(screen.queryByTestId('nodeflow-badges-n1')).toBeNull()
+        expect(screen.getByText('Send message').closest('div.rounded-md')).not.toHaveClass('opacity-40')
     })
 })
 

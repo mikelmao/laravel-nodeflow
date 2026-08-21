@@ -7,9 +7,12 @@ most were proven by probe during a review rather than suspected.
 **Status key:** `DECISION` needs a human call · `DEFECT` is proven and unfixed · `GAP` is missing
 coverage or missing code · `DRIFT` is documentation disagreeing with code.
 
-Last updated 2026-08-20 after Plan 3 package acceptance (`c5684e4..a5194ed`) and
-demo acceptance (`549fe42`): 123 package Vitest tests, 325 package Pest tests and
-44 demo Pest tests passing.
+Last updated 2026-08-21 after Plan 4 package work (`8e79b99..d6c7a59`): **157 package Vitest
+tests, 356 package Pest tests (5820 assertions)** passing, silent package `tsc`. Demo integration
+has landed: **49 demo Pest tests (191 assertions)**, silent demo `tsc`, a successful demo
+`npm run build`. Real-browser acceptance for Plan 4 has **not** run yet — see "Plan 4 acceptance
+evidence" below, which remains an unfilled placeholder pending Task 13. (A final whole-branch fix
+wave landed after this entry; see the fix-wave report for its own totals and commits.)
 
 ---
 
@@ -29,6 +32,10 @@ demo acceptance (`549fe42`): 123 package Vitest tests, 325 package Pest tests an
 observability: record or diagnose when the host's tenancy binding caused `auto` to choose resolver
 mode. The strengthening is decided in favour, unimplemented, and belongs with D-2 in a dedicated
 security-hardening plan after Plan 3b. E2a's `auto` inference itself already shipped in Plan 3a.
+
+**Untouched by Plan 4.** The run view added nothing to the durable execution path — E13 chose a
+reader-side derivation over any change there — so this diagnostic follow-up still belongs entirely
+to the post-3b security-hardening plan.
 
 Spec decision **E2** defaults the mode to `disabled`, so a multi-tenant host that binds a
 `TenantResolver` and never sets `resolver` keeps today's silent unscoped read whenever their resolver
@@ -57,6 +64,10 @@ ruling leans on the same edge (see G-3). Either implement it or correct the spec
 defence-in-depth layer that isn't there is worse than two honest layers. Implementing an assertion on
 the durable execution path deserves its own plan rather than a drive-by commit.
 
+**Untouched by Plan 4.** The run view reads through `$run->nodeExecutions()` and `$run->subjects()`
+and writes nothing; it adds no code to `RunNodeActivity` or any other point on the durable execution
+path. This gap remains exactly as described, assigned to the same post-Plan-3b plan as D-1.
+
 ---
 
 ## Plan 3 acceptance evidence
@@ -70,6 +81,25 @@ to revision 4 with a null duration; and reload displayed that draft over the las
 The supporting gates were 123 package Vitest tests, 325 package Pest tests (5754 assertions), 44 demo
 Pest tests (171 assertions), silent package and demo `tsc`, a successful demo Vite build, and package
 Tailwind output containing `min-h-[32rem]`.
+
+---
+
+## Plan 4 acceptance evidence
+
+**PLACEHOLDER — not yet filled in. Do not read this section as accepted.** The demo integration
+this evidence depends on has landed — see below — but Plan 4's real-browser acceptance against
+the symlinked demo, Task 13's remaining work, has not run as of this entry. This section exists so
+Task 13 has a fixed place to record that evidence rather than inventing one later; it will be
+replaced wholesale once the six checks in
+`docs/superpowers/specs/2026-08-21-run-view-design.md` §9 have actually been run.
+
+Package-only gates already measured, ahead of that browser pass: **356 package Pest tests (5820
+assertions)**, **157 package Vitest tests** (the design predicted 151; six extra tests were added
+during execution, each covering a guard that otherwise had none), and a silent package `tsc`.
+
+Demo integration gates, also already measured: **49 demo Pest tests (191 assertions)**, silent
+demo `tsc`, and a successful demo `npm run build`. Still missing before this section can be filled
+in for real: the six real-browser checks themselves.
 
 ---
 
@@ -104,18 +134,37 @@ name (two generated classes of the same name in one process fatals).
 ## Coverage and enforcement gaps
 
 ### G-1 · The request-context scanner misses aliased and joined forms
-**Status:** GAP · **Raised by:** Plan 2 fix-wave re-review, probed directly
+**Status:** ✅ **RESOLVED, Plan 4 (E18).** · **Raised by:** Plan 2 fix-wave re-review, probed
+directly
 
 `RunSubject` and `NodeExecution` carry no tenant scope by design (spec E1), so
-`tests/Support/RequestContextScanner.php` is their entire defence. It now catches
-`DB::table('nodeflow_run_subjects')` and the connection-prefixed form, but these still evade it:
+`tests/Support/RequestContextScanner.php` is their entire defence. It previously caught only
+`DB::table('nodeflow_run_subjects')` and the connection-prefixed form; these four forms evaded it,
+and Plan 4's own `runs/{run}/nodes/{node}/subjects` drill-down was exactly where one would have
+been written:
 
 - `DB::table('nodeflow_run_subjects as rs')`
 - `->join('nodeflow_run_subjects', ...)`
 - `->from('nodeflow_run_subjects')`
+- Raw SQL, e.g. `DB::select('... from nodeflow_node_executions ...')`
 
-Plan 4's `runs/{run}/nodes/{node}/subjects` drill-down is exactly where an aliased subjects query
-would get written.
+**Fix.** The rule became "request-context code never names these tables", matched over
+comment-stripped source: `tests/Support/RequestContextScanner.php` now runs `token_get_all()` and
+drops `T_COMMENT`/`T_DOC_COMMENT` before matching, then treats the forbidden table name appearing
+*anywhere* in what remains as a violation — one bright line instead of an ever-growing list of
+builder methods, and it catches raw SQL that no method list could. Comment-stripping is what lets
+`GraphValidator`'s comment about the table's unique constraint keep naming the table without
+tripping the rule.
+
+The cost is two legitimate call sites: `src/Models/RunSubject.php` and
+`src/Models/NodeExecution.php` declare `protected $table`, so both are path-allowlisted in
+`tests/Unit/ArchitectureTest.php`. That is not a reopened hole — a scope method added to either
+model still has to be *called* somewhere, and the existing `Model::` rule catches the call site,
+not the declaration.
+
+`tests/Unit/RequestContextScannerTest.php` gained coverage for the four evasion forms above, plus
+the over-matching guard: a comment or docblock naming the model or the table is asserted **not** to
+be a violation, so the fix cannot be "solved" by deleting a comment worth keeping.
 
 ### G-2 · `tenant_id` immutability is undocumented, and query-builder updates bypass it
 **Status:** GAP · **Raised by:** Plan 2 fix-wave re-review
@@ -151,6 +200,10 @@ package can load duplicate client runtimes and fail at runtime with an invalid h
 the build succeeds. Plan 5's `nodeflow:install` must verify this fifth requirement with the other
 four.
 
+**Untouched by Plan 4.** `FlowRun` shares the same five host-wiring requirements as `FlowEditor`
+and adds no sixth; it relies on the `dedupe` setting the demo already carries rather than needing a
+new one. Verifying all five, including this one, remains `nodeflow:install`'s Plan 5 work.
+
 ---
 
 ## Documentation drift
@@ -183,6 +236,30 @@ Recorded in the foundation spec's known-limitations and still open. None are in 
 - **C-1** `runs.status` never reaches a failure state — only `running` and `completed` are written.
   Plan 4's overlay polling treats "terminal" as `completed` only, so a dead run leaves a client
   polling until the page closes.
+- **C-5** (new, Plan 4, spec decision E13) A node that ran and released nobody writes no
+  `node_executions` row at all: `NodeRunner::advance()` inserts one row per named output plus one
+  for failures, and `NodeResult::empty()` — what `core.exit` returns — produces neither. The run
+  view's overlay derives `reached` from row existence *or* an active subject sitting at the node,
+  so once every subject has moved past a node like `core.exit`, it reads as never reached even
+  though the run genuinely executed it. Per-output counts elsewhere are unaffected; only that one
+  node's dimming misleads. **Sibling to C-1, not the same defect:** C-1 is why polling stops only
+  on `completed`; this is why `core.exit` reads as never reached. Both are honest limitations of
+  what the run view can show given what the durable execution path records today, and closing
+  either means writing to that path — deliberately out of scope for Plan 4, which only reads it.
+  See also **C-6**, discovered after Plan 4 shipped, which shares this exact root cause from the
+  other direction.
+- **C-6** (new, found after Plan 4 shipped, spec decision E13) `reached` can also flip from `true`
+  back to `false` on a later poll, not just start `false` and stay there. `RunOverlay`'s
+  `reached = (rows !== null || waiting > 0)`: if a subject was active at a node — the only thing
+  making that node `reached` — and is then cancelled via `SubjectExiter::exit()` without ever
+  producing an output or a failure row there, the next poll reports `reached: false`, even though
+  the node genuinely held that subject. `FlowRun`'s drill-down panel says "this node was never
+  reached by this run, so no subject has ever been here" in that state, which is false. **Same root
+  cause as C-5, not a separate defect:** `reached` is derived from currently observable state
+  rather than durable history, so any path that erases its own evidence also erases the fact that
+  it happened — `core.exit` writing no row (C-5) and a cancellation-only visit leaving nothing
+  behind (this) are the same gap approached from two directions. Closing either means writing a row
+  on the durable execution path, which Plan 4 deliberately does not touch.
 - **C-2** `ownsSubject()` is called once per subject; a set-shaped contract is wanted before
   six-figure use.
 - **C-3** The suite is SQLite-only.

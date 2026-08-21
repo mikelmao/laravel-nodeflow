@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { csrfHeaders, optionsUrl, send } from './http'
+import { csrfHeaders, optionsUrl, send, subjectsUrl } from './http'
 
 afterEach(() => {
     document.head.innerHTML = ''
@@ -118,5 +118,25 @@ describe('optionsUrl', () => {
             'a',
             'b',
         )).toThrow(/__NODEFLOW_TYPE__/)
+    })
+})
+
+describe('subjectsUrl', () => {
+    // Counterfactual: interpolate without encodeURIComponent and a node id
+    // containing a slash — which the graph permits — addresses a different
+    // route entirely.
+    it('substitutes the node sentinel, url-encoded', () => {
+        const template = 'https://app.test/admin/runs/9/nodes/__NODEFLOW_NODE__/subjects'
+
+        expect(subjectsUrl(template, 'wait/24h')).toBe(
+            'https://app.test/admin/runs/9/nodes/wait%2F24h/subjects',
+        )
+    })
+
+    // A missing sentinel is a server contract change, not a client bug to
+    // paper over. Counterfactual: return the template unchanged and the drill-
+    // down 404s with no explanation of why.
+    it('throws by name when the template has lost its placeholder', () => {
+        expect(() => subjectsUrl('/runs/9/nodes/wait/subjects', 'wait')).toThrow(/__NODEFLOW_NODE__/)
     })
 })

@@ -73,7 +73,15 @@ return new class extends Migration
             $t->text('last_error')->nullable();
             $t->timestamp('exited_at')->nullable();
             $t->unique(['run_id', 'subject_type', 'subject_id']);
-            $t->index(['run_id', 'current_node_id', 'status']);
+            // `id` is the fourth column deliberately. The run view's drill-down
+            // reads `where run_id = ? and current_node_id = ? and status = ?
+            // order by id` and pages on a cursor, so with the id in the index
+            // that is an ordered range scan. Without it, Postgres and SQLite
+            // sort the node's entire population on every page — six figures of
+            // it — because only InnoDB carries the primary key in a secondary
+            // index implicitly. Folded into this migration rather than added in
+            // a new one because nothing is installed anywhere yet.
+            $t->index(['run_id', 'current_node_id', 'status', 'id']);
         });
 
         Schema::create('nodeflow_node_executions', function (Blueprint $t) {
