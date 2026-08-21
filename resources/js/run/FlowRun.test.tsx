@@ -173,6 +173,33 @@ describe('FlowRun', () => {
         expect(screen.queryByText(/already released everyone/i)).toBeNull()
     })
 
+    it('says only that a reached node is now empty, not how the subjects left', async () => {
+        // Counterfactual: word the reached branch as "released everyone" (or
+        // "passed through") and this fails, because RunOverlay's byOutput and
+        // failed buckets are disjoint -- output === null is the failure
+        // bucket, not a declared output -- and SubjectExiter::exit() is a
+        // third path that nulls current_node_id with no output taken at all.
+        // reached: true, byOutput: {}, failed: 5 is exactly the state where
+        // nobody was released through an output: five subjects failed at this
+        // node and none advanced. The panel cannot tell failure, cancellation,
+        // and advancement apart, so its wording must hold for all three.
+        const failedOnly = {
+            ...overlay(),
+            nodes: { ...overlay().nodes, segment: { reached: true, byOutput: {}, waiting: 0, failed: 5, error: null } },
+        }
+        const fetchMock = vi.fn().mockImplementation((requested: string) => requested.includes('/subjects')
+            ? Promise.resolve(subjectsPage([], null))
+            : Promise.resolve(Response.json(failedOnly)))
+        vi.stubGlobal('fetch', fetchMock)
+
+        render(<FlowRun run={run} graph={graph} palette={palette} overlay={failedOnly} urls={urls} />)
+
+        await act(async () => { screen.getByText('segment').click() })
+        await waitFor(() => expect(screen.getByText(/reached earlier in the run/i)).toBeInTheDocument())
+        expect(screen.queryByText(/released/i)).toBeNull()
+        expect(screen.queryByText(/passed through it/i)).toBeNull()
+    })
+
     it('does not let a slow first-page reply overwrite the panel of a node selected after it', async () => {
         // Counterfactual: remove the per-request liveness guard in
         // SubjectPanel.tsx (the `currentNodeId.current !== requestedFor`

@@ -34,11 +34,18 @@ function rowsFrom(data: Record<string, unknown> | null): RunSubjectRow[] {
  * and nulls current_node_id on every terminal transition, so this can neither
  * list who passed through nor list a node's failures (spec E15). An empty
  * result is ambiguous between two different facts unless `reached` disambiguates
- * it in words: a node the run visited and has since released everyone, versus a
- * node the run never touched at all. The canvas already tells the two apart
- * visually (dimmed with no badge versus an explicit 0); this is the same
- * distinction restated for the panel a user opens precisely to get the detail
- * the canvas summarised away.
+ * it in words: a node the run visited and now has nobody on it, versus a node
+ * the run never touched at all. The reached branch must not claim *how* the
+ * first group left — RunOverlay's byOutput/failed buckets and
+ * SubjectExiter::exit() are three disjoint paths off a node (advanced through a
+ * declared output, failed at the node, or cancelled out of the run with no
+ * output at all), and this panel has no way to tell which happened to any one
+ * subject who is no longer here. "Released" or "passed through" would assert a
+ * mechanism this component cannot verify — the card's own counts are the only
+ * source of truth for that. The canvas already tells reached apart from
+ * never-reached visually (dimmed with no badge versus an explicit 0); this is
+ * the same distinction restated in words for the panel a user opens precisely
+ * to get the detail the canvas summarised away.
  */
 export function SubjectPanel({ template, nodeId, reached }: SubjectPanelProps) {
     const [state, setState] = useState<PanelState>(EMPTY)
@@ -112,7 +119,7 @@ export function SubjectPanel({ template, nodeId, reached }: SubjectPanelProps) {
             {!state.loading && state.error === null && state.rows.length === 0 && (
                 <p className="text-[11px] text-muted-foreground">
                     {reached
-                        ? 'No subjects are here now. This node ran and has already released everyone who passed through it.'
+                        ? 'No subjects are here now. This node was reached earlier in the run; the counts on its card show what happened to the subjects that were here.'
                         : 'This node was never reached by this run, so no subject has ever been here.'}
                 </p>
             )}
