@@ -708,7 +708,7 @@ class ExtractNodeCommand extends Command
         $original = substr($source, $reference->byteStart, $reference->byteEnd - $reference->byteStart);
 
         if ($reference->kind === 'string_literal') {
-            return $this->stringLiteralReplacement($original, $class, $newFqcn);
+            return $this->stringLiteralReplacement($reference, $source, $original, $class, $newFqcn);
         }
 
         return $preferShortName ? $shortName : '\\'.$newFqcn;
@@ -734,23 +734,90 @@ class ExtractNodeCommand extends Command
      *     heredoc body are just text) and the command would exit 0 having
      *     silently broken the reference it was supposed to fix.
      *
-     * Distinguished here by the ONE fact that actually differs: whether
-     * $original itself starts with a quote character. A bounded match is
-     * replaced with the SAME plain-vs-escaped spelling it was matched with
-     * (NodeReferenceScanner::scanBoundedText() searches for both the FQCN
-     * and its every-backslash-doubled form as two separate needles, for
-     * exactly this reason).
+     * A quoted token is distinguished from a bounded match by the ONE fact
+     * that actually differs: whether $original itself starts with a quote
+     * character.
+     *
+     * PROMOTED FINDING (review round 3). A bounded match inside a REAL
+     * heredoc (`<<<LABEL`, not a nowdoc) is NOT simply "preserve whatever
+     * spelling matched" the way a nowdoc or Blade/inline-HTML match is.
+     * A heredoc body processes escape sequences exactly like a
+     * double-quoted string — so if the NEW FQCN's own text contains a
+     * single backslash immediately followed by a recognised escape letter
+     * (`t`, `n`, `r`, `v`, `f`, `e`, `x`, `u`, or an octal digit — every one
+     * reachable from a lowercase, PHP-identifier-legal namespace segment,
+     * e.g. `--namespace=acme\things` makes the very next character after
+     * the separator a `t`), splicing that text in UNESCAPED writes a
+     * SYNTACTICALLY VALID file (`php -l` passes) whose heredoc silently
+     * evaluates to a value containing a literal TAB where a backslash and
+     * a letter belonged — corruption at exit 0, the same failure shape
+     * Important 3 already fixed, just one step further down the same
+     * bounded-match path. The fix always doubles every backslash in the
+     * REPLACEMENT when it lands inside a real heredoc, regardless of how
+     * the ORIGINAL text was spelled — a doubled backslash always collapses
+     * to exactly one literal backslash under heredoc/double-quoted escape
+     * rules, so this is unconditionally safe. A nowdoc and Blade/inline-
+     * HTML markup process NO escapes at all, so THEIR replacement keeps
+     * matching whichever spelling (plain or escaped) the original text
+     * matched — that spelling already IS the runtime value, verbatim, and
+     * needsHeredocEscaping() returning false for both is what keeps this
+     * method from "fixing" something that was never broken.
      */
-    private function stringLiteralReplacement(string $original, string $class, string $newFqcn): string
+    private function stringLiteralReplacement(NodeReference $reference, string $source, string $original, string $class, string $newFqcn): string
     {
         if ($original !== '' && ($original[0] === "'" || $original[0] === '"')) {
             return $this->requote($original, $newFqcn);
+        }
+
+        if ($this->needsHeredocEscaping($source, $reference->byteStart)) {
+            return str_replace('\\', '\\\\', $newFqcn);
         }
 
         $oldPlain = ltrim($class, '\\');
         $oldEscaped = str_replace('\\', '\\\\', $oldPlain);
 
         return $original === $oldEscaped ? str_replace('\\', '\\\\', $newFqcn) : $newFqcn;
+    }
+
+    /**
+     * Whether the byte at $byteStart sits inside a REAL heredoc's own body
+     * — a `T_ENCAPSED_AND_WHITESPACE` token whose OPENING `<<<LABEL` (no
+     * quotes around LABEL) processes escape sequences — as opposed to a
+     * NOWDOC's body (`<<<'LABEL'`, quoted, processes NO escapes at all) or
+     * Blade/inline-HTML markup (`T_INLINE_HTML`, also no escape
+     * processing). `T_START_HEREDOC`'s own token TEXT is the opening
+     * marker verbatim, quote characters included, which is what makes
+     * checking it for a `'` enough to tell the two apart — PHP's tokeniser
+     * does not expose a separate token id for "heredoc" vs "nowdoc";
+     * both a heredoc's and a nowdoc's body chunks are
+     * `T_ENCAPSED_AND_WHITESPACE`.
+     */
+    private function needsHeredocEscaping(string $source, int $byteStart): bool
+    {
+        $isNowdoc = null;
+        $raw = 0;
+
+        foreach (token_get_all($source) as $token) {
+            $text = is_array($token) ? $token[1] : $token;
+            $id = is_array($token) ? $token[0] : null;
+            $length = strlen($text);
+
+            if ($id === T_START_HEREDOC) {
+                $isNowdoc = str_contains($text, "'");
+            }
+
+            if ($byteStart >= $raw && $byteStart < $raw + $length) {
+                return $id === T_ENCAPSED_AND_WHITESPACE && $isNowdoc === false;
+            }
+
+            if ($id === T_END_HEREDOC) {
+                $isNowdoc = null;
+            }
+
+            $raw += $length;
+        }
+
+        return false;
     }
 
     /**
@@ -871,6 +938,26 @@ class ExtractNodeCommand extends Command
         // is merely untidy, never a stale reference), so a failed write
         // here is downgraded to "leave the import alone" rather than
         // aborting the whole extraction over a cosmetic cleanup step.
+        //
+        // DEFENSIVE, CURRENTLY UNREACHABLE THROUGH ANY VALID-INPUT TEST
+        // (round 3 mutation testing: deleting this whole block leaves the
+        // suite green). By the time this line runs, $providerFile has
+        // JUST been proven writable one call earlier in this exact
+        // sequence: deregisterFromHost() already called
+        // NodeRegistrationWriter::removeFrom() on this SAME file, which
+        // only returns `Removed` (the one outcome that reaches this
+        // method at all) after its OWN put()-then-reread check already
+        // succeeded — nothing between that check and this one changes the
+        // file's permissions or the filesystem's ability to write it, so
+        // there is no way to make THIS put() fail while leaving that
+        // EARLIER one to have already succeeded, through any host
+        // configuration a real Laravel application could have. Kept
+        // anyway, the same reasoning as hostPsr4Directories()'s and
+        // gate6()'s own "defensive, currently unreachable" guards: the
+        // dependency is on ANOTHER method (removeFrom()) staying exactly
+        // as strict as it is today, and if a future change ever lets
+        // control reach this method without that same guarantee, this
+        // keeps its own protection rather than trusting put() silently.
         if ($this->files->get($providerFile) !== $updated) {
             $this->files->put($providerFile, $contents);
         }
@@ -1101,6 +1188,27 @@ class ExtractNodeCommand extends Command
      * of G5's roots — must not become a scan root here either, or this
      * scan would find, and wrongly refuse or abort on, a reference planted
      * only in whatever the symlink happens to point at.
+     *
+     * DOCUMENTED RESIDUAL (round 3): a reference in a loose `.php` FILE
+     * sitting directly at the HOST ROOT ITSELF — not inside any
+     * directory at all — is invisible to this method and therefore to
+     * both G5 and M6a, since every entry this method returns is a
+     * DIRECTORY handed to `NodeReferenceScanner::scan()`, which only ever
+     * walks directories. This is not a regression: the OLD, narrower
+     * `REFERENCE_SCAN_DIRS` allowlist had the exact same gap (a root-level
+     * file was never one of its named directories either), and a real
+     * Laravel host does not put PHP source directly at its own project
+     * root (`artisan` has no `.php` extension and is never autoloaded
+     * source). Stated here rather than silently carried forward.
+     *
+     * DOCUMENTED COST (round 3): this widening means a full non-vendor,
+     * non-node_modules tree walk now happens TWICE per extraction — once
+     * for G5, once more for M6a's post-move rescan, which is a superset
+     * of the same ground plus the newly-created package directory. Each
+     * gate used to be cheap (a handful of named directories); G5 alone is
+     * now the same cost M6a already was. Judged acceptable for the same
+     * reason M6a's own cost was: this command runs once, by a developer,
+     * not in a hot path.
      *
      * @return list<string>
      */

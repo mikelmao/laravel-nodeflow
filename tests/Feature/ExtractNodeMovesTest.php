@@ -409,6 +409,48 @@ it('rewrites a self-referencing DOUBLE-quoted class-string literal to the new FQ
     expect((new \Acme\Widgets\Nodes\DoubleQuotedRefNode())->legacyAlias())->toBe('Acme\Widgets\Nodes\DoubleQuotedRefNode');
 });
 
+it('preserves the ESCAPED (doubled-backslash) spelling inside a NOWDOC, which processes no escapes at all (persisted probe, review round 3)', function () {
+    // A nowdoc (<<<'TEXT') is unlike EVERY other string form in this
+    // file: it processes NO escapes whatsoever, not even the \\ -> \
+    // collapse a single-quoted string does. NodeReferenceScanner's own
+    // scanBoundedText() searches for BOTH the plain FQCN and its every-
+    // backslash-doubled spelling as two separate needles specifically
+    // because either one can appear verbatim in such a body. The fixture
+    // below writes the OLD FQCN with every backslash ALREADY doubled --
+    // matching the ESCAPED needle -- so stringLiteralReplacement() must
+    // preserve that doubling in the replacement: writing the PLAIN
+    // spelling instead would change the RUNTIME VALUE (a nowdoc's value is
+    // its source text, byte for byte), not merely its cosmetic form.
+    $extraBody = <<<'PHP'
+
+        public function legacyAlias(): string
+        {
+            return <<<'TEXT'
+            App\\Nodeflow\\Nodes\\NowdocEscapedNode
+            TEXT;
+        }
+    PHP;
+
+    $class = movesWriteNode($this->root, 'NowdocEscapedNode', 'nowdocescaped.node', $extraBody);
+
+    $this->artisan('nodeflow:extract-node', ['class' => $class, '--package' => 'acme/widgets'])
+        ->assertExitCode(0);
+
+    $movedPath = $this->root.'/packages/acme/widgets/src/Nodes/NowdocEscapedNode.php';
+
+    exec('php -l '.escapeshellarg($movedPath).' 2>&1', $out, $exit);
+    expect($exit)->toBe(0);
+
+    require $movedPath;
+
+    // The RUNTIME VALUE of a nowdoc is its source text verbatim: the
+    // doubled backslashes the fixture was written with must survive as
+    // doubled backslashes in the value, not collapse to single ones.
+    $value = (new \Acme\Widgets\Nodes\NowdocEscapedNode())->legacyAlias();
+    expect($value)->toBe('Acme\\\\Widgets\\\\Nodes\\\\NowdocEscapedNode');
+    expect(substr_count($value, '\\'))->toBe(6);
+});
+
 it('rewrites a self-referencing HEREDOC body to the new FQCN without splicing in literal quote characters', function () {
     // IMPORTANT review finding. NodeReferenceScanner::scanBoundedText()
     // matches a heredoc/nowdoc body (T_ENCAPSED_AND_WHITESPACE) as a
@@ -419,6 +461,13 @@ it('rewrites a self-referencing HEREDOC body to the new FQCN without splicing in
     // (php -l still passes) but a corrupted VALUE at runtime. This proves
     // the fix by actually calling the method and checking the value, not
     // just parsing the file.
+    //
+    // A REAL heredoc (this one -- <<<TEXT, no quotes around the label)
+    // processes escapes like a double-quoted string, so the rewritten
+    // SOURCE now carries doubled backslashes (needsHeredocEscaping()'s own
+    // reason for existing) -- what matters is that the RUNTIME VALUE,
+    // after PHP's own escape processing collapses them back down, is the
+    // correct single-backslash FQCN.
     $extraBody = <<<'PHP'
 
         public function legacyAlias(): string
@@ -437,9 +486,12 @@ it('rewrites a self-referencing HEREDOC body to the new FQCN without splicing in
     $movedPath = $this->root.'/packages/acme/widgets/src/Nodes/HeredocRefNode.php';
     $moved = file_get_contents($movedPath);
 
-    // No quote character was spliced into the heredoc body: the rewritten
-    // line is the bare FQCN, nothing else.
-    expect($moved)->toContain("Acme\Widgets\Nodes\HeredocRefNode\n");
+    // No quote character was spliced into the heredoc body, and every
+    // backslash is doubled in the SOURCE (heredoc escape rules) -- a
+    // single-quoted PHP literal here, so every '\\\\' pair is exactly two
+    // literal backslash characters, matching the doubled SOURCE bytes
+    // needsHeredocEscaping() must have produced.
+    expect($moved)->toContain('Acme\\\\Widgets\\\\Nodes\\\\HeredocRefNode');
     expect($moved)->not->toContain("'Acme\Widgets\Nodes\HeredocRefNode'");
     expect($moved)->not->toContain('"Acme\Widgets\Nodes\HeredocRefNode"');
 
@@ -448,6 +500,50 @@ it('rewrites a self-referencing HEREDOC body to the new FQCN without splicing in
 
     require $movedPath;
     expect((new \Acme\Widgets\Nodes\HeredocRefNode())->legacyAlias())->toBe('Acme\Widgets\Nodes\HeredocRefNode');
+});
+
+it('escapes the new FQCN for heredoc rules when a namespace segment would otherwise form a real escape sequence (promoted finding, review round 3)', function () {
+    // The exact failure the reviewer constructed: --namespace=acme\things
+    // is a VALID Composer/PHP identifier pair (assertValidNamespaceSegments()
+    // only checks each segment is a legal PHP identifier; a lowercase
+    // first letter is legal), so the new FQCN's own text contains the two
+    // characters "\t" immediately after "acme" -- and "\t" IS a
+    // recognised heredoc escape (a literal tab) unless the replacement
+    // text is written with a DOUBLED backslash. Before this fix, the
+    // moved file would parse cleanly (php -l passes) while its heredoc
+    // silently evaluated to a value containing a tab character instead of
+    // "\t".
+    $extraBody = <<<'PHP'
+
+        public function legacyAlias(): string
+        {
+            return <<<TEXT
+            App\Nodeflow\Nodes\EscapeDangerNode
+            TEXT;
+        }
+    PHP;
+
+    $class = movesWriteNode($this->root, 'EscapeDangerNode', 'escapedanger.node', $extraBody);
+
+    $this->artisan('nodeflow:extract-node', [
+        'class' => $class,
+        '--package' => 'acme/things',
+        '--namespace' => 'acme\things',
+    ])->assertExitCode(0);
+
+    $movedPath = $this->root.'/packages/acme/things/src/Nodes/EscapeDangerNode.php';
+
+    exec('php -l '.escapeshellarg($movedPath).' 2>&1', $out, $exit);
+    expect($exit)->toBe(0);
+
+    require $movedPath;
+
+    // The runtime value must be the literal FQCN text -- "acme", a
+    // backslash, "things", ... -- and must NOT contain an actual tab
+    // character where the "t" of "things" belongs.
+    $value = (new \acme\things\Nodes\EscapeDangerNode())->legacyAlias();
+    expect($value)->toBe('acme\things\Nodes\EscapeDangerNode');
+    expect($value)->not->toContain("\t");
 });
 
 it("moves the class's test and rewrites its import, adding no namespace declaration", function () {
@@ -719,6 +815,116 @@ it('does not scan a top-level vendor/ directory, so extraction succeeds even tho
         ->assertExitCode(0);
 
     expect($this->root.'/packages/acme/widgets/src/Nodes/VendorBlindNode.php')->toBeFile();
+});
+
+it('does not scan a top-level node_modules/ directory, so extraction succeeds even though a reference sits there (mutation survivor 3)', function () {
+    // NODE_MODULES_DIR is a new constant with no dedicated test of its
+    // own -- mirroring the vendor/ test above, since a JS dependency tree
+    // is never the host's own source either.
+    $class = movesWriteNode($this->root, 'NodeModulesBlindNode', 'nodemodulesblind.node');
+
+    mkdir($this->root.'/node_modules/some-package', 0777, true);
+    file_put_contents($this->root.'/node_modules/some-package/consumer.php', <<<'PHP'
+    <?php
+
+    class Consumer
+    {
+        public function make(): \App\Nodeflow\Nodes\NodeModulesBlindNode
+        {
+            return new \App\Nodeflow\Nodes\NodeModulesBlindNode();
+        }
+    }
+    PHP);
+
+    $this->artisan('nodeflow:extract-node', ['class' => $class, '--package' => 'acme/widgets'])
+        ->assertExitCode(0);
+
+    expect($this->root.'/packages/acme/widgets/src/Nodes/NodeModulesBlindNode.php')->toBeFile();
+});
+
+it('does not apply the storage/framework exclusion to a PSR-4 directory that merely happens to be BASENAMED "storage" (mutation survivor 2)', function () {
+    // scanSharedRoots()'s own guard: $root !== $hostBasePath.'/'.basename($root).
+    // A PSR-4 mapping onto a nested "storage/" directory produces a scan
+    // root whose basename is "storage" but which is NOT the top-level
+    // host storage/ directory ARTIFACT_SUBDIRECTORIES means. The
+    // intermediate directory (".libhidden") is dot-prefixed specifically
+    // so the top-level walk itself never reaches this root by any OTHER
+    // path -- isolating the guard's own effect. Deleting the guard would
+    // wrongly apply the "framework" exclusion here too, hiding a REAL
+    // reference sitting in .libhidden/storage/framework/.
+    $class = movesWriteNode($this->root, 'FakeStorageNode', 'fakestorage.node');
+
+    file_put_contents($this->root.'/composer.json', json_encode([
+        'require' => ['atram/laravel-nodeflow' => '^2.0'],
+        'autoload' => ['psr-4' => [
+            'App\\' => 'app/',
+            'Lib\\' => '.libhidden/storage/',
+        ]],
+    ]));
+
+    mkdir($this->root.'/.libhidden/storage/framework', 0777, true);
+    file_put_contents($this->root.'/.libhidden/storage/framework/Consumer.php', <<<'PHP'
+    <?php
+
+    namespace Lib;
+
+    class Consumer
+    {
+        public function make(): \App\Nodeflow\Nodes\FakeStorageNode
+        {
+            return new \App\Nodeflow\Nodes\FakeStorageNode();
+        }
+    }
+    PHP);
+
+    $before = movesTreeHash($this->root);
+
+    $this->artisan('nodeflow:extract-node', ['class' => $class, '--package' => 'acme/widgets'])
+        ->expectsOutputToContain('.libhidden/storage/framework/Consumer.php')
+        ->assertFailed();
+
+    expect(movesTreeHash($this->root))->toBe($before);
+});
+
+it('still scans a PSR-4 directory that is dot-prefixed, ground the top-level walk alone would skip (mutation survivor 6)', function () {
+    // hostPsr4Directories() unioned into sharedScanRoots() is not fully
+    // redundant with the top-level walk: a host mapping its own
+    // namespace onto a dot-prefixed directory (unusual, but nothing in
+    // Composer forbids it) is exactly the ground the top-level walk
+    // itself excludes (".git and similar") -- so only the PSR-4 union
+    // reaches it.
+    $class = movesWriteNode($this->root, 'DotPsr4Node', 'dotpsr4.node');
+
+    file_put_contents($this->root.'/composer.json', json_encode([
+        'require' => ['atram/laravel-nodeflow' => '^2.0'],
+        'autoload' => ['psr-4' => [
+            'App\\' => 'app/',
+            'Hidden\\' => '.hidden-src/',
+        ]],
+    ]));
+
+    mkdir($this->root.'/.hidden-src', 0777, true);
+    file_put_contents($this->root.'/.hidden-src/Consumer.php', <<<'PHP'
+    <?php
+
+    namespace Hidden;
+
+    class Consumer
+    {
+        public function make(): \App\Nodeflow\Nodes\DotPsr4Node
+        {
+            return new \App\Nodeflow\Nodes\DotPsr4Node();
+        }
+    }
+    PHP);
+
+    $before = movesTreeHash($this->root);
+
+    $this->artisan('nodeflow:extract-node', ['class' => $class, '--package' => 'acme/widgets'])
+        ->expectsOutputToContain('.hidden-src/Consumer.php')
+        ->assertFailed();
+
+    expect(movesTreeHash($this->root))->toBe($before);
 });
 
 // --- Restores byte-identically on failure injected at each step ------------

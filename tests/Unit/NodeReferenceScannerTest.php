@@ -1500,3 +1500,50 @@ it('finds the FQCN as a substring inside a larger heredoc body, not only when th
     expect($found)->toHaveCount(1);
     expect($found[0]->kind)->toBe('string_literal');
 });
+
+// --- $excludedTopLevelNames (review round 3, mutation survivor 1) ---------
+
+it('excludes a directory NAME only when it sits directly inside the scanned root, not at any deeper nesting', function () {
+    // The central claim of the $excludedTopLevelNames parameter: deleting
+    // the `$directory === $scanRoot` guard in scannableFilesUnder() would
+    // apply the exclusion at EVERY depth, not just immediately inside the
+    // root scan() was actually handed. A nested storage/foo/framework/
+    // must still be scanned; only the TOP-LEVEL storage/framework/ (a
+    // direct child of the root) is skipped.
+    $root = hostWith([
+        'storage/framework/Compiled.php' => "<?php\nnew \\App\\Nodeflow\\Nodes\\SendMessage();\n",
+        'storage/foo/framework/Nested.php' => "<?php\nnew \\App\\Nodeflow\\Nodes\\SendMessage();\n",
+    ]);
+
+    $found = NodeReferenceScanner::scan(target(), [$root.'/storage'], ['framework']);
+
+    expect($found)->toHaveCount(1);
+    expect($found[0]->file)->toBe($root.'/storage/foo/framework/Nested.php');
+});
+
+it('excludes a directory NAME only for the root it was passed against, never a same-named directory reached via a DIFFERENT root', function () {
+    // A second call, scanning app/framework/ through a SEPARATE root with
+    // NO exclusion list of its own -- proving $excludedTopLevelNames is
+    // scoped per scan() call, not a global name-based filter.
+    $root = hostWith([
+        'storage/framework/Compiled.php' => "<?php\nnew \\App\\Nodeflow\\Nodes\\SendMessage();\n",
+        'app/framework/Real.php' => "<?php\nnew \\App\\Nodeflow\\Nodes\\SendMessage();\n",
+    ]);
+
+    $storageFound = NodeReferenceScanner::scan(target(), [$root.'/storage'], ['framework']);
+    $appFound = NodeReferenceScanner::scan(target(), [$root.'/app']);
+
+    expect($storageFound)->toHaveCount(0);
+    expect($appFound)->toHaveCount(1);
+    expect($appFound[0]->file)->toBe($root.'/app/framework/Real.php');
+});
+
+it('defaults $excludedTopLevelNames to an empty list, so every existing scan() call site is unaffected', function () {
+    $root = hostWith([
+        'app/framework/Real.php' => "<?php\nnew \\App\\Nodeflow\\Nodes\\SendMessage();\n",
+    ]);
+
+    $found = NodeReferenceScanner::scan(target(), [$root.'/app']);
+
+    expect($found)->toHaveCount(1);
+});
