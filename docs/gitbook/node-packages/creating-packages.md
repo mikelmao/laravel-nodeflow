@@ -105,7 +105,7 @@ An empty target is created. A non-empty target is refused unless either:
 
 `--force` permits writing the generated files into a foreign occupied directory. Review that target carefully first. It never permits using the host application root as the package target.
 
-For an existing matching package, the scaffold preserves existing Composer values and adds any missing defaults. It ensures the generated provider is present in `extra.laravel.providers`. Other generated files may be refreshed when they differ.
+For an existing matching package, the scaffold preserves existing Composer values and adds any missing defaults. It ensures the generated provider is present in `extra.laravel.providers`. Existing non-Composer generated files are left unchanged; missing generated files are added.
 
 The command validates rendered PHP and destination containment before it starts writing. That prevents the validation failures it can detect from leaving a partial scaffold, but it is not a filesystem transaction: an unexpected write failure after output begins does not provide a rollback command.
 

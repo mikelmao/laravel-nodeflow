@@ -74,11 +74,11 @@ Nodeflow is experimental. Use these current boundaries to decide what must be ha
 
 **Mitigation:** Keep application audit data for business events that need complete history, and use the run view for current operational inspection. See [Inspecting runs](../editor-and-run-view/inspecting-runs.md).
 
-### Editor recovery after a refused autosave is manual
+### Editor autosave recovery depends on the failure
 
-**Impact:** After a stale save, session failure, or network failure, autosave stops for that mounted editor session. A user can retain a local graph in the browser without a retry control.
+**Impact:** A stale save (`HTTP 409`) offers **Keep mine** and **Use theirs**; resolving that conflict restarts autosave. Other refused draft saves, including session and network failures, stop autosave for the mounted editor session without an in-place retry control. A user can retain a local graph in the browser without a retry control.
 
-**Mitigation:** Present the conflict flow clearly and tell authors to preserve visible changes before reloading or remounting when recovery is needed. See [Editor](../editor-and-run-view/editor.md).
+**Mitigation:** Present the conflict flow clearly. For a non-conflict failure, tell authors to preserve visible changes before reloading or remounting when recovery is needed. See [Editor](../editor-and-run-view/editor.md).
 
 ## Tooling and packages
 

@@ -65,7 +65,7 @@ After all read-only checks pass, the command:
 3. Moves `tests/Feature/Nodeflow/{ShortClass}Test.php` to `tests/{ShortClass}Test.php` when that conventional test exists and references the class.
 4. Registers the moved class in the package provider.
 5. Removes the original registration from the host provider and removes a now-unused single-class import when that is safe.
-6. Adds a host-relative Composer path repository. It gives the package a local `1.0.0` repository version and adds `"package/name": "*"` to `require` when it is not already required.
+6. Adds a host-relative Composer path repository. It gives the package a local `1.0.0` repository version and adds `"package/name": "*"` to `require` only when the package is absent from both `require` and `require-dev`.
 7. Re-scans the changed tree for old references, then deletes the original class and moved test.
 8. Runs Composer without scripts or plugins. With a lock file it updates the package; otherwise it installs dependencies.
 9. Invalidates the cached package manifest and starts a fresh host process. The fresh process must resolve the original node type to the new package class.
@@ -80,9 +80,11 @@ The host cannot already require the destination package from another source. Rep
 
 ## Rollback and recovery
 
-Every mutation is journaled before it happens, including Composer-generated state. If an operation after the read-only gates fails, the command restores recorded files, created paths, deleted originals, and Composer state in reverse order. If Composer installation had started, it also attempts a script-free autoload regeneration against the restored state.
+Every mutation is journaled before it happens, including Composer-generated state. If an operation fails before successful fresh-host verification, the command restores recorded files, created paths, deleted originals, and Composer state in reverse order. If Composer installation had started, it also attempts a script-free autoload regeneration against the restored state.
 
-That guarantee applies when restoration itself succeeds. If the command reports that rollback storage could not be cleaned up, that storage is retained for manual inspection. If it reports that restoration or autoload proof failed, stop and inspect the host before retrying; it may not be safe to assume the tree is fully restored. These recovery failures still use exit code `1`.
+That guarantee applies when restoration itself succeeds. If the command reports that rollback storage could not be cleaned up, that storage is retained for manual inspection. If it reports that restoration or autoload proof failed, stop and inspect the host before retrying; it may not be safe to assume the tree is fully restored.
+
+After fresh-host verification succeeds, the host and package are committed. If only journal cleanup then fails, the command exits `1` but deliberately leaves that verified state unchanged and reports the retained private cleanup path. Review the committed changes and follow your normal operator cleanup procedure for the reported private storage. These recovery and cleanup failures use exit code `1`.
 
 On success, review the Composer and moved-source diff, run the relevant application checks, and keep the old node type unchanged in every existing graph.
 
