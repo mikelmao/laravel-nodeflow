@@ -419,17 +419,51 @@ class ExtractNodeCommand extends Command
     /**
      * Every directory the host's own composer.json maps via
      * `autoload.psr-4` or `autoload-dev.psr-4`, resolved to an absolute
-     * path and kept only if it actually exists on disk — the SAME set both
-     * G2 (containment) and G5 (scan roots) consume, so the two gates agree
+     * path and kept only if it actually exists on disk AND resolves
+     * canonically inside the host root — the SAME set both G2
+     * (containment) and G5 (scan roots) consume, so the two gates agree
      * about what counts as "the host's own source" by construction rather
      * than by two independently-written lists happening to match.
      *
-     * Composer's own PSR-4 value may be a single directory string or an
-     * array of several for one namespace prefix; both are handled. A
-     * non-existent mapped directory (declared in composer.json but never
-     * created) is silently dropped rather than refused here — an absent
+     * THE ROOT-CONTAINMENT CHECK (this method's own reason for existing in
+     * its current shape) closes a case its own predecessor reopened: a
+     * PSR-4 value of `"./"`, `"."`, or `"/"` maps the ENTIRE host root, at
+     * which point `storage/framework/cache/...` (Important A's case (c),
+     * supposedly closed) is "mapped" again, because it is a subdirectory
+     * of "the whole project". A value of `"../"` is worse: resolved
+     * against `$hostBasePath` it points OUTSIDE the host entirely, which
+     * would hand G5 a scan root outside the tree it was ever told to
+     * cover. Both are refused before ever becoming a candidate root:
+     * `HostPath::segments()` deliberately KEEPS a `..` segment (its own
+     * docblock explains why — a caller must be able to SEE a climb-out in
+     * order to refuse it), so `in_array('..', $segments, true)` catches
+     * `../` at any position, and an empty segment list catches `.`, `/`,
+     * and `./` (all three normalise to no segments at all). The SEPARATE
+     * `$hostRoot->contains($absolute)` check, after that, is defence in
+     * depth against a symlink-based escape a syntactic segment check alone
+     * cannot see — the same reason `HostPath::resolveWithin()` checks both.
+     *
+     * A non-existent mapped directory (declared in composer.json but never
+     * created) is silently dropped rather than refused: an absent
      * directory contains nothing, so it can neither admit a node G2 should
-     * accept nor hide a reference G5 should have scanned.
+     * accept nor hide a reference G5 should have scanned. Dropping it here
+     * — rather than letting it become a G5 scan root — is also what keeps
+     * `NodeReferenceScanner::scan()` from receiving a root
+     * `HostPath::root()` would throw `InvalidArgumentException` on; gate5()
+     * only catches `RuntimeException`, so an unfiltered non-existent root
+     * would crash the command instead of refusing cleanly.
+     *
+     * Composer's own PSR-4 value may be a single directory string or an
+     * array of several for one namespace prefix; both are handled.
+     *
+     * STATED LIMIT (E-classmap): only `autoload`/`autoload-dev` PSR-4
+     * entries are read. A host whose own node classes are reachable only
+     * through `classmap` or the legacy PSR-0 style is refused outright by
+     * G2 (nothing it declares ever becomes a mapped root) — fail-safe, and
+     * vanishingly rare for a modern Laravel application (Laravel's own
+     * skeleton, and every generator in this package, both use PSR-4), but
+     * stated here rather than left for a future reader to mistake for a
+     * bug.
      *
      * @return list<string>
      */
@@ -444,6 +478,12 @@ class ExtractNodeCommand extends Command
         $decoded = json_decode($this->files->get($path), true);
 
         if (! is_array($decoded)) {
+            return [];
+        }
+
+        try {
+            $hostRoot = HostPath::root($hostBasePath);
+        } catch (InvalidArgumentException) {
             return [];
         }
 
@@ -462,11 +502,19 @@ class ExtractNodeCommand extends Command
                         continue;
                     }
 
-                    $absolute = $hostBasePath.'/'.trim($directory, '/');
+                    $segments = HostPath::segments($directory);
 
-                    if ($this->files->isDirectory($absolute)) {
-                        $directories[] = $absolute;
+                    if ($segments === [] || in_array('..', $segments, true)) {
+                        continue;
                     }
+
+                    $absolute = $hostBasePath.'/'.implode('/', $segments);
+
+                    if (! $this->files->isDirectory($absolute) || ! $hostRoot->contains($absolute)) {
+                        continue;
+                    }
+
+                    $directories[] = $absolute;
                 }
             }
         }
@@ -683,37 +731,44 @@ class ExtractNodeCommand extends Command
     /**
      * @param  array<string, mixed>  $decoded
      *
-     * TWO SEPARATE COMPARISONS, deliberately, not `fnmatch()` alone. A
-     * segment-wise equality check (via `HostPath::segments()`, the same
-     * canonical, slash-agnostic comparison every other path comparison in
-     * this codebase already uses) handles a literal url. A SEPARATE
-     * `fnmatch()` call, with `FNM_PATHNAME` and only when the url actually
-     * contains a glob metacharacter, handles a genuine glob — `*` cannot
+     * ONE `fnmatch()` call, with `FNM_PATHNAME`, handles both a literal
+     * url and a genuine glob — there is no separate equality arm. Two
+     * earlier revisions each kept ONE piece of now-redundant scaffolding
+     * around this single check, for two different reasons, and both were
+     * removed only once EXECUTION proved them redundant rather than by
+     * reasoning about it in the abstract:
+     *
+     *   1. A `preg_match('/[*?\[]/', $url)` guard used to gate whether
+     *      `fnmatch()` ran at all, on the theory that a literal url
+     *      needed a SEPARATE `HostPath::segments($url) === $targetSegments`
+     *      equality arm instead. Deleting the guard changed no test's
+     *      outcome: `HostPath::segments()` already normalises a literal
+     *      url's own backslashes before this point, so a metachar-free
+     *      pattern is already an exact match under `fnmatch()` with no
+     *      guard needed at all.
+     *   2. Once that guard was gone, the equality arm became redundant
+     *      TOO, confirmed the same way — `fnmatch('packages/acme/widgets',
+     *      'packages/acme/widgets', FNM_PATHNAME)` is `true` on its own.
+     *
+     * THE ORDER THIS HAPPENED IN MATTERS, and a stale claim about it was
+     * corrected here: it is NOT true that "removing either piece alone
+     * changes nothing" — measured with BOTH the guard and the equality
+     * arm still present, deleting the equality arm ALONE broke the
+     * literal-match case, because the guard was still gating `fnmatch()`
+     * away from literal urls entirely. Only once the guard was ALSO gone
+     * did the equality arm become provably redundant. Each removal was
+     * measured against the code as it stood at THAT point, not against
+     * some later, already-simplified state — the two facts are sequential,
+     * not simultaneous, and this docblock previously described the guard
+     * as though it still existed after the code had already moved past
+     * it, which is its own instance of the defect class this note exists
+     * to warn against: a comment describing behaviour the code no longer
+     * has is what let a Critical ship here once already (C2). `*` cannot
      * cross a `/` under `FNM_PATHNAME`, which is exactly what makes
-     * Composer's own idiomatic monorepo form (`"packages/*"`, ONE
-     * wildcard segment) fail to match a TWO-segment target
+     * Composer's own idiomatic monorepo form (`"packages/*"`, ONE wildcard
+     * segment) fail to match a TWO-segment target
      * (`packages/acme/widgets`) the same way Composer's own path
-     * repository resolution would. Without `FNM_PATHNAME`, `packages/*`
-     * matches ANY target nested arbitrarily deep under `packages/` —
-     * a segment-wise glob doing a "does this string merely start with
-     * this prefix" job, the substring-shaped mistake this codebase's own
-     * `HostPath` docblock names as its most recent recurrence.
-     */
-    /**
-     * ONE comparison, not two. An earlier version of this method kept a
-     * separate `HostPath::segments($url) === $targetSegments` equality
-     * check ALONGSIDE this `fnmatch()` call, reasoning that a literal url
-     * needed its own exact-match arm because `fnmatch()` was only called
-     * when $url contained a glob metacharacter. Once that metachar guard
-     * was found to be its own redundant no-op and removed — `fnmatch()`
-     * with `FNM_PATHNAME` on a metachar-free pattern already IS an exact,
-     * segment-wise match, confirmed by execution
-     * (`fnmatch('packages/acme/widgets', 'packages/acme/widgets',
-     * FNM_PATHNAME)` is `true`) — the equality arm became redundant WITH
-     * it: removing either one alone changes nothing, because the other
-     * already covers the literal case on its own. Collapsing to this one
-     * call is the fix, not a third redundant guard layered on top of two
-     * that had already cancelled each other out.
+     * repository resolution would.
      */
     private function requiredFromMatchingPathRepository(array $decoded, string $targetRelativePath): bool
     {

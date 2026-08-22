@@ -693,6 +693,363 @@ it('unions the host\'s own PSR-4 roots into G5\'s scan, agreeing with G2 by cons
     expect(hostTreeHash($this->root))->toBe($before);
 });
 
+// --- Important N2: a PSR-4 value must not map the whole root or escape it ---
+
+it('refuses a node under storage/, even when composer.json maps a PSR-4 prefix to "./" (Important N2)', function () {
+    // "./" normalises to zero path segments -- the same as "." or "/" --
+    // and MUST NOT be accepted as a mapped root, or it maps the ENTIRE
+    // host, reopening Important A's case (c): storage/framework/cache/
+    // would then be "contained" in that root and pass G2. Counterfactual:
+    // restore the old trim($directory, '/') derivation (no segment check)
+    // and this test fails at exit 0.
+    file_put_contents($this->root.'/composer.json', json_encode([
+        'require' => ['atram/laravel-nodeflow' => '^2.0'],
+        'autoload' => ['psr-4' => ['App\\' => './']],
+    ]));
+
+    mkdir($this->root.'/storage/framework/cache', 0777, true);
+    $path = $this->root.'/storage/framework/cache/DotSlashNode.php';
+
+    file_put_contents($path, <<<'PHP'
+    <?php
+
+    namespace Storage\Cache;
+
+    use Nodeflow\Execution\NodeResult;
+    use Nodeflow\Execution\SubjectContext;
+    use Nodeflow\Nodes\HandlesSubject;
+    use Nodeflow\Nodes\Node;
+    use Nodeflow\Schema\NodeDefinition;
+
+    class DotSlashNode extends Node implements HandlesSubject
+    {
+        public static function type(): string
+        {
+            return 'dot.slash.node';
+        }
+
+        public function definition(): NodeDefinition
+        {
+            return NodeDefinition::make('DotSlashNode')->outputs(['default']);
+        }
+
+        public function forSubject(SubjectContext $context): NodeResult
+        {
+            return $context->continue('default');
+        }
+    }
+    PHP);
+    require $path;
+
+    $before = hostTreeHash($this->root);
+
+    $this->artisan('nodeflow:extract-node', [
+        'class' => 'Storage\Cache\DotSlashNode',
+        '--package' => 'acme/widgets',
+    ])->assertFailed();
+
+    expect(hostTreeHash($this->root))->toBe($before);
+});
+
+it('refuses the same node when the PSR-4 value is the bare dot rather than dot-slash', function () {
+    file_put_contents($this->root.'/composer.json', json_encode([
+        'require' => ['atram/laravel-nodeflow' => '^2.0'],
+        'autoload' => ['psr-4' => ['App\\' => '.']],
+    ]));
+
+    mkdir($this->root.'/storage/framework/cache', 0777, true);
+    $path = $this->root.'/storage/framework/cache/BareDotNode.php';
+
+    file_put_contents($path, <<<'PHP'
+    <?php
+
+    namespace Storage\Cache;
+
+    use Nodeflow\Execution\NodeResult;
+    use Nodeflow\Execution\SubjectContext;
+    use Nodeflow\Nodes\HandlesSubject;
+    use Nodeflow\Nodes\Node;
+    use Nodeflow\Schema\NodeDefinition;
+
+    class BareDotNode extends Node implements HandlesSubject
+    {
+        public static function type(): string
+        {
+            return 'bare.dot.node';
+        }
+
+        public function definition(): NodeDefinition
+        {
+            return NodeDefinition::make('BareDotNode')->outputs(['default']);
+        }
+
+        public function forSubject(SubjectContext $context): NodeResult
+        {
+            return $context->continue('default');
+        }
+    }
+    PHP);
+    require $path;
+
+    $this->artisan('nodeflow:extract-node', [
+        'class' => 'Storage\Cache\BareDotNode',
+        '--package' => 'acme/widgets',
+    ])->assertFailed();
+});
+
+it('refuses the same node when the PSR-4 value is the bare slash rather than dot-slash', function () {
+    file_put_contents($this->root.'/composer.json', json_encode([
+        'require' => ['atram/laravel-nodeflow' => '^2.0'],
+        'autoload' => ['psr-4' => ['App\\' => '/']],
+    ]));
+
+    mkdir($this->root.'/storage/framework/cache', 0777, true);
+    $path = $this->root.'/storage/framework/cache/BareSlashNode.php';
+
+    file_put_contents($path, <<<'PHP'
+    <?php
+
+    namespace Storage\Cache;
+
+    use Nodeflow\Execution\NodeResult;
+    use Nodeflow\Execution\SubjectContext;
+    use Nodeflow\Nodes\HandlesSubject;
+    use Nodeflow\Nodes\Node;
+    use Nodeflow\Schema\NodeDefinition;
+
+    class BareSlashNode extends Node implements HandlesSubject
+    {
+        public static function type(): string
+        {
+            return 'bare.slash.node';
+        }
+
+        public function definition(): NodeDefinition
+        {
+            return NodeDefinition::make('BareSlashNode')->outputs(['default']);
+        }
+
+        public function forSubject(SubjectContext $context): NodeResult
+        {
+            return $context->continue('default');
+        }
+    }
+    PHP);
+    require $path;
+
+    $this->artisan('nodeflow:extract-node', [
+        'class' => 'Storage\Cache\BareSlashNode',
+        '--package' => 'acme/widgets',
+    ])->assertFailed();
+});
+
+it('does not let a "../" PSR-4 value make G5 scan outside the host root (Important N2)', function () {
+    // A dedicated, isolated sandbox (not sys_get_temp_dir() itself, which
+    // is a busy, shared directory unrelated files could live under) so
+    // this test is deterministic: the ONLY thing directly inside the
+    // sandbox, besides the host itself, is one planted file this test
+    // controls. composer.json declares a SECOND (legitimate) PSR-4 entry
+    // ("App\" => "app/") so G2 still passes for the node itself -- this
+    // test is isolating whether the "../" entry becomes a G5 scan root,
+    // not re-testing G2's own containment rule.
+    $sandbox = sys_get_temp_dir().'/nodeflow-extract-node-n2sandbox-'.bin2hex(random_bytes(6));
+    mkdir($sandbox, 0777, true);
+    $sandbox = realpath($sandbox);
+
+    $hostRoot = $sandbox.'/host';
+    mkdir($hostRoot.'/app', 0777, true);
+
+    file_put_contents($hostRoot.'/composer.json', json_encode([
+        'require' => ['atram/laravel-nodeflow' => '^2.0'],
+        'autoload' => ['psr-4' => [
+            'App\\' => 'app/',
+            'Escaped\\' => '../',
+        ]],
+    ]));
+
+    $this->app->setBasePath($hostRoot);
+
+    $class = writeAppNode($hostRoot, 'ClimbOutNode', 'climb.out.node');
+
+    // Planted directly inside the SANDBOX -- one level above the host root,
+    // exactly where "../" resolves to. If G5 ever treated that resolved
+    // path as a scan root, this reference would be found and extraction
+    // would wrongly refuse.
+    file_put_contents($sandbox.'/OutsideConsumer.php', <<<'PHP'
+    <?php
+
+    namespace Outside;
+
+    use App\Nodeflow\Nodes\ClimbOutNode;
+
+    class OutsideConsumer
+    {
+        public function make(): ClimbOutNode
+        {
+            return new ClimbOutNode();
+        }
+    }
+    PHP);
+
+    try {
+        $this->artisan('nodeflow:extract-node', ['class' => $class, '--package' => 'acme/widgets'])
+            ->assertExitCode(0);
+    } finally {
+        deleteTree($sandbox);
+        $this->app->setBasePath($this->root);
+    }
+});
+
+// --- Mutation survivors from the PSR-4 derivation itself --------------------
+
+it('refuses cleanly, not with an uncaught exception, when the host has no composer.json at all (mutation survivor 1)', function () {
+    unlink($this->root.'/composer.json');
+
+    $class = writeAppNode($this->root, 'NoComposerJsonAtAllNode', 'no.composer.json.at.all');
+
+    $exitCode = $this->artisan('nodeflow:extract-node', ['class' => $class, '--package' => 'acme/widgets'])->run();
+
+    expect($exitCode)->toBe(1);
+});
+
+it('reads a PSR-4 mapping declared under autoload-dev, not just autoload (mutation survivor 2)', function () {
+    file_put_contents($this->root.'/composer.json', json_encode([
+        'require' => ['atram/laravel-nodeflow' => '^2.0'],
+        'autoload-dev' => ['psr-4' => ['App\\' => 'app/']],
+    ]));
+
+    $class = writeAppNode($this->root, 'AutoloadDevNode', 'autoload.dev.node');
+
+    $this->artisan('nodeflow:extract-node', ['class' => $class, '--package' => 'acme/widgets'])
+        ->assertExitCode(0);
+});
+
+it('reads the ARRAY form of a single PSR-4 mapping (mutation survivor 3)', function () {
+    // Composer allows one namespace prefix to map to SEVERAL directories:
+    // "App\\": ["app/", "app2/"]. Both must be accepted as candidate roots.
+    file_put_contents($this->root.'/composer.json', json_encode([
+        'require' => ['atram/laravel-nodeflow' => '^2.0'],
+        'autoload' => ['psr-4' => ['App\\' => ['app2/', 'app/']]],
+    ]));
+
+    $class = writeAppNode($this->root, 'ArrayFormPsr4Node', 'array.form.psr4.node');
+
+    $this->artisan('nodeflow:extract-node', ['class' => $class, '--package' => 'acme/widgets'])
+        ->assertExitCode(0);
+});
+
+it('drops a PSR-4 entry pointing at a directory that does not exist on disk, rather than crashing (mutation survivor 4)', function () {
+    // A directory declared in composer.json but never created must never
+    // become a G5 scan root: NodeReferenceScanner::scan() calls
+    // HostPath::root() on every root it is given, which throws
+    // InvalidArgumentException for a non-existent path -- and gate5() only
+    // catches RuntimeException, so an unfiltered entry here would crash the
+    // command instead of refusing (or succeeding) cleanly.
+    file_put_contents($this->root.'/composer.json', json_encode([
+        'require' => ['atram/laravel-nodeflow' => '^2.0'],
+        'autoload' => ['psr-4' => [
+            'App\\' => 'app/',
+            'Missing\\' => 'does-not-exist/',
+        ]],
+    ]));
+
+    $class = writeAppNode($this->root, 'MissingMappedDirNode', 'missing.mapped.dir.node');
+
+    $exitCode = $this->artisan('nodeflow:extract-node', ['class' => $class, '--package' => 'acme/widgets'])->run();
+
+    expect($exitCode)->toBe(0);
+});
+
+it('does not treat an ancestor directory literally named "vendor", ABOVE the host root, as containment (mutation survivor 5)', function () {
+    // underVendorAtAnyDepth() only inspects the path SEGMENTS strictly
+    // BELOW the host root (array_slice($fileSegments, count($rootSegments))).
+    // Without that slice, a host root whose own ANCESTOR happens to be
+    // named "vendor" would false-positive on every single node it has.
+    $ancestor = sys_get_temp_dir().'/vendor';
+
+    if (! is_dir($ancestor)) {
+        mkdir($ancestor, 0777, true);
+    }
+
+    $ancestor = realpath($ancestor);
+
+    $hostRoot = $ancestor.'/nodeflow-extract-node-'.bin2hex(random_bytes(6));
+    mkdir($hostRoot.'/app', 0777, true);
+
+    file_put_contents($hostRoot.'/composer.json', json_encode([
+        'require' => ['atram/laravel-nodeflow' => '^2.0'],
+        'autoload' => ['psr-4' => ['App\\' => 'app/']],
+    ]));
+
+    $this->app->setBasePath($hostRoot);
+
+    $class = writeAppNode($hostRoot, 'AncestorVendorNode', 'ancestor.vendor.node');
+
+    try {
+        $this->artisan('nodeflow:extract-node', ['class' => $class, '--package' => 'acme/widgets'])
+            ->assertExitCode(0);
+    } finally {
+        deleteTree($hostRoot);
+        $this->app->setBasePath($this->root);
+    }
+});
+
+it('does not report the same survivor twice when a named scan root and a PSR-4 root are the same directory (mutation survivor 6)', function () {
+    // The default fixture maps App\ to app/, which is ALSO one of the seven
+    // NAMED scan directories -- without array_unique() on gate5()'s merged
+    // roots list, app/ would be scanned TWICE, and every unexempted
+    // reference inside it would be reported twice over.
+    $class = writeAppNode($this->root, 'DuplicateRootNode', 'duplicate.root.node');
+
+    // Deliberately no `use` import here -- one bare, fully-qualified
+    // reference is exactly ONE NodeReference, so this test's count is not
+    // confounded by a SEPARATE, legitimate second reference (an import
+    // plus a later short-name usage would be two REAL references in the
+    // same file, muddying what this test is actually isolating).
+    file_put_contents($this->root.'/app/UsesIt.php', <<<'PHP'
+    <?php
+
+    namespace App;
+
+    class UsesIt
+    {
+        public function make(): void
+        {
+            new \App\Nodeflow\Nodes\DuplicateRootNode();
+        }
+    }
+    PHP);
+
+    // Bypassing $this->artisan() deliberately: its own testing helper mocks
+    // the console's BufferedOutput (so expectsOutputToContain() can make its
+    // own assertions on individual writes), which means the buffer
+    // Artisan::output() would normally read is never actually populated.
+    // Artisan::call() runs the command through a REAL buffer instead, which
+    // is what this test needs to count occurrences rather than merely
+    // check presence.
+    $exitCode = \Illuminate\Support\Facades\Artisan::call('nodeflow:extract-node', [
+        'class' => $class,
+        '--package' => 'acme/widgets',
+    ]);
+    $output = \Illuminate\Support\Facades\Artisan::output();
+
+    expect($exitCode)->toBe(1);
+    expect(substr_count($output, 'UsesIt.php'))->toBe(1);
+});
+
+it('drops an empty-string PSR-4 mapping value (mutation survivor 7)', function () {
+    file_put_contents($this->root.'/composer.json', json_encode([
+        'require' => ['atram/laravel-nodeflow' => '^2.0'],
+        'autoload' => ['psr-4' => ['App\\' => '', 'Real\\' => 'app/']],
+    ]));
+
+    $class = writeAppNode($this->root, 'EmptyStringPsr4Node', 'empty.string.psr4.node');
+
+    $this->artisan('nodeflow:extract-node', ['class' => $class, '--package' => 'acme/widgets'])
+        ->assertExitCode(0);
+});
+
+
 it('refuses a node whose file also declares a trait, naming the trait', function () {
     // E47. M2 rewrites the file's namespace, which moves EVERY declaration in it,
     // while the scan only looks for references to the node. Without this gate the
