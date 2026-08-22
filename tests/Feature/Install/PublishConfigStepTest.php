@@ -20,20 +20,23 @@ afterEach(function () {
     @rmdir($this->root);
 });
 
-it('publishes the config when it is absent', function () {
-    expect($this->step->check())->toBe(InstallOutcome::Writable);
-    expect($this->step->apply())->toBe(InstallOutcome::Wired);
-
-    // The published file must be usable as config, not merely present.
-    expect(require $this->path)->toHaveKey('tenancy');
+it('reports healthy and writes nothing when config is intentionally unpublished', function () {
+    expect($this->path)->not->toBeFile();
+    expect($this->step->check())->toBe(InstallOutcome::AlreadyPresent);
+    expect($this->step->apply())->toBe(InstallOutcome::AlreadyPresent);
+    expect($this->path)->not->toBeFile();
 });
 
 it('never overwrites a config the host has edited', function () {
-    // Counterfactual: publish unconditionally in apply() and this fails, having
-    // destroyed the host's own tenancy setting.
     file_put_contents($this->path, "<?php return ['tenancy' => 'resolver'];");
+    $before = file_get_contents($this->path);
 
     expect($this->step->check())->toBe(InstallOutcome::AlreadyPresent);
+    expect(file_get_contents($this->path))->toBe($before);
     expect($this->step->apply())->toBe(InstallOutcome::AlreadyPresent);
-    expect(require $this->path)->toBe(['tenancy' => 'resolver']);
+    expect(file_get_contents($this->path))->toBe($before);
+});
+
+it('describes config as optional', function () {
+    expect($this->step->describe())->toContain('optional');
 });
