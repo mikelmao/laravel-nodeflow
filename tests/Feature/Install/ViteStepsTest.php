@@ -218,6 +218,100 @@ it('rejects two live nodeflow editor alias properties', function () {
     expect($this->alias->check())->toBe(InstallOutcome::CannotWire);
 });
 
+it('returns null when an alias value closes delimiters out of stack order', function () {
+    expect(ViteAliasValue::extract(
+        <<<'TS'
+        {
+            '@nodeflow/editor': ([
+                'vendor/atram/laravel-nodeflow/resources/js'
+            )]
+        }
+        TS,
+    ))->toBeNull();
+});
+
+it('rejects an alias value that closes delimiters out of stack order', function () {
+    ($this->write)(<<<'TS'
+    export default defineConfig({
+        resolve: {
+            alias: {
+                '@nodeflow/editor': ([
+                    'vendor/atram/laravel-nodeflow/resources/js'
+                )],
+            },
+        },
+    })
+    TS);
+
+    expect($this->alias->check())->toBe(InstallOutcome::CannotWire);
+});
+
+it('returns null for duplicate semantic alias keys', function (string $escapedKey) {
+    expect(ViteAliasValue::extract(<<<TS
+    {
+        '@nodeflow/editor': 'vendor/atram/laravel-nodeflow/resources/js',
+        '{$escapedKey}': 'vendor/atram/laravel-nodeflow/resources/js',
+    }
+    TS))->toBeNull();
+})->with([
+    'escaped slash' => ['@nodeflow\\/editor'],
+    'unicode slash' => ['@nodeflow\\u002feditor'],
+    'braced unicode slash' => ['@nodeflow\\u{2f}editor'],
+]);
+
+it('rejects duplicate semantic alias keys', function (string $escapedKey) {
+    ($this->write)(<<<TS
+    export default defineConfig({
+        resolve: {
+            alias: {
+                '@nodeflow/editor': 'vendor/atram/laravel-nodeflow/resources/js',
+                '{$escapedKey}': 'vendor/atram/laravel-nodeflow/resources/js',
+            },
+        },
+    })
+    TS);
+
+    expect($this->alias->check())->toBe(InstallOutcome::CannotWire);
+})->with([
+    'escaped slash' => ['@nodeflow\\/editor'],
+    'unicode slash' => ['@nodeflow\\u002feditor'],
+    'braced unicode slash' => ['@nodeflow\\u{2f}editor'],
+]);
+
+it('accepts a lone semantically escaped alias key', function (string $escapedKey) {
+    ($this->write)(<<<TS
+    export default defineConfig({
+        resolve: {
+            alias: {
+                '{$escapedKey}': 'vendor/atram/laravel-nodeflow/resources/js',
+            },
+        },
+    })
+    TS);
+
+    expect(ViteAliasValue::extract(file_get_contents($this->root.'/vite.config.ts')))
+        ->toBe("'vendor/atram/laravel-nodeflow/resources/js'");
+    expect($this->alias->check())->toBe(InstallOutcome::AlreadyPresent);
+})->with([
+    'escaped slash' => ['@nodeflow\\/editor'],
+    'unicode slash' => ['@nodeflow\\u002feditor'],
+    'braced unicode slash' => ['@nodeflow\\u{2f}editor'],
+]);
+
+it('accepts an escaped package path value with Vite semantics', function () {
+    ($this->write)(<<<'TS'
+    export default defineConfig({
+        resolve: {
+            alias: {
+                '@nodeflow/editor': 'vendor\/atram\/laravel-nodeflow\/resources\/js',
+            },
+        },
+    })
+    TS);
+
+    expect($this->alias->check())->toBe(InstallOutcome::AlreadyPresent);
+});
+
 it('returns null for an alias property with no value', function (string $source) {
     expect(ViteAliasValue::extract($source))->toBeNull();
 })->with([
