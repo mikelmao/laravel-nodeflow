@@ -13,6 +13,18 @@ This records what happened while executing
 - Package baseline: Pest 904 tests / 7,469 assertions; Vitest 160 tests across 17 files; TypeScript silent; Composer metadata valid.
 - Demo baseline: Pest 56 tests / 223 assertions; TypeScript silent; production build passed; Composer metadata and lock consistency valid with the known unbound local-package warnings; worktree clean.
 
+## Commit map and task outcomes
+
+| Task | Evidence commits | Outcome |
+|---|---|---|
+| 1 — G-12 | RED `90d3bd6`; production `012a6c7` | Counterfactuals killed; independent review clean. |
+| 2 — G-7 | RED `313f9a5`; production `89bc0d7`; remediation `a553cb3` | Empty-value and nested-duplicate review findings repaired; re-review clean. |
+| 3 — G-8 | RED `b220805`; production `ef0d82b`; report cleanup `b80878b`, `0a514da` | Counterfactuals killed; independent review clean after the scratch report was untracked. |
+| 4 — G-9 | RED `183c9dd`; production `a152244` | Both import-free fallback counterfactuals killed; independent review clean. |
+| 5 — tooling gate | `8a1383d` | Integrated gate and adversarial review clean, with two deferred Minor observations. |
+| 6 — G-5 | evidence `5918408`; clarification `56fa8e0` | Browser gate **BLOCKED**; independent review confirmed the record and scope. |
+| 7 — release documentation | measured source `56fa8e0`; commit subject `docs: record Plan 7 release readiness` | README, documentation handoff and this record only. The commit hash is recorded externally in the ignored Task 7 report because a commit cannot contain its own hash. |
+
 ## Counterfactuals
 
 ### Task 1: G-12 — installed-Vite config precedence
@@ -64,7 +76,10 @@ This records what happened while executing
 
 ### Task 3: G-8 — independent spec-compliance and code-quality review
 
-- PENDING: review must verify the `nodeflow-config` publication mapping remains in `NodeflowServiceProvider`, migration drift semantics remain unchanged, the nine-step order is preserved, and the red/green/counterfactual evidence above matches the committed diff.
+- PASS: independent review verified the `nodeflow-config` publication mapping remains in
+  `NodeflowServiceProvider`, migration drift semantics remain unchanged, the nine-step order is
+  preserved, and the red/green/counterfactual evidence matches the committed diff. A tracked SDD
+  scratch report was then removed in `0a514da`; scoped re-review was clean.
 
 ### Task 4: G-9 — independent spec-compliance and code-quality review
 
@@ -95,5 +110,32 @@ This records what happened while executing
 - **Gate outcome: G-5 blocked, not passed.** Exact blockers are the non-ten-node graphs, unavailable exact action redirect/failed-request evidence, and lock/recovery timing that does not prove mid-journey cancellation. The successful partial observations above must not be treated as a substitute for those gates.
 - Reopened 9222 review (read-only): current Chrome PID 43376 (`Google Chrome --restart`) listens on IPv4 9222, but `/json/version`, `/json/list`, and `/json` each return 404 and IPv6 loopback refuses the connection; it exposes no CDP target metadata or WebSocket endpoint. Chrome extension discovery found only the prior NodeFlow `/login` tab (not authenticated), already owned by browser session `01a02a9b-5397-7ae2-9100-36665f6a0081`; no tab was taken over, navigated, or otherwise changed. So this existing listener cannot close the exact action-POST redirect or failed-request evidence gap.
 - Ten-node reconciliation: the current canonical Fast-demo seeder has exactly 10 nodes / 13 edges, so the brief’s expectation is valid for a fresh fixture. Persistent flow #2 has published version 2 with 11 nodes / 13 edges (extra `v2only`) and a draft with 12 nodes / 13 edges (additional `draftonly`, the intentional pinned-version-divergence test node). No reseed or repair was permitted. The node-count gap therefore remains a real-demo fixture/data-drift blocker for this run, not a demonstrated package rendering defect. The earlier SQLite recovery/timing blocker is unchanged.
+
+### Task 6 review
+
+- PASS on record integrity and scope: independent review confirmed that the evidence supports a
+  **BLOCKED**, not passed, G-5 result and that only this execution record changed in the Task 6
+  commit range. No remediation was required after the blocker clarification in `56fa8e0`.
+
+## Task 7 release-readiness gates
+
+- Package source `56fa8e064b344083c36d8ad7b3d98b19607dd636`: the controlled full Pest
+  run passed **922 tests / 7,514 assertions** in 93.41s. Vitest passed **160 tests across 17 files**;
+  `npx tsc --noEmit` was silent; Composer metadata was valid; and `git diff --check` passed.
+- Demo source `e15e5bd912fee2e248654861b826d9e1458707dc`: the package symlink resolved
+  exactly to `/Users/mikelmao/Projects/laravel-nodeflow`; Pest passed **56 tests / 223 assertions**;
+  TypeScript was silent; the production build transformed 2,497 modules and passed; Composer
+  metadata/lock validation passed with only the known unbound `@dev` and `*` local-package
+  warnings; and the demo diff/status checks were clean after all gates.
+- Browser disposition: G-5 remained **BLOCKED** for the three reasons recorded above. README did
+  not gain a new browser-pass claim. It retains only the truthful earlier local-worker evidence and
+  states that real-queue execution is not part of CI.
+- Demo database evidence remained the Task 6 high-water mark: runs 5–6; subjects 17–24;
+  executions 31–48; messages 65–84. Task 7 ran tests, type checks and a build only; it did not reset,
+  reseed, migrate, repair, clean or otherwise write acceptance rows.
+- Documentation boundary: Plan 7 updated `README.md`, created `docs/documentation-changes.md`, and
+  updated this execution record. It did not edit `docs/02-integration.md`,
+  `docs/08-editor-client.md`, `docs/superpowers/open-issues.md`, or
+  `docs/superpowers/specs/2026-08-21-remaining-tooling-design.md`.
 
 ## Final merged-main verification

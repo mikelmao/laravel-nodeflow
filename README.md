@@ -7,12 +7,12 @@ The package owns the mechanism — storage, versioning, the node contract, the d
 Your application owns the domain — what a "subject" is, who the tenants are, and what the nodes
 actually do.
 
-> **Status: editor and run view.** The durable headless engine, node generator, opt-in editor
-> routes, React `FlowEditor` client and the run-inspection `FlowRun` client all ship. The
-> `nodeflow:install` command (Plan 5) and the node-packaging commands (Plan 6) remain, and
-> domain-specific nodes remain yours to write. The package is verified by 358 PHP tests and 160
-> client Vitest tests, but the interpreter has not yet been exercised against a real queue worker.
-> See [Known limitations](docs/05-execution-model.md#known-limitations) before you depend on it.
+> **Status: tooling shipped; final browser acceptance remains open.** The durable engine, node
+> generator, installer, opt-in editor, run view, node-package scaffolder and node extractor all
+> ship. The package is verified by 922 PHP tests with 7,514 assertions and 160 client Vitest tests
+> across 17 files. Earlier acceptance work exercised the interpreter locally with a real queue
+> worker; real-queue execution is not yet part of CI. See
+> [Known limitations](docs/05-execution-model.md#known-limitations) before you depend on it.
 
 ## What it gives you
 
@@ -33,7 +33,7 @@ actually do.
 
 ```bash
 composer require atram/laravel-nodeflow
-php artisan vendor:publish --tag=nodeflow-migrations
+php artisan nodeflow:install
 php artisan migrate
 ```
 
@@ -44,7 +44,8 @@ Then implement two small contracts and register your nodes — see
 [Integration](docs/02-integration.md). Nothing works until you do; the shipped defaults deliberately
 fail closed rather than guess.
 
-There is no `nodeflow:install`, so those two contracts are hand-written. Your nodes are not:
+`nodeflow:install` creates or wires the package provider and checks the required host integration.
+Your domain nodes remain explicit:
 
 ```bash
 php artisan nodeflow:make-node SendSms --type=yaya.send_sms --outputs='sent, failed' --test
@@ -65,6 +66,7 @@ line to paste. See [Writing nodes](docs/03-writing-nodes.md).
 | [6. Operations](docs/06-operations.md) | Test mode, health checks, pruning, status lifecycles. |
 | [7. Worked example](docs/07-worked-example-rada-yaya.md) | A complete flood-alert journey, end to end. |
 | [8. Editor client](docs/08-editor-client.md) | The five host-wiring requirements, thin Inertia pages, extension props, and the run view's overlay and polling contract. |
+| [9. Packaging nodes](docs/09-packaging-nodes.md) | Scaffold Composer node packages, ship editor controls, and safely extract existing nodes. |
 
 ## Design documents
 
