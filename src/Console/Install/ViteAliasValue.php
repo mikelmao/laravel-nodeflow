@@ -40,8 +40,14 @@ final class ViteAliasValue
                     return null;
                 }
 
-                $values[] = trim($value['value']);
-                $offset = $value['next'];
+                $span = trim($value['value']);
+
+                if ($span === '') {
+                    return null;
+                }
+
+                $values[] = $span;
+                $offset = $start;
 
                 continue;
             }

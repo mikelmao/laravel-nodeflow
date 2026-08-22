@@ -32,6 +32,8 @@ This records what happened while executing
 - Rejected lexical cases: the existing commented correct alias remained rejected after comment stripping; the wrong alias plus a standalone correct path, duplicate live alias keys, and a wrong alias plus a correct path nested in another property all returned `CannotWire`. A missing config also remained rejected.
 - Counterfactual: temporarily replacing the value-bound condition with the original whole-file `str_contains()` checks made `vendor/bin/pest tests/Feature/Install/ViteStepsTest.php --filter="does not combine" --compact` fail as intended (1 failure / 1 assertion), returning `AlreadyPresent`. `ViteAliasValue::extract()` was restored immediately, then the full file passed again (19 tests / 31 assertions).
 - Formatting: `vendor/bin/pint` is unavailable and absent from `composer.json`; the two changed PHP files were retained in project style and syntax-checked. `git diff --check` passed after restoring production.
+- Fix Round 1 RED: direct `ViteAliasValue::extract()` cases for values missing before a comma, an enclosing `}`, and EOF each returned `''` instead of `null`; direct and `ViteAliasStep` nested-duplicate fixtures also falsely accepted the outer value. `vendor/bin/pest tests/Feature/Install/ViteStepsTest.php --filter="no value|nested duplicate" --compact` produced 5 failures / 5 assertions, and the full file showed those same 5 intended failures with 19 passes / 36 assertions.
+- Fix Round 1 GREEN: empty trimmed value spans now return `null`; after one candidate is collected, scanning resumes at its value start so nested candidate keys are counted and conservatively rejected. The focused five regressions passed; `vendor/bin/pest tests/Feature/Install/ViteStepsTest.php --compact` passed 24 tests / 36 assertions; both amended PHP syntax checks and `git diff --check` passed.
 
 ## Reviews and remediation
 
@@ -42,6 +44,7 @@ This records what happened while executing
 ### Task 2: G-7 — independent spec-compliance and code-quality review
 
 - PASS: independent read-only review of red commit `313f9a5` and the pending bounded-scanner implementation found no Critical, Important, or Minor findings. It confirmed the exact G-7 contract and execution record. The reviewer constructed a wrong `@nodeflow/editor: 'resources/js'` entry alongside a correct package path in a different alias entry; it returned `CannotWire`. Its delimiter-in-string input, `@nodeflow/editor: 'vendor/atram/laravel-nodeflow/resources/js,})'`, returned `AlreadyPresent`, confirming delimiters inside literals do not terminate the value scanner. The reviewer reran the focused Pest file (19 tests / 31 assertions), both changed PHP syntax checks, and `git diff --check`; all passed. No remediation was required.
+- Fix Round 1 remediation: subsequent review identified two Important scanner gaps: empty value spans and nested duplicate keys hidden by the post-value offset jump. Both were reproduced by direct contract tests and a `ViteAliasStep` fixture, repaired, and verified by the 24-test focused file, both PHP syntax checks, and diff check before the remediation commit.
 
 ## Browser acceptance
 

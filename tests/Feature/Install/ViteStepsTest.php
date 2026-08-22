@@ -3,6 +3,7 @@
 use Illuminate\Filesystem\Filesystem;
 use Nodeflow\Console\Install\InstallOutcome;
 use Nodeflow\Console\Install\ViteAliasStep;
+use Nodeflow\Console\Install\ViteAliasValue;
 use Nodeflow\Console\Install\ViteDedupeStep;
 
 beforeEach(function () {
@@ -209,6 +210,36 @@ it('rejects two live nodeflow editor alias properties', function () {
             alias: {
                 '@nodeflow/editor': 'vendor/atram/laravel-nodeflow/resources/js',
                 '@nodeflow/editor': 'vendor/atram/laravel-nodeflow/resources/js',
+            },
+        },
+    })
+    TS);
+
+    expect($this->alias->check())->toBe(InstallOutcome::CannotWire);
+});
+
+it('returns null for an alias property with no value', function (string $source) {
+    expect(ViteAliasValue::extract($source))->toBeNull();
+})->with([
+    'before a comma' => ['{"@nodeflow/editor":,}'],
+    'before an enclosing object end' => ['{"@nodeflow/editor":}'],
+    'at end of file' => ['{"@nodeflow/editor":'],
+]);
+
+it('returns null for a nested duplicate alias property', function () {
+    expect(ViteAliasValue::extract(
+        '{"@nodeflow/editor":{"@nodeflow/editor":"vendor/atram/laravel-nodeflow/resources/js"}}',
+    ))->toBeNull();
+});
+
+it('rejects a nested duplicate nodeflow editor alias property', function () {
+    ($this->write)(<<<'TS'
+    export default defineConfig({
+        resolve: {
+            alias: {
+                '@nodeflow/editor': {
+                    '@nodeflow/editor': 'vendor/atram/laravel-nodeflow/resources/js',
+                },
             },
         },
     })
