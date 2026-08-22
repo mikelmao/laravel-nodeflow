@@ -53,6 +53,7 @@ beforeEach(function () {
 
 afterEach(function () {
     deleteRecursively($this->basePath);
+    deleteRecursively($this->basePath.'-outside');
 });
 
 it('emits a package whose composer.json is valid JSON with the expected name and providers', function () {
@@ -255,4 +256,61 @@ it('throws when a rendered stub does not parse, and leaves nothing behind', func
     // Nothing was written at all — not the package directory, not any
     // sibling file that rendered cleanly before the broken one was checked.
     expect(file_exists($this->packageRoot))->toBeFalse();
+});
+
+it('preflights every output path before overwriting an existing package', function () {
+    $outside = $this->basePath.'-outside';
+    mkdir($this->packageRoot, 0777, true);
+    mkdir($outside, 0777, true);
+
+    $composer = json_encode(['name' => 'acme/widgets', 'description' => 'keep me']);
+    file_put_contents($this->packageRoot.'/composer.json', $composer);
+    file_put_contents($this->packageRoot.'/README.md', 'existing readme');
+    symlink($outside, $this->packageRoot.'/tests');
+
+    expect(fn () => $this->scaffolder->scaffold(makePackageTarget($this->packageRoot)))
+        ->toThrow(InvalidArgumentException::class);
+
+    expect(file_get_contents($this->packageRoot.'/composer.json'))->toBe($composer)
+        ->and(file_get_contents($this->packageRoot.'/README.md'))->toBe('existing readme')
+        ->and(glob($outside.'/*'))->toBe([]);
+});
+
+it('merges into a matching package without overwriting any existing scaffold file', function () {
+    $this->scaffolder->scaffold(makePackageTarget($this->packageRoot));
+
+    $provider = $this->packageRoot.'/src/WidgetsServiceProvider.php';
+    $composer = $this->packageRoot.'/composer.json';
+    $readme = $this->packageRoot.'/README.md';
+    $test = $this->packageRoot.'/tests/ExampleTest.php';
+
+    file_put_contents($provider, str_replace(
+        'protected array $nodes = [',
+        "protected array \$nodes = [\n        \\Acme\\Widgets\\Nodes\\FirstNode::class,",
+        file_get_contents($provider),
+    ));
+    file_put_contents($composer, str_replace('Nodeflow nodes', 'Custom package', file_get_contents($composer)));
+    file_put_contents($readme, 'custom readme');
+    file_put_contents($test, '<?php // custom test');
+
+    $before = array_map('file_get_contents', [$provider, $composer, $readme, $test]);
+
+    $this->scaffolder->scaffold(makePackageTarget($this->packageRoot));
+
+    expect(array_map('file_get_contents', [$provider, $composer, $readme, $test]))->toBe($before)
+        ->and(file_get_contents($provider))->toContain('FirstNode::class');
+});
+
+it('repairs malformed discovery metadata in an otherwise matching composer file', function () {
+    mkdir($this->packageRoot, 0777, true);
+    file_put_contents($this->packageRoot.'/composer.json', json_encode([
+        'name' => 'acme/widgets',
+        'extra' => ['laravel' => 'invalid'],
+    ]));
+
+    $this->scaffolder->scaffold(makePackageTarget($this->packageRoot));
+
+    $composer = json_decode(file_get_contents($this->packageRoot.'/composer.json'), true);
+    expect($composer['extra']['laravel']['providers'])
+        ->toBe(['Acme\\Widgets\\WidgetsServiceProvider']);
 });

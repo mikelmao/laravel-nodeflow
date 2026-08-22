@@ -2246,6 +2246,21 @@ it('does not refuse when the matching path repository url is a glob, not a liter
         ->assertExitCode(0);
 });
 
+it('does not refuse when a Composer brace glob includes the matching path repository', function () {
+    $class = writeAppNode($this->root, 'GateSixBraceGlobNode', 'gate6.braceglob');
+
+    file_put_contents($this->root.'/composer.json', json_encode([
+        'autoload' => ['psr-4' => ['App\\' => 'app/']],
+        'require' => ['atram/laravel-nodeflow' => '^2.0', 'acme/widgets' => '^1.0'],
+        'repositories' => [
+            ['type' => 'path', 'url' => 'packages/{acme,other}/*'],
+        ],
+    ]));
+
+    $this->artisan('nodeflow:extract-node', ['class' => $class, '--package' => 'acme/widgets'])
+        ->assertExitCode(0);
+});
+
 it('refuses when a single-segment glob does not cross a "/" to cover a nested target (C2)', function () {
     // Critical 2. "packages/*" is Composer's own idiomatic monorepo form and
     // covers exactly one path SEGMENT under packages/ (e.g. packages/foo) --

@@ -427,6 +427,26 @@ it('accepts an existing package directory whose composer.json name matches, and 
     expect(glob($this->root.'/packages/acme/*'))->toBe($before);
 });
 
+it('refuses a nested output symlink before changing an existing matching package', function () {
+    $package = $this->root.'/packages/acme/widgets';
+    $outside = $this->root.'-outside';
+    mkdir($package, 0777, true);
+    mkdir($outside, 0777, true);
+
+    $composer = json_encode(['name' => 'acme/widgets', 'description' => 'keep me']);
+    file_put_contents($package.'/composer.json', $composer);
+    file_put_contents($package.'/README.md', 'keep this readme');
+    symlink($outside, $package.'/tests');
+
+    $this->artisan('nodeflow:make-node-package', ['name' => 'acme/widgets'])
+        ->expectsOutputToContain('resolves outside the project root')
+        ->assertFailed();
+
+    expect(file_get_contents($package.'/composer.json'))->toBe($composer)
+        ->and(file_get_contents($package.'/README.md'))->toBe('keep this readme')
+        ->and(glob($outside.'/*'))->toBe([]);
+});
+
 it('refuses a foreign occupied directory without --force, and succeeds with it', function () {
     mkdir($this->root.'/packages/acme/widgets', 0777, true);
     file_put_contents($this->root.'/packages/acme/widgets/composer.json', json_encode(['name' => 'someone/else']));

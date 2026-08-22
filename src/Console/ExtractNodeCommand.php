@@ -1100,11 +1100,11 @@ class ExtractNodeCommand extends Command
     }
 
     /**
-     * Deletes the `use ... ;` statement whose own imported name STARTS at
+     * Deletes a single-member `use ... ;` statement whose imported name STARTS at
      * $memberStart — found by walking backward to the nearest preceding
      * `use` keyword and forward to its terminating `;` — absorbing one
      * trailing newline so the removal does not leave a blank line behind.
-     * Null when no enclosing `use ... ;` can be found at all (defensive;
+     * Null for a comma/group import, or when no enclosing `use ... ;` can be found (defensive;
      * unreachable through this command's own call sites, which only ever
      * pass a span `importSpanFor()` itself already found inside a real `use`
      * statement).
@@ -1133,6 +1133,13 @@ class ExtractNodeCommand extends Command
         foreach ($tokens as $index => $token) {
             if ($index <= $useIndex) {
                 continue;
+            }
+
+            // importSpanFor() proves only the target member. Removing the
+            // whole statement would also erase unrelated comma/group
+            // members, so retain multi-member imports conservatively.
+            if ($token['id'] === null && in_array($token['text'], [',', '{', '}'], true)) {
+                return null;
             }
 
             if ($token['id'] === null && $token['text'] === ';') {
@@ -1452,6 +1459,8 @@ class ExtractNodeCommand extends Command
      */
     private function isScannableFileName(string $name): bool
     {
+        $name = strtolower($name);
+
         return str_ends_with($name, '.blade.php')
             || str_ends_with($name, '.php')
             || str_ends_with($name, '.phtml')
@@ -2735,8 +2744,9 @@ class ExtractNodeCommand extends Command
     /**
      * @param  array<string, mixed>  $decoded
      *
-     * ONE `fnmatch()` call, with `FNM_PATHNAME`, handles both a literal
-     * url and a genuine glob — there is no separate equality arm. Two
+     * `fnmatch()` with `FNM_PATHNAME` handles both a literal url and a
+     * genuine glob after Composer-style brace alternatives are expanded.
+     * There is no separate equality arm. Two
      * earlier revisions each kept ONE piece of now-redundant scaffolding
      * around this single check, for two different reasons, and both were
      * removed only once EXECUTION proved them redundant rather than by
@@ -2807,11 +2817,55 @@ class ExtractNodeCommand extends Command
         // FNM_PATHNAME so a glob's '*' cannot cross a '/' — Composer's own
         // idiomatic "packages/*" covers exactly one path segment, not
         // "packages/acme/widgets" (two segments).
-        return fnmatch(
-            implode('/', HostPath::segments($url)),
-            implode('/', HostPath::segments($targetRelativePath)),
-            FNM_PATHNAME,
-        );
+        $target = implode('/', HostPath::segments($targetRelativePath));
+
+        foreach ($this->braceExpandedPatterns(implode('/', HostPath::segments($url))) as $pattern) {
+            if (fnmatch($pattern, $target, FNM_PATHNAME)) {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    /**
+     * Expands Composer/PHP glob brace alternatives before fnmatch(). PHP's
+     * glob(..., GLOB_BRACE), which Composer path repositories use, accepts
+     * `packages/{acme,other}/*`; fnmatch() alone does not.
+     *
+     * @return list<string>
+     */
+    private function braceExpandedPatterns(string $pattern): array
+    {
+        $pending = [$pattern];
+        $expanded = [];
+
+        while ($pending !== []) {
+            $candidate = array_pop($pending);
+
+            if (preg_match('/\{([^{}]*,[^{}]*)\}/', $candidate, $match, PREG_OFFSET_CAPTURE) !== 1) {
+                $expanded[] = $candidate;
+
+                continue;
+            }
+
+            $whole = $match[0][0];
+            $offset = $match[0][1];
+
+            foreach (explode(',', $match[1][0]) as $alternative) {
+                $pending[] = substr($candidate, 0, $offset)
+                    .$alternative
+                    .substr($candidate, $offset + strlen($whole));
+            }
+
+            // Bound adversarial composer.json expansion before the queue can
+            // grow exponentially. A refusal is safer than an unbounded proof.
+            if (count($expanded) + count($pending) > 256) {
+                return [];
+            }
+        }
+
+        return $expanded;
     }
 
     /**

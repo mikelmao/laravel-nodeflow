@@ -804,6 +804,39 @@ it('removes the now-unused host import once its array entry is gone', function (
     expect($hostProvider)->not->toContain('ImportCleanupNode');
 });
 
+it('keeps a multi-member use statement when only one imported member becomes unused', function () {
+    $class = movesWriteNode($this->root, 'MultiImportNode', 'multi.import.node');
+    movesWriteProvider(
+        $this->root,
+        '        MultiImportNode::class,',
+        'use App\Nodeflow\Nodes\MultiImportNode, App\Support\Keep;',
+        '    public const OTHER = Keep::class;'.PHP_EOL,
+    );
+
+    $this->artisan('nodeflow:extract-node', ['class' => $class, '--package' => 'acme/widgets'])
+        ->assertExitCode(0);
+
+    $provider = file_get_contents($this->root.'/app/Providers/NodeflowServiceProvider.php');
+    expect($provider)->toContain('use App\Nodeflow\Nodes\MultiImportNode, App\Support\Keep;')
+        ->and($provider)->toContain('public const OTHER = Keep::class;');
+});
+
+it('preserves earlier registrations across successive extractions into the same package', function () {
+    $first = movesWriteNode($this->root, 'FirstPackagedNode', 'first.packaged.node');
+
+    $this->artisan('nodeflow:extract-node', ['class' => $first, '--package' => 'acme/widgets'])
+        ->assertExitCode(0);
+
+    $second = movesWriteNode($this->root, 'SecondPackagedNode', 'second.packaged.node');
+
+    $this->artisan('nodeflow:extract-node', ['class' => $second, '--package' => 'acme/widgets'])
+        ->assertExitCode(0);
+
+    $provider = file_get_contents($this->root.'/packages/acme/widgets/src/WidgetsServiceProvider.php');
+    expect($provider)->toContain('Acme\Widgets\Nodes\FirstPackagedNode::class')
+        ->and($provider)->toContain('Acme\Widgets\Nodes\SecondPackagedNode::class');
+});
+
 it('keeps the host import when its short name appears in a second place', function () {
     // A DIFFERENT, fully-qualified reference to a class that merely SHARES
     // ImportCleanupNode's own short name, elsewhere in the same provider --
@@ -1249,6 +1282,7 @@ it('refuses over a reference in a loose root-level PHP-family file with a non-ph
 })->with([
     'phtml' => ['RootPhtmlNode', 'phtml'],
     'inc' => ['RootIncNode', 'inc'],
+    'uppercase php' => ['RootUppercasePhpNode', 'PHP'],
 ]);
 
 it('refuses before moving when a loose root-level PHP-family file cannot be read', function () {

@@ -723,6 +723,32 @@ it('refuses loudly, naming the path, when a symlink forms a cycle rather than re
     }
 });
 
+it('skips a completed directory when legitimate scan roots overlap', function () {
+    $root = hostWith([
+        'packages/local/src/Consumer.php' => <<<'PHP'
+        <?php
+
+        return \App\Nodeflow\Nodes\SendMessage::class;
+        PHP,
+    ]);
+
+    $found = NodeReferenceScanner::scan(target(), [
+        $root.'/packages',
+        $root.'/packages/local/src',
+    ]);
+
+    expect($found)->toHaveCount(1)
+        ->and($found[0]->file)->toBe($root.'/packages/local/src/Consumer.php');
+});
+
+it('scans PHP-like extensions case-insensitively', function (string $name) {
+    $root = hostWith([
+        'app/'.$name => '<?php return \\App\\Nodeflow\\Nodes\\SendMessage::class;',
+    ]);
+
+    expect(NodeReferenceScanner::scan(target(), [$root.'/app']))->toHaveCount(1);
+})->with(['Consumer.PHP', 'view.BLADE.PHP', 'legacy.PHTML', 'legacy.INC']);
+
 it('refuses loudly, naming the path, when a symlink target cannot be resolved at all', function () {
     $root = hostWith(['app/.keep' => '']);
 

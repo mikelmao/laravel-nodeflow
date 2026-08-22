@@ -802,4 +802,3 @@ it('removes a middle element whose delimiting comma is stranded alone on its own
     expect($contents)->toContain('UserTagged::class');
     expectParseablePhp($path);
 });
-

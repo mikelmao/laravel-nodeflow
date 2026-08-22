@@ -201,9 +201,10 @@ final class NodeReferenceScanner
         $target = ltrim($fqcn, '\\');
         $references = [];
         $visitedRealPaths = [];
+        $activeRealPaths = [];
 
         foreach ($absoluteRoots as $root) {
-            foreach (self::scannableFilesUnder($root, $excludedTopLevelNames, $root, $visitedRealPaths) as $file) {
+            foreach (self::scannableFilesUnder($root, $excludedTopLevelNames, $root, $visitedRealPaths, $activeRealPaths) as $file) {
                 array_push($references, ...self::scanFile($file, $target));
             }
         }
@@ -216,9 +217,9 @@ final class NodeReferenceScanner
      * `*.inc` file under $directory, found by a recursive directory walk
      * that FOLLOWS a symlinked directory rather than skipping it (round 4
      * ruling — see below for why), with $visitedRealPaths tracking every
-     * directory's own canonical (`realpath()`) form across the WHOLE
-     * `scan()` call so a symlink cycle is caught rather than recursed into
-     * forever.
+     * directory's canonical (`realpath()`) form across the WHOLE `scan()`
+     * call. A recursion-stack revisit is refused as a cycle; a directory
+     * already completed through an overlapping root is simply not rescanned.
      *
      * WHY FOLLOW A SYMLINK NESTED INSIDE A SCAN ROOT AT ALL (round 4
      * ruling, replacing round-1's `HostPath::contains()` filter). A
@@ -271,16 +272,22 @@ final class NodeReferenceScanner
      * else entirely under the same root.
      *
      * @param  list<string>  $excludedTopLevelNames
-     * @param  array<string, true>  $visitedRealPaths  passed by reference
-     *  and shared across every root in the SAME scan() call, not reset per
-     *  root — two different top-level roots resolving to the same real
-     *  directory (an unusual symlink arrangement) is exactly as much a
-     *  cycle risk as one root symlinking into itself.
+     * @param  array<string, true>  $visitedRealPaths  completed or entered
+     *  directories shared across the whole scan, used to avoid rescanning
+     *  legitimate overlapping roots
+     * @param  array<string, true>  $activeRealPaths  the current recursion
+     *  stack only; revisiting one of these is an actual cycle
      * @return \Generator<string>
      *
      * @throws \RuntimeException
      */
-    private static function scannableFilesUnder(string $directory, array $excludedTopLevelNames, string $scanRoot, array &$visitedRealPaths): \Generator
+    private static function scannableFilesUnder(
+        string $directory,
+        array $excludedTopLevelNames,
+        string $scanRoot,
+        array &$visitedRealPaths,
+        array &$activeRealPaths,
+    ): \Generator
     {
         if (is_file($directory)) {
             if (self::hasScannableExtension($directory)) {
@@ -314,68 +321,85 @@ final class NodeReferenceScanner
             }
         }
 
-        if (isset($visitedRealPaths[$real])) {
+        if (isset($activeRealPaths[$real])) {
             throw new \RuntimeException(
                 "[{$directory}] resolves to [{$real}], a directory this scan has already visited — ".
                 'following it would recurse into a symlink cycle forever.'
             );
         }
 
-        $visitedRealPaths[$real] = true;
-
-        $entries = @scandir($directory);
-
-        if ($entries === false) {
-            throw new \RuntimeException(
-                "[{$directory}] could not be read — silently skipping an unreadable directory would "
-                .'hide references this scan could not then prove are absent.'
-            );
+        if (isset($visitedRealPaths[$real])) {
+            return;
         }
 
-        foreach ($entries as $entry) {
-            if ($entry === '.' || $entry === '..') {
-                continue;
-            }
+        $visitedRealPaths[$real] = true;
+        $activeRealPaths[$real] = true;
 
-            if ($directory === $scanRoot && in_array($entry, $excludedTopLevelNames, true)) {
-                continue;
-            }
+        try {
+            $entries = @scandir($directory);
 
-            $path = $directory.'/'.$entry;
-
-            // A broken symlink (target does not exist) is neither
-            // is_dir() nor is_file() — PHP cannot stat a target that
-            // is not there — so without this check it would silently
-            // fall through the two branches below and be skipped
-            // entirely, exactly the "found too little" failure this
-            // whole method exists to avoid. Checked here, structurally
-            // (is_link() plus a failed realpath()), rather than folded
-            // into the is_dir() branch below, because a broken symlink
-            // is neither a directory NOR a scannable file and must be
-            // refused regardless of which one its OWN name might have
-            // suggested.
-            if (is_link($path) && realpath($path) === false) {
+            if ($entries === false) {
                 throw new \RuntimeException(
-                    "[{$path}] is a symlink whose target could not be resolved — silently skipping it ".
-                    'would hide whatever it was meant to point at, which this scan could not then prove '.
-                    'does not reference the class under extraction.'
+                    "[{$directory}] could not be read — silently skipping an unreadable directory would "
+                    .'hide references this scan could not then prove are absent.'
                 );
             }
 
-            if (is_dir($path)) {
-                yield from self::scannableFilesUnder($path, $excludedTopLevelNames, $scanRoot, $visitedRealPaths);
+            foreach ($entries as $entry) {
+                if ($entry === '.' || $entry === '..') {
+                    continue;
+                }
 
-                continue;
-            }
+                if ($directory === $scanRoot && in_array($entry, $excludedTopLevelNames, true)) {
+                    continue;
+                }
 
-            if (self::hasScannableExtension($entry)) {
-                yield $path;
+                $path = $directory.'/'.$entry;
+
+                // A broken symlink (target does not exist) is neither
+                // is_dir() nor is_file() — PHP cannot stat a target that
+                // is not there — so without this check it would silently
+                // fall through the two branches below and be skipped
+                // entirely, exactly the "found too little" failure this
+                // whole method exists to avoid. Checked here, structurally
+                // (is_link() plus a failed realpath()), rather than folded
+                // into the is_dir() branch below, because a broken symlink
+                // is neither a directory NOR a scannable file and must be
+                // refused regardless of which one its OWN name might have
+                // suggested.
+                if (is_link($path) && realpath($path) === false) {
+                    throw new \RuntimeException(
+                        "[{$path}] is a symlink whose target could not be resolved — silently skipping it ".
+                        'would hide whatever it was meant to point at, which this scan could not then prove '.
+                        'does not reference the class under extraction.'
+                    );
+                }
+
+                if (is_dir($path)) {
+                    yield from self::scannableFilesUnder(
+                        $path,
+                        $excludedTopLevelNames,
+                        $scanRoot,
+                        $visitedRealPaths,
+                        $activeRealPaths,
+                    );
+
+                    continue;
+                }
+
+                if (self::hasScannableExtension($entry)) {
+                    yield $path;
+                }
             }
+        } finally {
+            unset($activeRealPaths[$real]);
         }
     }
 
     private static function hasScannableExtension(string $name): bool
     {
+        $name = strtolower($name);
+
         return str_ends_with($name, '.blade.php')
             || str_ends_with($name, '.php')
             || str_ends_with($name, '.phtml')

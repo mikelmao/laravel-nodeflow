@@ -673,4 +673,3 @@ it('does not treat a commented-out attribute registration as already present', f
     expect(file_get_contents($path))->toContain("make('clicked', 'Clicked'");
     expectParseablePhp($path);
 });
-

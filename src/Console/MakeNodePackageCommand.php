@@ -91,7 +91,7 @@ class MakeNodePackageCommand extends Command
         try {
             (new PackageScaffolder($this->files, $this->laravel->basePath()))
                 ->scaffold($target);
-        } catch (RuntimeException $e) {
+        } catch (InvalidArgumentException|RuntimeException $e) {
             $this->components->error($e->getMessage());
 
             return self::FAILURE;

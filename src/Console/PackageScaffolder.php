@@ -12,11 +12,9 @@ use Illuminate\Filesystem\Filesystem;
  * from its own `type()` plus explicit registration — the same three things
  * that make a hand-written package work, because that is all this emits.
  *
- * Every file's content is rendered into memory and every rendered `.php` file
- * is parse-checked BEFORE anything is written to disk (E52). That ordering is
- * what makes "a parse failure leaves nothing behind" true for free: nothing
- * exists yet for a failed render to have left behind, so there is no rollback
- * to get wrong.
+ * Every file is rendered and parse-checked, then every existing-target output
+ * path is containment-checked, BEFORE anything is written (E51/E52). A parse
+ * or path refusal therefore cannot leave a partially refreshed package.
  */
 final class PackageScaffolder
 {
@@ -65,26 +63,137 @@ final class PackageScaffolder
             }
         }
 
-        // Only now, with every render validated, does anything touch disk.
+        // An existing target can contain a nested symlink at ANY output
+        // directory. Resolve every destination before the first write so a
+        // late refusal cannot leave composer.json/README already replaced.
+        // A missing target cannot contain such a link, so it is created only
+        // after the entirely in-memory render/parse phase above.
+        $root = null;
+        $paths = [];
+
+        if ($this->files->isDirectory($target->absolutePath)) {
+            $root = HostPath::root($target->absolutePath);
+            $paths = $this->resolveOutputPaths($root, array_keys($files));
+        }
+
+        $matchingPackage = isset($paths['composer.json'])
+            && $this->composerNameAt($paths['composer.json']) === $target->composerName;
+
+        if ($matchingPackage) {
+            $files['composer.json'] = $this->mergeMatchingComposerJson(
+                $paths['composer.json'],
+                $files['composer.json'],
+                $target->providerClass,
+            );
+        }
+
         $this->files->ensureDirectoryExists($target->absolutePath);
 
-        // Re-resolved through HostPath rather than raw concatenation for
-        // every write below: the package root now exists, so this is safe
-        // to construct, and every subsequent join goes through
-        // resolveWithin() rather than string arithmetic (E51's rule,
-        // applied inside the scaffolded package's own root, not just the
-        // host's).
-        $root = HostPath::root($target->absolutePath);
+        $root ??= HostPath::root($target->absolutePath);
+        $paths = $paths !== [] ? $paths : $this->resolveOutputPaths($root, array_keys($files));
 
         // An empty sibling to the provider file, per the emitted tree's own
         // shape — no stub renders into it, so it is created directly.
-        $this->files->ensureDirectoryExists($root->resolveWithin('src/Nodes'));
+        $this->files->ensureDirectoryExists($paths['src/Nodes']);
 
         foreach ($files as $relative => $contents) {
-            $path = $root->resolveWithin($relative);
+            $path = $paths[$relative];
+
+            // E43's matching-package state is a merge, not a reinitialise:
+            // a later extraction must not erase earlier $nodes entries (or
+            // any other package-owned customisation) before adding its own.
+            if ($matchingPackage && $this->files->exists($path)
+                && ($relative !== 'composer.json' || $this->files->get($path) === $contents)) {
+                continue;
+            }
+
             $this->files->ensureDirectoryExists(dirname($path));
             $this->files->put($path, $contents);
         }
+    }
+
+    /**
+     * @param  list<string>  $files
+     * @return array<string, string>
+     */
+    private function resolveOutputPaths(HostPath $root, array $files): array
+    {
+        $paths = ['src/Nodes' => $root->resolveWithin('src/Nodes')];
+
+        foreach ($files as $relative) {
+            $paths[$relative] = $root->resolveWithin($relative);
+        }
+
+        return $paths;
+    }
+
+    private function composerNameAt(string $path): ?string
+    {
+        if (! $this->files->isFile($path)) {
+            return null;
+        }
+
+        $decoded = json_decode($this->files->get($path), true);
+        $name = is_array($decoded) ? ($decoded['name'] ?? null) : null;
+
+        return is_string($name) ? $name : null;
+    }
+
+    private function mergeMatchingComposerJson(string $path, string $rendered, string $providerClass): string
+    {
+        $original = $this->files->get($path);
+        $existing = json_decode($original, true);
+        $defaults = json_decode($rendered, true);
+
+        if (! is_array($existing) || ! is_array($defaults)) {
+            return $rendered;
+        }
+
+        $merged = $this->addMissingComposerValues($existing, $defaults);
+
+        if (! is_array($merged['extra'] ?? null)) {
+            $merged['extra'] = [];
+        }
+
+        if (! is_array($merged['extra']['laravel'] ?? null)) {
+            $merged['extra']['laravel'] = [];
+        }
+
+        $providers = $merged['extra']['laravel']['providers'] ?? [];
+
+        if (! is_array($providers)) {
+            $providers = [];
+        }
+
+        if (! in_array($providerClass, $providers, true)) {
+            $providers[] = $providerClass;
+        }
+
+        $merged['extra']['laravel']['providers'] = $providers;
+
+        if ($merged === $existing) {
+            return $original;
+        }
+
+        return json_encode($merged, JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES).PHP_EOL;
+    }
+
+    private function addMissingComposerValues(array $existing, array $defaults): array
+    {
+        foreach ($defaults as $key => $value) {
+            if (! array_key_exists($key, $existing)) {
+                $existing[$key] = $value;
+
+                continue;
+            }
+
+            if (is_array($existing[$key]) && is_array($value)
+                && ! array_is_list($existing[$key]) && ! array_is_list($value)) {
+                $existing[$key] = $this->addMissingComposerValues($existing[$key], $value);
+            }
+        }
+
+        return $existing;
     }
 
     private function renderComposerJson(PackageTarget $target, string $namespace): string
