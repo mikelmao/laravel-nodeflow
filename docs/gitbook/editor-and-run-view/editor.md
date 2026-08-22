@@ -66,15 +66,17 @@ If a save receives HTTP 409, autosave stops rather than overwriting a newer draf
 
 After any other refused save, including HTTP 419, or a network failure, the hook remains halted for that mounted editor session and offers no retry control. The local graph stays visible, but preserve the changes elsewhere before reloading. A reload or remount with fresh server props, or changing to another flow context, is required before autosave can run again.
 
-Publishing first waits for an accepted draft save. Its outcomes are intentionally separate:
+Publishing first waits for an accepted draft save. If that prerequisite draft `PUT` conflicts or fails, no publish `POST` is made and the autosave hook remains halted; resolve the conflict or preserve the visible changes and reload/remount before trying again. Once the prerequisite draft save succeeds, an ordinary failed publish `POST` releases the publish barrier without changing the draft revision, so later graph changes can autosave.
+
+The publish results are intentionally separate:
 
 | Result | Meaning in the editor |
 | --- | --- |
 | Success | Shows the new version and adopts the returned `draft_revision`. |
 | HTTP 422 without `node_errors` | Structural request validation; rendered as a developer-facing client/payload problem. |
 | HTTP 422 with `node_errors` | Semantic graph validation; `errors` are banner messages and each `{ node, field, message }` entry is attached to its node when possible. Graph-level or unknown-node entries remain in the banner. |
-| HTTP 419 | Shows session-expired guidance; autosave remains halted until reload or remount. |
-| Other HTTP status or network failure | Shows a request failure without discarding the local graph; autosave remains halted until reload or remount. |
+| HTTP 419 | Shows session-expired publish guidance. The failed `POST` releases the barrier; later graph changes can autosave. |
+| Other HTTP status or network failure | Shows a publish-request failure without discarding the local graph. The failed `POST` releases the barrier; later graph changes can autosave. |
 
 > **Note:** A valid draft is not necessarily publishable. Publishing is the point at which graph meaning, node types, and field values are validated.
 
