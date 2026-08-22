@@ -26,8 +26,8 @@ QUEUE_CONNECTION=database
 Nodeflow and Durable Workflow migrations do not create Laravel's `jobs` or `failed_jobs` tables. If this Laravel application does not already have those queue migrations, generate and run them first:
 
 ```bash
-php artisan make:queue-table
-php artisan make:queue-failed-table
+php artisan queue:table
+php artisan queue:failed-table
 php artisan migrate
 ```
 

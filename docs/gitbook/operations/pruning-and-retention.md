@@ -24,7 +24,7 @@ The cutoff is `now()->subDays($days)`. The command selects only rows whose `crea
 
 ## Know what is deleted
 
-Only these terminal run statuses are eligible: `completed`, `failed`, and `cancelled`. `pending`, `running`, `waiting`, and `blocked` are preserved at every age. In particular, `blocked` may become recoverable after a missing node type is registered or aliased; automatic deletion would destroy the state needed to resume it. The current interpreter itself writes `pending`, `running`, and `completed`; it does not automatically turn a missing-type or activity failure into a Nodeflow `failed` or `blocked` row. The command nevertheless recognizes those terminal status values when application code has written them.
+Only these terminal run statuses are eligible: `completed`, `failed`, and `cancelled`. `pending`, `running`, `waiting`, and `blocked` are conservatively preserved at every age as nonterminal or application-reserved states. The current interpreter itself writes `pending`, `running`, and `completed`; it does not automatically turn a missing-type or activity failure into a Nodeflow `failed` or `blocked` row. The command nevertheless recognizes those terminal status values when application code has written them.
 
 For each selected batch of 500 runs, the command explicitly deletes matching `nodeflow_run_subjects`, then matching `nodeflow_node_executions`, then deletes each `nodeflow_runs` row. It does not wrap the whole prune in one transaction. The foreign keys also declare cascade deletion, but explicit child deletion keeps pruning correct where SQLite foreign-key enforcement is disabled.
 

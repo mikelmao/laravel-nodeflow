@@ -17,7 +17,7 @@ php artisan nodeflow:check-node-types
 
 When the host uses Laravel failed-job storage and has its `failed_jobs` table, also run `php artisan queue:failed`.
 
-**Correct:** start or restore the host's queue workers, repair the backend capability reported by the doctor, and register or alias a missing type before its next affected activity. A missing type or activity exception can leave the Nodeflow run `running` while the durable execution has failed. For that already failed execution, inspect durable history and current engine state; after fixing the root cause, use an application-defined repair or create a safe new idempotent run. Do not mark the Nodeflow run complete manually or invent a generic resume command. See [Queues and workers](queues-and-workers.md).
+**Correct:** start or restore the host's queue workers, repair the backend capability reported by the doctor, and register or alias a missing type before its next affected activity. A missing type or activity exception can leave the Nodeflow run `running` while the durable execution has failed. Preserve that failed/current run for durable-history diagnosis and an application-defined recovery decision after fixing the root cause; a safe new idempotent run may be appropriate when the business operation permits it. Do not mark the Nodeflow run complete manually or invent a packaged resume command. See [Queues and workers](queues-and-workers.md).
 
 ## An audience is empty
 
