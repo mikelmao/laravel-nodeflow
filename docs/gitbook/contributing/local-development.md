@@ -6,7 +6,7 @@ Set up the package workspace to run the PHP package tests and the editor-source 
 
 The Composer manifest supports PHP `^8.3` and Laravel Illuminate components `^12.0|^13.0`. The JavaScript manifest declares React and React DOM peer ranges of `^18.0.0 || ^19.0.0`.
 
-The lockfile's current development dependency set requires Node.js `22.22.2` or later. The repository does not declare an npm `engines` field or make that a public runtime contract; use a compatible Node.js release for local tooling and your host application's Vite toolchain.
+The lockfile's current development dependency set requires Node.js `^22.22.2 || ^24.15.0 || >=26.0.0`. The repository does not declare an npm `engines` field or make that a public runtime contract; this is a development-toolchain requirement, so use a compatible release for local tooling and your host application's Vite toolchain.
 
 ## Create a workspace
 
