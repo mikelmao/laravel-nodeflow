@@ -1,0 +1,73 @@
+# Architecture
+
+Nodeflow separates authoring, execution, and inspection so a Laravel application can supply domain behavior while the package manages workflow mechanics. This page maps the boundaries and the paths between them.
+
+## Outcome
+
+After reading this page, you can choose the right subsystem for a change without moving domain side effects into replayed workflow code or coupling the run view to the editor.
+
+## Major boundaries
+
+| Area | Responsibility |
+| --- | --- |
+| Registration | Laravel service providers register nodes, triggers, and subject attributes with singleton registries. |
+| Authoring | The editor receives server-authored palettes, saves an intentionally incomplete draft, and asks the server to publish a valid graph. |
+| Publishing | Graph validation creates a numbered, immutable flow-version snapshot and updates the flow's current version. |
+| Starts and audiences | Manual and event starts select a published version, materialize an authorized audience, and create a durable run. |
+| Execution | The interpreter owns deterministic control flow; activities and the node runner read and write application state. |
+| Inspection | Run records become a read-only overlay and a cursor-paginated subject drill-down for the run's pinned graph. |
+
+The public integration surface is registration, the contracts, the flow and run services, and the React exports. The registry, graph, execution, workflow, and view-model internals are package implementation details. See [Project structure](project-structure.md) for the corresponding directories.
+
+## From registration to the editor
+
+Node and trigger classes are registered with their registries. A registry resolves each class, converts its definition to a serializable palette entry, and gives the editor the palette it needs to render and configure a graph. Subject attributes follow the same pattern for condition-field options.
+
+```mermaid
+flowchart LR
+    R[Host provider registration] --> N[Node, trigger, and attribute registries]
+    N --> P[Server-authored palettes]
+    P --> E[Flow editor]
+```
+
+The editor is a client for these server-authored contracts. It does not decide which PHP classes are executable. Keep validation and registration rules on the server, and add a client control or renderer only as presentation for an already registered definition. The full integration boundary is described in [Registering domain components](../integration/registering-domain-components.md).
+
+## Drafts become immutable versions
+
+A draft is working state, not an execution artifact. The editor saves its graph together with the draft revision it last saw. A stale revision is refused instead of silently overwriting another editor's save. Draft saves allow a half-finished graph; publish is the point at which graph semantics are checked.
+
+```mermaid
+flowchart LR
+    S[Draft save] --> R[Revision check]
+    R --> V[Publish validation]
+    V --> I[Immutable flow-version snapshot]
+```
+
+On a successful publish, the package creates the next numbered version, makes it the flow's current version, and clears the saved draft. Runs retain their own version reference, so a later publish cannot change an existing run. See [Flows and versions](../building-automations/flows-and-versions.md) and [Publishing flows](../building-automations/publishing-flows.md) for the API and validation contract.
+
+## Starts become durable execution
+
+A trigger listener or an authorized manual action calls the same start service. It selects the flow's current published version, checks and materializes the audience before inserting its run subjects, then starts the durable interpreter after the database work commits.
+
+```mermaid
+flowchart LR
+    T[Trigger or manual start] --> A[Audience materialization]
+    A --> D[Durable interpreter]
+    D --> X[Activities]
+    X --> N[Node runner]
+    N --> S[Subject advancement]
+```
+
+The interpreter is deliberately deterministic: it owns graph traversal and waits, but performs no database, HTTP, clock, or other side-effecting work itself. Durable engines may replay workflow code, so non-deterministic reads and effects there could run differently or more than once. Activities form the bridge into ordinary Laravel code; the node runner invokes subject or audience nodes and advances subject records according to each node result.
+
+Put domain effects in node implementations, reached through activities, and make those effects safe for the delivery and retry semantics your host requires. Learn the execution model in [Durable execution](../operations/durable-execution.md) and the node contracts in [Writing nodes](../building-automations/writing-nodes.md).
+
+## Records become a run view
+
+The run view reads the graph pinned to the run's flow version. The server derives an overlay from execution records and active subjects, then the client renders that overlay on the graph. Selecting a node requests only the active subjects currently at that node; it is not a complete history endpoint.
+
+The run client has no editor import. It is intentionally read-only, has no autosave or publish request, and does not need authoring state. Keeping the clients separate avoids pulling editor behavior into an operational screen and prevents an inspection view from implying it can change the executing graph. See [Inspecting runs](../editor-and-run-view/inspecting-runs.md).
+
+## Next step
+
+Set up the package workspace with [Local development](local-development.md).
