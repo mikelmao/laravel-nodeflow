@@ -18,7 +18,7 @@ php artisan migrate
 
 ## Capabilities
 
-- Durable waits, resumption, and cancellation for long-running workflows.
+- Durable waits, resumption, and subject cancellation for long-running workflows.
 - Package-managed published-version snapshots that keep existing runs on their original graphs.
 - Custom nodes, triggers, and subject attributes for application-defined behavior.
 - Opt-in Inertia editor and run-inspection clients.
