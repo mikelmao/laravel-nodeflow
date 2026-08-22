@@ -6,6 +6,7 @@ use Illuminate\Console\Command;
 use Illuminate\Filesystem\Filesystem;
 use Illuminate\Support\Str;
 use InvalidArgumentException;
+use Nodeflow\Console\Extract\ComposerRunner;
 use Nodeflow\Console\Extract\ExtractJournal;
 use Nodeflow\Console\Install\ProviderStep;
 use Nodeflow\Nodes\HandlesAudience;
@@ -28,9 +29,11 @@ use Throwable;
  * gate passes, `performMoves()` (Task 9) runs M1 through M7 plus M6a: it
  * scaffolds the package, moves the class and its test into it, edits both
  * providers and the host's own composer.json, re-scans the post-move tree
- * (M6a, E45), and only then deletes the originals (M7). Any failure at any
- * point in that sequence — including M6a's own abort — restores the host to
- * exactly the bytes it had before `performMoves()` ran (`ExtractJournal`).
+ * (M6a, E45), and only then deletes the originals (M7). M8 installs the new
+ * path dependency without scripts, and M9 boots a fresh host process to prove
+ * discovery registered the moved class. A failure at any point — including
+ * M6a, M8, or M9 — restores the host to the bytes it had before
+ * `performMoves()` ran (`ExtractJournal`).
  *
 
  * THE CROSS-TASK OBLIGATION THIS CLASS OWNS. G5 refuses any reference to the
@@ -46,6 +49,12 @@ use Throwable;
  */
 class ExtractNodeCommand extends Command
 {
+    /** Restore bytes were exact, but Composer returned false while proving the old autoloader usable. */
+    private const RESTORED_AUTOLOAD_UNUSABLE = 76;
+
+    /** Restore bytes were exact, but autoload proof and the proof journal's private cleanup both failed. */
+    private const RESTORED_AUTOLOAD_UNUSABLE_AND_CLEANUP_FAILED = 77;
+
     protected $signature = 'nodeflow:extract-node
         {class : Fully-qualified class name of the node to extract}
         {--package= : The Composer package name the class will move into, e.g. acme/widgets}
@@ -114,8 +123,14 @@ class ExtractNodeCommand extends Command
      */
     private ?bool $composerLockExisted = null;
 
-    public function __construct(private Filesystem $files)
+    /** @var array{packages: string, services: string}|null Exact read-only G8 observation frozen into M9. */
+    private ?array $laravelCachePaths = null;
+
+    private ComposerRunner $composerRunner;
+
+    public function __construct(private Filesystem $files, ?ComposerRunner $composerRunner = null)
     {
+        $this->composerRunner = $composerRunner ?? new ComposerRunner;
         parent::__construct();
     }
 
@@ -130,6 +145,7 @@ class ExtractNodeCommand extends Command
         // before gate 1 ever runs.
         $this->provenType = null;
         $this->composerLockExisted = null;
+        $this->laravelCachePaths = null;
 
         $class = trim((string) $this->argument('class'));
         $hostBasePath = $this->laravel->basePath();
@@ -214,7 +230,7 @@ class ExtractNodeCommand extends Command
     }
 
     /**
-     * M1-M7 and M6a — the actual moves, run only once every one of the eight
+     * M1-M9 and M6a — the actual moves, run only once every one of the eight
      * gates above has passed. Everything here is journaled: any failure at
      * ANY point, including M6a's own post-move rescan, restores the host to
      * exactly the bytes it had before this method ever ran (ExtractJournal's
@@ -241,6 +257,7 @@ class ExtractNodeCommand extends Command
         $testFile = $hostBasePath.'/'.self::TEST_DIR.'/'.$shortName.'Test.php';
         $providerFile = $hostBasePath.'/'.ProviderStep::PATH;
         $testMoved = false;
+        $composerInstallAttempted = false;
 
         try {
             $this->scaffoldPackage($target, $hostBasePath, $journal);
@@ -252,7 +269,7 @@ class ExtractNodeCommand extends Command
             }
 
             $this->registerInPackage($newFqcn, $target, $journal);
-            $this->deregisterFromHost($class, $shortName, $providerFile, $journal);
+            $this->deregisterFromHost($class, $shortName, $providerFile, $hostBasePath, $journal);
             $this->updateHostComposerJson($hostBasePath, $packageName, $targetRelativePath, $journal);
 
             // M6a (E45): the same rescan G5 already ran, but over the tree AS
@@ -263,14 +280,83 @@ class ExtractNodeCommand extends Command
             $this->rescanPostMoveTree($class, $hostBasePath);
 
             $this->deleteOriginals($nodeFile, $testMoved ? $testFile : null, $journal);
+            $this->installDependency($hostBasePath, $packageName, $journal, $composerInstallAttempted);
+            $this->verifyFreshHost($hostBasePath, (string) $this->provenType, $newFqcn);
         } catch (Throwable $e) {
+            $restoreCleanupFailure = null;
+
             try {
-                $journal->restore();
+                try {
+                    $journal->restore();
+                } catch (RuntimeException $candidate) {
+                    if ($candidate->getCode() !== ExtractJournal::RESTORE_CLEANUP_FAILED) {
+                        throw $candidate;
+                    }
+
+                    // Every undo completed. Only private temp cleanup failed,
+                    // so entries are already non-replayable; still prove the
+                    // raw-restored Composer state is usable before reporting
+                    // this narrower, accurately described failure.
+                    $restoreCleanupFailure = $candidate;
+                }
+
+                if ($composerInstallAttempted) {
+                    $this->regenerateRestoredAutoload($hostBasePath);
+                }
             } catch (Throwable $restoreFailure) {
+                if ($restoreCleanupFailure !== null
+                    && $restoreFailure instanceof RuntimeException
+                    && $restoreFailure->getCode() === ExtractJournal::RESTORE_CLEANUP_FAILED) {
+                    return $this->refuse(
+                        "Extraction of [{$class}] aborted; the host files were restored to their original state "
+                        .'and the Composer autoloader was regenerated, but cleanup failed for both private '
+                        .'restoration journals. Remove both retained paths manually. Main rollback cleanup: '
+                        .$restoreCleanupFailure->getMessage().' Autoloader-proof cleanup: '
+                        .$restoreFailure->getMessage().' Original failure: '.$e->getMessage()
+                    );
+                }
+
+                if ($restoreCleanupFailure !== null
+                    && $restoreFailure instanceof RuntimeException
+                    && $restoreFailure->getCode() === self::RESTORED_AUTOLOAD_UNUSABLE_AND_CLEANUP_FAILED) {
+                    return $this->refuse(
+                        "Extraction of [{$class}] aborted; the host files were restored to their original state, "
+                        .'but the Composer autoloader could not be proved usable and cleanup failed for both '
+                        .'private restoration journals. Remove both retained paths manually. Main rollback cleanup: '
+                        .$restoreCleanupFailure->getMessage().' Autoloader proof/cleanup failure: '
+                        .$restoreFailure->getMessage().' Original failure: '.$e->getMessage()
+                    );
+                }
+
+                if ($restoreCleanupFailure !== null
+                    && $restoreFailure instanceof RuntimeException
+                    && $restoreFailure->getCode() === self::RESTORED_AUTOLOAD_UNUSABLE) {
+                    return $this->refuse(
+                        "Extraction of [{$class}] aborted; the host files were restored to their original state, "
+                        .'but the Composer autoloader could not be proved usable and rollback storage cleanup '
+                        .'also failed. Remove the retained private storage manually. '
+                        .$restoreCleanupFailure->getMessage().' Autoloader proof failure: '
+                        .$restoreFailure->getMessage().' Original failure: '.$e->getMessage()
+                    );
+                }
+
                 return $this->refuse(
                     "Extraction of [{$class}] aborted ({$e->getMessage()}), AND restoring the host also ".
                     "failed — it may be left partially modified and needs inspecting by hand: "
                     .$restoreFailure->getMessage()
+                    .($restoreCleanupFailure === null
+                        ? ''
+                        : ' The main rollback had already restored its host entries but also retained private '
+                            .'cleanup storage: '.$restoreCleanupFailure->getMessage())
+                );
+            }
+
+            if ($restoreCleanupFailure !== null) {
+                return $this->refuse(
+                    "Extraction of [{$class}] aborted; the host was restored to its original state"
+                    .($composerInstallAttempted ? ' and its Composer autoloader was regenerated' : '')
+                    .', but rollback storage cleanup failed. Remove the retained private storage manually. '
+                    .$restoreCleanupFailure->getMessage().' Original failure: '.$e->getMessage()
                 );
             }
 
@@ -280,9 +366,23 @@ class ExtractNodeCommand extends Command
             );
         }
 
+        // M9 has verified the intended host, so rollback is no longer a
+        // valid response. Snapshot cleanup is a one-way commit operation:
+        // if it partially fails, report the retained private path without
+        // replaying entries whose backing bytes may already be gone.
+        try {
+            $journal->discard();
+        } catch (Throwable $cleanupFailure) {
+            return $this->refuse(
+                "Extraction of [{$class}] was installed and fresh-host verified, but temporary "
+                .'rollback storage cleanup failed. The committed host was NOT rolled back; remove '
+                .'the retained private storage manually. '.$cleanupFailure->getMessage()
+            );
+        }
+
         $this->components->info(
-            "Extracted [{$class}] into [{$packageName}] at [{$targetRelativePath}] as [{$newFqcn}]. Run "
-            .'`composer install` (or `composer update`) to finish wiring the package in.'
+            "Extracted [{$class}] into [{$packageName}] at [{$targetRelativePath}] as [{$newFqcn}]. "
+            .'Composer installed the dependency and a fresh host boot verified package discovery.'
         );
 
         return self::SUCCESS;
@@ -897,10 +997,20 @@ class ExtractNodeCommand extends Command
      * may be read as "nothing to do": doing so would let extraction proceed
      * to delete the class file a stale reference still, in fact, names.
      */
-    private function deregisterFromHost(string $class, string $shortName, string $providerFile, ExtractJournal $journal): void
+    private function deregisterFromHost(
+        string $class,
+        string $shortName,
+        string $providerFile,
+        string $hostBasePath,
+        ExtractJournal $journal,
+    ): void
     {
         if (! $this->files->exists($providerFile)) {
             return;
+        }
+
+        if (is_link($providerFile)) {
+            $this->journalMutationPath($hostBasePath, $providerFile, $journal);
         }
 
         $journal->recordWrite($providerFile);
@@ -1070,11 +1180,44 @@ class ExtractNodeCommand extends Command
 
         $changed = false;
 
-        if (! $this->requiredFromMatchingPathRepository($decoded, $targetRelativePath)) {
-            $repositories = is_array($decoded['repositories'] ?? null) ? $decoded['repositories'] : [];
-            $repositories[] = ['type' => 'path', 'url' => $targetRelativePath];
-            $decoded['repositories'] = $repositories;
+        $repositories = is_array($decoded['repositories'] ?? null) ? $decoded['repositories'] : [];
+        $matchingRepositoryFound = false;
+
+        foreach ($repositories as $index => $repository) {
+            if (! is_array($repository) || ! $this->pathRepositoryMatches($repository, $targetRelativePath)) {
+                continue;
+            }
+
+            $matchingRepositoryFound = true;
+            $options = is_array($repository['options'] ?? null) ? $repository['options'] : [];
+            $versions = is_array($options['versions'] ?? null) ? $options['versions'] : [];
+
+            if (! array_key_exists($packageName, $versions)) {
+                // A path package has no VCS tag to infer while it is still
+                // local. Composer otherwise labels this ordinary scaffold
+                // dev-main and a default-stability host rejects require "*".
+                // A repository-scoped alias keeps the emitted package free
+                // of a fake release version while making the local install
+                // resolvable on a normal stable host.
+                $versions[$packageName] = '1.0.0';
+                $options['versions'] = $versions;
+                $repository['options'] = $options;
+                $repositories[$index] = $repository;
+                $changed = true;
+            }
+        }
+
+        if (! $matchingRepositoryFound) {
+            $repositories[] = [
+                'type' => 'path',
+                'url' => $targetRelativePath,
+                'options' => ['versions' => [$packageName => '1.0.0']],
+            ];
             $changed = true;
+        }
+
+        if ($changed) {
+            $decoded['repositories'] = $repositories;
         }
 
         $require = is_array($decoded['require'] ?? null) ? $decoded['require'] : [];
@@ -1091,6 +1234,10 @@ class ExtractNodeCommand extends Command
         }
 
         $encoded = json_encode($decoded, JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES).PHP_EOL;
+
+        if (is_link($path)) {
+            $this->journalMutationPath($hostBasePath, $path, $journal);
+        }
 
         $journal->recordWrite($path);
         $this->files->put($path, $encoded);
@@ -1325,6 +1472,398 @@ class ExtractNodeCommand extends Command
 
         if ($testFile !== null) {
             $this->deleteJournaled($testFile, $journal);
+        }
+    }
+
+    /** M8 (E48) — journal Composer state, install the package, then invalidate Laravel's stale package manifest. */
+    private function installDependency(
+        string $hostBasePath,
+        string $packageName,
+        ExtractJournal $journal,
+        bool &$composerInstallAttempted,
+    ): void
+    {
+        $lockExistsNow = is_file($hostBasePath.'/composer.lock');
+
+        if ($this->composerLockExisted !== null && $lockExistsNow !== $this->composerLockExisted) {
+            throw new RuntimeException(
+                'The host composer.lock presence changed after G8 recorded it; M8 refuses to choose a '
+                .'different install/update operation from the state that passed the read-only gates.'
+            );
+        }
+
+        $vendorPath = $this->composerVendorPath($hostBasePath);
+        $binPath = $this->composerBinPath($hostBasePath, $vendorPath);
+
+        $this->journalMutationPath($hostBasePath, $hostBasePath.'/composer.lock', $journal);
+
+        foreach ($this->generatedComposerStateSymlinks($hostBasePath, $vendorPath) as $path) {
+            $this->journalMutationPath($hostBasePath, $path, $journal);
+        }
+
+        $journal->recordTree($vendorPath);
+
+        if ($binPath !== null) {
+            $journal->recordTree($binPath);
+        }
+
+        $composerInstallAttempted = true;
+
+        if (! $this->composerRunner->install($hostBasePath, $packageName)) {
+            throw new RuntimeException(
+                "Composer dependency installation failed for [{$packageName}] (M8, E48); "
+                .'the extraction cannot be verified.'
+            );
+        }
+
+        $cachePaths = $this->laravelCachePaths ?? $this->resolveEffectiveLaravelCachePaths($hostBasePath);
+        $this->composerRunner->freezeCachePaths(
+            $hostBasePath,
+            $cachePaths['packages'],
+            $cachePaths['services'],
+        );
+        $packagesManifest = $cachePaths['packages'];
+        $servicesManifest = $cachePaths['services'];
+        $this->journalMutationPath($hostBasePath, $packagesManifest, $journal);
+        $this->journalMutationPath($hostBasePath, $servicesManifest, $journal);
+
+        if (is_file($packagesManifest) || is_link($packagesManifest)) {
+            $this->files->delete($packagesManifest);
+
+            if (file_exists($packagesManifest) || is_link($packagesManifest)) {
+                throw new RuntimeException(
+                    "Laravel's cached package manifest [{$packagesManifest}] could not be invalidated before M9."
+                );
+            }
+        }
+    }
+
+    /** Resolves Composer's configured vendor directory inside the host so M8 journals the paths it will actually mutate. */
+    private function composerVendorPath(string $hostBasePath): string
+    {
+        $composer = json_decode($this->files->get($hostBasePath.'/composer.json'), true);
+        $configured = is_array($composer)
+            && is_array($composer['config'] ?? null)
+            && is_string($composer['config']['vendor-dir'] ?? null)
+            && trim($composer['config']['vendor-dir']) !== ''
+                ? $composer['config']['vendor-dir']
+                : 'vendor';
+
+        $vendorPath = HostPath::root($hostBasePath)->resolveWithin($configured);
+        $realVendorPath = realpath($vendorPath);
+
+        return $realVendorPath === false ? $vendorPath : $realVendorPath;
+    }
+
+    /**
+     * Resolves a custom Composer bin-dir inside the host. Null means the
+     * effective bin directory is already covered by the whole-vendor
+     * snapshot, including Composer's ordinary vendor/bin default.
+     */
+    private function composerBinPath(string $hostBasePath, string $vendorPath): ?string
+    {
+        $composer = json_decode($this->files->get($hostBasePath.'/composer.json'), true);
+        $configured = is_array($composer)
+            && is_array($composer['config'] ?? null)
+            && is_string($composer['config']['bin-dir'] ?? null)
+            && trim($composer['config']['bin-dir']) !== ''
+                ? $composer['config']['bin-dir']
+                : null;
+
+        if ($configured === null) {
+            return null;
+        }
+
+        $binPath = HostPath::root($hostBasePath)->resolveWithin($configured);
+        $realBinPath = realpath($binPath);
+        $resolvedBinPath = $realBinPath === false ? $binPath : $realBinPath;
+        $vendorSegments = HostPath::segments($vendorPath);
+        $binSegments = HostPath::segments($resolvedBinPath);
+
+        if (count($binSegments) >= count($vendorSegments)
+            && array_slice($binSegments, 0, count($vendorSegments)) === $vendorSegments) {
+            return null;
+        }
+
+        return $resolvedBinPath;
+    }
+
+    /**
+     * Proves Composer can regenerate the restored installed state without
+     * scripts, then puts every generated byte back exactly as it was before
+     * that proof. The second journal also contains a partial failed dump.
+     */
+    private function regenerateRestoredAutoload(string $hostBasePath): void
+    {
+        $regenerationJournal = new ExtractJournal($this->files);
+        $vendorPath = $this->composerVendorPath($hostBasePath);
+        $binPath = $this->composerBinPath($hostBasePath, $vendorPath);
+        $this->journalMutationPath(
+            $hostBasePath,
+            $hostBasePath.'/composer.lock',
+            $regenerationJournal,
+        );
+
+        foreach ($this->generatedComposerStateSymlinks($hostBasePath, $vendorPath) as $path) {
+            $this->journalMutationPath($hostBasePath, $path, $regenerationJournal);
+        }
+
+        $regenerationJournal->recordTree($vendorPath);
+
+        if ($binPath !== null) {
+            $regenerationJournal->recordTree($binPath);
+        }
+
+        $regenerated = false;
+        $regenerationFailure = null;
+
+        try {
+            $regenerated = $this->composerRunner->regenerateAutoload($hostBasePath);
+        } catch (Throwable $e) {
+            $regenerationFailure = $e;
+        }
+
+        try {
+            $regenerationJournal->restore();
+        } catch (RuntimeException $cleanupFailure) {
+            if ($cleanupFailure->getCode() === ExtractJournal::RESTORE_CLEANUP_FAILED
+                && ($regenerationFailure !== null || ! $regenerated)) {
+                $reason = $regenerationFailure?->getMessage()
+                    ?? 'Composer returned a false installation result.';
+
+                throw new RuntimeException(
+                    'Composer could not prove the restored host autoloader usable, and its exact-state '
+                    .'journal cleanup also failed. '.$reason.' '.$cleanupFailure->getMessage(),
+                    self::RESTORED_AUTOLOAD_UNUSABLE_AND_CLEANUP_FAILED,
+                    $cleanupFailure,
+                );
+            }
+
+            throw $cleanupFailure;
+        }
+
+        if ($regenerationFailure !== null) {
+            throw new RuntimeException(
+                'Composer could not regenerate the restored host autoloader without scripts: '
+                .$regenerationFailure->getMessage(),
+                self::RESTORED_AUTOLOAD_UNUSABLE,
+                $regenerationFailure,
+            );
+        }
+
+        if (! $regenerated) {
+            throw new RuntimeException(
+                'Composer could not regenerate the restored host autoloader without scripts.',
+                self::RESTORED_AUTOLOAD_UNUSABLE,
+            );
+        }
+    }
+
+    /** Journals both a mutation path's symlink object and any in-host target external code can write through it. */
+    private function journalMutationPath(string $hostBasePath, string $path, ExtractJournal $journal): void
+    {
+        $target = $this->mutationSymlinkTarget($hostBasePath, $path);
+
+        if ($target !== null) {
+            $journal->recordTree($target);
+        }
+
+        $journal->recordTree($path);
+    }
+
+    /**
+     * Returns the canonical target of a mutation-path symlink, refusing any
+     * target outside the host. External tools may either write through or
+     * replace the link, so caller journals the returned target and the link.
+     */
+    private function mutationSymlinkTarget(string $hostBasePath, string $path): ?string
+    {
+        if (! is_link($path)) {
+            return null;
+        }
+
+        $rawTarget = readlink($path);
+
+        if ($rawTarget === false) {
+            throw new InvalidArgumentException("[{$path}] is a symlink whose target cannot be read.");
+        }
+
+        if (preg_match('/^[A-Za-z]:/', $rawTarget) === 1
+            || str_starts_with($rawTarget, '\\')) {
+            throw new InvalidArgumentException(
+                "[{$path}] points to a Windows drive-qualified/UNC target [{$rawTarget}]."
+            );
+        }
+
+        $absoluteTarget = str_starts_with($rawTarget, '/')
+            ? $rawTarget
+            : dirname($path).'/'.$rawTarget;
+        $host = HostPath::root($hostBasePath);
+        $resolvedTarget = $host->resolveContained($absoluteTarget);
+
+        if ($resolvedTarget === null) {
+            throw new InvalidArgumentException(
+                "[{$path}] points outside the host, has an unresolved cycle, or exceeds the symlink-hop limit: "
+                ."[{$rawTarget}]."
+            );
+        }
+
+        return $resolvedTarget;
+    }
+
+    /**
+     * Reads the already-booted host Application's effective CLI cache paths.
+     * This observes its loaded environment/bootstrap customisation without
+     * executing bootstrap/app.php a second time during a read-only gate.
+     *
+     * @return array{packages: string, services: string}
+     */
+    private function resolveEffectiveLaravelCachePaths(string $hostBasePath): array
+    {
+        $paths = [
+            'packages' => $this->laravel->getCachedPackagesPath(),
+            'services' => $this->laravel->getCachedServicesPath(),
+        ];
+        $host = HostPath::root($hostBasePath);
+
+        foreach ($paths as $label => $path) {
+            if (is_string($path)
+                && (preg_match('/(?:^|[\\\\\/])[A-Za-z]:/', $path) === 1
+                    || str_starts_with($path, '\\'))) {
+                throw new InvalidArgumentException(
+                    "Laravel's {$label} cache path is unsafe: [{$path}] contains a "
+                    .'Windows drive-qualified/UNC path.'
+                );
+            }
+
+            if (! is_string($path) || trim($path) === '' || ! $host->contains($path)) {
+                $display = is_string($path) ? $path : get_debug_type($path);
+
+                throw new InvalidArgumentException(
+                    "Laravel's {$label} cache path is unsafe: [{$display}] must resolve inside the host."
+                );
+            }
+
+            try {
+                $this->mutationSymlinkTarget($hostBasePath, $path);
+            } catch (InvalidArgumentException $e) {
+                throw new InvalidArgumentException(
+                    "Laravel's {$label} cache path is unsafe: {$e->getMessage()}",
+                    0,
+                    $e,
+                );
+            }
+        }
+
+        return $paths;
+    }
+
+    /**
+     * Finds only symlinks in Composer's generated-output boundary. Ordinary
+     * package roots under vendor are intentionally excluded: path packages
+     * are commonly links to their sources and M8 does not generate through
+     * those objects. Composer does write vendor/autoload.php and the complete
+     * vendor/composer subtree, so every link there needs its distinct target
+     * contained and journaled in addition to the whole-vendor link object.
+     *
+     * @return list<string>
+     */
+    private function generatedComposerStateSymlinks(string $hostBasePath, string $vendorPath): array
+    {
+        $symlinks = [];
+        $visitedDirectories = [];
+        $autoload = $vendorPath.'/autoload.php';
+
+        if (is_link($autoload)) {
+            // Validates containment now; callers then either journal it or
+            // use this method as G8's read-only preflight.
+            $this->mutationSymlinkTarget($hostBasePath, $autoload);
+            $symlinks[] = $autoload;
+        }
+
+        $this->collectGeneratedComposerSymlinks(
+            $hostBasePath,
+            $vendorPath.'/composer',
+            $symlinks,
+            $visitedDirectories,
+        );
+
+        return array_values(array_unique($symlinks));
+    }
+
+    /**
+     * @param  list<string>  $symlinks
+     * @param  array<string, true>  $visitedDirectories
+     */
+    private function collectGeneratedComposerSymlinks(
+        string $hostBasePath,
+        string $path,
+        array &$symlinks,
+        array &$visitedDirectories,
+    ): void {
+        if (is_link($path)) {
+            $target = $this->mutationSymlinkTarget($hostBasePath, $path);
+            $symlinks[] = $path;
+
+            if ($target !== null && is_dir($target)) {
+                $this->collectGeneratedComposerSymlinks(
+                    $hostBasePath,
+                    $target,
+                    $symlinks,
+                    $visitedDirectories,
+                );
+            }
+
+            return;
+        }
+
+        if (! is_dir($path)) {
+            return;
+        }
+
+        $canonical = realpath($path) ?: $path;
+
+        if (isset($visitedDirectories[$canonical])) {
+            return;
+        }
+
+        $visitedDirectories[$canonical] = true;
+        $entries = @scandir($path);
+
+        if ($entries === false) {
+            throw new InvalidArgumentException(
+                "Composer's generated state directory [{$path}] cannot be inspected safely."
+            );
+        }
+
+        foreach ($entries as $entry) {
+            if ($entry !== '.' && $entry !== '..') {
+                $this->collectGeneratedComposerSymlinks(
+                    $hostBasePath,
+                    $path.'/'.$entry,
+                    $symlinks,
+                    $visitedDirectories,
+                );
+            }
+        }
+    }
+
+    /** M9 (E37, E49) — ask a genuinely fresh host process what package discovery registered. */
+    private function verifyFreshHost(string $hostBasePath, string $type, string $newFqcn): void
+    {
+        $resolved = $this->composerRunner->bootAndResolve($hostBasePath, $type);
+
+        if ($resolved === null) {
+            throw new RuntimeException(
+                "Fresh-host package discovery/type verification did not register [{$type}] (M9, E37/E49)."
+            );
+        }
+
+        if ($resolved !== $newFqcn) {
+            throw new RuntimeException(
+                "Fresh-host package discovery mapped [{$type}] to [{$resolved}], not the moved class "
+                ."[{$newFqcn}] (M9, E49)."
+            );
         }
     }
 
@@ -2243,30 +2782,36 @@ class ExtractNodeCommand extends Command
             return false;
         }
 
-        $normalisedTarget = implode('/', HostPath::segments($targetRelativePath));
-
         foreach ($repositories as $repository) {
-            if (! is_array($repository) || ($repository['type'] ?? null) !== 'path') {
-                continue;
-            }
-
-            $url = $repository['url'] ?? null;
-
-            if (! is_string($url) || $url === '') {
-                continue;
-            }
-
-            // FNM_PATHNAME so a glob's '*' cannot cross a '/' — Composer's
-            // own idiomatic "packages/*" covers exactly one path segment,
-            // not "packages/acme/widgets" (two segments), the same way
-            // Composer's own path-repository resolution would not treat it
-            // as a match.
-            if (fnmatch(implode('/', HostPath::segments($url)), $normalisedTarget, FNM_PATHNAME)) {
+            if (is_array($repository) && $this->pathRepositoryMatches($repository, $targetRelativePath)) {
                 return true;
             }
         }
 
         return false;
+    }
+
+    /** Applies Composer's path-repository literal/glob matching to one repository entry. */
+    private function pathRepositoryMatches(array $repository, string $targetRelativePath): bool
+    {
+        if (($repository['type'] ?? null) !== 'path') {
+            return false;
+        }
+
+        $url = $repository['url'] ?? null;
+
+        if (! is_string($url) || $url === '') {
+            return false;
+        }
+
+        // FNM_PATHNAME so a glob's '*' cannot cross a '/' — Composer's own
+        // idiomatic "packages/*" covers exactly one path segment, not
+        // "packages/acme/widgets" (two segments).
+        return fnmatch(
+            implode('/', HostPath::segments($url)),
+            implode('/', HostPath::segments($targetRelativePath)),
+            FNM_PATHNAME,
+        );
     }
 
     /**
@@ -2336,11 +2881,58 @@ class ExtractNodeCommand extends Command
     }
 
     /**
-     * G8 — Composer must be invocable, and whether composer.lock exists is
-     * recorded (not acted on) for Task 10's E48.
+     * G8 — Composer must be invocable, its effective vendor directory must
+     * remain inside the host, and whether composer.lock exists is recorded
+     * (not acted on) for Task 10's E48.
      */
     private function gate8(string $hostBasePath): ?string
     {
+        try {
+            $vendorPath = $this->composerVendorPath($hostBasePath);
+        } catch (InvalidArgumentException $e) {
+            return "Composer's configured vendor directory is unsafe: {$e->getMessage()}";
+        }
+
+        try {
+            $this->composerBinPath($hostBasePath, $vendorPath);
+        } catch (InvalidArgumentException $e) {
+            return "Composer's configured bin directory is unsafe: {$e->getMessage()}";
+        }
+
+        try {
+            $this->mutationSymlinkTarget($hostBasePath, $hostBasePath.'/composer.lock');
+        } catch (InvalidArgumentException $e) {
+            return "Composer's composer.lock symlink is unsafe: {$e->getMessage()}";
+        }
+
+        try {
+            $this->generatedComposerStateSymlinks($hostBasePath, $vendorPath);
+        } catch (InvalidArgumentException $e) {
+            return "A generated Composer state symlink is unsafe: {$e->getMessage()}";
+        }
+
+        foreach ([
+            'composer.json' => $hostBasePath.'/composer.json',
+            'host provider' => $hostBasePath.'/'.ProviderStep::PATH,
+        ] as $label => $path) {
+            try {
+                $this->mutationSymlinkTarget($hostBasePath, $path);
+            } catch (InvalidArgumentException $e) {
+                return "The mutable {$label} symlink is unsafe: {$e->getMessage()}";
+            }
+        }
+
+        try {
+            $this->laravelCachePaths = $this->resolveEffectiveLaravelCachePaths($hostBasePath);
+            $this->composerRunner->freezeCachePaths(
+                $hostBasePath,
+                $this->laravelCachePaths['packages'],
+                $this->laravelCachePaths['services'],
+            );
+        } catch (InvalidArgumentException $e) {
+            return $e->getMessage();
+        }
+
         $output = [];
         exec('composer --version 2>&1', $output, $exitCode);
 
@@ -2351,7 +2943,7 @@ class ExtractNodeCommand extends Command
                 .'than fail partway through a move later.';
         }
 
-        $this->composerLockExisted = $this->files->exists($hostBasePath.'/composer.lock');
+        $this->composerLockExisted = is_file($hostBasePath.'/composer.lock');
 
         return null;
     }

@@ -11,6 +11,11 @@ use Nodeflow\Nodes\NodeRegistry;
  * something, which is exactly the bug class E45's own history warns about.
  */
 beforeEach(function () {
+    $this->app->instance(
+        \Nodeflow\Console\Extract\ComposerRunner::class,
+        new \Tests\Support\PassingComposerRunner,
+    );
+
     $this->root = sys_get_temp_dir().'/nodeflow-extract-node-'.bin2hex(random_bytes(6));
     mkdir($this->root, 0777, true);
 

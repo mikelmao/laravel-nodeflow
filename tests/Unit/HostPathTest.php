@@ -62,6 +62,44 @@ it('refuses a symlink inside the root whose target escapes it', function () {
     exec('rm -rf '.escapeshellarg($outside));
 });
 
+it('resolves every dangling symlink hop before deciding containment', function () {
+    $outside = sys_get_temp_dir().'/nodeflow-hostpath-dangling-outside-'.bin2hex(random_bytes(6));
+    mkdir($outside, 0777, true);
+    symlink($outside.'/missing.txt', $this->base.'/hop-two');
+    symlink('hop-two', $this->base.'/hop-one');
+
+    expect(HostPath::root($this->base)->contains($this->base.'/hop-one'))->toBeFalse();
+
+    exec('rm -rf '.escapeshellarg($outside));
+});
+
+it('returns the final missing in-host target after resolving every symlink hop', function () {
+    mkdir($this->base.'/storage', 0777, true);
+    symlink('storage/missing.txt', $this->base.'/hop-two');
+    symlink('hop-two', $this->base.'/hop-one');
+
+    expect(HostPath::root($this->base)->resolveContained($this->base.'/hop-one'))
+        ->toBe($this->base.'/storage/missing.txt');
+});
+
+it('refuses a cyclic symlink chain instead of treating its lexical path as contained', function () {
+    symlink('hop-two', $this->base.'/hop-one');
+    symlink('hop-one', $this->base.'/hop-two');
+
+    expect(HostPath::root($this->base)->contains($this->base.'/hop-one'))->toBeFalse();
+});
+
+it('fails closed when a symlink chain exceeds the resolver hop limit', function () {
+    mkdir($this->base.'/storage', 0777, true);
+
+    for ($hop = 0; $hop < 65; $hop++) {
+        $target = $hop === 64 ? 'storage/missing.txt' : 'hop-'.($hop + 1);
+        symlink($target, $this->base.'/hop-'.$hop);
+    }
+
+    expect(HostPath::root($this->base)->resolveContained($this->base.'/hop-0'))->toBeNull();
+});
+
 it('counts relative depth without stripping a repeated inner segment', function () {
     // R15: str_replace($basePath, '', $entry) strips the basePath's text WHEREVER
     // it occurs. Build a directory that repeats the project's own last segment.
@@ -80,4 +118,6 @@ it('resolves a relative path inside the root and refuses one that escapes', func
     expect($host->resolveWithin('packages/acme/sms'))->toBe($this->base.'/packages/acme/sms');
     expect(fn () => $host->resolveWithin('../outside'))
         ->toThrow(InvalidArgumentException::class);
+    expect(fn () => $host->resolveWithin('C:relative\\vendor'))
+        ->toThrow(InvalidArgumentException::class, 'Windows drive-qualified/UNC path');
 });

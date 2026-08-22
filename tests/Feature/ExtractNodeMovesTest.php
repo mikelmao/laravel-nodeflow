@@ -20,6 +20,11 @@
  * are each covered by at least one failure-injection test.
  */
 beforeEach(function () {
+    $this->app->instance(
+        \Nodeflow\Console\Extract\ComposerRunner::class,
+        new \Tests\Support\PassingComposerRunner,
+    );
+
     $this->root = sys_get_temp_dir().'/nodeflow-extract-node-moves-'.bin2hex(random_bytes(6));
     mkdir($this->root, 0777, true);
 
@@ -904,7 +909,33 @@ it('adds a RELATIVE path repository and require entry, never an absolute path', 
     expect($pathRepo)->not->toBeNull();
     expect($pathRepo['url'])->toBe('packages/acme/widgets');
     expect($pathRepo['url'][0])->not->toBe('/');
+    expect($pathRepo['options']['versions']['acme/widgets'])->toBe('1.0.0');
     expect($decoded['require']['acme/widgets'])->not->toBeNull();
+});
+
+it('adds the stable version alias to an existing matching path repository without duplicating it', function () {
+    $class = movesWriteNode($this->root, 'ExistingPathAliasNode', 'existing.path.alias');
+    mkdir($this->root.'/packages/acme/widgets', 0777, true);
+    file_put_contents($this->root.'/packages/acme/widgets/composer.json', json_encode([
+        'name' => 'acme/widgets',
+    ]));
+    file_put_contents($this->root.'/composer.json', json_encode([
+        'require' => ['atram/laravel-nodeflow' => '^2.0', 'acme/widgets' => '*'],
+        'autoload' => ['psr-4' => ['App\\' => 'app/']],
+        'repositories' => [['type' => 'path', 'url' => 'packages/acme/widgets']],
+    ]));
+
+    $this->artisan('nodeflow:extract-node', ['class' => $class, '--package' => 'acme/widgets'])
+        ->assertSuccessful();
+
+    $decoded = json_decode(file_get_contents($this->root.'/composer.json'), true);
+    $matching = array_values(array_filter(
+        $decoded['repositories'],
+        fn (array $repository): bool => ($repository['url'] ?? null) === 'packages/acme/widgets',
+    ));
+
+    expect($matching)->toHaveCount(1);
+    expect($matching[0]['options']['versions']['acme/widgets'])->toBe('1.0.0');
 });
 
 // --- Building the package target: refusals before anything is touched -----

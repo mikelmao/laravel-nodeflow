@@ -50,10 +50,16 @@ final class HostPath
     /** True only when $candidate canonically resolves inside this root. */
     public function contains(string $candidate): bool
     {
+        return $this->resolveContained($candidate) !== null;
+    }
+
+    /** Returns the all-symlink-hop canonical path, or null when it is unresolved or outside this root. */
+    public function resolveContained(string $candidate): ?string
+    {
         $resolved = self::canonicalise($candidate);
 
         if ($resolved === null || in_array('..', self::segments($resolved), true)) {
-            return false;
+            return null;
         }
 
         $root = self::segments($this->root);
@@ -62,7 +68,9 @@ final class HostPath
         // Segment-wise prefix compare, never str_starts_with(): the raw string
         // '/Users/me/project' IS a prefix of '/Users/me/project-evil/app/Foo.php'.
         return count($path) >= count($root)
-            && array_slice($path, 0, count($root)) === $root;
+            && array_slice($path, 0, count($root)) === $root
+                ? $resolved
+                : null;
     }
 
     /** How many '../' it takes to get from $directory back to this root. */
@@ -86,6 +94,17 @@ final class HostPath
     public function resolveWithin(string $relative): string
     {
         $segments = self::segments($relative);
+
+        // PHP running on Unix does not recognise Windows drive/UNC strings
+        // as absolute, but Composer will when the same project is run on
+        // Windows. Refuse those platform-qualified forms before joining
+        // them to the host so this containment proof is portable.
+        if (preg_match('/^[A-Za-z]:/', $relative) === 1
+            || str_starts_with($relative, '\\')) {
+            throw new \InvalidArgumentException(
+                "[{$relative}] is a Windows drive-qualified/UNC path; it must be relative to the project."
+            );
+        }
 
         if (in_array('..', $segments, true) || str_starts_with($relative, '/')) {
             throw new \InvalidArgumentException(
@@ -119,16 +138,64 @@ final class HostPath
      */
     private static function canonicalise(string $path): ?string
     {
-        $real = realpath($path);
+        $seenLinks = [];
+        $linkHops = 0;
 
-        if ($real !== false) {
-            return $real;
-        }
+        return self::canonicaliseFollowingLinks($path, $seenLinks, $linkHops);
+    }
 
+    /**
+     * realpath() returns false for a dangling chain, including one whose
+     * final missing leaf lives outside the host. Walk upward until each
+     * symlink object is found, rewrite that hop, then continue through the
+     * rewritten path. This also makes cycles and overlong chains fail closed.
+     *
+     * @param  array<string, true>  $seenLinks
+     */
+    private static function canonicaliseFollowingLinks(
+        string $path,
+        array &$seenLinks,
+        int &$linkHops,
+    ): ?string {
         $trailing = [];
         $probe = $path;
 
         while (true) {
+            if (is_link($probe)) {
+                $linkKey = str_replace('\\', '/', $probe);
+
+                if (isset($seenLinks[$linkKey]) || ++$linkHops > 64) {
+                    return null;
+                }
+
+                $seenLinks[$linkKey] = true;
+                $rawTarget = readlink($probe);
+
+                if ($rawTarget === false
+                    || preg_match('/^[A-Za-z]:/', $rawTarget) === 1
+                    || str_starts_with($rawTarget, '\\')) {
+                    return null;
+                }
+
+                $target = str_starts_with($rawTarget, '/')
+                    ? $rawTarget
+                    : dirname($probe).'/'.$rawTarget;
+
+                if ($trailing !== []) {
+                    $target = rtrim($target, '/').'/'.implode('/', $trailing);
+                }
+
+                return self::canonicaliseFollowingLinks($target, $seenLinks, $linkHops);
+            }
+
+            $real = realpath($probe);
+
+            if ($real !== false) {
+                return $trailing === []
+                    ? $real
+                    : rtrim($real, '/').'/'.implode('/', $trailing);
+            }
+
             $parent = dirname($probe);
 
             if ($parent === $probe) {
@@ -136,12 +203,6 @@ final class HostPath
             }
 
             array_unshift($trailing, basename($probe));
-
-            $realParent = realpath($parent);
-
-            if ($realParent !== false) {
-                return rtrim($realParent, '/').'/'.implode('/', $trailing);
-            }
 
             $probe = $parent;
         }
