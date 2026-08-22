@@ -23,7 +23,7 @@ This records what happened while executing
 | 4 — G-9 | RED `183c9dd`; production `a152244` | Both import-free fallback counterfactuals killed; independent review clean. |
 | 5 — tooling gate | `8a1383d` | Integrated gate and adversarial review clean, with two deferred Minor observations. |
 | 6 — G-5 | evidence `5918408`; clarification `56fa8e0` | Browser gate **BLOCKED**; independent review confirmed the record and scope. |
-| 7 — release documentation | measured source `56fa8e0`; commit subject `docs: record Plan 7 release readiness` | README, documentation handoff and this record only. The commit hash is recorded externally in the ignored Task 7 report because a commit cannot contain its own hash. |
+| 7 — release documentation | measured source `56fa8e0`; release-documentation evidence `556206a` | README, documentation handoff and this record only. |
 
 ## Counterfactuals
 
