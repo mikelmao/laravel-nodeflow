@@ -14,11 +14,13 @@ The command is `nodeflow:make-trigger {name}`. It writes the class to `app/Nodef
 
 | Option | Default | Validation and behavior |
 | --- | --- | --- |
-| `--event=` | none | Required when the command cannot prompt. An interactive command prompts for it. A class or interface that is not yet loadable produces a warning but still generates the class; `::class` needs no loaded class. Use the exact class dispatched by Laravel: a wrong name attaches a listener that never receives an event. |
+| `--event=` | none | Required when the command cannot prompt. An interactive command prompts for it. A class or interface that is not yet loadable produces a warning but still generates the class; `::class` needs no loaded class. It must be the exact concrete class Laravel dispatches, such as `App\Events\FloodAlertFires`. A parent class or interface may be accepted by the generator but never matches: runtime lookup uses the exact `$event::class`. |
 | `--type=` | Interactive: class name converted to snake case; non-interactive: the same value with a warning | Must match lowercase letters and digits in dot- or underscore-separated segments, such as `app.flood_alert`. `core.` is reserved. The command refuses a type already owned by another registered trigger, but direct duplicate registration can still replace it. |
 | `--force`, `-f` | off | Overwrites an existing generated class. |
 
 When the generated provider contains exactly one trigger anchor, the command also adds the class to its `$triggers` array. Otherwise it prints the registration call. Generation without `--event` fails before it writes a file; a missing event class only warns because creating the event after the trigger is a valid order of work.
+
+> **Warning:** `TriggerRegistry` calls `forEvent($event::class)`. Do not register an interface or parent event class as a catch-all listener: it attaches successfully but the fired concrete event finds no trigger and starts no run.
 
 ## Implement the event and trigger
 

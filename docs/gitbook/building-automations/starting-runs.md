@@ -61,7 +61,7 @@ The recognized option keys are:
 | Option | Default | Behavior |
 | --- | --- | --- |
 | `idempotency_key` | `null` | A non-null string identifies one start for the current flow version. |
-| `correlation_id` | `null` | Stored on the run. Sub-flow starts use it for `>`-separated parent-run lineage. |
+| `correlation_id` | `null` | Stored on the run. Sub-flow starts use it for `>`-separated parent-run lineage. Do not put `>` in a host correlation ID unless it is intentional lineage: it creates extra lineage segments and counts toward the child-flow depth limit. |
 | `strategy` | `subject` for one supplied ID, otherwise `cohort` | Stored as supplied when present. The package does not validate this value; use only `subject` and `cohort`. |
 | `is_test` | `false` | Stored as a boolean on the run and exposed to nodes through their execution contexts. |
 
@@ -94,9 +94,11 @@ app(StartRun::class)->forFlow(
 
 The listener selects active flows with a current version and calls the trigger's `matchesConfig()` before this start. It catches and reports a failed start per flow, so one bad audience does not prevent another tenant's matching flow from starting. Implement the trigger contract in [Writing triggers](writing-triggers.md).
 
+> **Warning:** Event-triggered starts are always live. The listener passes no `is_test` option, and the trigger API has no test-mode override. Dispatching the real event can therefore reach node side effects. For tests, start manually with `is_test => true`, bind a fake workflow engine, and make every node's test path side-effect free.
+
 ## Start a child flow from a graph
 
-The built-in `core.start_flow` node runs once for its audience. Its configuration is:
+The built-in `core.start_flow` node runs once for each audience chunk. `NodeRunner` executes `HandlesAudience` nodes in chunks of `nodeflow.limits.audience_chunk`, whose current default is `5000`. Its configuration is:
 
 | Field | Required | Default | Behavior |
 | --- | --- | --- | --- |
@@ -109,7 +111,9 @@ Internally it calls the exact service method:
 public function start(Run $parentRun, int $flowId, string $subjectType, array $subjectIds): ?Run
 ```
 
-`SubFlowStarter` reads the target without tenancy scope but requires both the target ID and `tenant_id` to match the parent run. A cross-tenant target therefore raises Laravel's `ModelNotFoundException`. It passes the parent audience unchanged to `StartRun`, carries `is_test` from the parent, and creates the child correlation ID by appending the parent run ID to the existing `>`-separated lineage. A parent with no correlation ID creates one containing its own ID.
+`SubFlowStarter` reads the target without tenancy scope but requires both the target ID and `tenant_id` to match the parent run. A cross-tenant target therefore raises Laravel's `ModelNotFoundException`. For each chunk, it passes that chunk's unchanged subject type and subject IDs to `StartRun`, carries `is_test` from the parent, and creates the child correlation ID by appending the parent run ID to the existing `>`-separated lineage. A parent with no correlation ID creates one containing its own ID.
+
+A parent audience larger than the chunk size can therefore create multiple child runs, one per chunk. `SubFlowStarter` supplies no `idempotency_key`, so a retried or re-executed `core.start_flow` node can create duplicate child runs. Make the child flow's external side effects idempotent and avoid assuming one child run represents the whole parent audience.
 
 The maximum lineage depth is `SubFlowStarter::MAX_DEPTH`, currently `5`; it is a source constant, not a `nodeflow.php` setting. When the existing correlation ID already has five non-empty `>`-separated entries, `start()` returns `null` before it looks up a flow or creates a run. The node does not treat that `null` as an error; its `exit_this_flow` behavior still applies.
 
@@ -129,7 +133,9 @@ public function exit(Run $run, array $subjectIds): void
 
 It finds active `RunSubject` rows in that run whose string IDs are supplied, then sets `status` to `exited`, fills `exited_at`, and clears `current_node_id`. It does not alter the run's `status`; run statuses include `pending`, `running`, `waiting`, `blocked`, `completed`, `failed`, and `cancelled` in the current execution model.
 
-If that update leaves no active subjects and the run has an engine workflow ID and is live (`pending`, `running`, `waiting`, or `blocked`), it sends one `audienceEmptied` signal to the engine. A `core.wait` races its timeout against that signal, so the wait can wake early when the last active subject exits. Repeating an exit against an already exited subject has no extra row update; a terminal run records its exit but does not signal its engine workflow.
+After every `exit()` invocation, it counts active subjects. If the count is zero and the run has an engine workflow ID and is live (`pending`, `running`, `waiting`, or `blocked`), it sends `audienceEmptied` to the engine—even when that invocation updated no subject row. A `core.wait` races its timeout against that signal, so the wait can wake early when the last active subject exits. A terminal run records its exit but does not signal its engine workflow.
+
+There is no stored “signal already sent” marker. A later or concurrent duplicate exit call that also observes zero active subjects can signal again. Serialize or de-duplicate exit requests in application code if the engine or surrounding integration requires a single signal.
 
 Nodeflow does not package a subject-to-live-runs lookup. If your application needs an event-driven exit, query from tenant-scoped parent runs and then pass only the runs your application has authorized:
 
