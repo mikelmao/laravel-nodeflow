@@ -44,7 +44,7 @@ export default function Editor(props: FlowEditorProps) {
 
 `urls.draft`, `urls.publish`, and `urls.options` are server-owned. The options URL is a template containing `__NODEFLOW_TYPE__` and `__NODEFLOW_FIELD__`; the package replaces those sentinels with encoded values. Never reconstruct these URLs from a flow ID or a route string in the browser—your host's prefix, domain, and route-name configuration have already been resolved on the server.
 
-The package's HTTP helper sends same-origin requests with JSON, `Accept: application/json`, and `X-Requested-With: XMLHttpRequest`. It reads Laravel's decoded `XSRF-TOKEN` cookie first and falls back to a `meta[name="csrf-token"]` tag. Keep normal Laravel session/CSRF middleware on the containing route group; a 419 stops autosave and tells the author to reload.
+The package's HTTP helper sends same-origin requests with JSON, `Accept: application/json`, and `X-Requested-With: XMLHttpRequest`. It reads Laravel's decoded `XSRF-TOKEN` cookie first and falls back to a `meta[name="csrf-token"]` tag. Keep normal Laravel session/CSRF middleware on the containing route group; a 419 from a draft save stops autosave and tells the author to reload. The later publish-results table describes the separate behavior of a publish `POST` 419.
 
 ## Understand the initial draft
 
