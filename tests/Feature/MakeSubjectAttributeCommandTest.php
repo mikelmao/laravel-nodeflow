@@ -1,5 +1,7 @@
 <?php
 
+use App\Providers\ManualAttributeRegistrationProbe;
+use Illuminate\Support\Facades\Artisan;
 use Nodeflow\Schema\SubjectAttribute;
 use Nodeflow\Schema\SubjectAttributeRegistry;
 
@@ -188,10 +190,10 @@ it('rejects a key a published graph could not resolve', function () {
 it('prints the line and exits zero when there is no provider', function () {
     unlink($this->providerPath);
 
-    $exitCode = \Illuminate\Support\Facades\Artisan::call('nodeflow:make-subject-attribute', [
+    $exitCode = Artisan::call('nodeflow:make-subject-attribute', [
         'key' => 'manual_plan',
     ]);
-    $output = \Illuminate\Support\Facades\Artisan::output();
+    $output = Artisan::output();
 
     expect($exitCode)->toBe(0);
     expect($output)->toContain('SubjectAttributeRegistry');
@@ -212,7 +214,7 @@ it('prints the line and exits zero when there is no provider', function () {
 
     require $probePath;
 
-    App\Providers\ManualAttributeRegistrationProbe::run();
+    ManualAttributeRegistrationProbe::run();
 
     expect(app(SubjectAttributeRegistry::class)->has('manual_plan'))->toBeTrue();
 });

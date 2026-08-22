@@ -268,7 +268,7 @@ final class ViteAliasValue
 
             $codepoint = hexdec($hex);
 
-            return $codepoint <= 0x10ffff && ! ($codepoint >= 0xd800 && $codepoint <= 0xdfff)
+            return $codepoint <= 0x10FFFF && ! ($codepoint >= 0xD800 && $codepoint <= 0xDFFF)
                 ? ['codepoint' => $codepoint, 'last' => $end]
                 : null;
         }
@@ -284,25 +284,25 @@ final class ViteAliasValue
 
     private static function codepointToUtf8(int $codepoint): string
     {
-        if ($codepoint <= 0x7f) {
+        if ($codepoint <= 0x7F) {
             return chr($codepoint);
         }
 
-        if ($codepoint <= 0x7ff) {
-            return chr(0xc0 | ($codepoint >> 6))
-                .chr(0x80 | ($codepoint & 0x3f));
+        if ($codepoint <= 0x7FF) {
+            return chr(0xC0 | ($codepoint >> 6))
+                .chr(0x80 | ($codepoint & 0x3F));
         }
 
-        if ($codepoint <= 0xffff) {
-            return chr(0xe0 | ($codepoint >> 12))
-                .chr(0x80 | (($codepoint >> 6) & 0x3f))
-                .chr(0x80 | ($codepoint & 0x3f));
+        if ($codepoint <= 0xFFFF) {
+            return chr(0xE0 | ($codepoint >> 12))
+                .chr(0x80 | (($codepoint >> 6) & 0x3F))
+                .chr(0x80 | ($codepoint & 0x3F));
         }
 
-        return chr(0xf0 | ($codepoint >> 18))
-            .chr(0x80 | (($codepoint >> 12) & 0x3f))
-            .chr(0x80 | (($codepoint >> 6) & 0x3f))
-            .chr(0x80 | ($codepoint & 0x3f));
+        return chr(0xF0 | ($codepoint >> 18))
+            .chr(0x80 | (($codepoint >> 12) & 0x3F))
+            .chr(0x80 | (($codepoint >> 6) & 0x3F))
+            .chr(0x80 | ($codepoint & 0x3F));
     }
 
     private static function nextSignificant(string $source, int $offset): int

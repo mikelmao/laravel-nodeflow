@@ -5,6 +5,7 @@ use Illuminate\Support\Facades\Gate;
 use Nodeflow\Console\Install\InstallOutcome;
 use Nodeflow\Console\Install\ProviderRegistrationStep;
 use Nodeflow\Console\Install\ProviderStep;
+use Nodeflow\Console\InstallCommand;
 
 beforeEach(function () {
     $this->root = sys_get_temp_dir().'/nodeflow-install-cmd-'.bin2hex(random_bytes(6));
@@ -220,7 +221,7 @@ it('fails on a residual Writable outcome in either mode, not only under --check'
     // fragile invariant ("no future step's apply() may ever return Writable")
     // that nothing enforces. Testing exitCode() directly, by reflection, pins
     // the hardening itself rather than a scenario that does not exist yet.
-    $command = $this->app->make(\Nodeflow\Console\InstallCommand::class);
+    $command = $this->app->make(InstallCommand::class);
 
     $exitCode = new ReflectionMethod($command, 'exitCode');
     $exitCode->setAccessible(true);

@@ -1,5 +1,7 @@
 <?php
 
+use App\Providers\ManualRegistrationProbe;
+use Illuminate\Support\Facades\Artisan;
 use Nodeflow\Schema\TriggerDefinition;
 use Nodeflow\Triggers\Trigger;
 use Nodeflow\Triggers\TriggerMatch;
@@ -169,12 +171,12 @@ it('registers the trigger in the provider through the trigger anchor', function 
 it('prints the line that registers the trigger when there is no provider, and still exits zero', function () {
     // Same contract as make-node: never guess, always explain, and generating the
     // file is still a success.
-    $exitCode = \Illuminate\Support\Facades\Artisan::call('nodeflow:make-trigger', [
+    $exitCode = Artisan::call('nodeflow:make-trigger', [
         'name' => 'ManualTrigger',
         '--event' => MakeTriggerTestEvent::class,
         '--type' => 'shop.manual',
     ]);
-    $output = \Illuminate\Support\Facades\Artisan::output();
+    $output = Artisan::output();
 
     expect($exitCode)->toBe(0);
     expect($output)->toContain('TriggerRegistry');
@@ -197,7 +199,7 @@ it('prints the line that registers the trigger when there is no provider, and st
     require $this->root.'/app/Nodeflow/Triggers/ManualTrigger.php';
     require $probePath;
 
-    App\Providers\ManualRegistrationProbe::run();
+    ManualRegistrationProbe::run();
 
     expect(app(TriggerRegistry::class)->has('shop.manual'))->toBeTrue();
 });
