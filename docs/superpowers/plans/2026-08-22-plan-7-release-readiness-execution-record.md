@@ -24,7 +24,7 @@ This records what happened while executing
 | 5 — tooling gate | `8a1383d` | Integrated gate and adversarial review clean, with two deferred Minor observations. |
 | 6 — G-5 | evidence `5918408`; clarification `56fa8e0` | Browser gate **BLOCKED**; independent review confirmed the record and scope. |
 | 7 — release documentation | measured source `56fa8e0`; release-documentation evidence `556206a` | README, documentation handoff and this record only. |
-| 8 — whole-branch remediation | RED `3f32dff`; production `10b982c` | Two Important alias-scanner findings repaired under TDD; both counterfactuals killed. |
+| 8 — whole-branch remediation | RED `3f32dff`; production `10b982c`; CJS RED `1cc9970`; CJS production `c2fa80e` | Three Important alias-scanner findings repaired under TDD; all counterfactuals killed. |
 
 ## Counterfactuals
 
@@ -165,6 +165,25 @@ This records what happened while executing
   decoded value made all escaped-key regressions fail (**9 failures / 9 assertions**) across the
   direct duplicate, step duplicate and lone-key datasets. Semantic comparison was restored
   immediately, and the complete focused file passed again at **36 / 51**.
+- Fix Round 2 Important: adversarial `.cjs` review found that Vite 8.2.2 accepts Annex B legacy
+  octal escapes while the PHP decoder treated escaped digits as identity characters. A correct raw
+  key followed by `@nodeflow\\057editor: 'resources/js'` therefore resolved in Vite to the wrong
+  replacement but PHP falsely returned `AlreadyPresent`; lone octal-key and octal-path correct
+  configurations were false negatives.
+- Fix Round 2 RED (test-only commit `1cc9970`): three `.cjs` fixtures resolve the effective alias
+  through installed Vite before checking PHP. The duplicate resolved to `resources/js`, while the
+  lone octal key and octal path both resolved to
+  `vendor/atram/laravel-nodeflow/resources/js`; PHP then failed the intended parity assertion in
+  every case. The filtered run produced **3 failures / 9 assertions**, and the complete focused
+  file produced **3 failures, 36 passes and 60 assertions**.
+- Fix Round 2 GREEN (production commit `c2fa80e`): the decoder now consumes one to three octal
+  digits when the first digit is `0`–`3`, or at most two when it is `4`–`7`, which also gives
+  `\\0` its JavaScript null-escape behavior without changing simple, hex or Unicode handling. The
+  complete focused file passed **39 tests / 60 assertions**; production/test PHP lint, the Node
+  resolver syntax check and `git diff --check` passed.
+- Fix Round 2 counterfactual: temporarily restoring identity-digit decoding made all three new
+  installed-Vite/PHP parity cases fail again (**3 failures / 9 assertions**). Octal decoding was
+  restored immediately, and the complete focused file returned to **39 / 60**.
 - Pint remediation: whole-branch spec review correctly raised the Task 5 exit `127` as an unresolved
   required gate. Laravel Pint v1.30.5 was installed only in an isolated `/tmp` Composer project; no
   package dependency or manifest changed. Its first scoped `--test` run over the exact Plan 7 PHP
