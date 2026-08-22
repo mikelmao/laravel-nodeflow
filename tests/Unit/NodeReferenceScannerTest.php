@@ -662,6 +662,50 @@ it('DOES scan through a symlink nested inside a scan root, finding a reference i
     expect($found[0]->file)->toBe($root.'/app/escape/Escaped.php');
 });
 
+it('scans a readable symlink to a file nested inside a scan root', function () {
+    $root = hostWith(['app/.keep' => '']);
+    $outside = hostWith([
+        'Consumer.php' => <<<'PHP'
+        <?php
+
+        return \App\Nodeflow\Nodes\SendMessage::class;
+        PHP,
+    ]);
+    $sourceLink = $root.'/app/linked.php';
+    symlink($outside.'/Consumer.php', $sourceLink);
+
+    $found = NodeReferenceScanner::scan(target(), [$root.'/app']);
+
+    expect($found)->toHaveCount(1);
+    expect($found[0]->file)->toBe($sourceLink);
+});
+
+it('refuses loudly, naming the link path, when a symlinked file cannot be read', function () {
+    $root = hostWith(['app/.keep' => '']);
+    $outside = hostWith(['Consumer.php' => '<?php']);
+    $targetFile = $outside.'/Consumer.php';
+    $sourceLink = $root.'/app/linked.php';
+    symlink($targetFile, $sourceLink);
+    $exception = null;
+
+    try {
+        chmod($targetFile, 0000);
+
+        try {
+            NodeReferenceScanner::scan(target(), [$root.'/app']);
+        } catch (RuntimeException $e) {
+            $exception = $e;
+        }
+    } finally {
+        chmod($targetFile, 0644);
+    }
+
+    expect($exception)->not->toBeNull();
+    expect($exception->getMessage())
+        ->toContain($sourceLink)
+        ->toContain('could not be read');
+});
+
 it('refuses loudly, naming the path, when a symlink forms a cycle rather than recursing forever', function () {
     $root = hostWith(['app/.keep' => '']);
 

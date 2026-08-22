@@ -1220,6 +1220,34 @@ it('refuses over a reference in a loose root-level PHP-family file with a non-ph
     'inc' => ['RootIncNode', 'inc'],
 ]);
 
+it('refuses before moving when a loose root-level PHP-family file cannot be read', function () {
+    $class = movesWriteNode($this->root, 'UnreadableRootFileNode', 'unreadablerootfile.node');
+    $unreadableFile = $this->root.'/unreadable.phtml';
+    file_put_contents($unreadableFile, '<?php');
+
+    $before = movesTreeHash($this->root);
+
+    try {
+        chmod($unreadableFile, 0000);
+
+        $exit = \Illuminate\Support\Facades\Artisan::call('nodeflow:extract-node', [
+            'class' => $class,
+            '--package' => 'acme/widgets',
+        ]);
+
+        expect($exit)->not->toBe(0);
+        expect(\Illuminate\Support\Facades\Artisan::output())
+            ->toContain('unreadable.phtml')
+            ->toContain('could not be read');
+    } finally {
+        chmod($unreadableFile, 0644);
+    }
+
+    expect(movesTreeHash($this->root))->toBe($before);
+    expect($this->root.'/app/Nodeflow/Nodes/UnreadableRootFileNode.php')->toBeFile();
+    expect($this->root.'/packages/acme/widgets')->not->toBeDirectory();
+});
+
 it('refuses over a reference in a scannable root-level dotfile', function () {
     $class = movesWriteNode($this->root, 'DotConfigNode', 'dotconfig.node');
     file_put_contents(

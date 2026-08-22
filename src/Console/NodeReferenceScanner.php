@@ -187,13 +187,14 @@ final class NodeReferenceScanner
      *  "immediate child of THIS root" is what avoids both.
      * @return list<NodeReference>
      *
-     * @throws \RuntimeException when a scanned file declares more than one
-     *                            `namespace` block, when a directory entry
-     *                            (ordinarily a symlink) cannot be resolved
-     *                            or read, when a nested symlink resolves to
-     *                            an ancestor of its original scan root, or
-     *                            when following one would revisit a directory
-     *                            already scanned in this same call (a cycle)
+     * @throws \RuntimeException when a scanned file cannot be read or
+     *                            declares more than one `namespace` block,
+     *                            when a directory entry (ordinarily a symlink)
+     *                            cannot be resolved or read, when a nested
+     *                            symlink resolves to an ancestor of its
+     *                            original scan root, or when following one
+     *                            would revisit a directory already scanned in
+     *                            this same call (a cycle)
      */
     public static function scan(string $fqcn, array $absoluteRoots, array $excludedTopLevelNames = []): array
     {
@@ -381,13 +382,21 @@ final class NodeReferenceScanner
             || str_ends_with($name, '.inc');
     }
 
-    /** @return list<NodeReference> */
+    /**
+     * @return list<NodeReference>
+     *
+     * @throws \RuntimeException when $file cannot be read or declares more
+     *                            than one `namespace` block
+     */
     private static function scanFile(string $file, string $target): array
     {
-        $source = file_get_contents($file);
+        $source = @file_get_contents($file);
 
         if ($source === false) {
-            return [];
+            throw new \RuntimeException(
+                "[{$file}] could not be read — silently treating an unreadable file as reference-free ".
+                'would hide references this scan could not then prove are absent.'
+            );
         }
 
         $tokens = self::tokenise($source);
