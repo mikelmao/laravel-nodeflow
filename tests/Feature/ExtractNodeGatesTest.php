@@ -320,7 +320,7 @@ it('refuses a node whose file lives under vendor/, outside the host application 
         'class' => 'SomeVendor\SomePkg\VendorNode',
         '--package' => 'acme/widgets',
     ])
-        ->expectsOutputToContain('not inside the host application')
+        ->expectsOutputToContain('lives under [vendor/]')
         ->assertFailed();
 
     expect(hostTreeHash($this->root))->toBe($before);
@@ -769,12 +769,15 @@ it('does not refuse a node file that names its own FQCN inside itself, not just 
     ])->assertExitCode(0);
 });
 
-it('bracket-matches the $nodes array past a nested array literal, not just to the first "]"', function () {
-    // nodesArrayBody() must find the OUTER array's own closing bracket, not
-    // whatever ']' appears first -- a nested array value sitting before the
-    // real entry would otherwise truncate the body early, and a genuinely
-    // exempt entry sitting AFTER that point would be read as outside the
-    // $nodes property and left unexempted.
+it('refuses when the $nodes array also carries an element the writer cannot classify, rather than exempting the whole array (Important 2)', function () {
+    // rewritableSpans() now reuses NodeRegistrationWriter::findClassEntrySpans(),
+    // which returns [] whenever ANY element in the array is not a plain
+    // `<name>::class` -- exactly mirroring removeFrom()'s own EntryUnsupported
+    // refusal. A nested array literal sitting alongside the real entry means
+    // the LATER move can never safely touch this array at all, so G5 must NOT
+    // exempt the real entry either: exempting it here while removeFrom()
+    // refuses to touch it later is precisely the "gate and moves disagree"
+    // defect this method exists to prevent.
     $class = writeAppNode($this->root, 'NestedArrayCompanionNode', 'nested.array.companion');
 
     $providerDirectory = $this->root.'/app/Providers';
@@ -800,8 +803,13 @@ it('bracket-matches the $nodes array past a nested array literal, not just to th
     }
     PHP);
 
+    $before = hostTreeHash($this->root);
+
     $this->artisan('nodeflow:extract-node', ['class' => $class, '--package' => 'acme/widgets'])
-        ->assertExitCode(0);
+        ->expectsOutputToContain('NodeflowServiceProvider.php')
+        ->assertFailed();
+
+    expect(hostTreeHash($this->root))->toBe($before);
 });
 
 it('refuses a node whose FQCN appears only in config/, proving the widened scan roots reach it (G5, adversarial probe 4)', function () {

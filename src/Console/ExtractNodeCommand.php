@@ -48,11 +48,16 @@ class ExtractNodeCommand extends Command
 
     protected $description = "Extract a node class into its own Composer package (gates only — this build doesn't move anything yet).";
 
-    /** Laravel's own default location for a host's node classes, and the one gate G2 requires the class to live inside (E51). */
-    private const HOST_APP_DIR = 'app';
+    /** The Composer package name's own directory, excluded from G2's host containment rule — code already shipped as part of another package is not the host's own source (E51). */
+    private const VENDOR_DIR = 'vendor';
 
-    /** The directories widened E46 requires G5 to scan, beyond app/ alone — a reference can live in config, a route file, a Blade view, or a migration. */
-    private const REFERENCE_SCAN_DIRS = ['app', 'config', 'database', 'resources', 'routes'];
+    /**
+     * The directories E46 requires G5 to scan: a reference can live in
+     * config, a route file, a Blade view, a migration, the host's own
+     * bootstrap file (bootstrap/app.php is Laravel 11's own provider
+     * registration site), or the host's own test suite.
+     */
+    private const REFERENCE_SCAN_DIRS = ['app', 'bootstrap', 'config', 'database', 'resources', 'routes', 'tests'];
 
     /** Where MakeNodeCommand::writeTest() puts a generated node's test — the one convention this command has to guess a test file's location by. */
     private const TEST_DIR = 'tests/Feature/Nodeflow';
@@ -128,6 +133,20 @@ class ExtractNodeCommand extends Command
             );
         }
 
+        // Reuses MakeNodePackageCommand's own Composer-name pattern rather than
+        // inventing a second one. This also closes a real G6 bypass as a side
+        // effect, not by a separate case rule: the pattern is lowercase-only,
+        // so `--package=ACME/Widgets` is refused HERE, before it can ever reach
+        // G6's exact `===` comparison against a lowercase dont-discover entry
+        // (or a lowercase composer.json require key) and pass one check by
+        // spelling alone.
+        if (preg_match(MakeNodePackageCommand::COMPOSER_NAME_PATTERN, $packageName) !== 1) {
+            return $this->refuse(
+                "[{$packageName}] is not a valid Composer package name. It must match Composer's own ".
+                'pattern '.MakeNodePackageCommand::COMPOSER_NAME_PATTERN.', e.g. acme/widgets.'
+            );
+        }
+
         $targetRelativePath = $this->targetRelativePath($packageName);
 
         if (($message = $this->gate6($hostBasePath, $packageName, $targetRelativePath)) !== null) {
@@ -182,9 +201,15 @@ class ExtractNodeCommand extends Command
             $spans[] = RewritableSpan::wholeFile($nodeFile);
         }
 
+        // The conventional path is only a CANDIDATE, not proof: it is keyed
+        // by short class name alone, so two classes sharing a short name in
+        // different namespaces collide on the exact same test path. Claiming
+        // it regardless would hand Task 9's moves a file to move that may
+        // belong to a DIFFERENT class entirely — so the candidate is only
+        // trusted once it is confirmed to actually reference $class.
         $testFile = $hostBasePath.'/'.self::TEST_DIR.'/'.$reflection->getShortName().'Test.php';
 
-        if (is_file($testFile)) {
+        if (is_file($testFile) && $this->fileReferencesClass($testFile, $class)) {
             $spans[] = RewritableSpan::wholeFile($testFile);
         }
 
@@ -195,6 +220,33 @@ class ExtractNodeCommand extends Command
         }
 
         return $spans;
+    }
+
+    /**
+     * Whether $file itself (not merely some sibling in the same directory)
+     * contains a reference $class resolves to — scanning $file's own
+     * directory and then filtering the results down to $file's own
+     * canonical path, the same pattern `providerSpans()` uses and for the
+     * same reason: `NodeReferenceScanner::scan()` only accepts a directory,
+     * not a single file.
+     */
+    private function fileReferencesClass(string $file, string $class): bool
+    {
+        try {
+            $references = NodeReferenceScanner::scan($class, [dirname($file)]);
+        } catch (RuntimeException) {
+            return false;
+        }
+
+        $canonical = realpath($file) ?: $file;
+
+        foreach ($references as $reference) {
+            if ((realpath($reference->file) ?: $reference->file) === $canonical) {
+                return true;
+            }
+        }
+
+        return false;
     }
 
     /**
@@ -230,14 +282,21 @@ class ExtractNodeCommand extends Command
      * `ReflectionClass::getFileName()` first (false only for an internal or
      * eval'd class — unreachable once G1 has already proven `$class`
      * extends the project's own, PHP-defined `Node`, but refused rather
-     * than trusted regardless). Then `HostPath::contains()` against the
-     * host's own `app/` directory (E51): a class living under `vendor/`, or
-     * reached only through a symlink that escapes `app/`, is not something
-     * this command can extract FROM the host, because it is not part of
-     * the host's own source in the first place. Then E47: the file must
-     * declare exactly one top-level named symbol. M2 (Task 9) rewrites the
-     * file's namespace, which moves EVERY declaration the file contains,
-     * while NodeReferenceScanner (G5) only ever looks for references to the
+     * than trusted regardless). Then containment (E51): the rule is
+     * "inside the host root, and not under vendor/" — NOT "inside app/
+     * specifically". A host is free to map its own root namespace onto
+     * `src/`, or anywhere else, via its own PSR-4 config; requiring `app/`
+     * literally would fail safe (refuse) for such a host's otherwise
+     * perfectly legitimate node, and reading the host's own PSR-4 map to
+     * find out is more surface than this gate needs for what it actually
+     * has to prevent — extracting a class that is not part of the host's
+     * own source at all, either because it lives outside the host root
+     * entirely, or because it is reached only through a symlink that
+     * escapes the root, or because it already ships inside `vendor/` as
+     * part of some OTHER Composer package. Then E47: the file must declare
+     * exactly one top-level named symbol. M2 (Task 9) rewrites the file's
+     * namespace, which moves EVERY declaration the file contains, while
+     * NodeReferenceScanner (G5) only ever looks for references to the
      * NODE — so a companion trait, interface, enum, function, or constant
      * would move silently and break any host code that still uses it under
      * its old name.
@@ -253,15 +312,20 @@ class ExtractNodeCommand extends Command
         }
 
         try {
-            $appRoot = HostPath::root($hostBasePath.'/'.self::HOST_APP_DIR);
+            $hostRoot = HostPath::root($hostBasePath);
         } catch (InvalidArgumentException $e) {
-            return "The host's own [".self::HOST_APP_DIR."] directory could not be resolved: {$e->getMessage()}";
+            return "The host's own root could not be resolved: {$e->getMessage()}";
         }
 
-        if (! $appRoot->contains($file)) {
-            return "[{$class}]'s file [{$file}] is not inside the host application's own [".self::HOST_APP_DIR
-                .'] directory (E51). A class outside the host — for example one already shipped inside '
-                .'vendor/ — cannot be extracted from it.';
+        if (! $hostRoot->contains($file)) {
+            return "[{$class}]'s file [{$file}] is not inside the host application's own root (E51). A "
+                .'class outside the host cannot be extracted from it.';
+        }
+
+        if ($this->underVendor($file, $hostBasePath)) {
+            return "[{$class}]'s file [{$file}] lives under [".self::VENDOR_DIR.'/] (E51). A class already '
+                .'shipped as part of another Composer package is not the host\'s own source and cannot be '
+                .'extracted from it.';
         }
 
         $source = file_get_contents($file);
@@ -276,6 +340,25 @@ class ExtractNodeCommand extends Command
         }
 
         return null;
+    }
+
+    /**
+     * Whether $file lives inside the host's own vendor/, canonically
+     * (E51). A host missing a vendor/ directory entirely (freshly cloned,
+     * dependencies not yet installed) has nothing to be "under" — treated
+     * as false rather than an error, since the containment check against
+     * the host ROOT above has already run and already passed by the time
+     * this is called.
+     */
+    private function underVendor(string $file, string $hostBasePath): bool
+    {
+        try {
+            $vendorRoot = HostPath::root($hostBasePath.'/'.self::VENDOR_DIR);
+        } catch (InvalidArgumentException) {
+            return false;
+        }
+
+        return $vendorRoot->contains($file);
     }
 
     /**
@@ -435,7 +518,25 @@ class ExtractNodeCommand extends Command
         return null;
     }
 
-    /** @param  array<string, mixed>  $decoded */
+    /**
+     * @param  array<string, mixed>  $decoded
+     *
+     * TWO SEPARATE COMPARISONS, deliberately, not `fnmatch()` alone. A
+     * segment-wise equality check (via `HostPath::segments()`, the same
+     * canonical, slash-agnostic comparison every other path comparison in
+     * this codebase already uses) handles a literal url. A SEPARATE
+     * `fnmatch()` call, with `FNM_PATHNAME` and only when the url actually
+     * contains a glob metacharacter, handles a genuine glob — `*` cannot
+     * cross a `/` under `FNM_PATHNAME`, which is exactly what makes
+     * Composer's own idiomatic monorepo form (`"packages/*"`, ONE
+     * wildcard segment) fail to match a TWO-segment target
+     * (`packages/acme/widgets`) the same way Composer's own path
+     * repository resolution would. Without `FNM_PATHNAME`, `packages/*`
+     * matches ANY target nested arbitrarily deep under `packages/` —
+     * a segment-wise glob doing a "does this string merely start with
+     * this prefix" job, the substring-shaped mistake this codebase's own
+     * `HostPath` docblock names as its most recent recurrence.
+     */
     private function requiredFromMatchingPathRepository(array $decoded, string $targetRelativePath): bool
     {
         $repositories = $decoded['repositories'] ?? [];
@@ -444,7 +545,8 @@ class ExtractNodeCommand extends Command
             return false;
         }
 
-        $normalisedTarget = trim($targetRelativePath, '/');
+        $targetSegments = HostPath::segments($targetRelativePath);
+        $normalisedTarget = implode('/', $targetSegments);
 
         foreach ($repositories as $repository) {
             if (! is_array($repository) || ($repository['type'] ?? null) !== 'path') {
@@ -457,17 +559,12 @@ class ExtractNodeCommand extends Command
                 continue;
             }
 
-            $normalisedUrl = trim($url, '/');
+            if (HostPath::segments($url) === $targetSegments) {
+                return true;
+            }
 
-            // fnmatch(), not an equality check: Composer's own path repository
-            // url may be a glob (e.g. "packages/*/*"), and a literal string
-            // compare would treat every such host as "pointing elsewhere" even
-            // when its glob genuinely covers $targetRelativePath. A literal
-            // url with no glob metacharacter is already an exact match under
-            // fnmatch() (confirmed: a mutation deleting a separate `===`
-            // equality check alongside this call survives every test in this
-            // suite), so no separate equality branch is kept here.
-            if (fnmatch($normalisedUrl, $normalisedTarget)) {
+            if (preg_match('/[*?\[]/', $url) === 1
+                && fnmatch(implode('/', HostPath::segments($url)), $normalisedTarget, FNM_PATHNAME)) {
                 return true;
             }
         }
@@ -562,7 +659,30 @@ class ExtractNodeCommand extends Command
         return null;
     }
 
-    /** @return list<RewritableSpan> */
+    /**
+     * The provider's own `use` import for $class (found by scanning, kept
+     * only when it names THIS file), plus the exact byte span of every
+     * PLAIN `$class::class` entry in the provider's `$nodes` array —
+     * reusing `NodeRegistrationWriter::findClassEntrySpans()`'s own element
+     * classification rather than exempting the array's whole body.
+     *
+     * WHY REUSE RATHER THAN A LOCAL BRACKET RANGE (Important 2). An
+     * earlier version of this method exempted every byte between the
+     * array's own brackets, kind-blind — which meant `protected array
+     * $nodes = [ ...config('x', [Foo::class => 'alias']) ]` exempted a
+     * REAL reference to Foo that the later move (built on
+     * `NodeRegistrationWriter::removeFrom()`) can never actually touch,
+     * because `removeFrom()` refuses a spread/nested-array element as
+     * EntryUnsupported and leaves the WHOLE array alone. A too-wide
+     * exemption silently certifying a rewrite that never happens is the
+     * same defect E45 already named once, in a different shape.
+     * `findClassEntrySpans()` returns [] whenever ANY element in the array
+     * is not a plain `<name>::class` it can classify — so the gate and the
+     * move now agree BY CONSTRUCTION: neither one certifies anything about
+     * an array it cannot fully understand.
+     *
+     * @return list<RewritableSpan>
+     */
     private function providerSpans(string $providerFile, string $class): array
     {
         try {
@@ -577,6 +697,14 @@ class ExtractNodeCommand extends Command
             return [];
         }
 
+        // Filtered to THIS file, canonically, and not merely by raw string
+        // equality: NodeReferenceScanner::scan() is handed the provider's
+        // own DIRECTORY, and every sibling file living alongside it (an
+        // AppServiceProvider, say) is scanned too. A reference sitting in
+        // a SIBLING file must never be folded into this provider's own
+        // exemption set — that sibling is not one of the files Task 9
+        // rewrites, and exempting it here would silently certify a rewrite
+        // that will never happen to it either.
         $canonicalProvider = realpath($providerFile) ?: $providerFile;
 
         $inProvider = array_values(array_filter(
@@ -592,87 +720,14 @@ class ExtractNodeCommand extends Command
             }
         }
 
-        $nodesArray = $this->nodesArrayBody(file_get_contents($providerFile) ?: '');
+        $writer = new NodeRegistrationWriter($this->files);
+        $contents = file_get_contents($providerFile) ?: '';
 
-        if ($nodesArray !== null) {
-            foreach ($inProvider as $reference) {
-                if ($reference->byteStart >= $nodesArray['bodyStart'] && $reference->byteEnd <= $nodesArray['bodyEnd']) {
-                    $spans[] = new RewritableSpan($reference->file, $reference->byteStart, $reference->byteEnd);
-                }
-            }
+        foreach ($writer->findClassEntrySpans($contents, NodeRegistrationWriter::ANCHOR, $class) as $entry) {
+            $spans[] = new RewritableSpan($providerFile, $entry['start'], $entry['end']);
         }
 
         return $spans;
-    }
-
-    /**
-     * The byte range strictly between the brackets of the provider's own
-     * `protected array $nodes = [ ... ]` property (NodeRegistrationWriter's
-     * own ANCHOR, reused verbatim rather than re-spelled here), found by
-     * bracket-matching over TOKENS rather than raw characters — the same
-     * reason NodeRegistrationWriter::arraySpan() does: a `]` sitting inside
-     * a string literal or a comment must never be mistaken for the array's
-     * own closing bracket.
-     *
-     * @return array{bodyStart: int, bodyEnd: int}|null
-     */
-    private function nodesArrayBody(string $contents): ?array
-    {
-        $anchor = NodeRegistrationWriter::ANCHOR;
-        $anchorPos = strpos($contents, $anchor);
-
-        if ($anchorPos === false) {
-            return null;
-        }
-
-        // ANCHOR ends in '[' itself, so its own last character IS the
-        // opening bracket; no separate search for it is needed.
-        $openRaw = $anchorPos + strlen($anchor) - 1;
-
-        $tokens = [];
-        $raw = 0;
-
-        foreach (token_get_all($contents) as $token) {
-            $text = is_array($token) ? $token[1] : $token;
-            $tokens[] = ['isPunct' => ! is_array($token), 'text' => $text, 'start' => $raw, 'end' => $raw + strlen($text)];
-            $raw += strlen($text);
-        }
-
-        $openIndex = null;
-
-        foreach ($tokens as $index => $token) {
-            if ($token['start'] === $openRaw && $token['isPunct'] && $token['text'] === '[') {
-                $openIndex = $index;
-
-                break;
-            }
-        }
-
-        if ($openIndex === null) {
-            return null;
-        }
-
-        $depth = 0;
-
-        for ($i = $openIndex, $count = count($tokens); $i < $count; $i++) {
-            $token = $tokens[$i];
-
-            if (! $token['isPunct']) {
-                continue;
-            }
-
-            if ($token['text'] === '[') {
-                $depth++;
-            } elseif ($token['text'] === ']') {
-                $depth--;
-
-                if ($depth === 0) {
-                    return ['bodyStart' => $openRaw + 1, 'bodyEnd' => $token['start']];
-                }
-            }
-        }
-
-        return null;
     }
 
     /**
@@ -680,20 +735,25 @@ class ExtractNodeCommand extends Command
      * the target class's own declaration, always excluded — or null when
      * there is none (E47).
      *
-     * "Top-level" means at brace depth 0: a method inside the class body,
-     * or a closure's own body, sits at depth 1 or deeper and is never a
-     * candidate. Depth is tracked over literal '{'/'}' tokens only, the
-     * same simplification NodeTypeLiteral's own brace matching makes — a
-     * braced `namespace X { ... }` block (rather than the ordinary
-     * `namespace X;` every generator in this package writes) would count
-     * as one extra level of depth and is a stated limitation, not a
-     * silent one.
+     * "Top-level" means: not nested inside any brace OTHER than a
+     * namespace's own braced block. A method inside the class body, or a
+     * closure's own body, sits inside a real ('other') brace and is never
+     * a candidate — but a braced `namespace X { ... }` block's OWN brace
+     * does NOT count as one, exactly the distinction `PhpNameResolver` and
+     * `NodeReferenceScanner` already make for the same reason (a `use`
+     * statement, there; a companion declaration, here): a namespace brace
+     * is not a SCOPE that hides what is inside it. A plain depth counter
+     * over every '{'/'}' cannot make that distinction, which is why this
+     * tracks a STACK of brace KINDS instead — `namespaceBraceIndexes()`
+     * below is the exact algorithm those two classes already use to tell
+     * a namespace's own brace apart from any other.
      */
     private function findCompanionSymbol(string $source, string $ownShortName): ?string
     {
         $tokens = token_get_all($source);
         $count = count($tokens);
-        $depth = 0;
+        $namespaceBraces = $this->namespaceBraceIndexes($tokens);
+        $braceKinds = [];
 
         for ($i = 0; $i < $count; $i++) {
             $token = $tokens[$i];
@@ -702,15 +762,15 @@ class ExtractNodeCommand extends Command
 
             if ($id === null) {
                 if ($text === '{') {
-                    $depth++;
+                    $braceKinds[] = isset($namespaceBraces[$i]) ? 'namespace' : 'other';
                 } elseif ($text === '}') {
-                    $depth--;
+                    array_pop($braceKinds);
                 }
 
                 continue;
             }
 
-            if ($depth !== 0) {
+            if (in_array('other', $braceKinds, true)) {
                 continue;
             }
 
@@ -746,6 +806,59 @@ class ExtractNodeCommand extends Command
         return null;
     }
 
+    /**
+     * Token index of every `{` opening a namespace's braced body
+     * (`namespace App\Foo { ... }`, or the bare global `namespace { ... }`),
+     * the same algorithm `PhpNameResolver::namespaceBraceIndexes()` and
+     * `NodeReferenceScanner::namespaceBraceIndexes()` already use — walked
+     * here rather than shared with either, because both of those operate
+     * on a comment/whitespace-FILTERED token list whose indexes would not
+     * line up with this method's own unfiltered one (findCompanionSymbol()
+     * needs the raw stream so nextDeclaredName()/nextFunctionName() can
+     * skip whitespace themselves, token by token, rather than being handed
+     * an already-filtered array).
+     *
+     * @param  list<array{0:int,1:string}|string>  $tokens
+     * @return array<int, true>
+     */
+    private function namespaceBraceIndexes(array $tokens): array
+    {
+        $indexes = [];
+        $count = count($tokens);
+
+        for ($i = 0; $i < $count; $i++) {
+            $token = $tokens[$i];
+
+            if (! is_array($token) || $token[0] !== T_NAMESPACE) {
+                continue;
+            }
+
+            $j = $i + 1;
+
+            while ($j < $count) {
+                $next = $tokens[$j];
+
+                if (is_array($next) && in_array(
+                    $next[0],
+                    [T_NAME_QUALIFIED, T_STRING, T_NS_SEPARATOR, T_WHITESPACE, T_COMMENT, T_DOC_COMMENT],
+                    true
+                )) {
+                    $j++;
+
+                    continue;
+                }
+
+                break;
+            }
+
+            if (($tokens[$j] ?? null) === '{') {
+                $indexes[$j] = true;
+            }
+        }
+
+        return $indexes;
+    }
+
     /** The T_STRING immediately following $keywordIndex (whitespace/comments skipped), or null — an anonymous class/expression has none. */
     private function nextDeclaredName(array $tokens, int $keywordIndex): ?string
     {
@@ -766,7 +879,27 @@ class ExtractNodeCommand extends Command
         return null;
     }
 
-    /** Same as nextDeclaredName(), but tolerates a by-ref '&' between `function` and the name — a closure's `function (` (or `function &(`) still correctly yields null. */
+    /**
+     * Same as nextDeclaredName(), but tolerates a by-ref '&' between
+     * `function` and the name — a closure's `function (` (or `function
+     * &(`) still correctly yields null.
+     *
+     * The by-ref '&' is NOT the plain string token `nextDeclaredName()`
+     * would see for e.g. a bitwise-and: PHP 8.1+'s tokeniser emits a
+     * dedicated ARRAY token for it —
+     * `T_AMPERSAND_NOT_FOLLOWED_BY_VAR_OR_VARARG` specifically, since it is
+     * followed by an identifier (the function's name), not a `$variable`
+     * or `...` — so a check for the literal string `'&'` alone
+     * (`! is_array($token) && $token === '&'`) can never match it and is
+     * dead code on every supported PHP version. Confirmed empirically:
+     * `token_get_all('<?php function &foo() {}')` emits
+     * `T_AMPERSAND_NOT_FOLLOWED_BY_VAR_OR_VARARG` as an array token, not a
+     * bare string. Without recognising this token, a by-ref top-level
+     * companion function was read as having NO name at all (the array
+     * form fell through to the "not an array we care about" — wait, IS an
+     * array — branch and was treated as an ordinary, unrecognised token),
+     * silently passing G2 while the by-ref function moved with the file.
+     */
     private function nextFunctionName(array $tokens, int $keywordIndex): ?string
     {
         for ($j = $keywordIndex + 1, $count = count($tokens); $j < $count; $j++) {
@@ -780,7 +913,13 @@ class ExtractNodeCommand extends Command
                 return null;
             }
 
-            if (in_array($token[0], [T_WHITESPACE, T_COMMENT, T_DOC_COMMENT], true)) {
+            if (in_array($token[0], [
+                T_WHITESPACE,
+                T_COMMENT,
+                T_DOC_COMMENT,
+                T_AMPERSAND_NOT_FOLLOWED_BY_VAR_OR_VARARG,
+                T_AMPERSAND_FOLLOWED_BY_VAR_OR_VARARG,
+            ], true)) {
                 continue;
             }
 

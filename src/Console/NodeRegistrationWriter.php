@@ -347,6 +347,65 @@ class NodeRegistrationWriter
     }
 
     /**
+     * The exact byte span of every element inside $anchor's array that
+     * RESOLVES to $nodeClass, provided every element in that array is a
+     * plain `<name>::class` this writer actually understands — read-only,
+     * for a caller (ExtractNodeCommand's G5) that needs to know exactly
+     * what a LATER removeFrom() call would touch, without touching
+     * anything itself.
+     *
+     * WHY THIS EXISTS, rather than a caller computing the array's own
+     * bracket range and treating everything inside it as exempt. A too-wide
+     * exemption is the same defect class E45 already named once (a
+     * FILE-level exemption hiding a real reference) wearing a different
+     * costume: `protected array $nodes = [ ...config('x', [Foo::class =>
+     * 'alias']) ]` is a real reference to Foo sitting inside this array,
+     * but `removeFrom()` refuses to touch that array at all
+     * (EntryUnsupported, because a spread is not a plain `<name>::class`
+     * element) — so a caller that exempted the whole array body would
+     * certify a rewrite that never actually happens. Returning [] whenever
+     * ANY element is unsupported, rather than the elements that DO parse,
+     * is what keeps a gate built on this method and a move built on
+     * `removeFrom()` agreeing BY CONSTRUCTION: both refuse to certify
+     * anything about an array they cannot fully classify.
+     *
+     * The SAME anchor-ambiguity guard `appendTo()`/`removeFrom()` apply
+     * before ever calling `spanElements()` is applied here too — a second,
+     * accidental occurrence of $anchor's literal text (inside a string, a
+     * constant, a comment) makes WHICH array `arraySpan()`'s raw
+     * `strpos()` would find genuinely ambiguous, and returning [] in that
+     * case is the same "refuse rather than guess" rule this class already
+     * follows everywhere else, applied to a read-only query instead of a
+     * write.
+     *
+     * @return list<array{start: int, end: int}>
+     */
+    public function findClassEntrySpans(string $contents, string $anchor, string $nodeClass): array
+    {
+        if (substr_count($contents, $anchor) !== 1) {
+            return [];
+        }
+
+        $parsed = $this->spanElements($contents, $anchor);
+
+        if ($parsed === null || $parsed['unsupported']) {
+            return [];
+        }
+
+        $target = ltrim($nodeClass, '\\');
+        $resolver = PhpNameResolver::forSource($contents);
+        $spans = [];
+
+        foreach ($parsed['elements'] as $element) {
+            if ($resolver->resolve($element['writtenName']) === $target) {
+                $spans[] = ['start' => $element['rawStart'], 'end' => $element['rawEnd']];
+            }
+        }
+
+        return $spans;
+    }
+
+    /**
      * The RAW byte range(s) to delete for one matched element, or null when
      * the element cannot be removed without touching a sibling's content
      * (EntryAmbiguous).

@@ -41,8 +41,15 @@ class MakeNodePackageCommand extends Command
 
     protected $description = 'Scaffold a new Composer package that ships Nodeflow nodes.';
 
-    /** Composer's own package name pattern. */
-    private const COMPOSER_NAME_PATTERN = '/^[a-z0-9]([_.-]?[a-z0-9]+)*\/[a-z0-9](([_.]|-{1,2})?[a-z0-9]+)*$/';
+    /**
+     * Composer's own package name pattern. Public: ExtractNodeCommand's G6
+     * reuses this exact pattern to validate --package rather than inventing
+     * a second one — a divergent copy is exactly how an uppercase-tolerant
+     * validator would let a name past this check while still failing a
+     * later, case-sensitive comparison against composer.json (E49's own
+     * dont-discover check, for one).
+     */
+    public const COMPOSER_NAME_PATTERN = '/^[a-z0-9]([_.-]?[a-z0-9]+)*\/[a-z0-9](([_.]|-{1,2})?[a-z0-9]+)*$/';
 
     /** A single PHP identifier segment (E52). */
     private const NAMESPACE_SEGMENT_PATTERN = '/^[A-Za-z_\x80-\xff][A-Za-z0-9_\x80-\xff]*$/';
