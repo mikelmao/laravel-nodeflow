@@ -10,10 +10,9 @@ use Nodeflow\Console\SourceText;
  * ViteDedupeStep): the config filename candidates, the constructor, and the
  * comment-stripped read of whichever candidate exists.
  *
- * Extracted rather than duplicated because the brief warns the two copies would
- * otherwise drift — in particular CONFIG_CANDIDATES and the comment-stripping
- * call in configSource(), which both steps must apply identically for the
- * counterfactuals in ViteStepsTest to mean what they say.
+ * The candidate order mirrors installed Vite 8.2.2 and is shared so alias and
+ * dedupe cannot drift. The comment-stripping call in configSource() is shared
+ * for the same reason.
  *
  * Both concrete steps are verify-only (E20): editing an arbitrary vite.config.ts
  * needs a TypeScript AST, which PHP does not have, and E11 permits only an edit
@@ -22,7 +21,14 @@ use Nodeflow\Console\SourceText;
  */
 abstract class ViteConfigStep implements InstallStep
 {
-    public const CONFIG_CANDIDATES = ['vite.config.ts', 'vite.config.js', 'vite.config.mts', 'vite.config.mjs'];
+    public const CONFIG_CANDIDATES = [
+        'vite.config.js',
+        'vite.config.mjs',
+        'vite.config.ts',
+        'vite.config.cjs',
+        'vite.config.mts',
+        'vite.config.cts',
+    ];
 
     public function __construct(protected Filesystem $files, protected string $basePath) {}
 
