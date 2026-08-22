@@ -141,24 +141,43 @@ class MakeNodePackageCommand extends Command
         $namespaceOption = trim((string) ($this->option('namespace') ?? ''));
 
         // Default: StudlyCase each of the two Composer segments and join with
-        // '\'. --namespace overrides the base namespace, but the provider's
-        // own short class name is always derived from the package segment
-        // (Str::studly($package).'ServiceProvider'), matching what the
-        // scaffolder itself documents: it derives the short class name from
-        // the fully-qualified provider class this command hands it, not the
-        // other way around.
+        // '\'. --namespace overrides the base namespace.
         $namespace = $namespaceOption !== ''
             ? trim($namespaceOption, '\\')
             : Str::studly($vendor).'\\'.Str::studly($package);
 
-        $providerClass = $namespace.'\\'.Str::studly($package).'ServiceProvider';
+        // The provider's short class name is always derived from $namespace's
+        // OWN last segment — never separately from the package name — which
+        // matters concretely only when --namespace overrides the default,
+        // since in the default branch $namespace's last segment already
+        // equals Str::studly($package) by construction (there is no third
+        // value to diverge to; an earlier draft branched on $namespaceOption
+        // to pick one of two expressions that are provably identical in the
+        // default case, which is why that branch is gone rather than kept
+        // for symmetry). `2captcha/2captcha-php` (an actual Packagist name)
+        // is the case this fixes: its package segment studly-cases to
+        // `2captchaPhp`, an invalid identifier, so a version of this command
+        // that derived the short class from the package name regardless of
+        // --namespace would still fail on `2captchaPhpServiceProvider` even
+        // given `--namespace=Acme\Captcha` — telling the author to pass
+        // --namespace when passing --namespace provably could not have
+        // helped. Deriving from the namespace's own last segment instead
+        // yields `CaptchaServiceProvider`, and the message asking for
+        // --namespace is now one that can actually be acted on.
+        $namespaceSegments = explode('\\', $namespace);
+        $shortClassBase = Str::studly(end($namespaceSegments));
+
+        $providerClass = $namespace.'\\'.$shortClassBase.'ServiceProvider';
 
         // Validated on the FULL provider class, not the base namespace alone:
         // that covers every base-namespace segment (a prefix of the provider
-        // class's own segments) AND the derived short class name in one pass —
-        // which matters because an explicit --namespace can be perfectly
-        // valid PHP while the package segment used for the short class name
-        // (e.g. "456pkg") is not.
+        // class's own segments) AND the derived short class name in one pass.
+        // (This is provably redundant with validating $namespace alone as
+        // long as $shortClassBase is always drawn from one of $namespace's
+        // own segments, as it now is — see the report's mutation-testing
+        // section for why. Kept as the full provider class anyway, both for
+        // robustness against a future change to how the short class is
+        // derived and because it is what actually gets rendered.)
         $this->assertValidNamespaceSegments($providerClass);
 
         // Whitespace-trimmed only — NOT slash-trimmed. HostPath::resolveWithin()
@@ -175,7 +194,47 @@ class MakeNodePackageCommand extends Command
         // segment or a symlink escape (E51) — allowed to propagate as-is,
         // since it already carries the right exception type and a message
         // naming the problem.
-        $absolutePath = HostPath::root($this->laravel->basePath())->resolveWithin($relativePath);
+        $host = HostPath::root($this->laravel->basePath());
+        $absolutePath = $host->resolveWithin($relativePath);
+
+        // A package can never legitimately BE the host application, so this
+        // is refused unconditionally — not folded into targetIsAvailable(),
+        // and NOT unlockable by --force. Without this, `--path=.` (or any
+        // --path that canonically resolves to the project root) passes
+        // targetIsAvailable()'s "does an existing composer.json here name
+        // this package" test whenever the host's OWN composer.json happens
+        // to be named after the very package being scaffolded — the host's
+        // own composer.json, README.md, src/, and tests/ would then be
+        // overwritten by the package template at exit 0, no --force
+        // required. targetIsAvailable()'s inference ("this directory's
+        // composer.json names this package, therefore this directory IS
+        // that package") is sound for a subdirectory a prior run of this
+        // same command created; it is never sound for the project root.
+        //
+        // HostPath::relativeDepth() === 0, not a string comparison against
+        // $absolutePath. Two reasons, both found empirically while testing
+        // this exact guard: (1) resolveWithin('.') returns "{$root}/" — root
+        // plus a literal trailing slash, since HostPath::segments() drops a
+        // bare '.' to an empty list and resolveWithin() implodes that onto
+        // "{$root}/" — which a bare === against basePath()'s un-slashed
+        // root would never match. (2) far more seriously, a --path landing
+        // on an IN-HOST SYMLINK whose target is the host root itself (e.g.
+        // `packages/self` symlinked to the project root) resolves to a
+        // DIFFERENT raw string than $host->basePath() while being the exact
+        // same directory on disk — a bare string comparison, even after
+        // stripping the trailing slash, misses this entirely and the
+        // destructive overwrite this guard exists to prevent reappears
+        // through the symlink. relativeDepth() canonicalises (resolves
+        // symlinks) before comparing segments, exactly as `contains()` does
+        // for the same reason, and returns 0 precisely when $absolutePath —
+        // through any number of symlink hops — canonically IS the host root.
+        if ($host->relativeDepth($absolutePath) === 0) {
+            throw new InvalidArgumentException(
+                "[{$relativePath}] resolves to the host application's own root. A package ".
+                'cannot be scaffolded over the host itself — pass a --path pointing at a '.
+                'subdirectory, e.g. packages/'.$vendor.'/'.$package.'.'
+            );
+        }
 
         $constraint = $this->hostNodeflowConstraint();
 
