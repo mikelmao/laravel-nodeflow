@@ -630,10 +630,21 @@ it('refuses a file declaring two namespaces', function () {
     }
 });
 
-it('does not scan through a symlink whose target escapes the root', function () {
-    // Counterfactual for the HostPath::contains() filter: remove it and this
-    // fails, because phpFilesUnder() itself follows the symlinked directory
-    // (is_dir() returns true for it) to find the file inside.
+it('DOES scan through a symlink nested inside a scan root, finding a reference in its target (review round 4, item B)', function () {
+    // Reversed from an earlier design: this test used to assert the
+    // OPPOSITE (skipping such a symlink entirely), on the theory that a
+    // symlink escaping the root should never be trusted. The review round
+    // 4 found the real failure that design caused: `app/Linked` symlinked
+    // to a directory outside the host, declaring
+    // `App\Linked\Consumer` and referencing the node under extraction, is
+    // genuinely autoloadable by the host (PSR-4: `App\` -> `app/`), but
+    // was invisible to both G5 and M6a under the old filter -- extraction
+    // would delete the original and leave the host loading a class that
+    // no longer exists. A TOP-LEVEL scan root that is itself an escaping
+    // symlink is still refused before it ever reaches this class
+    // (ExtractNodeCommand's own sharedScanRoots()/hostPsr4Directories());
+    // this test is about a symlink NESTED inside an otherwise legitimate
+    // root, which this scanner must now follow.
     $root = hostWith(['app/.keep' => '']);
     $outside = hostWith([
         'Escaped.php' => <<<'PHP'
@@ -646,6 +657,68 @@ it('does not scan through a symlink whose target escapes the root', function () 
     symlink($outside, $root.'/app/escape');
 
     $found = NodeReferenceScanner::scan(target(), [$root.'/app']);
+
+    expect($found)->toHaveCount(1);
+    expect($found[0]->file)->toBe($root.'/app/escape/Escaped.php');
+});
+
+it('refuses loudly, naming the path, when a symlink forms a cycle rather than recursing forever', function () {
+    $root = hostWith(['app/.keep' => '']);
+
+    // app/loop -> app itself: following it would walk app/, then
+    // app/loop/, then app/loop/loop/, forever.
+    symlink($root.'/app', $root.'/app/loop');
+
+    expect(fn () => NodeReferenceScanner::scan(target(), [$root.'/app']))
+        ->toThrow(RuntimeException::class);
+
+    try {
+        NodeReferenceScanner::scan(target(), [$root.'/app']);
+    } catch (RuntimeException $e) {
+        expect($e->getMessage())->toContain($root.'/app/loop');
+    }
+});
+
+it('refuses loudly, naming the path, when a symlink target cannot be resolved at all', function () {
+    $root = hostWith(['app/.keep' => '']);
+
+    symlink($root.'/app/does-not-exist', $root.'/app/broken');
+
+    expect(fn () => NodeReferenceScanner::scan(target(), [$root.'/app']))
+        ->toThrow(RuntimeException::class);
+
+    try {
+        NodeReferenceScanner::scan(target(), [$root.'/app']);
+    } catch (RuntimeException $e) {
+        expect($e->getMessage())->toContain($root.'/app/broken');
+    }
+});
+
+it('accepts a single FILE as a scan root, not only a directory (review round 4, item A)', function () {
+    // A loose *.php file at the host root (e.g. rector.php) has no
+    // containing directory this class was ever told to walk -- accepting
+    // a file root directly is what lets ExtractNodeCommand's own
+    // sharedScanRoots() cover it.
+    $root = hostWith([
+        'rector.php' => <<<'PHP'
+        <?php
+
+        return \App\Nodeflow\Nodes\SendMessage::class;
+        PHP,
+    ]);
+
+    $found = NodeReferenceScanner::scan(target(), [$root.'/rector.php']);
+
+    expect($found)->toHaveCount(1);
+    expect($found[0]->file)->toBe($root.'/rector.php');
+});
+
+it('ignores a FILE root whose extension is not one of the scannable ones', function () {
+    $root = hostWith([
+        'rector.json' => 'return \App\Nodeflow\Nodes\SendMessage::class;',
+    ]);
+
+    $found = NodeReferenceScanner::scan(target(), [$root.'/rector.json']);
 
     expect($found)->toHaveCount(0);
 });

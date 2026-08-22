@@ -760,7 +760,7 @@ class ExtractNodeCommand extends Command
      * HTML markup process NO escapes at all, so THEIR replacement keeps
      * matching whichever spelling (plain or escaped) the original text
      * matched — that spelling already IS the runtime value, verbatim, and
-     * needsHeredocEscaping() returning false for both is what keeps this
+     * needsEscaping() returning false for both is what keeps this
      * method from "fixing" something that was never broken.
      */
     private function stringLiteralReplacement(NodeReference $reference, string $source, string $original, string $class, string $newFqcn): string
@@ -769,7 +769,7 @@ class ExtractNodeCommand extends Command
             return $this->requote($original, $newFqcn);
         }
 
-        if ($this->needsHeredocEscaping($source, $reference->byteStart)) {
+        if ($this->needsEscaping($source, $reference->byteStart)) {
             return str_replace('\\', '\\\\', $newFqcn);
         }
 
@@ -780,19 +780,45 @@ class ExtractNodeCommand extends Command
     }
 
     /**
-     * Whether the byte at $byteStart sits inside a REAL heredoc's own body
-     * — a `T_ENCAPSED_AND_WHITESPACE` token whose OPENING `<<<LABEL` (no
-     * quotes around LABEL) processes escape sequences — as opposed to a
-     * NOWDOC's body (`<<<'LABEL'`, quoted, processes NO escapes at all) or
-     * Blade/inline-HTML markup (`T_INLINE_HTML`, also no escape
-     * processing). `T_START_HEREDOC`'s own token TEXT is the opening
-     * marker verbatim, quote characters included, which is what makes
-     * checking it for a `'` enough to tell the two apart — PHP's tokeniser
-     * does not expose a separate token id for "heredoc" vs "nowdoc";
-     * both a heredoc's and a nowdoc's body chunks are
-     * `T_ENCAPSED_AND_WHITESPACE`.
+     * Whether the byte at $byteStart sits inside a `T_ENCAPSED_AND_WHITESPACE`
+     * chunk that PROCESSES escape sequences — which is every one of them
+     * EXCEPT a nowdoc's (`<<<'LABEL'`, quoted, processes no escapes at
+     * all, like a single-quoted string but without even the `\\` -> `\`
+     * collapse). This is NOT "inside a heredoc": PHP emits the identical
+     * `T_ENCAPSED_AND_WHITESPACE` token id for the literal segments
+     * BETWEEN interpolated `$variables` in an ordinary double-quoted
+     * string or a backtick shell-exec string too, and those process
+     * escapes exactly the same way a real heredoc's body does (review
+     * round 4, Important N1) — `"App\Nodeflow\Nodes\X{$this->suffix}"`
+     * with `--namespace=acme\things` is the identical `\t`-as-tab
+     * corruption in an interpolated string, not merely in a heredoc. A
+     * FIRST version of this method gated on `$isNowdoc === false`, which
+     * is false both inside a real heredoc AND for a token this method was
+     * never told is inside ANY heredoc/nowdoc at all (its default state,
+     * `null`, is not `=== false`) — silently skipping the escaping a
+     * plain double-quoted or backtick chunk still needs. Gating on
+     * `$isNowdoc !== true` instead treats "not proven to be a nowdoc" as
+     * "escape it", which is correct for a real heredoc AND for a chunk
+     * with no enclosing heredoc/nowdoc tracked at all.
+     *
+     * `T_START_HEREDOC`'s own token TEXT is the opening marker verbatim,
+     * quote characters included, which is what makes checking it for a
+     * `'` enough to tell a heredoc's `<<<LABEL` apart from a nowdoc's
+     * `<<<'LABEL'` — PHP's tokeniser does not expose a separate token id
+     * for the two; both a heredoc's and a nowdoc's own body chunks are
+     * `T_ENCAPSED_AND_WHITESPACE`. `T_END_HEREDOC` resets the tracked
+     * state back to `null` so a LATER plain string chunk — reached after
+     * a nowdoc has already closed, with no fresh `T_START_HEREDOC` of its
+     * own before it — is not mistaken for still being inside that nowdoc
+     * (round 4, mutation survivor: deleting this reset left a stale
+     * nowdoc state bleeding into unrelated later content).
+     *
+     * Blade/inline-HTML markup (`T_INLINE_HTML`) processes no escapes at
+     * all either, but never needs a `$isNowdoc` check to prove it: the
+     * `$id === T_ENCAPSED_AND_WHITESPACE` condition alone already
+     * excludes it, since it is a different token id entirely.
      */
-    private function needsHeredocEscaping(string $source, int $byteStart): bool
+    private function needsEscaping(string $source, int $byteStart): bool
     {
         $isNowdoc = null;
         $raw = 0;
@@ -807,7 +833,7 @@ class ExtractNodeCommand extends Command
             }
 
             if ($byteStart >= $raw && $byteStart < $raw + $length) {
-                return $id === T_ENCAPSED_AND_WHITESPACE && $isNowdoc === false;
+                return $id === T_ENCAPSED_AND_WHITESPACE && $isNowdoc !== true;
             }
 
             if ($id === T_END_HEREDOC) {
@@ -939,25 +965,36 @@ class ExtractNodeCommand extends Command
         // here is downgraded to "leave the import alone" rather than
         // aborting the whole extraction over a cosmetic cleanup step.
         //
-        // DEFENSIVE, CURRENTLY UNREACHABLE THROUGH ANY VALID-INPUT TEST
-        // (round 3 mutation testing: deleting this whole block leaves the
-        // suite green). By the time this line runs, $providerFile has
-        // JUST been proven writable one call earlier in this exact
-        // sequence: deregisterFromHost() already called
-        // NodeRegistrationWriter::removeFrom() on this SAME file, which
-        // only returns `Removed` (the one outcome that reaches this
-        // method at all) after its OWN put()-then-reread check already
-        // succeeded — nothing between that check and this one changes the
-        // file's permissions or the filesystem's ability to write it, so
-        // there is no way to make THIS put() fail while leaving that
-        // EARLIER one to have already succeeded, through any host
-        // configuration a real Laravel application could have. Kept
-        // anyway, the same reasoning as hostPsr4Directories()'s and
-        // gate6()'s own "defensive, currently unreachable" guards: the
-        // dependency is on ANOTHER method (removeFrom()) staying exactly
-        // as strict as it is today, and if a future change ever lets
-        // control reach this method without that same guarantee, this
-        // keeps its own protection rather than trusting put() silently.
+        // THIS METHOD IS REACHABLE WITH A WRITE THAT FAILS — a round-3
+        // docblock claimed otherwise ("Removed is the one outcome that
+        // reaches this method"), and the review round 4 disproved it:
+        // deregisterFromHost()'s own match falls through on `NotPresent`,
+        // `ProviderMissing`, `AnchorMissing`, and `AnchorAmbiguous` too,
+        // not only `Removed` — an import that is never registered in the
+        // array at all (`NotPresent`) reaches this method with NO prior
+        // write to this file to lean on, because `removeFrom()` never
+        // attempts a write when nothing was found to remove. A persisted
+        // test (below) proves this reachable end to end, using an
+        // installed error handler that lets a permission-denied
+        // `file_put_contents()` return `false` rather than throw — the
+        // way PHPUnit's own handler would otherwise convert that failure
+        // into an exception before this comparison ever ran, which is
+        // what round 3's own probe actually observed and reported
+        // correctly, just for the wrong reason.
+        //
+        // WHAT REMAINS UNTESTABLE (confirmed by mutation, not merely
+        // argued): deleting this ENTIRE `if` block survives that same
+        // persisted test, because every constructible permission failure
+        // (a chmod'd file) makes `file_put_contents()` fail BEFORE writing
+        // any bytes at all — the file is left EXACTLY as it was whether or
+        // not this block runs, so "revert to the original" and "do
+        // nothing" are observably identical outcomes for that failure
+        // mode. The block would only differ from doing nothing for a
+        // PARTIAL or otherwise corrupted write (a race with another
+        // process, a disk that fills up mid-write) that no portable test
+        // can manufacture. Kept anyway, on principle: the guard costs one
+        // extra read, and a write mode this method cannot currently
+        // provoke is not proof no host ever will.
         if ($this->files->get($providerFile) !== $updated) {
             $this->files->put($providerFile, $contents);
         }
@@ -1163,12 +1200,13 @@ class ExtractNodeCommand extends Command
     }
 
     /**
-     * Every top-level directory under $hostBasePath except `vendor/`,
-     * `node_modules/`, and any dot-prefixed directory (`.git` and
-     * similar), unioned with the host's own PSR-4 directories
-     * (`hostPsr4Directories()` — the SAME set G2 requires the node's own
-     * file to sit under, for the same "must never admit ground the scan
-     * does not cover" reason that method's own docblock already gives).
+     * Every top-level directory AND top-level scannable `*.php`-family
+     * file directly under $hostBasePath — except `vendor/`,
+     * `node_modules/`, and any dot-prefixed entry (`.git` and similar) —
+     * unioned with the host's own PSR-4 directories (`hostPsr4Directories()`
+     * — the SAME set G2 requires the node's own file to sit under, for the
+     * same "must never admit ground the scan does not cover" reason that
+     * method's own docblock already gives).
      *
      * WIDER than the gate's own OLD, narrow REFERENCE_SCAN_DIRS allowlist
      * (app, bootstrap, config, database, resources, routes, tests) —
@@ -1180,26 +1218,46 @@ class ExtractNodeCommand extends Command
      * `scanSharedRoots()`, not here) is what keeps this width from ALSO
      * admitting a compiled cache artifact as if it were source.
      *
-     * A candidate is dropped, not included, when it canonically escapes the
-     * host root through a symlink (E51's own rule, checked here the same
-     * way `isUnderAnyMappedRoot()` checks it for G2's own scan roots): a
-     * top-level entry that is itself a symlink pointing outside the host —
-     * exactly the shape Important N2's own PSR-4 guard exists to keep out
-     * of G5's roots — must not become a scan root here either, or this
-     * scan would find, and wrongly refuse or abort on, a reference planted
-     * only in whatever the symlink happens to point at.
+     * TOP-LEVEL FILES (round 4 fix, formerly a documented residual): a
+     * loose `*.php` file sitting directly at the host root (`rector.php`,
+     * confirmed reachable end to end) is now included as its own scan
+     * root — `NodeReferenceScanner::scan()` accepts a FILE root directly,
+     * not only a directory to walk. Before this fix, every entry this
+     * method returned was a directory, so a reference in such a file was
+     * invisible to both G5 and M6a — a host-fatal path after an
+     * irreversible delete, not merely a cosmetic gap, which is why it
+     * graduated from "documented" to "fixed" rather than staying noted.
      *
-     * DOCUMENTED RESIDUAL (round 3): a reference in a loose `.php` FILE
-     * sitting directly at the HOST ROOT ITSELF — not inside any
-     * directory at all — is invisible to this method and therefore to
-     * both G5 and M6a, since every entry this method returns is a
-     * DIRECTORY handed to `NodeReferenceScanner::scan()`, which only ever
-     * walks directories. This is not a regression: the OLD, narrower
-     * `REFERENCE_SCAN_DIRS` allowlist had the exact same gap (a root-level
-     * file was never one of its named directories either), and a real
-     * Laravel host does not put PHP source directly at its own project
-     * root (`artisan` has no `.php` extension and is never autoloaded
-     * source). Stated here rather than silently carried forward.
+     * A candidate TOP-LEVEL entry is dropped, not included, when it
+     * canonically escapes the host root through a symlink (E51's own
+     * rule, checked here the same way `isUnderAnyMappedRoot()` checks it
+     * for G2's own scan roots): a top-level entry that is ITSELF a
+     * symlink pointing outside the host — exactly the shape Important
+     * N2's own PSR-4 guard exists to keep out of G5's roots — must not
+     * become a scan root here either, or this scan would find, and
+     * wrongly refuse or abort on, a reference planted only in whatever
+     * the symlink happens to point at (an unrelated tree this command was
+     * never told to cover, which is what the containment check here
+     * exists to avoid treating as the host's own source).
+     *
+     * THIS RULE APPLIES ONLY TO A TOP-LEVEL ENTRY BECOMING A ROOT — it is
+     * NOT, and must never become, a general "skip anything reached via a
+     * symlink" filter applied INSIDE a scan (round 4 fix, replacing a
+     * round-1 design this method's own earlier revisions relied on).
+     * `NodeReferenceScanner::scan()` used to apply an equivalent
+     * containment filter to every file it found, nested symlinks
+     * included, and that was the CONVERSE cost this docblock did not
+     * previously name: `app/Linked` symlinked to a directory outside the
+     * host, declaring `App\Linked\Consumer` and referencing the node
+     * under extraction, is genuinely autoloadable by the host (PSR-4:
+     * `App\` → `app/`) but was invisible to both G5 and M6a under that
+     * filter — extraction would delete the original and leave the host
+     * loading a class that no longer exists, the exact failure this whole
+     * command exists to prevent. `NodeReferenceScanner` now follows a
+     * NESTED symlink instead (with cycle detection, refusing loudly on a
+     * cycle or an unreadable target) — this method's own containment
+     * check stays, but only for the narrower question of "should this
+     * TOP-LEVEL entry become a root at all."
      *
      * DOCUMENTED COST (round 3): this widening means a full non-vendor,
      * non-node_modules tree walk now happens TWICE per extraction — once
@@ -1225,7 +1283,13 @@ class ExtractNodeCommand extends Command
 
             $path = $hostBasePath.'/'.$entry;
 
-            if ($this->files->isDirectory($path) && $hostRoot->contains($path)) {
+            if (! $hostRoot->contains($path)) {
+                continue;
+            }
+
+            if ($this->files->isDirectory($path)) {
+                $roots[] = $path;
+            } elseif ($this->isScannableFileName($entry)) {
                 $roots[] = $path;
             }
         }
@@ -1234,6 +1298,22 @@ class ExtractNodeCommand extends Command
             $roots,
             $this->hostPsr4Directories($hostBasePath),
         )));
+    }
+
+    /**
+     * The same extension set `NodeReferenceScanner` itself scans for —
+     * kept as its own small copy here (that method's own equivalent is
+     * private) rather than shared, since this is the one place
+     * ExtractNodeCommand needs to decide "is this loose top-level FILE
+     * even worth handing to scan() as its own root" before scan() ever
+     * runs, not something scan() itself needs to expose.
+     */
+    private function isScannableFileName(string $name): bool
+    {
+        return str_ends_with($name, '.blade.php')
+            || str_ends_with($name, '.php')
+            || str_ends_with($name, '.phtml')
+            || str_ends_with($name, '.inc');
     }
 
     /**

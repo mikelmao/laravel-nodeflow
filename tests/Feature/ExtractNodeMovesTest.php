@@ -546,6 +546,193 @@ it('escapes the new FQCN for heredoc rules when a namespace segment would otherw
     expect($value)->not->toContain("\t");
 });
 
+it('escapes an INTERPOLATED double-quoted string reference too, not only a heredoc (Important N1, review round 4)', function () {
+    // The general class N1 named: EVERY T_ENCAPSED_AND_WHITESPACE chunk
+    // except a nowdoc's processes escapes -- an ordinary double-quoted
+    // string with a $variable interpolation is tokenised into exactly
+    // such chunks around the interpolation point, and the literal chunk
+    // containing our class reference is just as vulnerable to a \t-shaped
+    // corruption as a heredoc body is.
+    $extraBody = <<<'PHP'
+
+        public function legacyAlias(): string
+        {
+            $suffix = '!';
+
+            return "App\Nodeflow\Nodes\InterpNode$suffix";
+        }
+    PHP;
+
+    $class = movesWriteNode($this->root, 'InterpNode', 'interp.node', $extraBody);
+
+    $this->artisan('nodeflow:extract-node', [
+        'class' => $class,
+        '--package' => 'acme/things',
+        '--namespace' => 'acme\things',
+    ])->assertExitCode(0);
+
+    $movedPath = $this->root.'/packages/acme/things/src/Nodes/InterpNode.php';
+
+    exec('php -l '.escapeshellarg($movedPath).' 2>&1', $out, $exit);
+    expect($exit)->toBe(0);
+
+    require $movedPath;
+
+    $value = (new \acme\things\Nodes\InterpNode())->legacyAlias();
+    expect($value)->toBe('acme\things\Nodes\InterpNode!');
+    expect($value)->not->toContain("\t");
+});
+
+it('BACKTICK shell-exec strings process escapes the same way and need the same protection', function () {
+    $extraBody = <<<'PHP'
+
+        public function legacyAlias(): string
+        {
+            return `App\Nodeflow\Nodes\BacktickNode`;
+        }
+    PHP;
+
+    $class = movesWriteNode($this->root, 'BacktickNode', 'backtick.node', $extraBody);
+
+    $this->artisan('nodeflow:extract-node', [
+        'class' => $class,
+        '--package' => 'acme/things',
+        '--namespace' => 'acme\things',
+    ])->assertExitCode(0);
+
+    $movedPath = $this->root.'/packages/acme/things/src/Nodes/BacktickNode.php';
+
+    exec('php -l '.escapeshellarg($movedPath).' 2>&1', $out, $exit);
+    expect($exit)->toBe(0);
+
+    $moved = file_get_contents($movedPath);
+
+    // The doubled backslash must be present in the SOURCE (shell_exec's
+    // own escape rules match double-quoted strings) -- checked textually
+    // here since actually shelling out is unnecessary to prove the point.
+    expect($moved)->toContain('`acme\\\\things\\\\Nodes\\\\BacktickNode`');
+});
+
+it('preserves the PLAIN spelling inside a NOWDOC when the original text was plain, never doubling it (mutation survivors 1 and 2, review round 4)', function () {
+    // The committed nowdoc probe used the ESCAPED spelling, whose correct
+    // output happens to COINCIDE with what "always escape" would also
+    // produce -- so it could not tell "needsEscaping() always returns
+    // true" or "isNowdoc always computed as false" apart from the real
+    // fix. A PLAIN-spelled nowdoc is the missing counterexample: the
+    // correct replacement must stay PLAIN (single backslash), and either
+    // mutation above would wrongly double it.
+    $extraBody = <<<'PHP'
+
+        public function legacyAlias(): string
+        {
+            return <<<'TEXT'
+            App\Nodeflow\Nodes\PlainNowdocNode
+            TEXT;
+        }
+    PHP;
+
+    $class = movesWriteNode($this->root, 'PlainNowdocNode', 'plainnowdoc.node', $extraBody);
+
+    $this->artisan('nodeflow:extract-node', ['class' => $class, '--package' => 'acme/widgets'])
+        ->assertExitCode(0);
+
+    $movedPath = $this->root.'/packages/acme/widgets/src/Nodes/PlainNowdocNode.php';
+
+    exec('php -l '.escapeshellarg($movedPath).' 2>&1', $out, $exit);
+    expect($exit)->toBe(0);
+
+    require $movedPath;
+
+    $value = (new \Acme\Widgets\Nodes\PlainNowdocNode())->legacyAlias();
+    expect($value)->toBe('Acme\Widgets\Nodes\PlainNowdocNode');
+    expect(substr_count($value, '\\'))->toBe(3);
+});
+
+it('resets nowdoc state after T_END_HEREDOC, so an UNRELATED nowdoc earlier in the file cannot suppress escaping for a later interpolated string (mutation survivor 3, review round 4)', function () {
+    // Deleting the T_END_HEREDOC reset survived the whole suite: nothing
+    // exercised a file where a nowdoc closes and is FOLLOWED, with no
+    // fresh T_START_HEREDOC in between, by a plain double-quoted string
+    // that also needs escaping. Without the reset, the stale "we are in
+    // a nowdoc" state bleeds forward and wrongly skips escaping there.
+    $extraBody = <<<'PHP'
+
+        public function unrelatedNowdoc(): string
+        {
+            return <<<'NOWDOC'
+            just some literal text, no class reference here
+            NOWDOC;
+        }
+
+        public function legacyAlias(): string
+        {
+            $suffix = '!';
+
+            return "App\Nodeflow\Nodes\ResetProbeNode$suffix";
+        }
+    PHP;
+
+    $class = movesWriteNode($this->root, 'ResetProbeNode', 'resetprobe.node', $extraBody);
+
+    $this->artisan('nodeflow:extract-node', [
+        'class' => $class,
+        '--package' => 'acme/things',
+        '--namespace' => 'acme\things',
+    ])->assertExitCode(0);
+
+    $movedPath = $this->root.'/packages/acme/things/src/Nodes/ResetProbeNode.php';
+
+    exec('php -l '.escapeshellarg($movedPath).' 2>&1', $out, $exit);
+    expect($exit)->toBe(0);
+
+    require $movedPath;
+
+    $value = (new \acme\things\Nodes\ResetProbeNode())->legacyAlias();
+    expect($value)->toBe('acme\things\Nodes\ResetProbeNode!');
+    expect($value)->not->toContain("\t");
+});
+
+it('never escapes a Blade/inline-HTML reference, even when the new namespace would form a dangerous escape sequence (mutation survivor 4, review round 4)', function () {
+    // T_INLINE_HTML processes NO escapes at all -- dropping the
+    // "$id === T_ENCAPSED_AND_WHITESPACE" half of needsEscaping()'s own
+    // check (checking only $isNowdoc, which defaults to null and would
+    // read as "needs escaping" here too) would wrongly double the
+    // backslash in literal markup text, which is never correct: markup is
+    // echoed byte-for-byte, so a doubled backslash in the SOURCE means a
+    // doubled backslash in the OUTPUT -- a real, visible regression.
+    $extraBody = <<<'PHP'
+
+        public function bladeProbe(): void
+        {
+            ?>
+            App\Nodeflow\Nodes\BladeProbeNode
+            <?php
+        }
+    PHP;
+
+    $class = movesWriteNode($this->root, 'BladeProbeNode', 'bladeprobe.node', $extraBody);
+
+    $this->artisan('nodeflow:extract-node', [
+        'class' => $class,
+        '--package' => 'acme/things',
+        '--namespace' => 'acme\things',
+    ])->assertExitCode(0);
+
+    $movedPath = $this->root.'/packages/acme/things/src/Nodes/BladeProbeNode.php';
+
+    exec('php -l '.escapeshellarg($movedPath).' 2>&1', $out, $exit);
+    expect($exit)->toBe(0);
+
+    $moved = file_get_contents($movedPath);
+
+    // The inline-HTML text is echoed byte-for-byte, so checking the
+    // SOURCE text directly is equivalent to checking the runtime OUTPUT
+    // for this token kind -- unlike a heredoc/double-quoted string, there
+    // is no separate escape-processing step to distinguish source from
+    // value.
+    expect($moved)->toContain("acme\\things\\Nodes\\BladeProbeNode\n");
+    expect($moved)->not->toContain('acme\\\\things\\\\Nodes\\\\BladeProbeNode');
+});
+
 it("moves the class's test and rewrites its import, adding no namespace declaration", function () {
     $class = movesWriteNode($this->root, 'TestMoveNode', 'test.move.node');
     movesWriteHostTest($this->root, 'TestMoveNode', $class);
@@ -633,6 +820,53 @@ it('keeps the host import when its short name appears in a second place', functi
 
     exec('php -l '.escapeshellarg($this->root.'/app/Providers/NodeflowServiceProvider.php').' 2>&1', $out, $exit);
     expect($exit)->toBe(0);
+});
+
+it('leaves the import in place, and the extraction still succeeds, when removeUnusedImportIfSafe() cannot write the host provider (review round 4, Minor N3)', function () {
+    // The round-3 docblock claimed removeUnusedImportIfSafe()'s own put()
+    // is reached only after NodeRegistrationWriter::removeFrom() already
+    // proved this SAME file writable -- the reviewer disproved that:
+    // deregisterFromHost()'s match falls through on NotPresent too (an
+    // import that is never registered in the array at all), and
+    // removeFrom() never attempts a write when nothing was found to
+    // remove. Under PHPUnit's own error handling, that put() failure
+    // THROWS before this method's re-verify comparison ever runs -- which
+    // is what round 3 actually observed and correctly reported (exit 1,
+    // nothing moved) -- but it is not the only way a real host could
+    // behave: a production error handler that logs a warning and lets
+    // file_put_contents() return false WITHOUT throwing reaches the
+    // comparison for real. Installing exactly that handler here is what
+    // makes this test genuinely exercise the revert logic, not merely
+    // observe the exception path round 3 already covered.
+    $class = movesWriteNode($this->root, 'UnwritableImportNode', 'unwritableimport.node');
+    movesWriteProvider($this->root, '', 'use App\Nodeflow\Nodes\UnwritableImportNode;');
+
+    $providerPath = $this->root.'/app/Providers/NodeflowServiceProvider.php';
+    $originalProvider = file_get_contents($providerPath);
+    chmod($providerPath, 0444);
+
+    set_error_handler(static fn (): bool => true, E_WARNING);
+
+    try {
+        $this->artisan('nodeflow:extract-node', ['class' => $class, '--package' => 'acme/widgets'])
+            ->assertExitCode(0);
+    } finally {
+        restore_error_handler();
+        chmod($providerPath, 0644);
+    }
+
+    // The write failed silently (no throw, per the installed handler) and
+    // was correctly detected and reverted: the host provider is BYTE-FOR-
+    // BYTE what it was before, import and all -- not merely "still
+    // contains the import" (which a half-applied edit could also leave
+    // true of).
+    expect(file_get_contents($providerPath))->toBe($originalProvider);
+
+    // And the rest of the extraction still completed -- this is a
+    // cosmetic cleanup failure, never a reason to abort or restore
+    // everything else.
+    expect($this->root.'/packages/acme/widgets/src/Nodes/UnwritableImportNode.php')->toBeFile();
+    expect($this->root.'/app/Nodeflow/Nodes/UnwritableImportNode.php')->not->toBeFile();
 });
 
 // --- M6: the host composer.json -------------------------------------------
@@ -925,6 +1159,81 @@ it('still scans a PSR-4 directory that is dot-prefixed, ground the top-level wal
         ->assertFailed();
 
     expect(movesTreeHash($this->root))->toBe($before);
+});
+
+it('refuses over a reference in a loose root-level .php file, end to end (review round 4, item A)', function () {
+    // rector.php was the reviewer's own example: a loose *.php file
+    // sitting directly at the host root, with no containing directory of
+    // its own. Before this fix, sharedScanRoots() returned directories
+    // only, so nothing here was ever scanned by G5 or M6a — extraction
+    // would delete the original and leave this file's own reference
+    // pointing at a class that no longer exists.
+    $class = movesWriteNode($this->root, 'RootFileNode', 'rootfile.node');
+
+    file_put_contents($this->root.'/rector.php', <<<'PHP'
+    <?php
+
+    return \App\Nodeflow\Nodes\RootFileNode::class;
+    PHP);
+
+    $before = movesTreeHash($this->root);
+
+    $this->artisan('nodeflow:extract-node', ['class' => $class, '--package' => 'acme/widgets'])
+        ->expectsOutputToContain('rector.php')
+        ->assertFailed();
+
+    expect(movesTreeHash($this->root))->toBe($before);
+    expect($this->root.'/packages/acme/widgets')->not->toBeDirectory();
+});
+
+it('refuses over a reference reached through a symlink NESTED inside a scan root, rather than silently deleting the original (review round 4, item B)', function () {
+    // The sharper of the two: app/Linked symlinked to a directory OUTSIDE
+    // the host, declaring App\Linked\Consumer and referencing the node.
+    // PSR-4 (App\ -> app/) makes this genuinely autoloadable by the host
+    // at runtime -- the old HostPath::contains() filter INSIDE
+    // NodeReferenceScanner made it invisible to both G5 and M6a, so
+    // extraction would delete the original and leave the host loading a
+    // class that no longer exists: the exact failure this whole command
+    // exists to prevent. A top-level scan root that IS an escaping
+    // symlink is still refused upstream (Important N2's own test covers
+    // that); this is about a symlink NESTED inside an otherwise
+    // legitimate root, which the scanner must now follow.
+    $class = movesWriteNode($this->root, 'SymlinkedConsumerNode', 'symlinkedconsumer.node');
+
+    $outside = sys_get_temp_dir().'/nodeflow-extract-node-symlink-target-'.bin2hex(random_bytes(6));
+    mkdir($outside, 0777, true);
+    $outside = realpath($outside);
+
+    file_put_contents($outside.'/Consumer.php', <<<'PHP'
+    <?php
+
+    namespace App\Linked;
+
+    class Consumer
+    {
+        public function make(): \App\Nodeflow\Nodes\SymlinkedConsumerNode
+        {
+            return new \App\Nodeflow\Nodes\SymlinkedConsumerNode();
+        }
+    }
+    PHP);
+
+    symlink($outside, $this->root.'/app/Linked');
+
+    $before = movesTreeHash($this->root);
+
+    try {
+        $this->artisan('nodeflow:extract-node', ['class' => $class, '--package' => 'acme/widgets'])
+            ->expectsOutputToContain('Consumer.php')
+            ->assertFailed();
+
+        expect(movesTreeHash($this->root))->toBe($before);
+        expect($this->root.'/packages/acme/widgets')->not->toBeDirectory();
+        expect($this->root.'/app/Nodeflow/Nodes/SymlinkedConsumerNode.php')->toBeFile();
+    } finally {
+        unlink($this->root.'/app/Linked');
+        movesDeleteTree($outside);
+    }
 });
 
 // --- Restores byte-identically on failure injected at each step ------------

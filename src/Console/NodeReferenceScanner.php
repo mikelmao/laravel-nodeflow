@@ -162,7 +162,10 @@ final class NodeReferenceScanner
     private const IGNORED_TOKEN_IDS = [T_WHITESPACE, T_COMMENT, T_DOC_COMMENT];
 
     /**
-     * @param  list<string>  $absoluteRoots
+     * @param  list<string>  $absoluteRoots  Each entry is either a directory
+     *  (walked recursively) or a single FILE (scanned directly, without a
+     *  containing directory needing to be named at all — a loose root-level
+     *  `*.php` file a directory-only root list could never reach).
      * @param  list<string>  $excludedTopLevelNames  Directory NAMES to skip
      *  recursing into, but ONLY when they sit directly inside one of
      *  $absoluteRoots itself — never at any deeper nesting, and never
@@ -185,26 +188,20 @@ final class NodeReferenceScanner
      * @return list<NodeReference>
      *
      * @throws \RuntimeException when a scanned file declares more than one
-     *                            `namespace` block
+     *                            `namespace` block, when a directory entry
+     *                            (ordinarily a symlink) cannot be resolved
+     *                            to a real path, or when following one
+     *                            would revisit a directory already scanned
+     *                            in this same call (a symlink cycle)
      */
     public static function scan(string $fqcn, array $absoluteRoots, array $excludedTopLevelNames = []): array
     {
         $target = ltrim($fqcn, '\\');
         $references = [];
+        $visitedRealPaths = [];
 
         foreach ($absoluteRoots as $root) {
-            $hostPath = HostPath::root($root);
-
-            foreach (self::scannableFilesUnder($root, $excludedTopLevelNames, $root) as $file) {
-                // A file reached only through a symlink whose target escapes
-                // this root is not "inside" it (HostPath::contains() is
-                // canonical, per its own docblock) — skipping it here is
-                // what keeps this scanner from following a symlink out of
-                // the tree it was told to scan.
-                if (! $hostPath->contains($file)) {
-                    continue;
-                }
-
+            foreach (self::scannableFilesUnder($root, $excludedTopLevelNames, $root, $visitedRealPaths) as $file) {
                 array_push($references, ...self::scanFile($file, $target));
             }
         }
@@ -214,11 +211,44 @@ final class NodeReferenceScanner
 
     /**
      * Every `*.php` (which already covers `*.blade.php`), `*.phtml`, and
-     * `*.inc` file under $root, found by a plain recursive directory walk.
-     * `is_dir()` follows a symlinked directory (so a file reached only
-     * through one is still found and handed to `scan()`'s own `contains()`
-     * filter above, which is what actually decides whether it counts) —
-     * this method itself does no filtering beyond $excludedTopLevelNames.
+     * `*.inc` file under $directory, found by a recursive directory walk
+     * that FOLLOWS a symlinked directory rather than skipping it (round 4
+     * ruling — see below for why), with $visitedRealPaths tracking every
+     * directory's own canonical (`realpath()`) form across the WHOLE
+     * `scan()` call so a symlink cycle is caught rather than recursed into
+     * forever.
+     *
+     * WHY FOLLOW A SYMLINK NESTED INSIDE A SCAN ROOT AT ALL (round 4
+     * ruling, replacing round-1's `HostPath::contains()` filter). A
+     * top-level scan root that IS ITSELF an escaping symlink is refused
+     * upstream, before it ever reaches this class — ExtractNodeCommand's
+     * own `hostPsr4Directories()` and `sharedScanRoots()` already filter
+     * that out (E51, Important N2). What this method now handles is
+     * DIFFERENT and sharper: a symlink NESTED inside an otherwise
+     * legitimate root — `app/Linked` symlinked to a directory outside the
+     * host, itself declaring `App\Linked\Consumer` and referencing the
+     * node under extraction. PSR-4 (`App\` → `app/`) makes that class
+     * genuinely autoloadable by the host at runtime, but the OLD
+     * `HostPath::contains()` filter made it invisible to this scanner —
+     * meaning invisible to both G5 and M6a — so extraction would delete
+     * the original and leave the host loading a class that no longer
+     * exists, the exact failure this whole command exists to prevent. A
+     * blanket refusal of any scan root containing an escaping symlink was
+     * considered and rejected: a monorepo with symlinked shared source is
+     * exactly where this is real, and refusing there would block the
+     * users who most need this command. Scanning the target instead finds
+     * the reference and refuses for the right reason, naming the file —
+     * the SAME trade this class already makes everywhere else (E46: erring
+     * toward finding too much is always the safe direction; the unsafe one
+     * is silently finding too little).
+     *
+     * The COST of following symlinks is what $visitedRealPaths pays for:
+     * an unbounded symlink cycle would otherwise recurse forever, and a
+     * broken symlink's target cannot be scanned at all — both REFUSE
+     * LOUDLY (a thrown exception naming the path) rather than being
+     * silently skipped, because silently skipping either is the same
+     * "found too little" failure this method exists to avoid, just
+     * reached a different way.
      *
      * $excludedTopLevelNames is only ever tested against an entry when
      * `$directory === $scanRoot` — i.e. only for entries directly inside
@@ -229,10 +259,44 @@ final class NodeReferenceScanner
      * else entirely under the same root.
      *
      * @param  list<string>  $excludedTopLevelNames
+     * @param  array<string, true>  $visitedRealPaths  passed by reference
+     *  and shared across every root in the SAME scan() call, not reset per
+     *  root — two different top-level roots resolving to the same real
+     *  directory (an unusual symlink arrangement) is exactly as much a
+     *  cycle risk as one root symlinking into itself.
      * @return \Generator<string>
+     *
+     * @throws \RuntimeException
      */
-    private static function scannableFilesUnder(string $directory, array $excludedTopLevelNames, string $scanRoot): \Generator
+    private static function scannableFilesUnder(string $directory, array $excludedTopLevelNames, string $scanRoot, array &$visitedRealPaths): \Generator
     {
+        if (is_file($directory)) {
+            if (self::hasScannableExtension($directory)) {
+                yield $directory;
+            }
+
+            return;
+        }
+
+        $real = realpath($directory);
+
+        if ($real === false) {
+            throw new \RuntimeException(
+                "[{$directory}] could not be resolved to a real path — a broken symlink target would ".
+                'otherwise be silently skipped here, hiding a reference this scan could not then prove '.
+                'is absent.'
+            );
+        }
+
+        if (isset($visitedRealPaths[$real])) {
+            throw new \RuntimeException(
+                "[{$directory}] resolves to [{$real}], a directory this scan has already visited — ".
+                'following it would recurse into a symlink cycle forever.'
+            );
+        }
+
+        $visitedRealPaths[$real] = true;
+
         $entries = @scandir($directory);
 
         if ($entries === false) {
@@ -250,19 +314,43 @@ final class NodeReferenceScanner
 
             $path = $directory.'/'.$entry;
 
+            // A broken symlink (target does not exist) is neither
+            // is_dir() nor is_file() — PHP cannot stat a target that
+            // is not there — so without this check it would silently
+            // fall through the two branches below and be skipped
+            // entirely, exactly the "found too little" failure this
+            // whole method exists to avoid. Checked here, structurally
+            // (is_link() plus a failed realpath()), rather than folded
+            // into the is_dir() branch below, because a broken symlink
+            // is neither a directory NOR a scannable file and must be
+            // refused regardless of which one its OWN name might have
+            // suggested.
+            if (is_link($path) && realpath($path) === false) {
+                throw new \RuntimeException(
+                    "[{$path}] is a symlink whose target could not be resolved — silently skipping it ".
+                    'would hide whatever it was meant to point at, which this scan could not then prove '.
+                    'does not reference the class under extraction.'
+                );
+            }
+
             if (is_dir($path)) {
-                yield from self::scannableFilesUnder($path, $excludedTopLevelNames, $scanRoot);
+                yield from self::scannableFilesUnder($path, $excludedTopLevelNames, $scanRoot, $visitedRealPaths);
 
                 continue;
             }
 
-            if (str_ends_with($entry, '.blade.php')
-                || str_ends_with($entry, '.php')
-                || str_ends_with($entry, '.phtml')
-                || str_ends_with($entry, '.inc')) {
+            if (self::hasScannableExtension($entry)) {
                 yield $path;
             }
         }
+    }
+
+    private static function hasScannableExtension(string $name): bool
+    {
+        return str_ends_with($name, '.blade.php')
+            || str_ends_with($name, '.php')
+            || str_ends_with($name, '.phtml')
+            || str_ends_with($name, '.inc');
     }
 
     /** @return list<NodeReference> */
