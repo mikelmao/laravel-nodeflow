@@ -187,11 +187,9 @@ After the steps, and never affecting the exit code:
 ### 3.4 Idempotency
 
 A second run reports `AlreadyPresent` for every step and exits 0. The claim does **not** rest on
-`NodeRegistrationWriter`'s presence check, whose documented gap is that a provider importing a class
-and listing a bare `SendSms::class` is not recognised, so a duplicate is appended. `install` writes
-class entries only into a provider it just created with empty arrays, where that gap cannot fire;
-for an existing provider it inserts anchors and `boot()` calls, whose presence checks are exact
-strings the writer does not participate in.
+`NodeRegistrationWriter`'s presence check. `install` writes class entries only into a provider it
+just created with empty arrays; for an existing provider it inserts anchors and `boot()` calls,
+whose presence checks are exact strings the writer does not participate in.
 
 ---
 

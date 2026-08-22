@@ -7,12 +7,13 @@ most were proven by probe during a review rather than suspected.
 **Status key:** `DECISION` needs a human call · `DEFECT` is proven and unfixed · `GAP` is missing
 coverage or missing code · `DRIFT` is documentation disagreeing with code.
 
-Last updated 2026-08-21 as **Plan 5** merged (branch `f56f9e1..0e5274f`, 28 commits).
-Gates measured on the branch immediately before merge: **488 package Pest tests (6152 assertions)**, **160 package Vitest
-tests**, silent package `tsc`. Demo: **56 demo Pest tests (223 assertions)**, silent demo `tsc`, a
-successful demo `npm run build`. Real-browser acceptance is recorded separately below once run —
-until that section exists, Plan 5 is merged but **not** browser-accepted. Plan 5 closed F-1, F-2, G-2 and G-4, cut G-3 (**E26**), verified and
-closed R-2, and added F-3 plus the demo tenant-switcher limitation below.
+Last updated 2026-08-22 as **Plan 6's implementation** completed at package commit `b7a1772`, with
+its documentation close recorded here and the permanent demo extraction at `e15e5bd`. Gates
+measured for Plan 6: **891 package Pest tests (7438 assertions)**, **160 package Vitest tests**,
+silent package `tsc`; demo **56 Pest tests (223
+assertions)**, silent demo `tsc`, and a successful demo `npm run build`. Plan 6 delivered E9 and E10
+as amended by E36, closed G-6 and G-10, and added F-4 and G-13 below. Plan 5's real-browser caveat
+remains open as G-5.
 
 **Read `docs/superpowers/plans/2026-08-21-nodeflow-remaining-tooling-execution-record.md` before
 trusting Plan 5's plan document.** Execution forced 22 recorded rulings, 15 of them corrections to
@@ -207,6 +208,32 @@ first three are the ones a green suite genuinely cannot substitute for.
 
 ---
 
+## Plan 6 acceptance evidence
+
+Measured on the package branch at `b7a1772`: **891 Pest tests (7438 assertions)**, **160 Vitest
+tests**, and silent `npx tsc --noEmit`. The permanent demo changes are `b2f70fc` (all three nodes
+moved into the generated `$nodes` registration home) and `e15e5bd` (the real extraction). At the
+latter, demo Pest remained **56/223**, demo `tsc` was silent, and `npm run build` passed.
+
+**The persisted-data proof.** Five published `flow_versions.graph` rows contain **15** occurrences of
+`demo.send`. Every direct and persisted resolution still maps that type to
+`Atram\NodeflowDemoNodes\Nodes\SendMessage` after extraction. The demo permanently carries that one
+node in `packages/atram/nodeflow-demo-nodes/`; `TagUser` and `SegmentUsers` remain host nodes. This
+mixed shape is intentional standing regression evidence (E42), not cleanup still to do.
+
+The failed-run oracle also passed before the kept extraction: an injected M7 deletion failure exited
+1, restored the demo to a clean Git tree, left `packages/` absent and preserved the original class.
+The successful run then performed a real Composer install and a fresh Laravel boot that discovered
+the package provider. **M3 was not exercised by the real host**, because the demo has no
+`tests/Feature/Nodeflow/`; its test-move behavior remains covered by package fixtures.
+
+**Scope boundary.** Plan 6 did not touch **G-5, G-7, G-8, G-9, G-11, G-12, D-1, D-2 or G-3**.
+G-7 is especially easy to misread: E41 unified the package-source constant but did not bind the path
+to the `@nodeflow/editor` alias entry. Dynamic and database-stored class references also remain
+outside the static extraction scan (G-13/E46).
+
+---
+
 ## Proven defects
 
 ### F-1 · `--group='{{ outputs }}'` renders an unparseable file and exits 0
@@ -261,6 +288,24 @@ Both commands ship a persisted test asserting that two invocations in one proces
 `--type` (or `--type`/`--event`), each produce their own file with their own value and never the
 other's — `MakeNodeCommandTest`'s "validates each invocation independently, even when the command
 instance is reused" and its `MakeTriggerCommandTest` counterpart.
+
+### F-4 · `appendTo()` treated any whole-file mention as an existing registration
+**Status:** ✅ **RESOLVED, Plan 6 (E50).** · **Raised by:** Plan 6 external design review, reproduced
+before implementation
+
+`NodeRegistrationWriter::appendTo()` stripped comments and ran `str_contains()` over the entire
+provider. A class name in an unrelated string or method therefore returned `AlreadyPresent`, even
+when the target `$nodes` array contained no such entry, and the generator silently skipped the
+registration.
+
+**Fix.** Presence now resolves entries only inside the anchored array, through the same PHP name
+resolution used by removal. The regression test puts the target in an unrelated string and proves
+the entry is still appended. The review also found one existing writer test asserted false PHP name
+semantics: inside `namespace App\Providers`, the written
+`App\Nodeflow\Nodes\SendSms::class` resolves to
+`App\Providers\App\Nodeflow\Nodes\SendSms`, not the intended class. That one test was deliberately
+rewritten from `AlreadyPresent` to `Appended`, with a no-namespace companion preserving the case it
+was trying to express. The other fifteen pre-existing writer tests remained untouched.
 
 ---
 
@@ -399,16 +444,21 @@ genuinely cannot substitute for:
 IPv6 loopback — use `http://[::1]:9222/json/version`, not `127.0.0.1`.
 
 ### G-6 · Duplicated path logic across the install steps
-**Status:** GAP · **Raised by:** Plan 5 whole-branch review · **Cost:** small
+**Status:** ✅ **RESOLVED, Plan 6 (corrected E41).** · **Raised by:** Plan 5 whole-branch review
 
 Two of Plan 5's fix-round defects (**R13**, **R15**) were path-arithmetic bugs in separate step
-classes, and the logic was still not shared afterwards. There are three `PACKAGE_SOURCE` constants
-holding **two different values** — `TailwindSourceStep` and `TsconfigPathsStep` use
-`vendor/atram/…`, `ViteAliasStep` uses `atram/…` — and two independent `segments()` helpers with
-different filtering rules (one drops `''`, the other drops `''` and `'.'`).
+classes, and the logic was still not shared afterwards. There were three `PACKAGE_SOURCE` constants
+holding **two different values** — `TailwindSourceStep` and `TsconfigPathsStep` used
+`vendor/atram/…`, `ViteAliasStep` used `atram/…` — and two independent `segments()` helpers with
+different filtering rules (one dropped `''`, the other dropped `''` and `'.'`).
 
-The characteristic bug of this codebase is a substring test standing in for real path handling; it has
-now appeared four times. Sharing one normalised path helper is the structural answer.
+**Fix.** `HostPath` is now the shared home for segment splitting, relative depth and canonical
+containment, and all three constants use the full
+`vendor/atram/laravel-nodeflow/resources/js` value. The first Plan 6 design draft claimed the shorter
+`atram/...` constant deliberately tolerated a leading `./vendor/`; that rationale was false and was
+reproduced as false: `str_contains('./vendor/atram/...', 'vendor/atram/...')` is already true. The
+shorter string bought no tolerance and only accepted unrelated paths such as
+`/tmp/packages/atram/...`.
 
 ### G-7 · `ViteAliasStep` requires two facts that need never be adjacent
 **Status:** GAP · **Raised by:** Plan 5 whole-branch review, proven by probe · **Cost:** small
@@ -418,6 +468,9 @@ the package path. An alias pointing at the wrong directory plus any other mentio
 anywhere in the file reads `AlreadyPresent`. The docblock discloses a *different*, narrower limit —
 that it cannot prove the alias is in the actively exported config. State the real limit or bound the
 match to the alias entry.
+
+**Still open after Plan 6.** E41 unified the path constant and arithmetic only. It did not bound the
+package-path match to the `@nodeflow/editor` alias entry, so the two-facts false accept remains.
 
 ### G-8 · The install steps disagree about what an unpublished optional file means
 **Status:** GAP · **Raised by:** Plan 5 whole-branch review · **Cost:** small
@@ -438,14 +491,12 @@ it never touches the `use` block — and `ProviderStep::homes()` does. But `Make
 opposite conclusion.
 
 ### G-10 · The writer's short-name gap is fixed but its documentation is not
-**Status:** DRIFT · **Raised by:** Plan 5 whole-branch review · **Cost:** trivial
+**Status:** ✅ **RESOLVED, Plan 6 (E40).** · **Raised by:** Plan 5 whole-branch review
 
-`NodeRegistrationWriter`'s comment recording that a bare imported `SendSms::class` is not recognised
-was deleted during Plan 5's Task 3 refactor and exists nowhere in `src/`, `tests/` or `docs/`. Spec
-§3.4 still cites it as documented, and it is the gap behind the worst defect the Plan 5 whole-branch
-review found (`install --check` failing on the reference host). The gap is now closed in
-`ProviderRegistrationStep` for the `providers.php` case, but the writer's own generic behaviour and
-its documentation both need restating.
+`NodeRegistrationWriter` now resolves bare and aliased short names inside the target array using the
+provider's namespace and imports, shared by append and removal. The obsolete Plan 5 §3.4 citation of
+a deleted source comment is gone: the gap closed in code instead of being re-documented as a known
+limitation.
 
 ### G-11 · Spec E20's arithmetic contradicts §3.2
 **Status:** DRIFT · **Raised by:** Plan 5 whole-branch review · **Cost:** trivial
@@ -460,6 +511,15 @@ headline numbers are wrong in the binding document.
 
 `CONFIG_CANDIDATES` checks `vite.config.ts` first; Vite itself resolves `.js` before `.ts`. A host with
 both is checked against the file Vite does not use. One-line ordering fix.
+
+### G-13 · Extraction cannot statically see dynamic or database-stored class names
+**Status:** ACCEPTED RESIDUAL, Plan 6 (E46). · **Raised by:** Plan 6 external design review
+
+`NodeReferenceScanner` resolves direct PHP names, imports, aliases, class strings and
+`class_alias()` across host-owned PHP-like source. It cannot discover a class name assembled by
+runtime concatenation or loaded from a database. M9's fresh host boot catches one only when normal
+application boot actually executes the relevant path. The command has no `--allow-references` flag;
+authors must search and migrate those references explicitly before extraction.
 
 ---
 

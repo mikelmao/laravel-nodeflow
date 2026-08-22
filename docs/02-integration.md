@@ -247,6 +247,8 @@ the entry belongs, and otherwise print a line for you to paste rather than guess
 Registering in any other provider's `boot()` still works at runtime — nothing in
 the package cares which provider called `Nodeflow::register()` — but the
 generators cannot find it there, so you would be pasting every entry by hand.
+`nodeflow:extract-node` also refuses a node registered there: extraction can
+only remove an entry it can prove belongs to the `$nodes` array above.
 
 Three things worth knowing:
 

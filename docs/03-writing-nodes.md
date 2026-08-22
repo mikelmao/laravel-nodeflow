@@ -116,6 +116,9 @@ Nodeflow::nodes()->alias('app.old_send', 'app.send_message');
 
 Both `has()` and `resolve()` honour aliases, so the validator and the runtime agree.
 
+If the node may ever be extracted into a package, return an inline string literal or a constant
+declared on that same class; `nodeflow:extract-node` refuses every other shape.
+
 **`definition(): NodeDefinition`** — the label, group, description, optional icon, the **outputs** it
 can return, and its config **fields**. This single object produces both the JSON an editor renders and
 the Laravel validation rules the server enforces at publish. There is no second place to keep in sync.

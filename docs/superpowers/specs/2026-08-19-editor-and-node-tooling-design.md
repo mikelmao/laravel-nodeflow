@@ -116,8 +116,8 @@ Four gaps verified against the source during this design, each of which blocks r
 | E6 | The options endpoint is keyed by **`(node type, field key)`** and resolves the source from the node's own `definition()`. A class name is never accepted from the client, and `options_source` stops appearing in the palette JSON | Accepting a class name is "instantiate any class in this application and call `options()` on it" |
 | E7 | The run view is a **separate component and route** reading the run's pinned `flow_version.graph`, sharing canvas primitives with the editor and importing nothing from it | A run executed a frozen graph; the editor renders a draft that may have diverged. One component for both invites painting a run's counts onto nodes that were never in it |
 | E8 | Live overlay is **interval polling**, not broadcasting | The foundation spec §4 says the package does not own queue or messaging infrastructure; requiring Echo/Reverb would dictate a websocket stack to the host |
-| E9 | A shareable node is an **ordinary Composer package**. No manifest, no build step, no bundle, no discovery mechanism | Everything a manifest would declare is already declared where it works: `require` for compatibility, `extra.laravel.providers` for loading, `type()` plus explicit registration for identity |
-| E10 | `nodeflow:extract-node` **refuses** a `type()` that is not a plain string literal, and asserts `type()` is byte-identical after the move | `type()` is what immutable versions and live mid-wait runs resolve through. A `type()` derived from `static::class` silently changes identity when the namespace moves, orphaning every published version referencing it. This is the one unrecoverable failure the command could cause |
+| E9 | ✅ **Delivered by Plan 6.** A shareable node is an **ordinary Composer package**. No manifest, no build step, no bundle, no discovery mechanism | Everything a manifest would declare is already declared where it works: `require` for compatibility, `extra.laravel.providers` for loading, `type()` plus explicit registration for identity |
+| E10 | ✅ **Delivered by Plan 6, as amended by E36.** `nodeflow:extract-node` refuses a `type()` that is not an inline string literal or a literal same-class constant, and asserts `type()` is byte-identical after the move | `type()` is what immutable versions and live mid-wait runs resolve through. A `type()` derived from `static::class` silently changes identity when the namespace moves, orphaning every published version referencing it. E36 admits a same-class literal constant because it provides the same fixed-value guarantee without asking authors to make good code worse |
 | E11 | Every generated or modified file is written **anchor-asserted and then re-verified**; `nodeflow:install` exits non-zero when it could not wire something | Two edits in this project's history applied cleanly and changed nothing because a pattern did not match and nothing asserted it had |
 | E12 | The package carries a **private, dev-only `package.json`** — devDependencies and peerDependencies only, never an npm publish target | Vitest and `tsc --noEmit` need it. Publishing to npm would reopen the two-sources-of-truth problem D2 closed |
 
@@ -135,7 +135,7 @@ Six implementation plans, sequenced by dependency. One spec, because the field-c
 | **3 — Editor** ✅ **delivered** `c5684e4..a5194ed` (demo acceptance `549fe42`) | `draft_graph`; `Nodeflow::routes()` and controllers; options endpoint; `Field::custom()`; `resources/js`; six field controls; dev `package.json` + Vitest | §5 | 2 |
 | **4 — Run view** ✅ **delivered** `8e79b99..f36f54f` (merged `f5b2e31`, accepted `627cdf2`) | `FlowRun` component and routes; overlay queries; subject drill-down; polling | §6 | 3 |
 | **5 — Remaining tooling** | `nodeflow:install`; `make-trigger`; `make-subject-attribute` | §7.1, §7.3 | 3 |
-| **6 — Packaging** | `make-node-package`; `extract-node` | §8 | 1, 5 |
+| **6 — Packaging** ✅ **delivered** (implementation `673ca0d..b7a1772`, demo extraction `e15e5bd`) | `make-node-package`; `extract-node` | §8 | 1, 5 |
 
 Plan 2 gates Plan 3 because routes are the leak. Plan 4 needs Plan 3's canvas primitives. Plan 5's
 install command has nothing to verify until Plan 3's wiring requirements exist. Plan 6 needs Plan
@@ -662,6 +662,49 @@ ones and the control's shape should be proven in use first.
 ---
 
 ## 8. Packaging a node for sharing (Plan 6)
+
+**This section is now a description of shipped behaviour, not a proposal.** The proposal remains
+below for its reasoning; where it differs from this block, the "as built" block is the truth. The
+binding Plan 6 design records the review amendments as E29–E53, especially E36's amendment to E10.
+
+> #### As built
+>
+> `nodeflow:make-node-package {name}` supports `--namespace`, `--path`, `--js` and `--force`. It
+> scaffolds an ordinary Composer package under `packages/{vendor}/{name}` by default: Composer and
+> Laravel discovery metadata, a provider with `$nodes` only, `src/Nodes`, tests and a README. `--js`
+> additionally creates a minimal private TypeScript project and prints, but never writes, the host's
+> Vite alias and tsconfig paths. Composer-name validation and PHP-identifier validation are separate,
+> and every target is canonically contained inside the host.
+>
+> The provider omits triggers and subject attributes deliberately (E31). Their contracts name host
+> events, host models or host closures, so they do not travel honestly in a reusable node package.
+> Authors export package controls from `resources/js/index.ts` and spread them into the host's
+> `FlowEditor` `controls` prop; no manifest or implicit client registry was added (E9).
+>
+> `nodeflow:extract-node {class} --package=vendor/name` accepts the same namespace, path and force
+> controls, moves one class per invocation, and never renames it. Eight read-only gates precede any
+> write. E36 amends E10's original literal-only wording: `type()` may be one inline quoted literal,
+> or `self::`/`static::` may return a quoted-literal constant declared on that same class. Every other
+> shape refuses with both repairs named. The value is also compared after the move in a fresh process;
+> that empirical check supplements rather than replaces the static proof.
+>
+> References are resolved under PHP namespace/import rules and exempted by exact rewrite span, never
+> by whole file. Host-owned PHP-like sources across the project are scanned before the move and again
+> before originals are deleted. Dynamic concatenation and database-stored class names remain outside
+> any static scan (E46); the fresh host boot sees them only when application boot executes the path.
+>
+> Composer installs the path dependency for real: a package-scoped update when a lock exists, or an
+> install when it does not, with scripts and plugins disabled and ambient Composer configuration
+> isolated. Laravel then boots in a fresh PHP process, and package discovery itself must already map
+> the original type to the new FQCN. The verifier never manually registers the class.
+>
+> Rollback is disk-backed and covers every host edit plus Composer's effective vendor/bin state,
+> Laravel discovery caches, bytes, modes, empty directories and symlinks. Any move, Composer or
+> fresh-boot failure restores in reverse; after a Composer attempt it also regenerates the restored
+> autoloader without scripts or plugins. Restore and cleanup failures remain loud and retain an exact
+> recovery path. The real demo permanently resolves `demo.send` to
+> `Atram\NodeflowDemoNodes\Nodes\SendMessage` from a package while its other two nodes remain in
+> the host.
 
 ### 8.1 `nodeflow:make-node-package {vendor/name}`
 
