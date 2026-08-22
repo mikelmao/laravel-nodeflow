@@ -70,6 +70,16 @@ This records what happened while executing
 
 - PASS: independent read-only review of RED commit `183c9dd` and the production diff found no Critical, Important, or Minor findings. It confirmed both tests use `Artisan::call()` plus `Artisan::output()`, extract and embed the exact captured block in distinct `App\Providers` probes without registry imports, parse before `require`, execute, and assert their package registries. It also confirmed the exact emitted registry FQCNs, preserved trigger/attribute-entry FQCNs and exit behavior, reran the two-file suite (19 passed / 71 assertions), the prescribed filtered fallback tests (3 passed / 13 assertions), all four changed PHP syntax checks, and the scoped diff check.
 
+### Task 5: integrated tooling gate and cross-gap adversarial review
+
+- Focused tooling surface PASS: `COMPOSER_DISABLE_NETWORK=1 vendor/bin/pest` over the six prescribed feature files passed **67 tests / 184 assertions** in 1.13s. All seven prescribed `php -l` checks were clean: `ViteAliasValue.php`, `ViteAliasStep.php`, `ViteConfigStep.php`, `PublishConfigStep.php`, `InstallCommand.php`, `MakeTriggerCommand.php`, and `MakeSubjectAttributeCommand.php`. Both `git diff --check` and the branch-point diff check were clean.
+- Pint: the exact prescribed `vendor/bin/pint --test` invocation was run once and exited `127` with `zsh:1: no such file or directory: vendor/bin/pint`. It is unavailable, never passed, and no dependency was added: `laravel/pint` is undeclared/uninstalled in this worktree.
+- Cross-gap adversarial review PASS: all six mandatory probes passed — wrong alias with correct path nested in an unrelated value; duplicate alias keys with only one correct; missing and customized config under normal install and `--check`; both fallback snippets in an import-free namespace; `.js`/`.ts` coexistence; and `.cjs`/`.cts`-only resolution. The reviewer found no Critical or Important findings. It also confirmed no GitBook, open-issues, historical-spec, demo, or TypeScript/React production file was changed.
+- Deferred Minor observation: `ViteAliasValue` uses independent delimiter counters, so malformed cross-nesting such as `([ 'vendor/…' )]` may be treated as balanced. Reviewer classified Minor because malformed Vite source fails when Vite loads it.
+- Deferred Minor observation: `PublishConfigStep.php` has an extra blank line immediately before the class-closing brace; cosmetic Minor.
+- Deferred limitation: Pint exit 127 is a non-blocking environment limitation because `laravel/pint` is undeclared/uninstalled; record unavailable, never passed, and do not add a dependency.
+- No remediation was required for Task 5; production and test files were not changed during this task.
+
 ## Browser acceptance
 
 ## Final merged-main verification
