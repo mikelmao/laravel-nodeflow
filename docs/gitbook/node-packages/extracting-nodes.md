@@ -76,15 +76,17 @@ The host path repository remains portable because it records the relative path, 
 
 The destination directory may be absent, empty, or already be the same package. A foreign non-empty target is refused unless you pass `--force`.
 
+> **Warning:** `--force` can overwrite `composer.json`, `README.md`, `src/{ProviderShortClass}.php`, and `tests/ExampleTest.php` in the destination package. `ProviderShortClass` is the generated provider's class basename, such as `WidgetsServiceProvider`. Extraction can also overwrite `src/Nodes/{ShortClass}.php` and, when it moves a conventional test, `tests/{ShortClass}Test.php`. Inspect the target first and use a clean Git worktree or a backup before forcing an extraction. These overwrites remain on a successful extraction; rollback is for a failed extraction, not a successful forced replacement.
+
 The host cannot already require the destination package from another source. Repoint or remove that dependency first. Likewise, remove a matching `extra.laravel.dont-discover` entry before extraction: discovery is how the new provider registers the node after the host registration is removed.
 
 ## Rollback and recovery
 
-Every mutation is journaled before it happens, including Composer-generated state. If an operation fails before successful fresh-host verification, the command restores recorded files, created paths, deleted originals, and Composer state in reverse order. If Composer installation had started, it also attempts a script-free autoload regeneration against the restored state.
+The extraction journal records the filesystem paths and Composer state that the command mutates. If an operation fails before successful fresh-host verification, it restores those recorded files, created paths, deleted originals, and Composer state in reverse order. If Composer installation had started, it also attempts a script-free autoload regeneration against the restored state.
 
-That guarantee applies when restoration itself succeeds. If the command reports that rollback storage could not be cleaned up, that storage is retained for manual inspection. If it reports that restoration or autoload proof failed, stop and inspect the host before retrying; it may not be safe to assume the tree is fully restored.
+Fresh-host verification boots the host application and can execute arbitrary providers. Database writes or external side effects made there are outside the extraction journal and cannot be reversed by this command. That guarantee also applies only when restoration itself succeeds. If the command reports that rollback storage could not be cleaned up, that storage is retained for manual inspection. If it reports that restoration or autoload proof failed, stop and inspect the host before retrying; it may not be safe to assume the tree is fully restored.
 
-After fresh-host verification succeeds, the host and package are committed. If only journal cleanup then fails, the command exits `1` but deliberately leaves that verified state unchanged and reports the retained private cleanup path. Review the committed changes and follow your normal operator cleanup procedure for the reported private storage. These recovery and cleanup failures use exit code `1`.
+After fresh-host verification succeeds, the rollback journal is committed and discarded. The changed host and package files remain on disk for your review; the command does not create a Git commit. If only journal cleanup then fails, the command exits `1` but deliberately leaves that verified state unchanged and reports the retained private cleanup path. Review the changes and follow your normal operator cleanup procedure for the reported private storage. These recovery and cleanup failures use exit code `1`.
 
 On success, review the Composer and moved-source diff, run the relevant application checks, and keep the old node type unchanged in every existing graph.
 

@@ -12,15 +12,21 @@ Nodeflow is experimental. Use these current boundaries to decide what must be ha
 
 ### A run can reach its step limit without becoming an error
 
-**Impact:** The interpreter stops after `nodeflow.limits.max_steps_per_run` node activities and then completes the run. The default is 1000. A long or unexpectedly looping operational design can therefore finish before all intended work is observed as an explicit runtime failure.
+**Impact:** The interpreter stops after `nodeflow.limits.max_steps_per_run` node activities and then completes the run. The default is 1000. An oversized or deep acyclic graph can therefore finish before all intended work is observed as an explicit runtime failure. Normal publishing rejects cycles; a cycle can reach this limit only when host code bypasses normal publishing validation.
 
-**Mitigation:** Set a limit appropriate to your graph, alert on unexpected completion patterns, and keep graphs acyclic. Review the limit and the executed node records in [Durable execution](../operations/durable-execution.md).
+**Mitigation:** Set a limit appropriate to your graph, alert on unexpected completion patterns, and keep normal publishing validation in every host publishing path. Review the limit and the executed node records in [Durable execution](../operations/durable-execution.md).
 
 ### Audience work is chunked, not one whole-cohort call
 
 **Impact:** Audience nodes receive one chunk at a time. A side effect or child-flow start may therefore happen multiple times for one logical audience.
 
 **Mitigation:** Make audience-node effects idempotent per subject and per chunk. Tune the configured chunk sizes only after measuring your own database and worker capacity. See [Durable execution](../operations/durable-execution.md).
+
+### Audience materialization checks every distinct subject
+
+**Impact:** Starting a run calls `TenantResolver::ownsSubject()` once for each distinct, normalized subject ID before inserting the audience. Large audiences can therefore create many membership checks and remote database round trips.
+
+**Mitigation:** Keep membership checks cheap, and use operation-scoped batching, local preloading, or caching inside the resolver where that remains safe. Measure representative audiences against your supported database. Do not weaken the per-subject ownership check. See [Starting runs](../building-automations/starting-runs.md).
 
 ### Child flows are keyless per chunk
 
@@ -68,11 +74,11 @@ Nodeflow is experimental. Use these current boundaries to decide what must be ha
 
 **Mitigation:** Monitor the durable engine and Nodeflow records together, enable node-type checks where appropriate, and define an application repair procedure before operating critical flows. See [Durable execution](../operations/durable-execution.md) and [Health checks](../operations/health-checks.md).
 
-### The run view is an operational snapshot, not a complete audit trail
+### The run view is current evidence, not historical proof
 
-**Impact:** The subjects panel lists active subjects at the selected node. Overlay counts and node execution records do not necessarily reconstruct every historical subject movement or departure.
+**Impact:** The subjects panel lists active subjects at the selected node. A node that leaves no execution row or output, including `core.exit`, can later display as never reached. Cancellation-only current evidence can similarly make a node appear reached while a subject is active there, then not reached once no active row remains. Dimming and `reached` are current observable evidence, not audit facts.
 
-**Mitigation:** Keep application audit data for business events that need complete history, and use the run view for current operational inspection. See [Inspecting runs](../editor-and-run-view/inspecting-runs.md).
+**Mitigation:** Use durable workflow history and application audit data for historical truth, and use the run view for current operational inspection. See [Inspecting runs](../editor-and-run-view/inspecting-runs.md).
 
 ### Editor autosave recovery depends on the failure
 
@@ -104,9 +110,9 @@ Nodeflow is experimental. Use these current boundaries to decide what must be ha
 
 ### Application-specific operational validation remains required
 
-**Impact:** Package-level checks cannot prove your queue retry policy, durable-workflow storage, database isolation, cache configuration, browser build, package discovery cache, or domain side-effect behavior work together.
+**Impact:** The current package test suite runs on SQLite only and CI does not execute the interpreter through a real queue worker. Package-level checks therefore cannot prove your supported database behavior, queue retry policy, durable-workflow storage, cache configuration, browser build, package discovery cache, or domain side effects work together.
 
-**Mitigation:** Run a representative journey in an environment that matches your queue, database, cache, tenancy, and frontend setup. Include worker restarts, waits, retries, browser interaction, and deployment-like node-type checks in your release process. See [Project status](project-status.md), [Queues and workers](../operations/queues-and-workers.md), and [Health checks](../operations/health-checks.md).
+**Mitigation:** Run a representative canonical journey against each supported database and with a supervised real queue worker, using the same queue, cache, tenancy, and frontend setup you intend to operate. Include worker restarts, waits, retries, browser interaction, and deployment-like node-type checks in your release process. See [Project status](project-status.md), [Queues and workers](../operations/queues-and-workers.md), and [Health checks](../operations/health-checks.md).
 
 ## Next step
 
