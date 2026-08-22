@@ -2,7 +2,7 @@
 
 Nodeflow's shipped migration creates six tables with literal `nodeflow_` names. `nodeflow.tables.prefix` is currently inert: the migration, Eloquent models, and the runtime raw insert use these literal names, so changing that configuration value does not rename or redirect a database.
 
-Only the foreign keys, unique constraints, and indexes explicitly declared by the migration are listed below. Do not assume an additional index from a database engine's foreign-key implementation.
+Only the foreign keys, unique constraints, and indexes explicitly declared by the migration are listed below. Do not assume an additional index from a database engine's foreign-key implementation. A declared foreign-key cascade takes effect only when the database enforces foreign keys; in particular, SQLite requires `foreign_keys` to be enabled. The package's SQLite test driver needs that enforcement setting too, and pruning explicitly removes child rows before runs for this reason.
 
 ## `nodeflow_flows`
 
@@ -27,7 +27,7 @@ The migration also declares the composite index `(tenant_id, trigger_type, statu
 
 ## `nodeflow_flow_versions`
 
-Stores immutable published graph snapshots.
+Stores published graph snapshots. Package publication creates new versions and does not mutate their graphs, but the model and database do not block host updates or deletes; do not alter a version required by a run. See [Publishing flows](../building-automations/publishing-flows.md#know-what-publishing-changes).
 
 | Column | Type and default |
 | --- | --- |
@@ -63,7 +63,7 @@ Stores one execution of one pinned flow version.
 | `started_at`, `ended_at` | timestamps, nullable |
 | `created_at`, `updated_at` | nullable timestamps |
 
-The unique constraint is `(flow_version_id, idempotency_key)`. Because SQL nullable unique values are not equal to one another, the constraint does not deduplicate runs whose idempotency key is `NULL`. A run belongs to a flow version and has many run subjects and node executions.
+The unique constraint is `(flow_version_id, idempotency_key)`. A null key provides no package-level idempotency: `StartRun` only looks up and recovers duplicate-key races for a non-null key. Supply a non-null stable key when duplicate run suppression is required. A run belongs to a flow version and has many run subjects and node executions.
 
 ## `nodeflow_run_subjects`
 

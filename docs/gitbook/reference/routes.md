@@ -15,7 +15,7 @@ Route::middleware(['web', 'auth'])
     ->group(fn () => Nodeflow::routes());
 ```
 
-Use middleware appropriate to the host; the package policies do not authenticate a request on their own. The host also owns the page shell required by the returned Inertia pages.
+Use middleware appropriate to the host; the package policies do not authenticate a request on their own. Define the required host gates as described in [Authorization](../integration/authorization.md). The host also owns the page shell required by the returned Inertia pages.
 
 ## Routes
 
@@ -25,13 +25,29 @@ The names below are the canonical, unprefixed names registered by the package. `
 | --- | --- | --- | --- | --- | --- |
 | `GET` | `flows/{flow}/edit` | `nodeflow.flows.edit` | Inertia `nodeflow/editor` page | Supplies the flow, draft-or-current graph, palette, triggers, and server-authored URLs. | `update` / `nodeflow.update` |
 | `PUT` | `flows/{flow}/draft` | `nodeflow.flows.draft` | JSON | Structurally validates and saves a draft with its revision token. | `update` / `nodeflow.update` |
-| `POST` | `flows/{flow}/publish` | `nodeflow.flows.publish` | JSON | Validates and publishes an immutable flow version. | `publish` / `nodeflow.publish` |
+| `POST` | `flows/{flow}/publish` | `nodeflow.flows.publish` | JSON | Validates and creates the next published flow version. | `publish` / `nodeflow.publish` |
 | `GET` | `flows/{flow}/nodes/{type}/fields/{field}/options` | `nodeflow.fields.options` | JSON | Resolves a registered node field's dynamic options. | `update` / `nodeflow.update` |
 | `GET` | `runs/{run}` | `nodeflow.runs.show` | Inertia `nodeflow/run` page | Supplies a run's pinned graph, overlay, palette, and server-authored URLs. | `view` / `nodeflow.viewAny` |
 | `GET` | `runs/{run}/overlay` | `nodeflow.runs.overlay` | JSON | Returns only the current overlay snapshot. | `view` / `nodeflow.viewAny` |
 | `GET` | `runs/{run}/nodes/{node}/subjects` | `nodeflow.runs.subjects` | JSON | Cursor-paginates active subjects at one node of the pinned graph. | `view` / `nodeflow.viewAny` |
 
 The options route accepts a node *type* and field *key*, never a class name. Unknown types, undeclared fields, and fields without a dynamic option source return `404`; an options response is `{"options": {}}` when the source has no options.
+
+## Draft and publish success responses
+
+`PUT` draft returns the revision that must be sent with the next draft save:
+
+```json
+{ "draft_revision": 1 }
+```
+
+`POST` publish returns the new per-flow version and the current draft revision:
+
+```json
+{ "version": 2, "draft_revision": 1 }
+```
+
+Treat either returned `draft_revision` as authoritative. In particular, adopt the publish response's value before the next autosave; publishing does not reset the revision.
 
 ## Host URL and name prefixes
 
@@ -57,7 +73,7 @@ The meaning of a null tenant depends on `nodeflow.tenancy`: the default `auto` m
 
 ## Error responses
 
-Malformed draft and publish payloads use Laravel validation responses. A stale draft returns `409` with `message`, a graph-shaped `graph`, and `draft_revision`. A semantically invalid publish returns `422` with `message`, `errors`, and `node_errors`; see [Graph format](graph-format.md#drafts-publishing-and-errors) for the payload rules and error shape.
+Malformed draft and publish payloads use Laravel validation responses. A stale draft returns `409` with `message`, `graph`, and `draft_revision`. `graph` is the current persisted draft when one exists, so it can be a raw partial graph; only an absent or empty persisted draft is replaced with the `{ "start": "", "nodes": [], "edges": [] }` skeleton. A semantically invalid publish returns `422` with `message`, `errors`, and `node_errors`; see [Graph format](graph-format.md#drafts-publishing-and-errors) for the payload rules and error shape.
 
 ## Next step
 
