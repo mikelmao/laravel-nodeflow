@@ -43,6 +43,14 @@ This records what happened while executing
 - Counterfactual: temporarily restored `PublishConfigStep`'s `Writable` absence path and copy-on-apply implementation. `vendor/bin/pest tests/Feature/Install/PublishConfigStepTest.php --filter='reports healthy and writes nothing' --compact` failed 1 test / 2 assertions at the expected `AlreadyPresent` versus `Writable` check. `vendor/bin/pest tests/Feature/InstallCommandTest.php --filter='keeps the optional config healthy' --compact` failed 1 test / 11 assertions because normal install created `config/nodeflow.php`. A disposable command-level probe with every other step wired, the generated config removed, and `--check` asserted `1` passed 1 test / 2 assertions, proving the mutated absent-config path exits 1 under `--check`. The production implementation and probe edit were restored immediately; the prescribed three-file green suite was rerun afterward.
 - Formatting: `vendor/bin/pint` is unavailable in this worktree (`vendor/bin/pint` is not present and `laravel/pint` is not declared/installed). The two changed PHP production files were kept in existing project style and syntax-checked; scoped diff checks passed.
 
+### Task 4: G-9 — make both fallback snippets import-free
+
+- RED (test-only discriminator commit `183c9dd`): `vendor/bin/pest tests/Feature/MakeTriggerCommandTest.php tests/Feature/MakeSubjectAttributeCommandTest.php --filter="prints the line" --compact` produced the two intended `BindingResolutionException` failures, plus the unrelated existing anchor-fallback pass (2 failures, 1 pass, 11 assertions). The captured trigger fallback, embedded verbatim in `App\Providers\ManualRegistrationProbe`, resolved short `TriggerRegistry::class` as missing `App\Providers\TriggerRegistry`; the captured attribute fallback in `App\Providers\ManualAttributeRegistrationProbe` likewise resolved missing `App\Providers\SubjectAttributeRegistry`. Both probes parsed before their `require`, declared no registry import, and the commands still exited 0 before the host-probe execution failed.
+- GREEN: each manual fallback now emits an absolute registry class constant: `\Nodeflow\Triggers\TriggerRegistry::class` and `\Nodeflow\Schema\SubjectAttributeRegistry::class`. `vendor/bin/pest tests/Feature/MakeTriggerCommandTest.php tests/Feature/MakeSubjectAttributeCommandTest.php --compact` passed 19 tests / 71 assertions after the change and again after both mutations were restored. The generated trigger class and subject-attribute entry remained their pre-existing fully qualified values; command exit behavior was preserved.
+- Counterfactual A: temporarily restored only trigger output to short `TriggerRegistry::class`, then ran `vendor/bin/pest tests/Feature/MakeTriggerCommandTest.php --filter="prints the line that registers" --compact`. It failed 1 test / 4 assertions with `Target class [App\Providers\TriggerRegistry] does not exist.` Production output was restored immediately.
+- Counterfactual B: temporarily restored only attribute output to short `SubjectAttributeRegistry::class`, then ran `vendor/bin/pest tests/Feature/MakeSubjectAttributeCommandTest.php --filter="prints the line and exits zero" --compact`. It failed 1 test / 4 assertions with `Target class [App\Providers\SubjectAttributeRegistry] does not exist.` Production output was restored immediately.
+- Formatting: `vendor/bin/pint` is unavailable (`vendor/bin/pint` is absent and `laravel/pint` is not declared in `composer.json`), so no formatter was run. All four changed PHP files were retained in project style and passed `php -l`; `git diff --check 183c9dd -- src/Console/MakeTriggerCommand.php src/Console/MakeSubjectAttributeCommand.php tests/Feature/MakeTriggerCommandTest.php tests/Feature/MakeSubjectAttributeCommandTest.php` passed.
+
 ## Reviews and remediation
 
 ### Task 1: G-12 — independent spec-compliance and code-quality review
@@ -57,6 +65,10 @@ This records what happened while executing
 ### Task 3: G-8 — independent spec-compliance and code-quality review
 
 - PENDING: review must verify the `nodeflow-config` publication mapping remains in `NodeflowServiceProvider`, migration drift semantics remain unchanged, the nine-step order is preserved, and the red/green/counterfactual evidence above matches the committed diff.
+
+### Task 4: G-9 — independent spec-compliance and code-quality review
+
+- PASS: independent read-only review of RED commit `183c9dd` and the production diff found no Critical, Important, or Minor findings. It confirmed both tests use `Artisan::call()` plus `Artisan::output()`, extract and embed the exact captured block in distinct `App\Providers` probes without registry imports, parse before `require`, execute, and assert their package registries. It also confirmed the exact emitted registry FQCNs, preserved trigger/attribute-entry FQCNs and exit behavior, reran the two-file suite (19 passed / 71 assertions), the prescribed filtered fallback tests (3 passed / 13 assertions), all four changed PHP syntax checks, and the scoped diff check.
 
 ## Browser acceptance
 
