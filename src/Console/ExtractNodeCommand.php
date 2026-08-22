@@ -456,14 +456,40 @@ class ExtractNodeCommand extends Command
      * Composer's own PSR-4 value may be a single directory string or an
      * array of several for one namespace prefix; both are handled.
      *
-     * STATED LIMIT (E-classmap): only `autoload`/`autoload-dev` PSR-4
-     * entries are read. A host whose own node classes are reachable only
-     * through `classmap` or the legacy PSR-0 style is refused outright by
-     * G2 (nothing it declares ever becomes a mapped root) — fail-safe, and
-     * vanishingly rare for a modern Laravel application (Laravel's own
-     * skeleton, and every generator in this package, both use PSR-4), but
-     * stated here rather than left for a future reader to mistake for a
-     * bug.
+     * STATED LIMITS, both fail-safe (each one REFUSES a node rather than
+     * mishandling it, so neither is a correctness bug, only a coverage
+     * gap a future reader should not mistake for one):
+     *   - Only `autoload`/`autoload-dev` PSR-4 entries are read. A host
+     *     whose own node classes are reachable only through `classmap` or
+     *     the legacy PSR-0 style is refused outright by G2 (nothing it
+     *     declares ever becomes a mapped root) — vanishingly rare for a
+     *     modern Laravel application (Laravel's own skeleton, and every
+     *     generator in this package, both use PSR-4).
+     *   - `"App\": ""` — Composer's own legal shorthand for "the package
+     *     root itself" — is treated the same as any other empty or
+     *     blank-after-trim value and dropped, never accepted as a mapped
+     *     root. A host relying on that exact shorthand to map its node
+     *     classes to its own project root is refused; mapping to `"./"`
+     *     is refused for an unrelated reason (Important N2: it would map
+     *     the ENTIRE host, which this method must never allow), so there
+     *     is no alternate spelling of "map the whole root" this method
+     *     will ever accept, by design.
+     *
+     * DEFENSIVE, CURRENTLY UNREACHABLE: the `try`/`catch` around
+     * `HostPath::root($hostBasePath)` immediately below cannot actually
+     * fire through any call path this class has today. `gate2()` already
+     * resolves and refuses on `HostPath::root($hostBasePath)` itself,
+     * before ever reaching either of its own two calls into this method
+     * (once directly, once via `gate5()`, both later in the SAME
+     * `handle()` invocation) — so by the time this method's own `try`
+     * runs, the identical call has already succeeded once. Kept anyway,
+     * the same reasoning as `gate6()`'s own currently-unreachable
+     * existence/parse checks: the dependency is on ANOTHER method
+     * (`gate2()`) staying exactly as strict as it is today, and if this
+     * method is ever called from a path that does not go through `gate2()`
+     * first — Task 9's moves, say — this keeps its own protection rather
+     * than letting an unresolvable host root reach `$hostRoot->contains()`
+     * uncaught.
      *
      * @return list<string>
      */

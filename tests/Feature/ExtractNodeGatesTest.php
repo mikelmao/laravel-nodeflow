@@ -900,6 +900,127 @@ it('does not let a "../" PSR-4 value make G5 scan outside the host root (Importa
     }
 });
 
+it('refuses a node under storage/, when composer.json maps a PSR-4 prefix to "app/.." (a non-leading ".." segment)', function () {
+    // "app/.." canonicalises straight back to the host root -- is_dir() is
+    // true and $hostRoot->contains() is true for it, so ONLY the
+    // in_array('..', $segments, true) check refuses it; the containment
+    // check alone would let it through, because the escape-and-return
+    // lands EXACTLY on legitimate ground. Every other Important N2 test
+    // uses a value where '..' is the FIRST (or only) segment; this is the
+    // one shape a purely positional check ("is the last/first segment
+    // '..'?") would miss, and only a scan of every segment catches it.
+    // Counterfactual: delete the in_array('..', $segments, true) line
+    // (keep the emptiness and containment checks) and this test fails at
+    // exit 0.
+    file_put_contents($this->root.'/composer.json', json_encode([
+        'require' => ['atram/laravel-nodeflow' => '^2.0'],
+        'autoload' => ['psr-4' => ['App\\' => 'app/..']],
+    ]));
+
+    mkdir($this->root.'/storage/framework/cache', 0777, true);
+    $path = $this->root.'/storage/framework/cache/NonLeadingDotDotNode.php';
+
+    file_put_contents($path, <<<'PHP'
+    <?php
+
+    namespace Storage\Cache;
+
+    use Nodeflow\Execution\NodeResult;
+    use Nodeflow\Execution\SubjectContext;
+    use Nodeflow\Nodes\HandlesSubject;
+    use Nodeflow\Nodes\Node;
+    use Nodeflow\Schema\NodeDefinition;
+
+    class NonLeadingDotDotNode extends Node implements HandlesSubject
+    {
+        public static function type(): string
+        {
+            return 'non.leading.dot.dot.node';
+        }
+
+        public function definition(): NodeDefinition
+        {
+            return NodeDefinition::make('NonLeadingDotDotNode')->outputs(['default']);
+        }
+
+        public function forSubject(SubjectContext $context): NodeResult
+        {
+            return $context->continue('default');
+        }
+    }
+    PHP);
+    require $path;
+
+    $before = hostTreeHash($this->root);
+
+    $this->artisan('nodeflow:extract-node', [
+        'class' => 'Storage\Cache\NonLeadingDotDotNode',
+        '--package' => 'acme/widgets',
+    ])->assertFailed();
+
+    expect(hostTreeHash($this->root))->toBe($before);
+});
+
+it('does not let a PSR-4 directory that is a SYMLINK escaping the host become a scan root (Important N2, symlink escape)', function () {
+    // The syntactic segment check (empty, or containing '..') cannot see
+    // this one at all: "linked/" is a perfectly ordinary-looking value.
+    // Only resolving it -- $hostRoot->contains($absolute), which
+    // canonicalises through the symlink via HostPath's own realpath() --
+    // reveals that it points OUTSIDE the host. A second, legitimate PSR-4
+    // entry ("App" => "app/") lets G2 pass normally for the node itself,
+    // isolating what this test actually checks: whether the ESCAPING
+    // entry becomes a G5 scan root. If it does, G5 finds a reference
+    // planted only in the symlink's OUTSIDE target and wrongly refuses
+    // citing a file that was never part of the host; if it does not
+    // (the fix), extraction succeeds, because nothing outside the host is
+    // ever scanned. Counterfactual: delete the
+    // `! $hostRoot->contains($absolute)` half of the guard (keep only the
+    // isDirectory() check) and this test fails -- exit 1, citing
+    // OutsideConsumer.php, a file that was never part of the host tree.
+    $outside = sys_get_temp_dir().'/nodeflow-extract-node-symlink-outside-'.bin2hex(random_bytes(6));
+    mkdir($outside, 0777, true);
+    $outside = realpath($outside);
+
+    symlink($outside, $this->root.'/linked');
+
+    file_put_contents($this->root.'/composer.json', json_encode([
+        'require' => ['atram/laravel-nodeflow' => '^2.0'],
+        'autoload' => ['psr-4' => [
+            'App\\' => 'app/',
+            'Escaped\\' => 'linked/',
+        ]],
+    ]));
+
+    $class = writeAppNode($this->root, 'SymlinkEscapeNode', 'symlink.escape.node');
+
+    // Planted only inside the symlink's OUTSIDE target -- never part of
+    // the host tree at all, reachable ONLY if the escaping "linked/" entry
+    // were ever treated as a real scan root.
+    file_put_contents($outside.'/OutsideConsumer.php', <<<'PHP'
+    <?php
+
+    namespace Outside;
+
+    use App\Nodeflow\Nodes\SymlinkEscapeNode;
+
+    class OutsideConsumer
+    {
+        public function make(): SymlinkEscapeNode
+        {
+            return new SymlinkEscapeNode();
+        }
+    }
+    PHP);
+
+    try {
+        $this->artisan('nodeflow:extract-node', ['class' => $class, '--package' => 'acme/widgets'])
+            ->assertExitCode(0);
+    } finally {
+        unlink($this->root.'/linked');
+        deleteTree($outside);
+    }
+});
+
 // --- Mutation survivors from the PSR-4 derivation itself --------------------
 
 it('refuses cleanly, not with an uncaught exception, when the host has no composer.json at all (mutation survivor 1)', function () {
