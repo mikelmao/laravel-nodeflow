@@ -165,5 +165,12 @@ This records what happened while executing
   decoded value made all escaped-key regressions fail (**9 failures / 9 assertions**) across the
   direct duplicate, step duplicate and lone-key datasets. Semantic comparison was restored
   immediately, and the complete focused file passed again at **36 / 51**.
+- Pint remediation: whole-branch spec review correctly raised the Task 5 exit `127` as an unresolved
+  required gate. Laravel Pint v1.30.5 was installed only in an isolated `/tmp` Composer project; no
+  package dependency or manifest changed. Its first scoped `--test` run over the exact Plan 7 PHP
+  file list failed on four files. Pint then formatted only those changed files in `539fc23`; the
+  same scoped `--test` command passed, and the six-file focused Pest surface passed **79 tests / 199
+  assertions** afterward. This closes the earlier unavailable/never-passed limitation without
+  adding Pint to the repository.
 
 ## Final merged-main verification
