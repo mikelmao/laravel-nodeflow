@@ -29,7 +29,9 @@ use Nodeflow\Tenancy\NoTenancyResolver;
  * copies, reported as "Invalid hook call", which reads as a React bug). A sixth,
  * listing the provider in bootstrap/providers.php, fails just as quietly.
  *
- * So the exit code is a contract. handle() is declared int deliberately:
+ * The nine-step list has three default writers, one opt-in migration writer,
+ * four verifiers and one optional-config report. So the exit code is a contract.
+ * handle() is declared int deliberately:
  * returning false from a Laravel command's handle() is cast with (int) and exits
  * 0, which would silently defeat this command's own reason for existing.
  */
@@ -101,6 +103,8 @@ class InstallCommand extends Command
 
         $force = (bool) $this->option('force-migrations');
 
+        // Three default writers, one opt-in migration writer, four verifiers and
+        // one optional-config report make up the stable nine-step install list.
         return [
             new PublishConfigStep($files, $base),
             // --force-migrations implies --publish-migrations: re-publishing over a
