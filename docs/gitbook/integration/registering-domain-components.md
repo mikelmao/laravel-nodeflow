@@ -142,7 +142,7 @@ Keep the resolver focused on one resolved subject and register only fields that 
 php artisan nodeflow:make-subject-attribute email_verified --label="Email verified" --type=boolean
 ```
 
-The supported introductory types are `boolean`, `text`, and `number`. See [Condition fields](../building-automations/condition-fields.md) for comparison behavior and attribute design.
+The supported introductory types are `boolean`, `text`, and `number`. See [Subject attributes](../building-automations/subject-attributes.md) for comparison behavior and attribute design.
 
 ## Next step
 
