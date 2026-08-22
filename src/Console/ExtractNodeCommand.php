@@ -4,7 +4,9 @@ namespace Nodeflow\Console;
 
 use Illuminate\Console\Command;
 use Illuminate\Filesystem\Filesystem;
+use Illuminate\Support\Str;
 use InvalidArgumentException;
+use Nodeflow\Console\Extract\ExtractJournal;
 use Nodeflow\Console\Install\ProviderStep;
 use Nodeflow\Nodes\HandlesAudience;
 use Nodeflow\Nodes\HandlesSubject;
@@ -13,6 +15,7 @@ use Nodeflow\Nodes\Node;
 use Nodeflow\Nodes\NodeRegistry;
 use ReflectionClass;
 use RuntimeException;
+use Throwable;
 
 /**
  * `nodeflow:extract-node {class} --package=vendor/name` — moves a node class
@@ -64,6 +67,17 @@ class ExtractNodeCommand extends Command
 
     /** Where MakeNodeCommand::writeTest() puts a generated node's test — the one convention this command has to guess a test file's location by. */
     private const TEST_DIR = 'tests/Feature/Nodeflow';
+
+    /**
+     * A single PHP identifier segment (E52) — the same pattern
+     * MakeNodePackageCommand::NAMESPACE_SEGMENT_PATTERN uses, kept as its own
+     * private copy rather than made public there: this class already
+     * derives its OWN namespace independently of that command (it accepts
+     * --namespace directly rather than going through
+     * MakeNodePackageCommand::resolveTarget()), so the two validations are
+     * two call sites of the same RULE, not one shared piece of state.
+     */
+    private const NAMESPACE_SEGMENT_PATTERN = '/^[A-Za-z_\x80-\xff][A-Za-z0-9_\x80-\xff]*$/';
 
     /**
      * The `type()` literal G3 proved for the class under extraction, or null
@@ -164,14 +178,1061 @@ class ExtractNodeCommand extends Command
             return $this->refuse($message);
         }
 
-        $lockState = $this->composerLockExisted ? 'present' : 'absent';
+        try {
+            $target = $this->buildPackageTarget($packageName, $targetRelativePath, $hostBasePath);
+        } catch (RuntimeException $e) {
+            return $this->refuse($e->getMessage());
+        }
+
+        return $this->performMoves(
+            $class,
+            new ReflectionClass($class),
+            $hostBasePath,
+            $packageName,
+            $targetRelativePath,
+            $target,
+        );
+    }
+
+    /**
+     * M1-M7 and M6a — the actual moves, run only once every one of the eight
+     * gates above has passed. Everything here is journaled: any failure at
+     * ANY point, including M6a's own post-move rescan, restores the host to
+     * exactly the bytes it had before this method ever ran (ExtractJournal's
+     * own docblock explains why the undo order matters). M7 deletes the
+     * ORIGINAL files last — after M6a has already proven nothing still
+     * names them by their old FQCN — because deleting first and discovering
+     * a survivor after would make "restore" mean "resurrect a file", which
+     * is a needless risk when refusing BEFORE the delete costs nothing.
+     */
+    private function performMoves(
+        string $class,
+        ReflectionClass $reflection,
+        string $hostBasePath,
+        string $packageName,
+        string $targetRelativePath,
+        PackageTarget $target,
+    ): int {
+        $journal = new ExtractJournal($this->files);
+
+        $nodeFile = $reflection->getFileName();
+        $shortName = $reflection->getShortName();
+        $newNamespace = rtrim($target->namespace, '\\').'\\Nodes';
+        $newFqcn = $newNamespace.'\\'.$shortName;
+        $testFile = $hostBasePath.'/'.self::TEST_DIR.'/'.$shortName.'Test.php';
+        $providerFile = $hostBasePath.'/'.ProviderStep::PATH;
+        $testMoved = false;
+
+        try {
+            $this->scaffoldPackage($target, $hostBasePath, $journal);
+            $this->moveClassFile($class, $reflection, $nodeFile, $newNamespace, $newFqcn, $target, $journal);
+
+            if (is_file($testFile) && $this->fileReferencesClass($testFile, $class)) {
+                $this->moveTestFile($class, $testFile, $shortName, $newFqcn, $target, $journal);
+                $testMoved = true;
+            }
+
+            $this->registerInPackage($newFqcn, $target, $journal);
+            $this->deregisterFromHost($class, $shortName, $providerFile, $journal);
+            $this->updateHostComposerJson($hostBasePath, $packageName, $targetRelativePath, $journal);
+
+            // M6a (E45): the same rescan G5 already ran, but over the tree AS
+            // IT NOW STANDS — including the package directory M1 only just
+            // created, ground G5 could never have scanned because it did not
+            // exist yet — and BEFORE M7 deletes anything, while restoring is
+            // still cheap.
+            $this->rescanPostMoveTree($class, $hostBasePath);
+
+            $this->deleteOriginals($nodeFile, $testMoved ? $testFile : null, $journal);
+        } catch (Throwable $e) {
+            try {
+                $journal->restore();
+            } catch (Throwable $restoreFailure) {
+                return $this->refuse(
+                    "Extraction of [{$class}] aborted ({$e->getMessage()}), AND restoring the host also ".
+                    "failed — it may be left partially modified and needs inspecting by hand: "
+                    .$restoreFailure->getMessage()
+                );
+            }
+
+            return $this->refuse(
+                "Extraction of [{$class}] aborted; the host has been restored to its original state. "
+                .$e->getMessage()
+            );
+        }
 
         $this->components->info(
-            "All eight gates passed for [{$class}]. Nothing has been moved — this build stops here; "
-            ."Task 9 performs the actual moves. (composer.lock: {$lockState})"
+            "Extracted [{$class}] into [{$packageName}] at [{$targetRelativePath}] as [{$newFqcn}]. Run "
+            .'`composer install` (or `composer update`) to finish wiring the package in.'
         );
 
         return self::SUCCESS;
+    }
+
+    /**
+     * Everything PackageScaffolder::scaffold() needs, validated the same way
+     * MakeNodePackageCommand::resolveTarget() validates it for
+     * nodeflow:make-node-package — but derived from THIS command's own
+     * --package/--namespace options rather than routed through that other
+     * command's object, since the two commands' inputs differ ($packageName
+     * and $targetRelativePath are already validated by G6/G7 by the time
+     * this runs).
+     *
+     * Deliberately called BEFORE any journal exists: every refusal here
+     * happens before a single byte has been touched, so there is nothing to
+     * restore — this is closer in spirit to a ninth gate than to a move.
+     *
+     * @throws RuntimeException
+     */
+    private function buildPackageTarget(string $packageName, string $targetRelativePath, string $hostBasePath): PackageTarget
+    {
+        [$vendor, $package] = array_pad(explode('/', $packageName, 2), 2, '');
+
+        $namespaceOption = trim((string) ($this->option('namespace') ?? ''));
+
+        $namespace = $namespaceOption !== ''
+            ? trim($namespaceOption, '\\')
+            : Str::studly($vendor).'\\'.Str::studly($package);
+
+        $namespaceSegments = explode('\\', $namespace);
+        $shortClassBase = Str::studly(end($namespaceSegments));
+        $providerClass = $namespace.'\\'.$shortClassBase.'ServiceProvider';
+
+        $this->assertValidNamespaceSegments($providerClass);
+
+        $host = HostPath::root($hostBasePath);
+        $absolutePath = $host->resolveWithin($targetRelativePath);
+
+        $constraint = $this->hostNodeflowConstraint($hostBasePath);
+
+        if ($constraint === null) {
+            throw new RuntimeException(
+                "The host's composer.json does not require atram/laravel-nodeflow (E33); extraction "
+                .'cannot mirror a constraint that is not there. Run `composer require '
+                .'atram/laravel-nodeflow` first.'
+            );
+        }
+
+        return new PackageTarget(
+            composerName: $packageName,
+            namespace: $namespace,
+            absolutePath: $absolutePath,
+            relativePath: $targetRelativePath,
+            providerClass: $providerClass,
+            nodeflowConstraint: $constraint,
+            withJs: false,
+        );
+    }
+
+    /** @throws RuntimeException */
+    private function assertValidNamespaceSegments(string $fqcn): void
+    {
+        foreach (explode('\\', trim($fqcn, '\\')) as $segment) {
+            if (preg_match(self::NAMESPACE_SEGMENT_PATTERN, $segment) !== 1) {
+                throw new RuntimeException(
+                    "[{$segment}] is not a valid PHP identifier, so [{$fqcn}] is not a namespace PHP can "
+                    .'parse (E52). Pass --namespace to supply one explicitly.'
+                );
+            }
+        }
+    }
+
+    /** The host's own `atram/laravel-nodeflow` require constraint (E33), or null when there is nothing to mirror. */
+    private function hostNodeflowConstraint(string $hostBasePath): ?string
+    {
+        $decoded = json_decode($this->files->get($hostBasePath.'/composer.json'), true);
+        $constraint = is_array($decoded) ? ($decoded['require']['atram/laravel-nodeflow'] ?? null) : null;
+
+        return is_string($constraint) && $constraint !== '' ? $constraint : null;
+    }
+
+    /**
+     * M1 — scaffolds the package, then journals exactly what changed on
+     * disk: every file PackageScaffolder overwrote that already EXISTED is
+     * journaled as a write (captured BEFORE scaffold() runs, so the
+     * original bytes are in hand); every path that did not exist before is
+     * journaled as a create. Diffing the tree before and after, rather than
+     * hard-coding the list of files PackageScaffolder happens to write today,
+     * is what keeps this correct across all three E43 target states — absent,
+     * a matching re-run, and a foreign --force overwrite — without this
+     * class needing to know PackageScaffolder's own file list at all.
+     */
+    private function scaffoldPackage(PackageTarget $target, string $hostBasePath, ExtractJournal $journal): void
+    {
+        $existedBefore = $this->files->isDirectory($target->absolutePath);
+        $before = $existedBefore ? $this->treeEntries($target->absolutePath) : [];
+
+        // Computed BEFORE scaffold() runs, while it is still possible to see
+        // which ancestor directories do not exist yet: --path may nest the
+        // target several levels below anything the host already has (the
+        // default packages/vendor/name is itself two levels), and
+        // PackageScaffolder's own ensureDirectoryExists() creates every one
+        // of them via a single recursive mkdir(). Recording only the LEAF
+        // directory as a create would undo the leaf and leave its now-empty
+        // ancestors behind — exactly the gap a mutation of this method
+        // survived until a real diff against the host tree caught it.
+        $missingRoot = $existedBefore ? null : $this->shallowestMissingAncestor($target->absolutePath);
+
+        foreach ($before as $relative => $isDirectory) {
+            if (! $isDirectory) {
+                $journal->recordWrite($target->absolutePath.'/'.$relative);
+            }
+        }
+
+        (new PackageScaffolder($this->files, $hostBasePath))->scaffold($target);
+
+        // E11: re-verify rather than trust. PackageScaffolder validates every
+        // rendered .php file parses BEFORE it writes anything, but does not
+        // itself re-check that each write actually landed — file_put_contents()
+        // returns false, rather than throwing, on a genuine disk failure (a
+        // path component that collides with a plain file where a directory is
+        // expected, most concretely). The provider file is the one M4 depends
+        // on next, so its absence is the cheapest, earliest signal that
+        // something about this scaffold did not actually take.
+        $providerPath = $target->absolutePath.'/src/'.$this->shortClassName($target->providerClass).'.php';
+
+        if (! $this->files->exists($providerPath)) {
+            throw new RuntimeException(
+                "Scaffolding [{$target->composerName}] did not produce its own provider at "
+                ."[{$providerPath}]; nothing was moved."
+            );
+        }
+
+        if (! $existedBefore) {
+            // The whole subtree, from the shallowest missing ancestor down,
+            // is new; one entry undoes all of it.
+            $journal->recordCreate($missingRoot);
+
+            return;
+        }
+
+        $after = $this->treeEntries($target->absolutePath);
+        $newRelatives = array_values(array_diff(array_keys($after), array_keys($before)));
+
+        // Shallowest first, so a later restore() (which processes entries in
+        // REVERSE) removes the deepest new paths before the directories that
+        // contain them — see ExtractJournal's own docblock.
+        usort($newRelatives, static fn (string $a, string $b): int => substr_count($a, '/') <=> substr_count($b, '/'));
+
+        foreach ($newRelatives as $relative) {
+            $journal->recordCreate($target->absolutePath.'/'.$relative);
+        }
+    }
+
+    /**
+     * Walking UP from $path, the shallowest directory that does not exist
+     * yet — the one whose recursive removal undoes every directory
+     * PackageScaffolder's own single recursive mkdir() is about to create
+     * along the way to $path, not merely $path itself. Must be computed
+     * BEFORE anything creates those directories; once they exist, there is
+     * nothing left to distinguish "always existed" from "created by this
+     * run" by looking at the filesystem alone.
+     */
+    private function shallowestMissingAncestor(string $path): string
+    {
+        $current = $path;
+        $missing = $path;
+
+        // The host root itself always exists (handle() already resolved it
+        // via HostPath::root()), so this loop is guaranteed to terminate at
+        // or before reaching it; the dirname()-fixed-point check is
+        // defensive only, for a $path this command somehow reached without
+        // it being rooted under the host at all.
+        while (! $this->files->isDirectory($current)) {
+            $missing = $current;
+            $parent = dirname($current);
+
+            if ($parent === $current) {
+                break;
+            }
+
+            $current = $parent;
+        }
+
+        return $missing;
+    }
+
+    /**
+     * Every entry (file or directory) recursively under $root, keyed by its
+     * path relative to $root, valued true for a directory. Empty when $root
+     * does not exist yet.
+     *
+     * @return array<string, bool>
+     */
+    private function treeEntries(string $root): array
+    {
+        $entries = [];
+
+        $walk = function (string $dir) use (&$walk, &$entries, $root): void {
+            foreach (scandir($dir) ?: [] as $name) {
+                if ($name === '.' || $name === '..') {
+                    continue;
+                }
+
+                $path = $dir.'/'.$name;
+                $relative = substr($path, strlen($root) + 1);
+
+                if (is_dir($path)) {
+                    $entries[$relative] = true;
+                    $walk($path);
+                } else {
+                    $entries[$relative] = false;
+                }
+            }
+        };
+
+        if (is_dir($root)) {
+            $walk($root);
+        }
+
+        return $entries;
+    }
+
+    /**
+     * M2 — writes $class's own source into the package at
+     * `src/Nodes/{ShortClass}.php` (mirroring the host's own
+     * `app/Nodeflow/Nodes/` convention onto the package's PSR-4 root,
+     * exactly the empty sibling directory PackageScaffolder already
+     * prepared), rewriting ONLY the namespace declaration's own name and
+     * every reference to $class found INSIDE the file itself — never a
+     * global str_replace of the old namespace text (F-1), which would just
+     * as happily rewrite a docblock or a string literal that legitimately
+     * still names the old location and is not, in fact, a live reference at
+     * all.
+     */
+    private function moveClassFile(
+        string $class,
+        ReflectionClass $reflection,
+        string $nodeFile,
+        string $newNamespace,
+        string $newFqcn,
+        PackageTarget $target,
+        ExtractJournal $journal,
+    ): void {
+        $source = file_get_contents($nodeFile);
+
+        if ($source === false) {
+            throw new RuntimeException("[{$nodeFile}] could not be read; extraction cannot move it.");
+        }
+
+        $namespaceSpan = $this->namespaceDeclarationSpan($source);
+
+        if ($namespaceSpan === null) {
+            throw new RuntimeException(
+                "[{$nodeFile}] has no namespace declaration extraction knows how to rewrite."
+            );
+        }
+
+        $shortName = $reflection->getShortName();
+
+        $replacements = [[
+            'start' => $namespaceSpan['start'],
+            'end' => $namespaceSpan['end'],
+            'text' => $newNamespace,
+        ]];
+
+        foreach ($this->fileOwnReferences($class, $nodeFile, $source) as $reference) {
+            $original = substr($source, $reference->byteStart, $reference->byteEnd - $reference->byteStart);
+
+            $replacements[] = [
+                'start' => $reference->byteStart,
+                'end' => $reference->byteEnd,
+                // A string literal's VALUE does not resolve through PHP's own
+                // namespace rules the way a name token does, so it must be
+                // re-spelled as the full new FQCN; every other kind (a bare
+                // self-reference such as `Foo::make()`) keeps resolving to
+                // itself correctly once written as the short name alone,
+                // because a name unqualified in its own (new) namespace
+                // always resolves to a sibling declared in that namespace.
+                'text' => $reference->kind === 'string_literal'
+                    ? $this->requote($original, $newFqcn)
+                    : $shortName,
+            ];
+        }
+
+        $rewritten = $this->applySpanReplacements($source, $replacements);
+
+        if (! $this->parses($rewritten)) {
+            throw new RuntimeException(
+                "Rewriting [{$nodeFile}]'s namespace to [{$newNamespace}] produced PHP that does not "
+                .'parse; nothing was moved.'
+            );
+        }
+
+        $this->writeJournaled($target->absolutePath.'/src/Nodes/'.$shortName.'.php', $rewritten, $journal);
+    }
+
+    /**
+     * M3 — moves the host's own test for $class (if the conventional path
+     * holds one that genuinely references it — the same proof
+     * `rewritableSpans()` requires) into the package at
+     * `tests/{ShortClass}Test.php`, rewriting only its resolved `use`
+     * import, never a namespace declaration: `stubs/node.test.stub` opens
+     * `<?php` and declares no namespace at all, so a namespace-declaration
+     * rewrite is a verified no-op on the exact file this move exists to fix.
+     */
+    private function moveTestFile(
+        string $class,
+        string $testFile,
+        string $shortName,
+        string $newFqcn,
+        PackageTarget $target,
+        ExtractJournal $journal,
+    ): void {
+        $source = file_get_contents($testFile);
+
+        if ($source === false) {
+            throw new RuntimeException("[{$testFile}] could not be read; extraction cannot move it.");
+        }
+
+        $importSpan = $this->importSpanFor($class, $testFile, $source);
+
+        if ($importSpan === null) {
+            throw new RuntimeException(
+                "[{$testFile}] references [{$class}] but extraction could not find a rewritable `use` "
+                .'import for it; nothing was moved.'
+            );
+        }
+
+        $rewritten = substr_replace($source, $newFqcn, $importSpan['start'], $importSpan['end'] - $importSpan['start']);
+
+        if (! $this->parses($rewritten)) {
+            throw new RuntimeException(
+                "Rewriting [{$testFile}]'s import to [{$newFqcn}] produced PHP that does not parse; "
+                .'nothing was moved.'
+            );
+        }
+
+        $this->writeJournaled($target->absolutePath.'/tests/'.$shortName.'Test.php', $rewritten, $journal);
+    }
+
+    /**
+     * M4 — registers $newFqcn into the PACKAGE's own freshly-scaffolded
+     * provider (never the host's). `AlreadyPresent` is treated the same as
+     * `Appended`: a re-run of extraction against an already-matching
+     * package (E43's "matching existing" target state) must not refuse just
+     * because a previous run already got this far.
+     */
+    private function registerInPackage(string $newFqcn, PackageTarget $target, ExtractJournal $journal): void
+    {
+        $providerPath = $target->absolutePath.'/src/'.$this->shortClassName($target->providerClass).'.php';
+
+        $journal->recordWrite($providerPath);
+
+        $outcome = (new NodeRegistrationWriter($this->files))->register($providerPath, $newFqcn);
+
+        if ($outcome !== NodeRegistrationOutcome::Appended && $outcome !== NodeRegistrationOutcome::AlreadyPresent) {
+            throw new RuntimeException(
+                "Registering [{$newFqcn}] into the package's own provider [{$providerPath}] failed "
+                ."({$outcome->name}); nothing was moved."
+            );
+        }
+    }
+
+    /** The short (unqualified) class name at the end of a fully-qualified one. */
+    private function shortClassName(string $fqcn): string
+    {
+        $position = strrpos($fqcn, '\\');
+
+        return $position === false ? $fqcn : substr($fqcn, $position + 1);
+    }
+
+    /**
+     * M5 — removes $class from the HOST's own provider, then removes the
+     * now-unused `use` import for it, but only when the short name appears
+     * nowhere else in the file (identifierAppearsOutside()'s own docblock
+     * explains why that check is structural, not a substring search).
+     *
+     * Every one of NodeRemovalOutcome's eight cases is handled explicitly.
+     * `Removed`, `NotPresent`, `ProviderMissing`, `AnchorMissing`, and
+     * `AnchorAmbiguous` all mean the SAME thing from this method's own point
+     * of view — there is nothing left in the host naming $class that
+     * `removeFrom()` was able to (or needed to) touch, which G5 having
+     * already passed guarantees is safe: if a REAL, resolvable reference to
+     * $class survived in an ambiguous or unsupported form, G5's own scan
+     * would already have refused the whole extraction before this method
+     * ever ran. `EntryUnsupported`, `EntryAmbiguous`, and `WriteFailed` are
+     * genuine failures — the writer found something it would not safely
+     * edit, or the edit it attempted did not hold up — and NONE of the three
+     * may be read as "nothing to do": doing so would let extraction proceed
+     * to delete the class file a stale reference still, in fact, names.
+     */
+    private function deregisterFromHost(string $class, string $shortName, string $providerFile, ExtractJournal $journal): void
+    {
+        if (! $this->files->exists($providerFile)) {
+            return;
+        }
+
+        $journal->recordWrite($providerFile);
+
+        $outcome = (new NodeRegistrationWriter($this->files))->removeFrom($providerFile, NodeRegistrationWriter::ANCHOR, $class);
+
+        match ($outcome) {
+            NodeRemovalOutcome::Removed,
+            NodeRemovalOutcome::NotPresent,
+            NodeRemovalOutcome::ProviderMissing,
+            NodeRemovalOutcome::AnchorMissing,
+            NodeRemovalOutcome::AnchorAmbiguous => null,
+            NodeRemovalOutcome::EntryUnsupported,
+            NodeRemovalOutcome::EntryAmbiguous,
+            NodeRemovalOutcome::WriteFailed => throw new RuntimeException(
+                "Removing [{$class}] from the host provider [{$providerFile}] failed ({$outcome->name}); "
+                .'nothing was moved. The provider may name this class in a form extraction cannot safely edit.'
+            ),
+        };
+
+        $this->removeUnusedImportIfSafe($class, $shortName, $providerFile, $journal);
+    }
+
+    /**
+     * Removes $providerFile's own `use` import for $class, but only when
+     * $shortName does not appear anywhere else in the file — checked
+     * structurally (identifierAppearsOutside()), not by searching the raw
+     * text for the name, and left alone entirely (not an error) whenever
+     * removing it is not provably safe: there is no reference left to
+     * refuse over at this point, so the worst a wrong guess here could do is
+     * leave a harmless unused import, never break the host.
+     */
+    private function removeUnusedImportIfSafe(string $class, string $shortName, string $providerFile, ExtractJournal $journal): void
+    {
+        $contents = $this->files->get($providerFile);
+        $importSpan = $this->importSpanFor($class, $providerFile, $contents);
+
+        if ($importSpan === null) {
+            return;
+        }
+
+        if ($this->identifierAppearsOutside($contents, $shortName, $importSpan['start'], $importSpan['end'])) {
+            return;
+        }
+
+        $updated = $this->deleteUseStatement($contents, $importSpan['start']);
+
+        if ($updated === null || ! $this->parses($updated)) {
+            return;
+        }
+
+        $journal->recordWrite($providerFile);
+        $this->files->put($providerFile, $updated);
+    }
+
+    /**
+     * Deletes the `use ... ;` statement whose own imported name STARTS at
+     * $memberStart — found by walking backward to the nearest preceding
+     * `use` keyword and forward to its terminating `;` — absorbing one
+     * trailing newline so the removal does not leave a blank line behind.
+     * Null when no enclosing `use ... ;` can be found at all (defensive;
+     * unreachable through this command's own call sites, which only ever
+     * pass a span `importSpanFor()` itself already found inside a real `use`
+     * statement).
+     */
+    private function deleteUseStatement(string $contents, int $memberStart): ?string
+    {
+        $tokens = $this->tokenizeWithOffsets($contents);
+        $useIndex = null;
+
+        foreach ($tokens as $index => $token) {
+            if ($token['start'] >= $memberStart) {
+                break;
+            }
+
+            if ($token['id'] === T_USE) {
+                $useIndex = $index;
+            }
+        }
+
+        if ($useIndex === null) {
+            return null;
+        }
+
+        $semicolonEnd = null;
+
+        foreach ($tokens as $index => $token) {
+            if ($index <= $useIndex) {
+                continue;
+            }
+
+            if ($token['id'] === null && $token['text'] === ';') {
+                $semicolonEnd = $token['end'];
+
+                break;
+            }
+        }
+
+        if ($semicolonEnd === null) {
+            return null;
+        }
+
+        $start = $tokens[$useIndex]['start'];
+        $end = $semicolonEnd;
+
+        if (($contents[$end] ?? null) === "\n") {
+            $end++;
+        }
+
+        return substr_replace($contents, '', $start, $end - $start);
+    }
+
+    /**
+     * M6 (E29) — adds a path repository pointing at $targetRelativePath,
+     * ALWAYS relative, never resolved to an absolute path: an absolute path
+     * breaks the moment the host is committed and rebuilt on another
+     * machine. Reuses `requiredFromMatchingPathRepository()` (G6's own
+     * matching logic — literal or glob, via `fnmatch()`) to decide whether a
+     * repository entry is already there, so a re-run against an
+     * already-wired host (E43's "matching existing" target state) does not
+     * duplicate anything. `require[$packageName]` is added only when the
+     * package is not already required from EITHER `require` or
+     * `require-dev` — G6 already refused any OTHER kind of pre-existing
+     * requirement before this point was ever reached.
+     */
+    private function updateHostComposerJson(string $hostBasePath, string $packageName, string $targetRelativePath, ExtractJournal $journal): void
+    {
+        $path = $hostBasePath.'/composer.json';
+        $decoded = json_decode($this->files->get($path), true);
+
+        if (! is_array($decoded)) {
+            throw new RuntimeException("[{$path}] does not parse as JSON; extraction cannot update it.");
+        }
+
+        $changed = false;
+
+        if (! $this->requiredFromMatchingPathRepository($decoded, $targetRelativePath)) {
+            $repositories = is_array($decoded['repositories'] ?? null) ? $decoded['repositories'] : [];
+            $repositories[] = ['type' => 'path', 'url' => $targetRelativePath];
+            $decoded['repositories'] = $repositories;
+            $changed = true;
+        }
+
+        $require = is_array($decoded['require'] ?? null) ? $decoded['require'] : [];
+        $requireDev = is_array($decoded['require-dev'] ?? null) ? $decoded['require-dev'] : [];
+
+        if (! array_key_exists($packageName, $require) && ! array_key_exists($packageName, $requireDev)) {
+            $require[$packageName] = '*';
+            $decoded['require'] = $require;
+            $changed = true;
+        }
+
+        if (! $changed) {
+            return;
+        }
+
+        $encoded = json_encode($decoded, JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES).PHP_EOL;
+
+        $journal->recordWrite($path);
+        $this->files->put($path, $encoded);
+
+        // E11: re-verify rather than trust, the same reason writeJournaled()
+        // checks its own write.
+        if ($this->files->get($path) !== $encoded) {
+            throw new RuntimeException("[{$path}] could not be updated; nothing further was moved.");
+        }
+    }
+
+    /**
+     * M6a (E45) — re-runs the SAME reference scan G5 already ran, over a
+     * WIDER set of roots than G5's own named-directory allowlist
+     * (postMoveScanRoots()'s own docblock explains why), subtracting
+     * exactly the set `rewritableSpans()` proves the extraction transforms —
+     * the SAME method G5 itself calls, recomputed fresh rather than reused
+     * from earlier in this same run, because the provider file's own content
+     * has since changed (M5 already edited it). Any survivor aborts BEFORE
+     * M7 deletes anything (E45): a reference the gates could not see, caught
+     * here instead, while restoring is still cheap.
+     *
+     * @throws RuntimeException
+     */
+    private function rescanPostMoveTree(string $class, string $hostBasePath): void
+    {
+        $roots = $this->postMoveScanRoots($hostBasePath);
+
+        try {
+            $found = NodeReferenceScanner::scan($class, $roots);
+        } catch (RuntimeException $e) {
+            throw new RuntimeException('Post-move reference rescan (E45) failed: '.$e->getMessage());
+        }
+
+        if ($found === []) {
+            return;
+        }
+
+        $spans = $this->rewritableSpans($class, $hostBasePath);
+
+        $survivors = array_values(array_filter(
+            $found,
+            fn (NodeReference $reference): bool => ! $this->isRewritten($reference, $spans),
+        ));
+
+        if ($survivors === []) {
+            return;
+        }
+
+        $locations = array_map(
+            static fn (NodeReference $reference): string => "{$reference->file}:{$reference->line}",
+            $survivors,
+        );
+
+        throw new RuntimeException(
+            "Extraction would still leave [{$class}] referenced by its old FQCN after the move (E45) — ".
+            "a reference the earlier gates could not see, at:\n".implode("\n", $locations)
+        );
+    }
+
+    /**
+     * Every top-level directory under $hostBasePath except `vendor` and any
+     * dot-prefixed directory (`.git` and similar) — deliberately WIDER than
+     * G5's own REFERENCE_SCAN_DIRS allowlist. That width is the entire
+     * reason M6a exists: a reference living in some OTHER top-level
+     * directory — one that is neither one of G5's conventional names nor
+     * mapped by the host's own PSR-4 — is invisible to every gate, because
+     * no gate ever scans it, yet it is just as fatal once the class moves.
+     * Run once, after the moves, immediately before an irreversible delete
+     * — the cost of a full-tree walk is acceptable exactly there, not on
+     * every gate check.
+     *
+     * A candidate is dropped, not included, when it canonically escapes the
+     * host root through a symlink (E51's own rule, checked here the same
+     * way `isUnderAnyMappedRoot()` checks it for G2/G5's scan roots): a
+     * top-level entry that is itself a symlink pointing outside the host —
+     * exactly the shape Important N2's own PSR-4 guard exists to keep out of
+     * G5's roots — must not become a wider-scanning M6a root either, or this
+     * rescan would find, and wrongly abort on, a reference planted only in
+     * whatever the symlink happens to point at.
+     *
+     * @return list<string>
+     */
+    private function postMoveScanRoots(string $hostBasePath): array
+    {
+        $hostRoot = HostPath::root($hostBasePath);
+        $roots = [];
+
+        foreach (scandir($hostBasePath) ?: [] as $entry) {
+            if ($entry === '.' || $entry === '..' || $entry === self::VENDOR_DIR || str_starts_with($entry, '.')) {
+                continue;
+            }
+
+            $path = $hostBasePath.'/'.$entry;
+
+            if ($this->files->isDirectory($path) && $hostRoot->contains($path)) {
+                $roots[] = $path;
+            }
+        }
+
+        return $roots;
+    }
+
+    /**
+     * M7 — deletes the original class file and, if M3 moved one, the
+     * original test file, journaling each deletion (with the bytes read
+     * BEFORE the delete) so a failure elsewhere in the SAME performMoves()
+     * call — unreachable today, since M7 is the last step, but kept for the
+     * same reason PackageScaffolder's own currently-unreachable guards are —
+     * can still restore them.
+     */
+    private function deleteOriginals(string $nodeFile, ?string $testFile, ExtractJournal $journal): void
+    {
+        $this->deleteJournaled($nodeFile, $journal);
+
+        if ($testFile !== null) {
+            $this->deleteJournaled($testFile, $journal);
+        }
+    }
+
+    /**
+     * Deletes $path, journaling its bytes first (read BEFORE the delete, the
+     * same "capture before you mutate" rule every other journaled mutation
+     * in this class follows) and re-verifying afterwards (E11) that it is
+     * actually gone: `Filesystem::delete()` reports failure as a boolean
+     * return, never an exception, so trusting it without checking would let
+     * extraction report success while the original file it was supposed to
+     * remove — the entire reason G5's guarantee holds — is still sitting
+     * there under its old FQCN.
+     */
+    private function deleteJournaled(string $path, ExtractJournal $journal): void
+    {
+        $contents = file_get_contents($path);
+
+        if ($contents === false) {
+            throw new RuntimeException("[{$path}] could not be read; extraction cannot delete it safely.");
+        }
+
+        $journal->recordDelete($path, $contents);
+        $this->files->delete($path);
+
+        if ($this->files->exists($path)) {
+            throw new RuntimeException("[{$path}] could not be deleted; nothing further was moved.");
+        }
+    }
+
+    /**
+     * Writes $contents to $path, journaling it correctly whether $path
+     * already existed (a write, undone by restoring the original bytes) or
+     * not (a create, undone by deleting it) — the same before/after
+     * distinction scaffoldPackage() applies to the whole package directory,
+     * applied here to one file at a time for M2's and M3's own destination
+     * writes.
+     */
+    private function writeJournaled(string $path, string $contents, ExtractJournal $journal): void
+    {
+        if ($this->files->exists($path)) {
+            $journal->recordWrite($path);
+        } else {
+            $journal->recordCreate($path);
+        }
+
+        $this->files->ensureDirectoryExists(dirname($path));
+        $this->files->put($path, $contents);
+
+        // E11: re-verify rather than trust — put() reports a genuine disk
+        // failure (a path component colliding with a plain file where a
+        // directory belongs, most concretely) by returning false, never by
+        // throwing, so an unchecked call here would let extraction report
+        // success while the bytes it was supposed to move never actually
+        // landed.
+        if ($this->files->get($path) !== $contents) {
+            throw new RuntimeException("[{$path}] could not be written; nothing further was moved.");
+        }
+    }
+
+    /**
+     * Every reference to $class found INSIDE $file itself — a self-reference
+     * such as a static call the class makes on its own name, or a
+     * class-string literal naming itself — never the class's own
+     * declaration, which NodeReferenceScanner already treats as a
+     * definition rather than a use. Scans $file's own directory (the
+     * scanner accepts only directories) and filters down to $file's own
+     * canonical path, the same pattern `providerSpans()` already uses and
+     * for the same reason: a reference sitting in a SIBLING file must never
+     * be folded into this file's own set.
+     *
+     * @return list<NodeReference>
+     */
+    private function fileOwnReferences(string $class, string $file, string $source): array
+    {
+        try {
+            $references = NodeReferenceScanner::scan($class, [dirname($file)]);
+        } catch (RuntimeException) {
+            return [];
+        }
+
+        $canonical = realpath($file) ?: $file;
+
+        return array_values(array_filter(
+            $references,
+            static fn (NodeReference $reference): bool => (realpath($reference->file) ?: $reference->file) === $canonical,
+        ));
+    }
+
+    /** @return array{start: int, end: int}|null */
+    private function importSpanFor(string $class, string $file, string $source): ?array
+    {
+        foreach ($this->fileOwnReferences($class, $file, $source) as $reference) {
+            if ($reference->kind === 'import') {
+                return ['start' => $reference->byteStart, 'end' => $reference->byteEnd];
+            }
+        }
+
+        return null;
+    }
+
+    /**
+     * The exact byte range of $source's namespace declaration's own NAME —
+     * not the `namespace` keyword, not the terminating `;` — e.g. for
+     * `namespace App\Nodeflow\Nodes;`, the span covering exactly
+     * `App\Nodeflow\Nodes`. Substituting new text into THIS span, and this
+     * span alone, is what keeps M2's rewrite structural rather than a
+     * global find/replace of the old namespace string (F-1): a docblock or
+     * string literal that happens to spell the same text is never touched,
+     * because it is never part of this span.
+     *
+     * @return array{start: int, end: int}|null null when $source has no
+     *  namespace declaration at all — G2's own PSR-4 containment rule makes
+     *  this unreachable through this command's own call sites, since a file
+     *  with no namespace could never sit under a mapped PSR-4 directory and
+     *  declare the class under extraction, but this is defensive rather than
+     *  assumed.
+     */
+    private function namespaceDeclarationSpan(string $source): ?array
+    {
+        $tokens = $this->tokenizeWithOffsets($source);
+        $nameTokenIds = [T_STRING, T_NAME_QUALIFIED, T_NAME_FULLY_QUALIFIED, T_NAME_RELATIVE, T_NS_SEPARATOR];
+        $ignored = [T_WHITESPACE, T_COMMENT, T_DOC_COMMENT];
+
+        foreach ($tokens as $index => $token) {
+            if ($token['id'] !== T_NAMESPACE) {
+                continue;
+            }
+
+            $start = null;
+            $end = null;
+
+            for ($j = $index + 1, $count = count($tokens); $j < $count; $j++) {
+                $next = $tokens[$j];
+
+                if ($next['id'] !== null && in_array($next['id'], $ignored, true)) {
+                    continue;
+                }
+
+                if ($next['id'] === null || ! in_array($next['id'], $nameTokenIds, true)) {
+                    break;
+                }
+
+                $start ??= $next['start'];
+                $end = $next['end'];
+            }
+
+            return $start === null ? null : ['start' => $start, 'end' => $end];
+        }
+
+        return null;
+    }
+
+    /**
+     * Whether the bare identifier $shortName appears, as a NAME TOKEN (never
+     * a raw substring — a comment or a string literal spelling the same
+     * text does not count, matching NodeReferenceScanner's own rule that a
+     * comment is invisible to any scan), anywhere in $contents OUTSIDE the
+     * byte range [$excludeStart, $excludeEnd) — the import statement's own
+     * member listing. Only the LAST segment of a qualified name is compared
+     * (`Other\Foo` still names something called "Foo"), because what this
+     * check protects against is a DIFFERENT reference that happens to share
+     * $class's own short name — removeUnusedImportIfSafe()'s own docblock
+     * explains why a plain, RESOLUTION-blind identifier match is the correct
+     * (deliberately conservative) rule here, not a bug where a resolution
+     * check was intended instead.
+     */
+    private function identifierAppearsOutside(string $contents, string $shortName, int $excludeStart, int $excludeEnd): bool
+    {
+        $nameTokenIds = [T_STRING, T_NAME_QUALIFIED, T_NAME_FULLY_QUALIFIED, T_NAME_RELATIVE, T_NS_SEPARATOR];
+        $ignored = [T_WHITESPACE, T_COMMENT, T_DOC_COMMENT];
+
+        $tokens = array_values(array_filter(
+            $this->tokenizeWithOffsets($contents),
+            static fn (array $token): bool => $token['id'] === null || ! in_array($token['id'], $ignored, true),
+        ));
+
+        $count = count($tokens);
+        $i = 0;
+
+        // A `while` loop with a manually managed index, deliberately, not a
+        // `for`: the inner run-consuming loop below already advances $i
+        // itself, and a `for` header's own `$i++` on top of that would
+        // double-increment and silently skip the token immediately after
+        // every run — the exact defect class NodeReferenceScanner's own
+        // scanTokens() docblock names as having shipped once already.
+        while ($i < $count) {
+            if ($tokens[$i]['id'] === null || ! in_array($tokens[$i]['id'], $nameTokenIds, true)) {
+                $i++;
+
+                continue;
+            }
+
+            $runText = '';
+            $runStart = $tokens[$i]['start'];
+            $runEnd = $tokens[$i]['end'];
+
+            while ($i < $count && $tokens[$i]['id'] !== null && in_array($tokens[$i]['id'], $nameTokenIds, true)) {
+                $runText .= $tokens[$i]['text'];
+                $runEnd = $tokens[$i]['end'];
+                $i++;
+            }
+
+            $segments = explode('\\', $runText);
+            $last = end($segments);
+
+            if ($last === $shortName && ! ($runStart >= $excludeStart && $runEnd <= $excludeEnd)) {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    /**
+     * Re-quotes $newValue in the SAME quote style as $originalToken (its
+     * own raw text, quotes included) — so a self-referencing class-string
+     * literal keeps working once the namespace it names changes. $newValue
+     * is always a plain FQCN, so escaping it correctly only ever needs to
+     * double a literal backslash (and, for a single-quoted result, escape a
+     * literal quote too) — neither of which a class's own FQCN ever
+     * contains, but both are handled on principle rather than assumed away.
+     */
+    private function requote(string $originalToken, string $newValue): string
+    {
+        if ($originalToken !== '' && $originalToken[0] === "'") {
+            return "'".str_replace(['\\', "'"], ['\\\\', "\\'"], $newValue)."'";
+        }
+
+        return '"'.str_replace('\\', '\\\\', $newValue).'"';
+    }
+
+    /**
+     * Applies every [start, end) => text replacement in $replacements to
+     * $source, processing them in DESCENDING order by start so an earlier
+     * substr_replace() never invalidates a later one's already-computed
+     * byte range — the same ordering rule NodeRegistrationWriter::removeFrom()
+     * applies to its own deletions.
+     *
+     * @param  list<array{start: int, end: int, text: string}>  $replacements
+     */
+    private function applySpanReplacements(string $source, array $replacements): string
+    {
+        usort($replacements, static fn (array $a, array $b): int => $b['start'] <=> $a['start']);
+
+        foreach ($replacements as $replacement) {
+            $source = substr_replace(
+                $source,
+                $replacement['text'],
+                $replacement['start'],
+                $replacement['end'] - $replacement['start'],
+            );
+        }
+
+        return $source;
+    }
+
+    /**
+     * Every PHP token in $source alongside its own raw byte range —
+     * token_get_all() is a lossless lexer, so each token's raw start is just
+     * the running length of every token before it, the same property
+     * NodeReferenceScanner::tokenise() and NodeRegistrationWriter::tokens()
+     * both already rely on.
+     *
+     * @return list<array{id: int|null, text: string, start: int, end: int}>
+     */
+    private function tokenizeWithOffsets(string $source): array
+    {
+        $tokens = [];
+        $raw = 0;
+
+        foreach (token_get_all($source) as $token) {
+            $text = is_array($token) ? $token[1] : $token;
+            $id = is_array($token) ? $token[0] : null;
+            $length = strlen($text);
+
+            $tokens[] = ['id' => $id, 'text' => $text, 'start' => $raw, 'end' => $raw + $length];
+            $raw += $length;
+        }
+
+        return $tokens;
+    }
+
+    /**
+     * Whether $source is valid PHP — the same TOKEN_PARSE approach
+     * PackageScaffolder::parses() and NodeRegistrationWriter::parses() both
+     * already use, for the same reason: staying in-process avoids a
+     * subprocess per rewritten file, and a syntax error is exactly what
+     * TOKEN_PARSE catches.
+     */
+    private function parses(string $source): bool
+    {
+        try {
+            token_get_all($source, TOKEN_PARSE);
+
+            return true;
+        } catch (\ParseError) {
+            return false;
+        }
     }
 
     /**

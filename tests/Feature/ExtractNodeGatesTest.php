@@ -171,26 +171,31 @@ function writeAppNode(string $root, string $shortClass, string $type): string
     return 'App\Nodeflow\Nodes\\'.$shortClass;
 }
 
-// --- Happy path: nothing refuses, nothing is written -----------------------
+// --- Happy path: every gate passes, so Task 9's moves actually run --------
 
-it('passes all eight gates, prints a notice, and writes nothing', function () {
+// Task 8's own build stopped here with a "gates passed, nothing moved yet"
+// notice and asserted the host tree stayed byte-identical -- the correct
+// assertion for a command that was, at the time, read-only by construction.
+// Task 9 replaces that notice with the real moves (see
+// tests/Feature/ExtractNodeMovesTest.php for full coverage of M1-M7 and
+// M6a), so a host tree that changes -- the package now exists, the original
+// is gone -- is the CORRECT outcome here, not a regression.
+it('passes all eight gates and performs the extraction', function () {
     $class = writeAppNode($this->root, 'HappyPathNode', 'happy.path');
     file_put_contents($this->root.'/composer.lock', '{}');
 
-    $before = hostTreeHash($this->root);
-
     $this->artisan('nodeflow:extract-node', ['class' => $class, '--package' => 'acme/widgets'])
-        ->expectsOutputToContain('composer.lock: present')
         ->assertExitCode(0);
 
-    expect(hostTreeHash($this->root))->toBe($before);
+    expect($this->root.'/packages/acme/widgets/composer.json')->toBeFile();
+    expect($this->root.'/packages/acme/widgets/src/Nodes/HappyPathNode.php')->toBeFile();
+    expect($this->root.'/app/Nodeflow/Nodes/HappyPathNode.php')->not->toBeFile();
 });
 
-it('records composer.lock as absent when the host has none', function () {
+it('extracts successfully when the host has no composer.lock', function () {
     $class = writeAppNode($this->root, 'LockAbsentNode', 'lock.absent');
 
     $this->artisan('nodeflow:extract-node', ['class' => $class, '--package' => 'acme/widgets'])
-        ->expectsOutputToContain('composer.lock: absent')
         ->assertExitCode(0);
 });
 
@@ -2372,13 +2377,22 @@ it('refuses an occupied target path that is not the package being extracted, and
 
     expect(hostTreeHash($this->root))->toBe($before);
 
+    // --force overrides the foreign occupant and lets extraction actually
+    // run (Task 9) -- the host tree is NOT byte-identical afterwards: the
+    // foreign composer.json is gone, replaced by the scaffolded package's
+    // own, and the original class file has moved. See
+    // ExtractNodeMovesTest.php for the full "foreign directory under
+    // --force" journal/restore coverage this one line of this file is not
+    // meant to duplicate.
     $this->artisan('nodeflow:extract-node', [
         'class' => $class,
         '--package' => 'acme/widgets',
         '--force' => true,
     ])->assertExitCode(0);
 
-    expect(hostTreeHash($this->root))->toBe($before);
+    $decoded = json_decode(file_get_contents($this->root.'/packages/acme/widgets/composer.json'), true);
+    expect($decoded['name'])->toBe('acme/widgets');
+    expect($this->root.'/app/Nodeflow/Nodes/GateSevenNode.php')->not->toBeFile();
 });
 
 it('does not refuse an empty, pre-existing target directory (G7)', function () {
