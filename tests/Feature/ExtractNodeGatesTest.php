@@ -23,8 +23,15 @@ beforeEach(function () {
 
     mkdir($this->root.'/app', 0777, true);
 
+    // 'autoload' => ['psr-4' => ['App\\' => 'app/']] matches every real
+    // Laravel host's own composer.json (Laravel's own skeleton ships exactly
+    // this entry) -- and, since Important A, G2 now REQUIRES the node's own
+    // file to sit under a directory the host's composer.json maps this way,
+    // so every fixture in this file needs it present to reach any gate past
+    // G2 at all.
     file_put_contents($this->root.'/composer.json', json_encode([
         'require' => ['atram/laravel-nodeflow' => '^2.0'],
+        'autoload' => ['psr-4' => ['App\\' => 'app/']],
     ]));
 
     $this->app->setBasePath($this->root);
@@ -320,19 +327,29 @@ it('refuses a node whose file lives under vendor/, outside the host application 
         'class' => 'SomeVendor\SomePkg\VendorNode',
         '--package' => 'acme/widgets',
     ])
-        ->expectsOutputToContain('lives under [vendor/]')
+        ->expectsOutputToContain('lives under a [vendor/] segment')
         ->assertFailed();
 
     expect(hostTreeHash($this->root))->toBe($before);
 });
 
-it('does not refuse a node living outside app/ but still inside the host root, e.g. a src/ PSR-4 root (Important 5)', function () {
-    // G2's rule is "inside the host root, and not under vendor/" -- NOT
-    // "inside app/ specifically". A host mapping its own root namespace to
-    // src/ (a legitimate, if less common, PSR-4 choice) has every right to
-    // keep its own node classes there; refusing it just because it is not
-    // literally under app/ would fail safe but block real, legitimate work
-    // for no reason this gate actually needs to enforce.
+it('does not refuse a node living outside app/ but still inside a PSR-4 root the host itself maps, e.g. src/ (Important 5, refined by Important A)', function () {
+    // G2's rule is "under a directory the host's OWN composer.json maps via
+    // autoload/autoload-dev PSR-4, and not under vendor/ at any depth" --
+    // NOT "inside app/ specifically", and (since Important A) NOT merely
+    // "anywhere under the host root" either: reading the host's own PSR-4
+    // map is what lets a host mapping its root namespace to src/ (a
+    // legitimate, if less common, choice) still work, while a directory the
+    // host's own composer.json does not claim (storage/, a sibling
+    // package's own src/, ...) does not. This fixture's own composer.json
+    // therefore maps App\ to src/ explicitly -- the DEFAULT fixture (App\
+    // => app/) would otherwise correctly refuse this exact file, which is
+    // the whole point.
+    file_put_contents($this->root.'/composer.json', json_encode([
+        'require' => ['atram/laravel-nodeflow' => '^2.0'],
+        'autoload' => ['psr-4' => ['App\\' => 'src/']],
+    ]));
+
     $directory = $this->root.'/src/Nodeflow/Nodes';
     mkdir($directory, 0777, true);
     $path = $directory.'/SrcRootNode.php';
@@ -372,6 +389,308 @@ it('does not refuse a node living outside app/ but still inside the host root, e
         'class' => 'App\Nodeflow\Nodes\SrcRootNode',
         '--package' => 'acme/widgets',
     ])->assertExitCode(0);
+});
+
+// --- Important A: G2 must not admit ground G5 cannot scan ------------------
+
+it('refuses a node inside ANOTHER local path-repository package, not mapped by the HOST\'s own composer.json (Important A, case a)', function () {
+    // packages/acme/other/src/... is a DIFFERENT Composer package's own
+    // source, mapped by THAT package's own composer.json, never the host's.
+    // Before Important A (G2 widened to "host root minus a top-level
+    // vendor/"), this exited 0: the file sits inside the host root and not
+    // under vendor/, so it passed, even though moving it would rewrite a
+    // namespace that other package's own src/Consumer.php still references
+    // -- a reference G5 never scans, because packages/acme/other/src/ was
+    // never one of G5's roots either.
+    mkdir($this->root.'/packages/acme/other/src/Nodes', 0777, true);
+    $path = $this->root.'/packages/acme/other/src/Nodes/OtherPackageNode.php';
+
+    file_put_contents($path, <<<'PHP'
+    <?php
+
+    namespace Acme\Other\Nodes;
+
+    use Nodeflow\Execution\NodeResult;
+    use Nodeflow\Execution\SubjectContext;
+    use Nodeflow\Nodes\HandlesSubject;
+    use Nodeflow\Nodes\Node;
+    use Nodeflow\Schema\NodeDefinition;
+
+    class OtherPackageNode extends Node implements HandlesSubject
+    {
+        public static function type(): string
+        {
+            return 'other.package.node';
+        }
+
+        public function definition(): NodeDefinition
+        {
+            return NodeDefinition::make('OtherPackageNode')->outputs(['default']);
+        }
+
+        public function forSubject(SubjectContext $context): NodeResult
+        {
+            return $context->continue('default');
+        }
+    }
+    PHP);
+    require $path;
+
+    // The live reference G5 would never have reached, even before this fix
+    // -- included so the fixture demonstrates the actual consequence, not
+    // merely a contrived path.
+    file_put_contents($this->root.'/packages/acme/other/src/Consumer.php', <<<'PHP'
+    <?php
+
+    namespace Acme\Other;
+
+    use Acme\Other\Nodes\OtherPackageNode;
+
+    class Consumer
+    {
+        public function make(): OtherPackageNode
+        {
+            return new OtherPackageNode();
+        }
+    }
+    PHP);
+
+    $before = hostTreeHash($this->root);
+
+    $this->artisan('nodeflow:extract-node', [
+        'class' => 'Acme\Other\Nodes\OtherPackageNode',
+        '--package' => 'acme/widgets',
+    ])
+        ->expectsOutputToContain('PSR-4')
+        ->assertFailed();
+
+    expect(hostTreeHash($this->root))->toBe($before);
+});
+
+it('refuses a node inside a NESTED vendor/ directory belonging to a different local package (Important A, case b)', function () {
+    // packages/foo/vendor/bar/pkg/src/... -- a vendor/ segment two levels
+    // deep, precisely what the any-depth exclusion exists to stop. A host
+    // mapping a broad root like "packages/" would otherwise treat this as
+    // "contained" and therefore fine under a PSR-4-only check with no
+    // separate vendor exclusion.
+    mkdir($this->root.'/packages/foo/vendor/bar/pkg/src', 0777, true);
+    $path = $this->root.'/packages/foo/vendor/bar/pkg/src/NestedVendorNode.php';
+
+    file_put_contents($path, <<<'PHP'
+    <?php
+
+    namespace Bar\Pkg;
+
+    use Nodeflow\Execution\NodeResult;
+    use Nodeflow\Execution\SubjectContext;
+    use Nodeflow\Nodes\HandlesSubject;
+    use Nodeflow\Nodes\Node;
+    use Nodeflow\Schema\NodeDefinition;
+
+    class NestedVendorNode extends Node implements HandlesSubject
+    {
+        public static function type(): string
+        {
+            return 'nested.vendor.node';
+        }
+
+        public function definition(): NodeDefinition
+        {
+            return NodeDefinition::make('NestedVendorNode')->outputs(['default']);
+        }
+
+        public function forSubject(SubjectContext $context): NodeResult
+        {
+            return $context->continue('default');
+        }
+    }
+    PHP);
+    require $path;
+
+    $before = hostTreeHash($this->root);
+
+    $this->artisan('nodeflow:extract-node', [
+        'class' => 'Bar\Pkg\NestedVendorNode',
+        '--package' => 'acme/widgets',
+    ])
+        ->expectsOutputToContain('vendor/] segment')
+        ->assertFailed();
+
+    expect(hostTreeHash($this->root))->toBe($before);
+});
+
+it('refuses a node inside storage/framework/cache/, unmapped by any PSR-4 entry (Important A, case c)', function () {
+    mkdir($this->root.'/storage/framework/cache', 0777, true);
+    $path = $this->root.'/storage/framework/cache/CacheNode.php';
+
+    file_put_contents($path, <<<'PHP'
+    <?php
+
+    namespace Storage\Cache;
+
+    use Nodeflow\Execution\NodeResult;
+    use Nodeflow\Execution\SubjectContext;
+    use Nodeflow\Nodes\HandlesSubject;
+    use Nodeflow\Nodes\Node;
+    use Nodeflow\Schema\NodeDefinition;
+
+    class CacheNode extends Node implements HandlesSubject
+    {
+        public static function type(): string
+        {
+            return 'cache.node';
+        }
+
+        public function definition(): NodeDefinition
+        {
+            return NodeDefinition::make('CacheNode')->outputs(['default']);
+        }
+
+        public function forSubject(SubjectContext $context): NodeResult
+        {
+            return $context->continue('default');
+        }
+    }
+    PHP);
+    require $path;
+
+    $before = hostTreeHash($this->root);
+
+    $this->artisan('nodeflow:extract-node', [
+        'class' => 'Storage\Cache\CacheNode',
+        '--package' => 'acme/widgets',
+    ])
+        ->expectsOutputToContain('PSR-4')
+        ->assertFailed();
+
+    expect(hostTreeHash($this->root))->toBe($before);
+});
+
+it('refuses a node already inside the extraction\'s own TARGET package, unmapped by the host (Important A, case d)', function () {
+    // packages/acme/widgets/src/... is exactly where THIS extraction's own
+    // --package=acme/widgets would land -- a node already sitting there is
+    // not the host's own source either, and the host's composer.json never
+    // claims it via autoload/autoload-dev.
+    mkdir($this->root.'/packages/acme/widgets/src', 0777, true);
+    $path = $this->root.'/packages/acme/widgets/src/AlreadyInTargetNode.php';
+
+    file_put_contents($path, <<<'PHP'
+    <?php
+
+    namespace Acme\Widgets;
+
+    use Nodeflow\Execution\NodeResult;
+    use Nodeflow\Execution\SubjectContext;
+    use Nodeflow\Nodes\HandlesSubject;
+    use Nodeflow\Nodes\Node;
+    use Nodeflow\Schema\NodeDefinition;
+
+    class AlreadyInTargetNode extends Node implements HandlesSubject
+    {
+        public static function type(): string
+        {
+            return 'already.in.target.node';
+        }
+
+        public function definition(): NodeDefinition
+        {
+            return NodeDefinition::make('AlreadyInTargetNode')->outputs(['default']);
+        }
+
+        public function forSubject(SubjectContext $context): NodeResult
+        {
+            return $context->continue('default');
+        }
+    }
+    PHP);
+    require $path;
+
+    $before = hostTreeHash($this->root);
+
+    $this->artisan('nodeflow:extract-node', [
+        'class' => 'Acme\Widgets\AlreadyInTargetNode',
+        '--package' => 'acme/widgets',
+    ])
+        ->expectsOutputToContain('PSR-4')
+        ->assertFailed();
+
+    expect(hostTreeHash($this->root))->toBe($before);
+});
+
+it('unions the host\'s own PSR-4 roots into G5\'s scan, agreeing with G2 by construction (Important A)', function () {
+    // G2 requires the node's own file to sit under a host PSR-4 root; G5's
+    // scan roots gain that SAME set via the SAME hostPsr4Directories() call
+    // -- proven here by mapping App\ to src/ (NOT one of the seven NAMED
+    // scan directories) and putting a live reference to the target only
+    // inside that src/ tree, outside every named root.
+    file_put_contents($this->root.'/composer.json', json_encode([
+        'require' => ['atram/laravel-nodeflow' => '^2.0'],
+        'autoload' => ['psr-4' => ['App\\' => 'src/']],
+    ]));
+
+    mkdir($this->root.'/src/Nodeflow/Nodes', 0777, true);
+    $nodePath = $this->root.'/src/Nodeflow/Nodes/PsrRootScanNode.php';
+
+    file_put_contents($nodePath, <<<'PHP'
+    <?php
+
+    namespace App\Nodeflow\Nodes;
+
+    use Nodeflow\Execution\NodeResult;
+    use Nodeflow\Execution\SubjectContext;
+    use Nodeflow\Nodes\HandlesSubject;
+    use Nodeflow\Nodes\Node;
+    use Nodeflow\Schema\NodeDefinition;
+
+    class PsrRootScanNode extends Node implements HandlesSubject
+    {
+        public static function type(): string
+        {
+            return 'psr.root.scan.node';
+        }
+
+        public function definition(): NodeDefinition
+        {
+            return NodeDefinition::make('PsrRootScanNode')->outputs(['default']);
+        }
+
+        public function forSubject(SubjectContext $context): NodeResult
+        {
+            return $context->continue('default');
+        }
+    }
+    PHP);
+    require $nodePath;
+
+    // A reference living ONLY under src/ -- not app/, config/, database/,
+    // resources/, routes/, bootstrap/, or tests/.
+    mkdir($this->root.'/src/Other', 0777, true);
+    file_put_contents($this->root.'/src/Other/Consumer.php', <<<'PHP'
+    <?php
+
+    namespace App\Other;
+
+    use App\Nodeflow\Nodes\PsrRootScanNode;
+
+    class Consumer
+    {
+        public function make(): PsrRootScanNode
+        {
+            return new PsrRootScanNode();
+        }
+    }
+    PHP);
+
+    $before = hostTreeHash($this->root);
+
+    $this->artisan('nodeflow:extract-node', [
+        'class' => 'App\Nodeflow\Nodes\PsrRootScanNode',
+        '--package' => 'acme/widgets',
+    ])
+        ->expectsOutputToContain('Consumer.php')
+        ->assertFailed();
+
+    expect(hostTreeHash($this->root))->toBe($before);
 });
 
 it('refuses a node whose file also declares a trait, naming the trait', function () {
@@ -972,11 +1291,26 @@ it('refuses (safe, over-refusal) rather than mis-locate the $nodes array when th
     // findClassEntrySpans() and this test fails at exit 0 -- the FIRST
     // class's $nodes entry is silently exempted, its own ambiguity with the
     // second occurrence never detected.
+    //
+    // ORDERING IN THIS FIXTURE IS LOAD-BEARING -- do not "tidy" it (e.g. by
+    // alphabetising the two classes, which would put LeftoverDuplicateProvider
+    // first). Raw strpos() always finds the FIRST occurrence of the anchor
+    // text. Putting the DUPLICATE (empty-array) class first would refuse
+    // either way, with or without the guard: without it, strpos() finds the
+    // empty array, parses it successfully, and correctly finds zero matching
+    // elements in it -- the exact same [] result the guard itself would
+    // produce, so that ordering cannot tell the two apart. Only with the
+    // REAL, non-empty class's own array occurring FIRST does removing the
+    // guard actually change the observable outcome (it silently succeeds by
+    // accident instead of refusing on principle), which is why the real
+    // class must stay first for this test to mean anything.
     $class = writeAppNode($this->root, 'MinorTwoNode', 'minor.two.node');
 
     $providerDirectory = $this->root.'/app/Providers';
     mkdir($providerDirectory, 0777, true);
 
+    // NodeflowServiceProvider (the REAL, non-empty $nodes array) MUST come
+    // FIRST in this file -- see the ordering note above.
     file_put_contents($providerDirectory.'/NodeflowServiceProvider.php', <<<'PHP'
     <?php
 
@@ -1116,6 +1450,68 @@ it('does not claim a same-short-name test file that tests a DIFFERENT class (Imp
 
     $canonicalTestFile = realpath($testFile);
     $matching = array_filter($spans, fn ($span) => (realpath($span->file) ?: $span->file) === $canonicalTestFile);
+
+    expect($matching)->toBeEmpty();
+});
+
+it('does not claim the conventional test file merely because a SIBLING file in the same directory references the target (Important B)', function () {
+    // fileReferencesClass()'s canonical same-file filter -- Finding 6's own
+    // filter, re-entering through this new helper -- was untested. Its
+    // sibling copy inside providerSpans() (Minor 1, Finding 9) already had
+    // a discriminating test; this one did not, even though the exact same
+    // hazard applies: NodeReferenceScanner::scan() is handed the candidate
+    // FILE'S OWN DIRECTORY (it only accepts a directory), so every sibling
+    // living alongside the conventional {Short}Test.php is scanned too.
+    // Replacing the canonical filter with `return $references !== []`
+    // leaves the suite green UNTIL a sibling in that same directory
+    // references the target while the conventional candidate itself does
+    // not -- exactly this fixture. Counterfactual: make that replacement
+    // and the wrong-owner span count goes from 0 to 1.
+    $target = writeAppNode($this->root, 'SiblingRefNode', 'sibling.ref.node');
+
+    $testDirectory = $this->root.'/tests/Feature/Nodeflow';
+    mkdir($testDirectory, 0777, true);
+
+    // The CONVENTIONAL candidate path -- deliberately references nothing.
+    $conventionalTestFile = $testDirectory.'/SiblingRefNodeTest.php';
+    file_put_contents($conventionalTestFile, <<<'PHP'
+    <?php
+
+    namespace Tests\Feature\Nodeflow;
+
+    class SiblingRefNodeTest
+    {
+        public function it_asserts_nothing_about_the_node_at_all(): void
+        {
+        }
+    }
+    PHP);
+
+    // A SIBLING file, in the SAME directory, that DOES reference the target.
+    file_put_contents($testDirectory.'/UnrelatedOtherTest.php', <<<'PHP'
+    <?php
+
+    namespace Tests\Feature\Nodeflow;
+
+    use App\Nodeflow\Nodes\SiblingRefNode;
+
+    class UnrelatedOtherTest
+    {
+        public function it_uses_the_node_for_something_else_entirely(): void
+        {
+            new SiblingRefNode();
+        }
+    }
+    PHP);
+
+    $command = app(\Nodeflow\Console\ExtractNodeCommand::class);
+    $spans = $command->rewritableSpans($target, $this->root);
+
+    $canonicalConventionalFile = realpath($conventionalTestFile);
+    $matching = array_filter(
+        $spans,
+        fn ($span) => (realpath($span->file) ?: $span->file) === $canonicalConventionalFile,
+    );
 
     expect($matching)->toBeEmpty();
 });
@@ -1295,6 +1691,7 @@ it('refuses when --package is already required from a path repository pointing e
     $class = writeAppNode($this->root, 'GateSixElsewhereNode', 'gate6.elsewhere');
 
     file_put_contents($this->root.'/composer.json', json_encode([
+        'autoload' => ['psr-4' => ['App\\' => 'app/']],
         'require' => ['atram/laravel-nodeflow' => '^2.0', 'acme/widgets' => '^1.0'],
         'repositories' => [
             ['type' => 'path', 'url' => 'packages/somewhere-else'],
@@ -1314,6 +1711,7 @@ it('refuses when --package is already required in require-dev, not just require,
     $class = writeAppNode($this->root, 'GateSixRequireDevNode', 'gate6.requiredev');
 
     file_put_contents($this->root.'/composer.json', json_encode([
+        'autoload' => ['psr-4' => ['App\\' => 'app/']],
         'require' => ['atram/laravel-nodeflow' => '^2.0'],
         'require-dev' => ['acme/widgets' => '^1.0'],
     ]));
@@ -1331,6 +1729,7 @@ it('does not refuse when --package is required from a matching path repository',
     $class = writeAppNode($this->root, 'GateSixMatchingNode', 'gate6.matching');
 
     file_put_contents($this->root.'/composer.json', json_encode([
+        'autoload' => ['psr-4' => ['App\\' => 'app/']],
         'require' => ['atram/laravel-nodeflow' => '^2.0', 'acme/widgets' => '^1.0'],
         'repositories' => [
             ['type' => 'path', 'url' => 'packages/acme/widgets'],
@@ -1348,6 +1747,7 @@ it('does not refuse when the matching path repository url is a glob, not a liter
     $class = writeAppNode($this->root, 'GateSixGlobNode', 'gate6.glob');
 
     file_put_contents($this->root.'/composer.json', json_encode([
+        'autoload' => ['psr-4' => ['App\\' => 'app/']],
         'require' => ['atram/laravel-nodeflow' => '^2.0', 'acme/widgets' => '^1.0'],
         'repositories' => [
             ['type' => 'path', 'url' => 'packages/*/*'],
@@ -1374,6 +1774,7 @@ it('refuses when a single-segment glob does not cross a "/" to cover a nested ta
     $class = writeAppNode($this->root, 'GateSixGlobCrossSlashNode', 'gate6.globcrossslash');
 
     file_put_contents($this->root.'/composer.json', json_encode([
+        'autoload' => ['psr-4' => ['App\\' => 'app/']],
         'require' => ['atram/laravel-nodeflow' => '^2.0', 'acme/widgets' => '^1.0'],
         'repositories' => [
             ['type' => 'path', 'url' => 'packages/*'],
@@ -1393,6 +1794,7 @@ it('refuses when extra.laravel.dont-discover covers the new package with a "*" e
     $class = writeAppNode($this->root, 'GateSixStarNode', 'gate6.star');
 
     file_put_contents($this->root.'/composer.json', json_encode([
+        'autoload' => ['psr-4' => ['App\\' => 'app/']],
         'require' => ['atram/laravel-nodeflow' => '^2.0'],
         'extra' => ['laravel' => ['dont-discover' => ['*']]],
     ]));
@@ -1410,6 +1812,7 @@ it('refuses when dont-discover is written as the bare string "*" rather than an 
     $class = writeAppNode($this->root, 'GateSixBareStarNode', 'gate6.barestar');
 
     file_put_contents($this->root.'/composer.json', json_encode([
+        'autoload' => ['psr-4' => ['App\\' => 'app/']],
         'require' => ['atram/laravel-nodeflow' => '^2.0'],
         'extra' => ['laravel' => ['dont-discover' => '*']],
     ]));
@@ -1427,6 +1830,7 @@ it('refuses when dont-discover names the new package specifically, not just "*"'
     $class = writeAppNode($this->root, 'GateSixNamedNode', 'gate6.named');
 
     file_put_contents($this->root.'/composer.json', json_encode([
+        'autoload' => ['psr-4' => ['App\\' => 'app/']],
         'require' => ['atram/laravel-nodeflow' => '^2.0'],
         'extra' => ['laravel' => ['dont-discover' => ['acme/widgets']]],
     ]));
@@ -1440,6 +1844,7 @@ it('does not refuse when dont-discover lists only unrelated packages', function 
     $class = writeAppNode($this->root, 'GateSixUnrelatedNode', 'gate6.unrelated');
 
     file_put_contents($this->root.'/composer.json', json_encode([
+        'autoload' => ['psr-4' => ['App\\' => 'app/']],
         'require' => ['atram/laravel-nodeflow' => '^2.0'],
         'extra' => ['laravel' => ['dont-discover' => ['someone/else']]],
     ]));
@@ -1448,7 +1853,18 @@ it('does not refuse when dont-discover lists only unrelated packages', function 
         ->assertExitCode(0);
 });
 
-it('refuses when the host composer.json does not parse as JSON (G6)', function () {
+it('refuses when the host composer.json does not parse as JSON, now via G2 rather than G6 (Important A ripple)', function () {
+    // This refusal moved gates. Before Important A widened G2 to require
+    // the node's own file sit under a host PSR-4 root, an unparseable
+    // composer.json was only ever caught by G6's OWN existence/parse check
+    // below. Now G2's hostPsr4Directories() reads and decodes the SAME file
+    // FIRST, gets [] (an unparseable file maps nothing), and refuses before
+    // G6 ever runs -- so G6's own "does not parse as JSON" message
+    // (deliberately left in place; see gate6()'s own docblock for why) is
+    // provably unreachable through any valid call path today. This test
+    // asserts what ACTUALLY happens now -- refusal via G2's message, not
+    // G6's -- rather than keeping a stale assertion that would silently
+    // start failing for the wrong reason.
     $class = writeAppNode($this->root, 'GateSixBadJsonNode', 'gate6.badjson');
 
     file_put_contents($this->root.'/composer.json', '{not valid json');
@@ -1456,7 +1872,7 @@ it('refuses when the host composer.json does not parse as JSON (G6)', function (
     $before = hostTreeHash($this->root);
 
     $this->artisan('nodeflow:extract-node', ['class' => $class, '--package' => 'acme/widgets'])
-        ->expectsOutputToContain('does not parse as JSON')
+        ->expectsOutputToContain('composer.json maps via autoload or autoload-dev PSR-4')
         ->assertFailed();
 
     expect(hostTreeHash($this->root))->toBe($before);
@@ -1616,6 +2032,7 @@ it('refuses an uppercase --package, closing a real G6 case-sensitivity bypass (I
     $class = writeAppNode($this->root, 'UppercasePackageBypassNode', 'uppercase.package.bypass');
 
     file_put_contents($this->root.'/composer.json', json_encode([
+        'autoload' => ['psr-4' => ['App\\' => 'app/']],
         'require' => ['atram/laravel-nodeflow' => '^2.0'],
         'extra' => ['laravel' => ['dont-discover' => ['acme/widgets']]],
     ]));

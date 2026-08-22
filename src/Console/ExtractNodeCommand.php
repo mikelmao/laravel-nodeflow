@@ -48,14 +48,17 @@ class ExtractNodeCommand extends Command
 
     protected $description = "Extract a node class into its own Composer package (gates only — this build doesn't move anything yet).";
 
-    /** The Composer package name's own directory, excluded from G2's host containment rule — code already shipped as part of another package is not the host's own source (E51). */
+    /** The directory segment excluded from G2's containment rule at ANY depth below the host root — code already shipped as part of a Composer package, the host's own or a nested one, is not the host's own source (E51). */
     private const VENDOR_DIR = 'vendor';
 
     /**
-     * The directories E46 requires G5 to scan: a reference can live in
-     * config, a route file, a Blade view, a migration, the host's own
-     * bootstrap file (bootstrap/app.php is Laravel 11's own provider
-     * registration site), or the host's own test suite.
+     * The NAMED directories E46 requires G5 to scan, beyond whatever the
+     * host's own composer.json PSR-4 maps (hostPsr4Directories(), unioned
+     * in below): a reference can live in config, a route file, a Blade
+     * view, a migration, the host's own bootstrap file (bootstrap/app.php
+     * is Laravel 11's own provider registration site), or the host's own
+     * test suite — none of which a PSR-4 autoload entry is expected to
+     * cover.
      */
     private const REFERENCE_SCAN_DIRS = ['app', 'bootstrap', 'config', 'database', 'resources', 'routes', 'tests'];
 
@@ -282,24 +285,51 @@ class ExtractNodeCommand extends Command
      * `ReflectionClass::getFileName()` first (false only for an internal or
      * eval'd class — unreachable once G1 has already proven `$class`
      * extends the project's own, PHP-defined `Node`, but refused rather
-     * than trusted regardless). Then containment (E51): the rule is
-     * "inside the host root, and not under vendor/" — NOT "inside app/
-     * specifically". A host is free to map its own root namespace onto
-     * `src/`, or anywhere else, via its own PSR-4 config; requiring `app/`
-     * literally would fail safe (refuse) for such a host's otherwise
-     * perfectly legitimate node, and reading the host's own PSR-4 map to
-     * find out is more surface than this gate needs for what it actually
-     * has to prevent — extracting a class that is not part of the host's
-     * own source at all, either because it lives outside the host root
-     * entirely, or because it is reached only through a symlink that
-     * escapes the root, or because it already ships inside `vendor/` as
-     * part of some OTHER Composer package. Then E47: the file must declare
-     * exactly one top-level named symbol. M2 (Task 9) rewrites the file's
-     * namespace, which moves EVERY declaration the file contains, while
-     * NodeReferenceScanner (G5) only ever looks for references to the
-     * NODE — so a companion trait, interface, enum, function, or constant
-     * would move silently and break any host code that still uses it under
-     * its old name.
+     * than trusted regardless). Then containment (E51), and this is the
+     * SECOND ruling this exact question has had:
+     *
+     * ROUND 1 said "inside the host root, and not under vendor/ [at the
+     * top level]" — deliberately NOT reading the host's own PSR-4 map,
+     * reasoned as "more surface than this gate needs". ROUND 2 reverses
+     * that: widening containment to the whole host root, with only a
+     * single-level vendor/ exclusion, admits ground `hostPsr4Directories()`
+     * (G5) never scans — a node inside ANOTHER local path-repository
+     * package (`packages/acme/other/src/...`), inside a NESTED vendor/
+     * directory (`packages/foo/vendor/bar/pkg/src/...`), inside
+     * `storage/framework/cache/...`, or already inside the extraction's own
+     * TARGET package all passed G2 and then went completely unvetted by
+     * G5, because none of those directories were ever roots G5 scans. The
+     * invariant this gate must hold is not merely "inside the host, not
+     * vendor" — it is G2 MUST NOT ADMIT GROUND G5 CANNOT SCAN. A gate that
+     * passes on unvettable territory is worse than one that refuses too
+     * much.
+     *
+     * THE RULE NOW: the file must sit under a directory the host's OWN
+     * composer.json maps via `autoload` or `autoload-dev` PSR-4
+     * (`hostPsr4Directories()`), and must not sit under a `vendor/`
+     * SEGMENT AT ANY DEPTH (`underVendorAtAnyDepth()` — not merely a
+     * top-level `vendor/`, because a nested package's own vendor/ is
+     * exactly what the exclusion exists to stop, and a host mapping a
+     * broad root like `packages/` would otherwise treat a nested vendor/
+     * as "contained" and therefore fine).
+     *
+     * `hostPsr4Directories()` is the SAME method G5 unions into its own
+     * scan roots below — not two lists that happen to agree, but one
+     * shared source of truth both gates consume, the identical reasoning
+     * behind `rewritableSpans()` being the one thing both this class's own
+     * G5 and Task 9's moves are required to call. A host mapping its own
+     * root namespace onto `src/` (or anywhere else) still works: its own
+     * composer.json says so, and this gate reads exactly that, rather than
+     * assuming `app/` — reading the PSR-4 map is what makes both the DX
+     * win (any legitimately mapped location works) and the safety
+     * property (nothing else does) true at once.
+     *
+     * Then E47: the file must declare exactly one top-level named symbol.
+     * M2 (Task 9) rewrites the file's namespace, which moves EVERY
+     * declaration the file contains, while NodeReferenceScanner (G5) only
+     * ever looks for references to the NODE — so a companion trait,
+     * interface, enum, function, or constant would move silently and break
+     * any host code that still uses it under its old name.
      */
     private function gate2(string $class, string $hostBasePath): ?string
     {
@@ -322,10 +352,20 @@ class ExtractNodeCommand extends Command
                 .'class outside the host cannot be extracted from it.';
         }
 
-        if ($this->underVendor($file, $hostBasePath)) {
-            return "[{$class}]'s file [{$file}] lives under [".self::VENDOR_DIR.'/] (E51). A class already '
-                .'shipped as part of another Composer package is not the host\'s own source and cannot be '
-                .'extracted from it.';
+        if ($this->underVendorAtAnyDepth($file, $hostBasePath)) {
+            return "[{$class}]'s file [{$file}] lives under a [".self::VENDOR_DIR.'/] segment (E51), at '
+                .'some depth under the host root. A class already shipped as part of another Composer '
+                .'package — the host\'s own, or a nested one belonging to a different local package — is '
+                .'not the host\'s own source and cannot be extracted from it.';
+        }
+
+        $psr4Directories = $this->hostPsr4Directories($hostBasePath);
+
+        if (! $this->isUnderAnyMappedRoot($file, $psr4Directories)) {
+            return "[{$class}]'s file [{$file}] is not inside any directory the host's own composer.json "
+                .'maps via autoload or autoload-dev PSR-4 (E51). A location the host itself does not claim '
+                .'as its own source is exactly the ground NodeReferenceScanner (G5) cannot be trusted to '
+                .'scan — it would let extraction proceed over territory nothing has vetted.';
         }
 
         $source = file_get_contents($file);
@@ -343,22 +383,113 @@ class ExtractNodeCommand extends Command
     }
 
     /**
-     * Whether $file lives inside the host's own vendor/, canonically
-     * (E51). A host missing a vendor/ directory entirely (freshly cloned,
-     * dependencies not yet installed) has nothing to be "under" — treated
-     * as false rather than an error, since the containment check against
-     * the host ROOT above has already run and already passed by the time
-     * this is called.
+     * Whether $file lives under a `vendor/` PATH SEGMENT at any depth below
+     * the host root — not merely a top-level `vendor/`. Segment-wise, over
+     * the portion of the canonical path strictly BELOW the host root, so a
+     * host root whose own ANCESTOR directory happens to be named "vendor"
+     * (unlikely, but this is exactly the class of substring-shaped mistake
+     * this codebase keeps re-finding) is never mistaken for containment.
      */
-    private function underVendor(string $file, string $hostBasePath): bool
+    private function underVendorAtAnyDepth(string $file, string $hostBasePath): bool
     {
+        $canonicalFile = realpath($file);
+
+        if ($canonicalFile === false) {
+            return false;
+        }
+
         try {
-            $vendorRoot = HostPath::root($hostBasePath.'/'.self::VENDOR_DIR);
+            $hostRoot = HostPath::root($hostBasePath);
         } catch (InvalidArgumentException) {
             return false;
         }
 
-        return $vendorRoot->contains($file);
+        $rootSegments = HostPath::segments($hostRoot->basePath());
+        $fileSegments = HostPath::segments($canonicalFile);
+
+        if (count($fileSegments) < count($rootSegments)) {
+            return false;
+        }
+
+        $relativeSegments = array_slice($fileSegments, count($rootSegments));
+
+        return in_array(self::VENDOR_DIR, $relativeSegments, true);
+    }
+
+    /**
+     * Every directory the host's own composer.json maps via
+     * `autoload.psr-4` or `autoload-dev.psr-4`, resolved to an absolute
+     * path and kept only if it actually exists on disk — the SAME set both
+     * G2 (containment) and G5 (scan roots) consume, so the two gates agree
+     * about what counts as "the host's own source" by construction rather
+     * than by two independently-written lists happening to match.
+     *
+     * Composer's own PSR-4 value may be a single directory string or an
+     * array of several for one namespace prefix; both are handled. A
+     * non-existent mapped directory (declared in composer.json but never
+     * created) is silently dropped rather than refused here — an absent
+     * directory contains nothing, so it can neither admit a node G2 should
+     * accept nor hide a reference G5 should have scanned.
+     *
+     * @return list<string>
+     */
+    private function hostPsr4Directories(string $hostBasePath): array
+    {
+        $path = $hostBasePath.'/composer.json';
+
+        if (! $this->files->exists($path)) {
+            return [];
+        }
+
+        $decoded = json_decode($this->files->get($path), true);
+
+        if (! is_array($decoded)) {
+            return [];
+        }
+
+        $directories = [];
+
+        foreach (['autoload', 'autoload-dev'] as $section) {
+            $psr4 = $decoded[$section]['psr-4'] ?? null;
+
+            if (! is_array($psr4)) {
+                continue;
+            }
+
+            foreach ($psr4 as $mapped) {
+                foreach (is_array($mapped) ? $mapped : [$mapped] as $directory) {
+                    if (! is_string($directory) || $directory === '') {
+                        continue;
+                    }
+
+                    $absolute = $hostBasePath.'/'.trim($directory, '/');
+
+                    if ($this->files->isDirectory($absolute)) {
+                        $directories[] = $absolute;
+                    }
+                }
+            }
+        }
+
+        return array_values(array_unique($directories));
+    }
+
+    /** @param  list<string>  $psr4Directories */
+    private function isUnderAnyMappedRoot(string $file, array $psr4Directories): bool
+    {
+        foreach ($psr4Directories as $directory) {
+            try {
+                $root = HostPath::root($directory);
+            } catch (InvalidArgumentException) {
+                continue;
+            }
+
+            if ($root->contains($file)) {
+                return true;
+            }
+        }
+
+        return false;
     }
 
     /**
@@ -418,13 +549,23 @@ class ExtractNodeCommand extends Command
      */
     private function gate5(string $class, string $hostBasePath): ?string
     {
-        $roots = array_values(array_filter(
+        // Unioned with hostPsr4Directories() — the SAME set G2 requires the
+        // node's own file to sit under — rather than two independently
+        // maintained lists: G2 must never admit ground this scan does not
+        // cover, and sharing one method is what makes that true by
+        // construction instead of by the two lists happening to agree.
+        $namedRoots = array_values(array_filter(
             array_map(
                 static fn (string $dir): string => $hostBasePath.'/'.$dir,
                 self::REFERENCE_SCAN_DIRS,
             ),
             fn (string $root): bool => $this->files->isDirectory($root),
         ));
+
+        $roots = array_values(array_unique(array_merge(
+            $namedRoots,
+            $this->hostPsr4Directories($hostBasePath),
+        )));
 
         try {
             $found = NodeReferenceScanner::scan($class, $roots);
@@ -478,6 +619,27 @@ class ExtractNodeCommand extends Command
      * "*" entry, or the package's own name, would silently stop the
      * extracted package's provider from ever being discovered, so the host
      * would lose its only registration of the node with no error anywhere.
+     *
+     * CURRENTLY UNREACHABLE, KEPT ANYWAY: the existence and parse checks
+     * immediately below can no longer actually fire by the time this gate
+     * runs. G2's own `hostPsr4Directories()` already reads and decodes this
+     * SAME file, on this SAME `$hostBasePath`, through this SAME
+     * `$this->files`, earlier in the SAME `handle()` call — and already
+     * refuses (via "not inside any PSR-4-mapped directory") whenever that
+     * file is missing or does not decode to a JSON object, since an empty
+     * PSR-4 directory list can never contain anything. Nothing writes to
+     * the file in between (every gate is read-only), so a second decode
+     * here cannot fail differently. Confirmed by execution, not assumed:
+     * the covering test for this exact scenario was rewritten once this
+     * stopped holding, and its own comment records what it demonstrates
+     * now instead. These two checks are kept — rather than deleted and the
+     * two lines below trusted to always succeed — because the dependency
+     * is on ANOTHER gate's OWN internal method staying exactly as strict
+     * as it is today; if `hostPsr4Directories()` ever relaxes (an escape
+     * hatch added to G2, a recursive/internal call bypassing it), this
+     * gate keeps its own, independent protection rather than silently
+     * treating a missing or corrupt composer.json as "nothing required,
+     * nothing discovered".
      */
     private function gate6(string $hostBasePath, string $packageName, string $targetRelativePath): ?string
     {
@@ -537,6 +699,22 @@ class ExtractNodeCommand extends Command
      * this prefix" job, the substring-shaped mistake this codebase's own
      * `HostPath` docblock names as its most recent recurrence.
      */
+    /**
+     * ONE comparison, not two. An earlier version of this method kept a
+     * separate `HostPath::segments($url) === $targetSegments` equality
+     * check ALONGSIDE this `fnmatch()` call, reasoning that a literal url
+     * needed its own exact-match arm because `fnmatch()` was only called
+     * when $url contained a glob metacharacter. Once that metachar guard
+     * was found to be its own redundant no-op and removed — `fnmatch()`
+     * with `FNM_PATHNAME` on a metachar-free pattern already IS an exact,
+     * segment-wise match, confirmed by execution
+     * (`fnmatch('packages/acme/widgets', 'packages/acme/widgets',
+     * FNM_PATHNAME)` is `true`) — the equality arm became redundant WITH
+     * it: removing either one alone changes nothing, because the other
+     * already covers the literal case on its own. Collapsing to this one
+     * call is the fix, not a third redundant guard layered on top of two
+     * that had already cancelled each other out.
+     */
     private function requiredFromMatchingPathRepository(array $decoded, string $targetRelativePath): bool
     {
         $repositories = $decoded['repositories'] ?? [];
@@ -545,8 +723,7 @@ class ExtractNodeCommand extends Command
             return false;
         }
 
-        $targetSegments = HostPath::segments($targetRelativePath);
-        $normalisedTarget = implode('/', $targetSegments);
+        $normalisedTarget = implode('/', HostPath::segments($targetRelativePath));
 
         foreach ($repositories as $repository) {
             if (! is_array($repository) || ($repository['type'] ?? null) !== 'path') {
@@ -559,12 +736,12 @@ class ExtractNodeCommand extends Command
                 continue;
             }
 
-            if (HostPath::segments($url) === $targetSegments) {
-                return true;
-            }
-
-            if (preg_match('/[*?\[]/', $url) === 1
-                && fnmatch(implode('/', HostPath::segments($url)), $normalisedTarget, FNM_PATHNAME)) {
+            // FNM_PATHNAME so a glob's '*' cannot cross a '/' — Composer's
+            // own idiomatic "packages/*" covers exactly one path segment,
+            // not "packages/acme/widgets" (two segments), the same way
+            // Composer's own path-repository resolution would not treat it
+            // as a match.
+            if (fnmatch(implode('/', HostPath::segments($url)), $normalisedTarget, FNM_PATHNAME)) {
                 return true;
             }
         }
