@@ -23,7 +23,7 @@ In prose: authors edit a flow, publishing creates a separate immutable version, 
 
 A **node** is a registered capability in the graph. It declares a stable type such as `app.send_message`, its author-facing fields, and its named outputs. Nodeflow's built-in nodes use the `core.` namespace.
 
-An **edge** connects one named output to the next node. For example, an `app.send_welcome` node can route its `sent` output to `core.exit`. A graph has one `start` node and must be valid before it can be published.
+An **edge** connects one named output to the next node. For example, an `app.send_welcome` node can route its `sent` output to `core.exit`. A graph has one `start` field that names its first ordinary node and must be valid before it can be published.
 
 Subject nodes are written as single-subject code: they receive one resolved subject and return its next output. Nodeflow applies that same code across the run's audience. Audience nodes instead receive a cohort at once when batching makes sense.
 
