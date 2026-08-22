@@ -42,6 +42,7 @@ return new class extends Migration
             $table->foreignId('organization_id')
                 ->constrained()
                 ->cascadeOnDelete();
+            $table->index('organization_id');
             $table->timestamp('clicked_offer_at')->nullable();
         });
 
@@ -57,6 +58,7 @@ return new class extends Migration
             $table->foreignId('organization_id')
                 ->constrained()
                 ->cascadeOnDelete();
+            $table->index('organization_id');
             $table->foreignId('user_id')
                 ->constrained()
                 ->cascadeOnDelete();
