@@ -1,0 +1,55 @@
+# {{ name }}
+
+Nodeflow nodes for `{{ name }}`, installable into any host that already
+requires [`atram/laravel-nodeflow`](https://github.com/atram/laravel-nodeflow)
+at `{{ nodeflowConstraint }}`.
+
+There is no manifest here — a host's compatibility comes entirely from
+`composer.json`'s own `require` constraint, provider loading comes from
+`extra.laravel.providers`, and a node's identity comes from its own `type()`
+plus explicit registration below. This package is an ordinary Composer
+package that happens to ship Nodeflow nodes, nothing more.
+
+## Installation
+
+```
+composer require {{ name }}
+```
+
+Laravel's package discovery loads `{{ providerClass }}` automatically from
+this package's own `composer.json` — nothing else needs registering.
+
+## Registering nodes
+
+Add each node class to `{{ providerClass }}`'s `$nodes` array:
+
+```php
+protected array $nodes = [
+    \{{ namespace }}\Nodes\YourNode::class,
+];
+```
+
+`{{ providerClass }}::boot()` calls `Nodeflow::register($this->nodes)` for
+you; nothing further to wire up.
+
+## Why no triggers or subject attributes
+
+This provider carries `$nodes` only — no triggers array, no subject-attribute
+method. That is a decision, not an omission: a trigger's `event()` method
+names an event class that lives in the *host* application, and a subject
+attribute's resolver closure takes the *host*'s own model as its argument.
+Neither can be expressed by a class shipped inside a package that has no
+knowledge of the host it will eventually be installed into. If your own
+workflow needs a trigger or a subject attribute, add it by hand to the host's
+own provider — not to this one.
+
+## Running `nodeflow:make-node` here
+
+You cannot run `php artisan nodeflow:make-node` inside this package: the
+command hard-codes the host application's own provider path and root
+namespace, and this package has no `artisan` of its own. Generate nodes in
+your host application and move them here by hand instead. The `$nodes`
+array's opening line above is byte-identical to the one the host generator
+already knows how to write into, so a future tool that targets a package's
+own provider directly would have somewhere to land — but nothing in this
+package does that today.

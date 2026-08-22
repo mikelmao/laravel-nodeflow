@@ -1,0 +1,5 @@
+<?php
+
+it('registers the {{ shortClass }} provider so Laravel can discover it', function () {
+    expect(class_exists({{ providerClass }}::class))->toBeTrue();
+});

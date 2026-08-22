@@ -1,0 +1,8 @@
+/**
+ * {{ name }} — Nodeflow editor integration.
+ *
+ * Export your node's editor-side definitions here. A host wires this up with
+ * the Vite alias and tsconfig `paths` entry that `nodeflow:make-node-package
+ * --js` prints (never writes) for you.
+ */
+export {};

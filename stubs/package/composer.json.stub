@@ -1,0 +1,25 @@
+{
+    "name": {{ name }},
+    "description": {{ description }},
+    "type": "library",
+    "license": "MIT",
+    "require": {
+        "php": "^8.3",
+        "atram/laravel-nodeflow": {{ nodeflowConstraint }}
+    },
+    "autoload": {
+        "psr-4": {
+            {{ namespaceKey }}: "src/"
+        }
+    },
+    "autoload-dev": {
+        "psr-4": {
+            "Tests\\": "tests/"
+        }
+    },
+    "extra": {
+        "laravel": {
+            "providers": {{ providers }}
+        }
+    }
+}

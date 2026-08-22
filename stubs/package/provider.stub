@@ -1,0 +1,28 @@
+<?php
+
+namespace {{ namespace }};
+
+use Illuminate\Support\ServiceProvider;
+
+class {{ shortClass }} extends ServiceProvider
+{
+    /**
+     * The nodes this package ships.
+     *
+     * Leave the opening line exactly as it is — a byte-for-byte match with
+     * the anchor `nodeflow:make-node` writes into a HOST provider's own
+     * `$nodes` array. Nothing in this package writes into this one today
+     * (see README.md, "Running nodeflow:make-node here"), but a future
+     * generator that targets a package's own provider could, and keeping the
+     * line identical is what would let it.
+     *
+     * @var class-string[]
+     */
+    protected array $nodes = [
+    ];
+
+    public function boot(): void
+    {
+        \Nodeflow\Nodeflow::register($this->nodes);
+    }
+}
