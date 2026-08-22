@@ -1,73 +1,31 @@
-# laravel-nodeflow
+# Laravel Nodeflow
 
-A visual workflow builder and durable execution engine for Laravel applications, built so your
-**customers** can author their own multi-day automated journeys without you shipping code for each one.
+Laravel Nodeflow is a visual workflow builder and durable execution engine that lets your application users compose approved, long-running automations while your application retains control of its tenants, subjects, authorization rules, and domain-specific actions.
 
-The package owns the mechanism — storage, versioning, the node contract, the durable interpreter.
-Your application owns the domain — what a "subject" is, who the tenants are, and what the nodes
-actually do.
+> **Experimental:** Nodeflow is pre-release software. Review the [experimental project status](docs/gitbook/experimental/project-status.md) and [known limitations](docs/gitbook/experimental/known-limitations.md), then test it carefully before relying on it for production automations.
 
-> **Status: editor and run view.** The durable headless engine, node generator, opt-in editor
-> routes, React `FlowEditor` client and the run-inspection `FlowRun` client all ship. The
-> `nodeflow:install` command (Plan 5) and the node-packaging commands (Plan 6) remain, and
-> domain-specific nodes remain yours to write. The package is verified by 358 PHP tests and 160
-> client Vitest tests, but the interpreter has not yet been exercised against a real queue worker.
-> See [Known limitations](docs/05-execution-model.md#known-limitations) before you depend on it.
+## Requirements
 
-## What it gives you
-
-- **Durable, non-blocking waits.** A journey can wait five minutes or thirty days. Nothing holds a
-  queue worker while it waits; the workflow hibernates and resumes across restarts and deploys.
-- **Cancellation as a first-class primitive.** "Wait one day, unless the customer converts first" is
-  expressed once and works. A converting subject stops receiving the rest of the journey.
-- **Fan-out at scale.** One event can produce a run per tenant, each over an audience of six figures,
-  without one run per person.
-- **Domain nodes in about an hour.** A node is one class plus one declarative definition, and
-  `php artisan nodeflow:make-node` writes the first draft of it. You never touch the interpreter.
-- **Immutable versioning.** A customer editing a journey cannot disturb the runs currently sitting
-  mid-24-hour wait on the previous version.
-- **Multi-tenancy that fails closed.** Tenant isolation is enforced in three layers, and the audience
-  ownership check is mandatory and cannot be switched off.
+Nodeflow requires PHP `^8.3`, Laravel 12 or 13 (`illuminate/console`, `filesystem`, `support`, and `database` `^12.0|^13.0`), and `durable-workflow/workflow ^2.0@rc`. Editor routes additionally need `inertiajs/inertia-laravel ^2.0`; durable execution needs a queue connection other than `sync`.
 
 ## Install
 
 ```bash
 composer require atram/laravel-nodeflow
-php artisan vendor:publish --tag=nodeflow-migrations
+php artisan nodeflow:install
 php artisan migrate
 ```
 
-Requires PHP 8.3+, Laravel 12 or 13, and a queue driver that is not `sync`
-(Redis, SQS, Beanstalkd or database).
+## Capabilities
 
-Then implement two small contracts and register your nodes — see
-[Integration](docs/02-integration.md). Nothing works until you do; the shipped defaults deliberately
-fail closed rather than guess.
-
-There is no `nodeflow:install`, so those two contracts are hand-written. Your nodes are not:
-
-```bash
-php artisan nodeflow:make-node SendSms --type=yaya.send_sms --outputs='sent, failed' --test
-```
-
-That writes one class and one Pest test, and either registers the node for you or prints the exact
-line to paste. See [Writing nodes](docs/03-writing-nodes.md).
+- Durable waits, resumption, and cancellation for long-running workflows.
+- Immutable published versions, tenant-scoped audiences, and per-subject execution.
+- Custom nodes, triggers, and subject attributes for application-defined behavior.
+- Opt-in Inertia editor and run-inspection clients.
+- Health checks, pruning, package scaffolding, and node extraction tooling.
 
 ## Documentation
 
-| | |
-|---|---|
-| [1. Overview](docs/01-overview.md) | The mental model: flows, versions, runs, subjects, audiences. Read this first. |
-| [2. Integration](docs/02-integration.md) | Install, the two contracts you must implement, service-provider wiring, queue setup. |
-| [3. Writing nodes](docs/03-writing-nodes.md) | The node contract, cardinality, config fields, test mode, failure isolation. |
-| [4. Writing triggers](docs/04-writing-triggers.md) | Turning any Laravel event into an authoring surface. |
-| [5. Execution model](docs/05-execution-model.md) | How a stored graph becomes a durable run. Waits, cancellation, limitations. |
-| [6. Operations](docs/06-operations.md) | Test mode, health checks, pruning, status lifecycles. |
-| [7. Worked example](docs/07-worked-example-rada-yaya.md) | A complete flood-alert journey, end to end. |
-| [8. Editor client](docs/08-editor-client.md) | The five host-wiring requirements, thin Inertia pages, extension props, and the run view's overlay and polling contract. |
+The [GitBook documentation](docs/gitbook/README.md) is the canonical guide. Start with the [quick start](docs/gitbook/getting-started/quick-start.md), follow the [flood-alert example application](docs/gitbook/example-application/overview.md), review the [experimental status](docs/gitbook/experimental/project-status.md), or see [contributing](docs/gitbook/contributing/architecture.md).
 
-## Design documents
-
-`docs/superpowers/specs/` holds the architectural spec, including the numbered decisions behind the
-design and a record of two engine-API corrections found during implementation. Read it when you want
-to know *why*; read the guides above when you want to know *how*.
+The numbered guides in `docs/01-*.md` through `docs/09-*.md` remain as legacy references; use the GitBook for current documentation.
