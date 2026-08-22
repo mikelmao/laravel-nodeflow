@@ -36,7 +36,7 @@ An unknown, absent, differently cased, or non-string value throws `InvalidArgume
 
 ## Validation and caching notes
 
-Only `tenancy` has runtime enum validation. The numeric limits and retention values are deliberately not range-checked by the current package. In particular, `nodeflow:prune --days` overrides `runs_days`, casts without validation, and should be previewed with `--dry-run`; a nonnumeric value becomes `0` and a negative value creates a future cutoff.
+Only `tenancy` has runtime enum validation. The numeric limits and retention values are deliberately not range-checked by the current package. In particular, only a truthy supplied `nodeflow:prune --days` overrides `runs_days`; omitted, empty, and literal `0` values fall back. A truthy nonnumeric value casts to `0`, and a negative value creates a future cutoff. Preview the exact command with `--dry-run`.
 
 `NODEFLOW_TENANCY` is read while Laravel loads configuration. With `config:cache`, editing `.env` alone has no effect until the cache is rebuilt. Published configuration is merged with package defaults, but a stale cached configuration that lacks `nodeflow.tenancy` is rejected on scoped reads; clear the cache before retrying.
 
