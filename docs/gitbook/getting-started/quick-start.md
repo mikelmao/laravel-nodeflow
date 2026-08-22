@@ -238,7 +238,10 @@ use Nodeflow\Nodeflow;
 Route::middleware(['web', 'auth'])->prefix('admin')->group(function (): void {
     Nodeflow::routes();
 
-    Route::post('users/{recipient}/welcome-journey', \App\Http\Controllers\StartWelcomeJourneyController::class)
+    Route::post('welcome-journeys', [\App\Http\Controllers\WelcomeJourneyController::class, 'store'])
+        ->name('welcome-journeys.store');
+
+    Route::post('flows/{flow}/users/{recipient}/welcome-journey', [\App\Http\Controllers\WelcomeJourneyController::class, 'start'])
         ->name('welcome-journeys.start');
 });
 ```
@@ -271,7 +274,7 @@ The lower-case, case-sensitive paths are intentional: the package renders `nodef
 
 ## Publish and start a flow
 
-Create `app/Http/Controllers/StartWelcomeJourneyController.php`. This authenticated web controller uses the host-owned creation gate before creating a flow, then the package's registered `publish` and `runManually` policy abilities for that flow.
+Create `app/Http/Controllers/WelcomeJourneyController.php`. First, its authenticated `store()` endpoint creates and publishes a flow once. Then its authenticated `start()` endpoint receives that already-published, tenant-scoped flow through route-model binding and starts live or test runs for it.
 
 ```php
 <?php
@@ -287,23 +290,17 @@ use Nodeflow\Execution\StartRun;
 use Nodeflow\Models\Flow;
 use Nodeflow\Publishing\PublishFlow;
 
-class StartWelcomeJourneyController extends Controller
+class WelcomeJourneyController extends Controller
 {
     use AuthorizesRequests;
 
-    public function __invoke(Request $request, User $recipient): RedirectResponse
+    public function store(Request $request): RedirectResponse
     {
         /** @var User $actor */
         $actor = $request->user();
 
         abort_unless($actor instanceof User, 403);
         $this->authorize('welcome-journeys.create');
-
-        // Do not let one organization start a run for another organization's user.
-        abort_unless((string) $actor->organization_id === (string) $recipient->organization_id, 404);
-
-        $isTest = $request->boolean('test_mode');
-        $mode = $isTest ? 'test' : 'live';
 
         // TenantResolver derives this flow's tenant from the authenticated actor.
         $flow = Flow::create([
@@ -331,7 +328,19 @@ class StartWelcomeJourneyController extends Controller
             publishedBy: (string) $actor->getAuthIdentifier(),
         );
 
+        return to_route('nodeflow.flows.edit', ['flow' => $flow]);
+    }
+
+    public function start(Request $request, Flow $flow, User $recipient): RedirectResponse
+    {
+        // The {flow} binding is tenant-scoped by Nodeflow before this code runs.
         $this->authorize('runManually', $flow);
+
+        // Do not let a flow address another organization's user.
+        abort_unless((string) $flow->tenant_id === (string) $recipient->organization_id, 404);
+
+        $isTest = $request->boolean('test_mode');
+        $mode = $isTest ? 'test' : 'live';
         $run = app(StartRun::class)->forFlow(
             flow: $flow->fresh(),
             subjectType: 'user',
@@ -349,7 +358,7 @@ class StartWelcomeJourneyController extends Controller
 }
 ```
 
-`PublishFlow::publish()` validates the graph and freezes it as a version. `StartRun::forFlow()` uses that published version, creates one audience for the supplied IDs, and starts the durable workflow. The idempotency key prevents a second start for the same published version and key from creating another run. Test and live runs use distinct keys, so a test request creates its own run.
+`PublishFlow::publish()` validates the graph and freezes it as a version. `StartRun::forFlow()` uses that published version, creates one audience for the supplied IDs, and starts the durable workflow. On this same flow version, the idempotency key prevents a repeat live or test start from creating another run. Test and live starts use different keys, so each mode creates its own run.
 
 > **Warning:** `PublishFlow` and `StartRun` are direct actions; they do not authorize themselves. Keep them behind an authenticated host boundary and explicitly authorize flow creation, publishing, and manual starts as this controller does.
 
@@ -365,9 +374,10 @@ php artisan queue:work
 
 Verify the integration:
 
-- The `nodeflow_runs` record for `$run->id` moves beyond `pending` and eventually completes for this two-node flow.
+- Create and publish the flow once by submitting authenticated `POST /admin/welcome-journeys`. Keep the returned flow ID; the controller redirects to that flow's editor.
+- Start the live run by submitting authenticated `POST /admin/flows/{flow}/users/{recipient}/welcome-journey`. The `nodeflow_runs` record for the returned run moves beyond `pending` and eventually completes for this two-node flow.
 - The `nodeflow_run_subjects` record has `subject_type` `user`, the user's string ID, and reaches `completed` with no current node.
-- The user receives `WelcomeNotification` for this live run. To create a separate test run, submit the same authenticated `POST /admin/users/{recipient}/welcome-journey` with the request body `{"test_mode": true}`. Its `welcome:test:{recipient-id}` idempotency key differs from the live run; the subject should complete without a notification.
+- The user receives `WelcomeNotification` for this live run. To create a separate test run on the same published flow, submit the same authenticated start request with the request body `{"test_mode": true}`. Its `welcome:test:{recipient-id}` idempotency key differs from the live `welcome:live:{recipient-id}` key; the subject should complete without a notification.
 - Open the authenticated run view to inspect the pinned graph and per-node subject progress.
 
 For worker settings, waits, and operational checks, see [Queues and workers](../operations/queues-and-workers.md) and [Inspecting runs](../editor-and-run-view/inspecting-runs.md).
