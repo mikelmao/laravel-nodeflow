@@ -19,7 +19,9 @@ Nodeflow registers these four nodes automatically. Their stable `core.*` types a
 
 `duration` accepts a relative duration such as `5 minutes`, `1 day`, or `2 weeks`. The interpreter waits before it runs the node body, using the configured duration; when the timer elapses, `WaitNode` returns every still-active subject on `default`.
 
-The wait races its timer with the `audienceEmptied` signal. `SubjectExiter` signals only when the last active subject leaves a live run, so an entirely exited audience wakes early and nobody continues. The node is audience-based: each `NodeRunner` invocation receives a batch of up to `nodeflow.limits.audience_chunk` active subjects. A wait is still one interpreter wait per graph node, not one delay per batch.
+The wait races its timer with the `audienceEmptied` signal. `SubjectExiter` checks after every `exit()` call whether a live run now has zero active subjects and signals when it does, so an entirely exited audience wakes early and nobody continues. The node is audience-based: each `forAudience()` invocation receives one batch of up to `nodeflow.limits.audience_chunk` active subjects, while one `NodeRunner::run()` iterates all such batches. A wait is still one interpreter wait per graph node, not one delay per batch.
+
+There is no persisted “already signalled” marker. A duplicate or concurrent `exit()` call can signal again even when its update changed no rows, provided the run is still live and empty; treat the signal path as duplicate-tolerant.
 
 Branch waits are currently sequential in the interpreter: two reachable branch waits do not overlap, so their durations can add.
 

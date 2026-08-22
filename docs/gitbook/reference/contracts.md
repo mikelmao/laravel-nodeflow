@@ -58,7 +58,7 @@ interface HandlesAudience
 }
 ```
 
-`type()` is the stable graph identifier. `definition()` supplies editor metadata and publish-time rules. `defaultConfig()` returns `[]` unless overridden. A node implementing both interfaces must give equivalent outcomes for the same subjects.
+`type()` is the stable graph identifier. `definition()` supplies editor metadata and publish-time rules. `defaultConfig()` returns `[]` unless overridden. `$tries = 3` is currently not read by `NodeRunner`, so it provides no retry behavior or delivery guarantee; make every external side effect idempotent. A node implementing both interfaces must give equivalent outcomes for the same subjects, but the current runner chooses `HandlesAudience` first whenever both are implemented and never calls `forSubject()` for that node.
 
 ## Schema builders and option sources
 
@@ -241,7 +241,9 @@ class NodeResult
 }
 ```
 
-`AudienceContext::subjects()` calls the bound `SubjectResolver`. `isTest()` means no external side effect. `NodeResult` has a private constructor; use its factories or a context helper.
+`AudienceContext::subjects()` calls the bound `SubjectResolver`. `isTest()` tells a host node that the run is test mode; Nodeflow does not suppress or enforce external work, so the node itself must avoid sends, charges, and other visible side effects. `NodeResult` has a private constructor; use its factories or a context helper.
+
+> **Result safety invariant:** A subject or audience node must return only IDs from its current context, and name each current ID at most once across all outputs and failures. `NodeResult` does not validate this. An omitted processed ID is completed by reconciliation. An extraneous active ID of the same run and subject type can be advanced from another branch because output and failure updates do not constrain `current_node_id`; duplicated IDs create ambiguous accounting. Do not reuse IDs across outputs or mix an ID into both an output and a failure.
 
 ## Workflow and direct services
 
@@ -268,14 +270,6 @@ class SubjectExiter
 {
     public function exit(Run $run, array $subjectIds): void;
 }
-
-interface WorkflowEngine
-{
-    public function start(string $workflowClass, array $args): string;
-    public function signal(string $workflowId, string $method, array $args = []): void;
-    public function cancel(string $workflowId): void;
-    public function isRunning(string $workflowId): bool;
-}
 ```
 
 `StartRun::forFlow()` accepts optional `idempotency_key`, `correlation_id`, `strategy`, and `is_test` entries. It throws when a flow has no published version and returns the existing run for a matching non-null idempotency key and flow version. `PublishFlow::publish()` validates its graph and throws `GraphInvalidException` when invalid. `errors()` returns `string[]` general graph failures. `nodeErrors()` returns `array<int, array{node: ?string, field: ?string, message: string}>`, so an editor can attach a failure to a node or field when known. `SubjectExiter::exit()` removes active listed subjects and signals an emptied live audience where applicable.
@@ -284,7 +278,7 @@ These methods do not authorize a caller. Keep them behind application policies, 
 
 ### Deliberate exclusions
 
-The mechanical public-method scan also finds exception factories (`InvalidNodeException` and `UnknownOptionSourceException`), the `UnknownNodeTypeException` constructor, `ValidDuration::validate(string $attribute, mixed $value, Closure $fail): void`, `ValidDuration::seconds(string $value): ?int`, `EventTriggerListener::handle()`, and `SubFlowStarter::start()`. They are package error, validation parsing, listener, or core-node support APIs rather than host implementation surfaces: do not construct or call them as host integration APIs. `core.start_flow` is the supported graph-level entry to the sub-flow starter and is documented in [Core nodes](core-nodes.md).
+The mechanical public-method scan also finds exception factories (`InvalidNodeException` and `UnknownOptionSourceException`), the `UnknownNodeTypeException` constructor, `ValidDuration::validate(string $attribute, mixed $value, Closure $fail): void`, `ValidDuration::seconds(string $value): ?int`, `EventTriggerListener::handle()`, `SubFlowStarter::start()`, and the runtime `WorkflowEngine` methods `start()`, `signal()`, `cancel()`, and `isRunning()`. They are package error, validation parsing, listener, core-node, or durable-workflow infrastructure support rather than host integration surfaces. Do not construct or call them as host integration APIs: direct engine control bypasses Nodeflow's lifecycle, authorization, and run-state handling. `core.start_flow` is the supported graph-level entry to the sub-flow starter and is documented in [Core nodes](core-nodes.md).
 
 ## Next step
 

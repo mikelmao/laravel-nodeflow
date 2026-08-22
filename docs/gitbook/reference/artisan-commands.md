@@ -99,7 +99,7 @@ nodeflow:make-node-package
 
 **Outcome:** scaffolds `composer.json`, `README.md`, `src/{Provider}.php`, `src/Nodes/`, and `tests/ExampleTest.php`; `--js` also adds `package.json`, `tsconfig.json`, and `resources/js/index.ts`. It exits `0` after scaffolding or `1` for validation/scaffolding failure. It does not add the package to the host's Composer repositories or dependencies.
 
-The package name must be valid Composer lowercase `vendor/name` syntax. The namespace defaults to the StudlyCase vendor and package segments; an explicit namespace must be valid PHP identifiers. The default target is `packages/vendor/name`; paths must be host-relative, inside the host, and not the host root. The host must require `atram/laravel-nodeflow` so its exact constraint can be copied.
+The package name must be valid Composer lowercase `vendor/name` syntax. The namespace defaults to the StudlyCase vendor and package segments; an explicit namespace must be valid PHP identifiers. The default target is `packages/vendor/name`; paths must be host-relative, inside the host, and not the host root. The host must require `atram/laravel-nodeflow` so its exact constraint can be copied. With `--js`, the command prints missing Vite alias and TypeScript `paths` snippets but never writes either host configuration; add the shown snippets yourself.
 
 A non-empty target is refused unless its `composer.json` names this same package or `--force` is supplied. `--force` can overwrite generated files in a foreign occupied directory; inspect it first. A matching package merges missing Composer defaults and provider registration while leaving existing non-Composer generated files in place. Unexpected filesystem failures after writing begins are not a transaction.
 
@@ -155,7 +155,7 @@ nodeflow:prune {--days= : Retention window} {--dry-run}
 
 **Outcome:** deletes terminal `completed`, `failed`, and `cancelled` runs older than the cutoff, plus matching run subjects and node executions. It exits `0` for both preview and deletion. It does not delete flows, flow versions, templates, or durable-engine records; it never selects `pending`, `running`, `waiting`, or `blocked` runs.
 
-An omitted or empty `--days` uses `nodeflow.retention.runs_days` (default `90`). A supplied option overrides it for that invocation. `--dry-run` only reports the count. The command casts `--days` to `int` without validating it: nonnumeric input becomes `0`, and a negative value makes a future cutoff that can select far more data. Always preview the exact value before a live run. It processes selected runs in batches of 500 and is not one whole-command database transaction.
+An omitted, empty, or literal `--days=0` uses `nodeflow.retention.runs_days` (default `90`) because the command uses PHP's falsey fallback. Any truthy supplied option overrides it for that invocation; a truthy nonnumeric value casts to `0`. `--dry-run` only reports the count. Negative values make a future cutoff that can select far more data. The criterion is exactly `Run.created_at < now()->subDays($days)`: it does not use `ended_at` or the time a run became terminal. Always preview the exact value before a live run. It processes selected runs in batches of 500 and is not one whole-command database transaction.
 
 ```bash
 php artisan nodeflow:prune --days=90 --dry-run
