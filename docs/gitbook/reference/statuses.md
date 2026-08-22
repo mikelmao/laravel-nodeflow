@@ -19,6 +19,8 @@ No package lifecycle transition writes a flow back to `draft`, and the schema ac
 | `running` | `LoadGraphActivity`. | The engine loaded the pinned graph and recorded `started_at`. |
 | `completed` | `CompleteRunActivity`. | The interpreter loop ended and recorded `ended_at`. This is the only status the overlay currently treats as terminal. |
 
+`nodeflow_runs.error` is nullable, but the current package has no writer for it: run-level failures do not populate the column. `started_at` is written only when `LoadGraphActivity` changes the run to `running`; `ended_at` is written only when `CompleteRunActivity` changes it to `completed`.
+
 The schema allows every value in the next table, but the package currently has no writer that moves a run to `waiting`, `blocked`, `failed`, or `cancelled`.
 
 | Recognised value | Readers or tools that recognise it | Current consequence |
