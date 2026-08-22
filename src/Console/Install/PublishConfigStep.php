@@ -37,5 +37,4 @@ final class PublishConfigStep implements InstallStep
     {
         return null;
     }
-
 }

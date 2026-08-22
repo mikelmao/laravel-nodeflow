@@ -29,7 +29,7 @@ final class ViteAliasValue
             $colon = self::nextSignificant($source, $quoted['next']);
 
             if (
-                $quoted['value'] === self::KEY
+                $quoted['decoded'] === self::KEY
                 && in_array($before, ['{', ','], true)
                 && ($source[$colon] ?? null) === ':'
             ) {
@@ -40,9 +40,9 @@ final class ViteAliasValue
                     return null;
                 }
 
-                $span = trim($value['value']);
+                $span = self::decodeQuotedStrings(trim($value['value']));
 
-                if ($span === '') {
+                if ($span === null || $span === '') {
                     return null;
                 }
 
@@ -58,7 +58,7 @@ final class ViteAliasValue
         return count($values) === 1 ? $values[0] : null;
     }
 
-    /** @return array{value: string, next: int}|null */
+    /** @return array{value: string, decoded: string, next: int}|null */
     private static function quotedAt(string $source, int $offset): ?array
     {
         $quote = $source[$offset] ?? null;
@@ -83,7 +83,11 @@ final class ViteAliasValue
             }
 
             if ($source[$i] === $quote) {
-                return ['value' => $value, 'next' => $i + 1];
+                $decoded = self::decodeJsString($value);
+
+                return $decoded === null
+                    ? null
+                    : ['value' => $value, 'decoded' => $decoded, 'next' => $i + 1];
             }
 
             $value .= $source[$i];
@@ -95,8 +99,9 @@ final class ViteAliasValue
     /** @return array{value: string, next: int}|null */
     private static function valueAt(string $source, int $offset): ?array
     {
-        $depth = ['(' => 0, '[' => 0, '{' => 0];
+        $opening = ['(' => true, '[' => true, '{' => true];
         $closing = [')' => '(', ']' => '[', '}' => '{'];
+        $stack = [];
         $length = strlen($source);
 
         for ($i = $offset; $i < $length; $i++) {
@@ -114,42 +119,190 @@ final class ViteAliasValue
                 continue;
             }
 
-            if (isset($depth[$char])) {
-                $depth[$char]++;
+            if (isset($opening[$char])) {
+                $stack[] = $char;
 
                 continue;
             }
 
             if (isset($closing[$char])) {
-                $open = $closing[$char];
-
-                if ($char === '}' && $depth[$open] === 0 && self::allZero($depth)) {
+                if ($char === '}' && $stack === []) {
                     return ['value' => substr($source, $offset, $i - $offset), 'next' => $i];
                 }
 
-                if ($depth[$open] === 0) {
+                if (array_pop($stack) !== $closing[$char]) {
                     return null;
                 }
-
-                $depth[$open]--;
 
                 continue;
             }
 
-            if ($char === ',' && self::allZero($depth)) {
+            if ($char === ',' && $stack === []) {
                 return ['value' => substr($source, $offset, $i - $offset), 'next' => $i + 1];
             }
         }
 
-        return self::allZero($depth)
+        return $stack === []
             ? ['value' => substr($source, $offset), 'next' => $length]
             : null;
     }
 
-    /** @param array<string, int> $depth */
-    private static function allZero(array $depth): bool
+    private static function decodeQuotedStrings(string $source): ?string
     {
-        return array_sum($depth) === 0;
+        $decoded = '';
+        $length = strlen($source);
+
+        for ($i = 0; $i < $length; $i++) {
+            if (! in_array($source[$i], ["'", '"', '`'], true)) {
+                $decoded .= $source[$i];
+
+                continue;
+            }
+
+            $quoted = self::quotedAt($source, $i);
+
+            if ($quoted === null) {
+                return null;
+            }
+
+            $decoded .= $source[$i].$quoted['decoded'].$source[$i];
+            $i = $quoted['next'] - 1;
+        }
+
+        return $decoded;
+    }
+
+    private static function decodeJsString(string $value): ?string
+    {
+        $decoded = '';
+        $length = strlen($value);
+
+        for ($i = 0; $i < $length; $i++) {
+            if ($value[$i] !== '\\') {
+                $decoded .= $value[$i];
+
+                continue;
+            }
+
+            $i++;
+
+            if ($i >= $length) {
+                return null;
+            }
+
+            $escape = $value[$i];
+            $simple = [
+                'b' => "\x08",
+                'f' => "\x0c",
+                'n' => "\n",
+                'r' => "\r",
+                't' => "\t",
+                'v' => "\x0b",
+            ];
+
+            if (isset($simple[$escape])) {
+                $decoded .= $simple[$escape];
+
+                continue;
+            }
+
+            if ($escape === "\n") {
+                continue;
+            }
+
+            if ($escape === "\r") {
+                if (($value[$i + 1] ?? null) === "\n") {
+                    $i++;
+                }
+
+                continue;
+            }
+
+            if ($escape === 'x') {
+                $hex = substr($value, $i + 1, 2);
+
+                if (strlen($hex) !== 2 || ! ctype_xdigit($hex)) {
+                    return null;
+                }
+
+                $decoded .= self::codepointToUtf8(hexdec($hex));
+                $i += 2;
+
+                continue;
+            }
+
+            if ($escape === 'u') {
+                $unicode = self::unicodeEscapeAt($value, $i + 1);
+
+                if ($unicode === null) {
+                    return null;
+                }
+
+                $decoded .= self::codepointToUtf8($unicode['codepoint']);
+                $i = $unicode['last'];
+
+                continue;
+            }
+
+            $decoded .= $escape;
+        }
+
+        return $decoded;
+    }
+
+    /** @return array{codepoint: int, last: int}|null */
+    private static function unicodeEscapeAt(string $value, int $offset): ?array
+    {
+        if (($value[$offset] ?? null) === '{') {
+            $end = strpos($value, '}', $offset + 1);
+
+            if ($end === false) {
+                return null;
+            }
+
+            $hex = substr($value, $offset + 1, $end - $offset - 1);
+
+            if ($hex === '' || strlen($hex) > 6 || ! ctype_xdigit($hex)) {
+                return null;
+            }
+
+            $codepoint = hexdec($hex);
+
+            return $codepoint <= 0x10ffff && ! ($codepoint >= 0xd800 && $codepoint <= 0xdfff)
+                ? ['codepoint' => $codepoint, 'last' => $end]
+                : null;
+        }
+
+        $hex = substr($value, $offset, 4);
+
+        if (strlen($hex) !== 4 || ! ctype_xdigit($hex)) {
+            return null;
+        }
+
+        return ['codepoint' => hexdec($hex), 'last' => $offset + 3];
+    }
+
+    private static function codepointToUtf8(int $codepoint): string
+    {
+        if ($codepoint <= 0x7f) {
+            return chr($codepoint);
+        }
+
+        if ($codepoint <= 0x7ff) {
+            return chr(0xc0 | ($codepoint >> 6))
+                .chr(0x80 | ($codepoint & 0x3f));
+        }
+
+        if ($codepoint <= 0xffff) {
+            return chr(0xe0 | ($codepoint >> 12))
+                .chr(0x80 | (($codepoint >> 6) & 0x3f))
+                .chr(0x80 | ($codepoint & 0x3f));
+        }
+
+        return chr(0xf0 | ($codepoint >> 18))
+            .chr(0x80 | (($codepoint >> 12) & 0x3f))
+            .chr(0x80 | (($codepoint >> 6) & 0x3f))
+            .chr(0x80 | ($codepoint & 0x3f));
     }
 
     private static function nextSignificant(string $source, int $offset): int
