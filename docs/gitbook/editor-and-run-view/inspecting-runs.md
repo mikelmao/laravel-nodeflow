@@ -62,7 +62,7 @@ export type OverlaySnapshot = {
 }
 ```
 
-For every node in the graph, a never-reached node is dimmed and shows no badge. A reached node is not inferred from a count: it always shows at least one badge, using an explicit `subjects 0` badge when `byOutput`, `waiting`, and `failed` are all zero. This keeps “reached but released nobody” separate from “never reached.”
+For every node in the graph, a never-reached node is dimmed and shows no badge. A reached node is not inferred from a count: it always shows at least one badge. Each key in `byOutput` renders its named output badge even at zero (for example, `unmatched 0`); the fallback `subjects 0` badge appears only when `byOutput` has no entries and both `waiting` and `failed` are zero. This keeps “reached but released nobody” separate from “never reached.”
 
 `byOutput` produces one badge per output name. Positive `waiting` produces a `waiting` badge, and positive `failed` produces an `errors` badge. An `error` string becomes a mandatory node error on the card. Counts describe the snapshot; they are not a complete subject history.
 
