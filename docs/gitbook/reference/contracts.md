@@ -243,7 +243,7 @@ class NodeResult
 
 `AudienceContext::subjects()` calls the bound `SubjectResolver`. `isTest()` tells a host node that the run is test mode; Nodeflow does not suppress or enforce external work, so the node itself must avoid sends, charges, and other visible side effects. `NodeResult` has a private constructor; use its factories or a context helper.
 
-> **Result safety invariant:** A subject or audience node must return only IDs from its current context, and name each current ID at most once across all outputs and failures. `NodeResult` does not validate this. An omitted processed ID is completed by reconciliation. An extraneous active ID of the same run and subject type can be advanced from another branch because output and failure updates do not constrain `current_node_id`; duplicated IDs create ambiguous accounting. Do not reuse IDs across outputs or mix an ID into both an output and a failure.
+> **Result safety invariant:** A subject or audience node must return only IDs from its current context, and name each current ID at most once across all outputs and failures. `NodeResult` does not validate this. An omitted processed ID is completed by reconciliation only if it remains active at the current node. An extraneous active ID of the same run and subject type can be advanced from another branch because output and failure updates do not constrain `current_node_id`; duplicated IDs create ambiguous accounting. Do not reuse IDs across outputs or mix an ID into both an output and a failure.
 
 ## Workflow and direct services
 
