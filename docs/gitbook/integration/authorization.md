@@ -16,10 +16,14 @@ Nodeflow knows a model’s opaque `tenant_id`, but it does not know your roles, 
 Add these definitions in your application `NodeflowServiceProvider::boot()` after the provider’s registry work. This partial snippet assumes `User::isNodeflowAdministrator(): bool` is an application method and `organization_id` identifies the user’s organization.
 
 ```php
-// Partial snippet: App\Providers\NodeflowServiceProvider::boot().
+// Partial snippet: imports at the top of App\Providers\NodeflowServiceProvider.
 
 use App\Models\User;
 use Illuminate\Support\Facades\Gate;
+```
+
+```php
+// Partial snippet: the body of App\Providers\NodeflowServiceProvider::boot().
 
 Gate::define('nodeflow.viewAny', function (?User $user, mixed $resource = null): bool {
     if ($user === null || ! $user->isNodeflowAdministrator()) {
