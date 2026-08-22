@@ -153,6 +153,87 @@ it('rejects an alias pointing at a sibling packages/ directory without the vendo
     expect($this->alias->check())->toBe(InstallOutcome::CannotWire);
 });
 
+it('does not combine a wrong alias with the package path elsewhere in the file', function () {
+    ($this->write)(<<<'TS'
+    export default defineConfig({
+        resolve: {
+            alias: {
+                '@nodeflow/editor': path.resolve(__dirname, 'resources/js'),
+            },
+        },
+    })
+
+    const documentationPath = 'vendor/atram/laravel-nodeflow/resources/js'
+    TS);
+
+    expect($this->alias->check())->toBe(InstallOutcome::CannotWire);
+});
+
+it('accepts every single- and double-quoted alias key and package-path combination', function (string $keyQuote, string $pathQuote) {
+    ($this->write)(<<<TS
+    export default defineConfig({
+        resolve: {
+            alias: {
+                {$keyQuote}@nodeflow/editor{$keyQuote}: {$pathQuote}vendor/atram/laravel-nodeflow/resources/js{$pathQuote},
+            },
+        },
+    })
+    TS);
+
+    expect($this->alias->check())->toBe(InstallOutcome::AlreadyPresent);
+})->with([
+    'single key and single path' => ["'", "'"],
+    'single key and double path' => ["'", '"'],
+    'double key and single path' => ['"', "'"],
+    'double key and double path' => ['"', '"'],
+]);
+
+it('scans an alias path.resolve value through its inner comma', function () {
+    ($this->write)(<<<'TS'
+    export default defineConfig({
+        resolve: {
+            alias: {
+                '@nodeflow/editor': path.resolve(__dirname, 'vendor/atram/laravel-nodeflow/resources/js'),
+            },
+        },
+    })
+    TS);
+
+    expect($this->alias->check())->toBe(InstallOutcome::AlreadyPresent);
+});
+
+it('rejects two live nodeflow editor alias properties', function () {
+    ($this->write)(<<<'TS'
+    export default defineConfig({
+        resolve: {
+            alias: {
+                '@nodeflow/editor': 'vendor/atram/laravel-nodeflow/resources/js',
+                '@nodeflow/editor': 'vendor/atram/laravel-nodeflow/resources/js',
+            },
+        },
+    })
+    TS);
+
+    expect($this->alias->check())->toBe(InstallOutcome::CannotWire);
+});
+
+it('does not let a package path in another nested property rescue a wrong alias', function () {
+    ($this->write)(<<<'TS'
+    export default defineConfig({
+        resolve: {
+            alias: {
+                '@nodeflow/editor': 'resources/js',
+            },
+        },
+        metadata: {
+            documentationPath: path.resolve(__dirname, 'vendor/atram/laravel-nodeflow/resources/js'),
+        },
+    })
+    TS);
+
+    expect($this->alias->check())->toBe(InstallOutcome::CannotWire);
+});
+
 it('rejects a commented-out dedupe', function () {
     ($this->write)("/* dedupe: ['react', 'react-dom', '@xyflow/react'], */\nexport default defineConfig({})");
 
