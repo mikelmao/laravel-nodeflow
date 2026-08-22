@@ -258,6 +258,12 @@ class PublishFlow
     public function publish(Flow $flow, array $graph, ?string $publishedBy = null): FlowVersion;
 }
 
+class GraphInvalidException extends RuntimeException
+{
+    public function errors(): array;
+    public function nodeErrors(): array;
+}
+
 class SubjectExiter
 {
     public function exit(Run $run, array $subjectIds): void;
@@ -272,13 +278,13 @@ interface WorkflowEngine
 }
 ```
 
-`StartRun::forFlow()` accepts optional `idempotency_key`, `correlation_id`, `strategy`, and `is_test` entries. It throws when a flow has no published version and returns the existing run for a matching non-null idempotency key and flow version. `PublishFlow::publish()` validates its graph and throws `GraphInvalidException` when invalid. `SubjectExiter::exit()` removes active listed subjects and signals an emptied live audience where applicable.
+`StartRun::forFlow()` accepts optional `idempotency_key`, `correlation_id`, `strategy`, and `is_test` entries. It throws when a flow has no published version and returns the existing run for a matching non-null idempotency key and flow version. `PublishFlow::publish()` validates its graph and throws `GraphInvalidException` when invalid. `errors()` returns `string[]` general graph failures. `nodeErrors()` returns `array<int, array{node: ?string, field: ?string, message: string}>`, so an editor can attach a failure to a node or field when known. `SubjectExiter::exit()` removes active listed subjects and signals an emptied live audience where applicable.
 
 These methods do not authorize a caller. Keep them behind application policies, gates, and tenant checks; a public direct action is not permission to expose it.
 
 ### Deliberate exclusions
 
-The mechanical public-method scan also finds exception factories (`InvalidNodeException` and `UnknownOptionSourceException`), the `UnknownNodeTypeException` constructor, `ValidDuration`'s Laravel validation-rule methods, `EventTriggerListener::handle()`, and `SubFlowStarter::start()`. They are package error, validation, listener, or core-node support APIs rather than host implementation surfaces: construct no runtime listener or exception yourself. `core.start_flow` is the supported graph-level entry to the sub-flow starter and is documented in [Core nodes](core-nodes.md).
+The mechanical public-method scan also finds exception factories (`InvalidNodeException` and `UnknownOptionSourceException`), the `UnknownNodeTypeException` constructor, `ValidDuration::validate(string $attribute, mixed $value, Closure $fail): void`, `ValidDuration::seconds(string $value): ?int`, `EventTriggerListener::handle()`, and `SubFlowStarter::start()`. They are package error, validation parsing, listener, or core-node support APIs rather than host implementation surfaces: do not construct or call them as host integration APIs. `core.start_flow` is the supported graph-level entry to the sub-flow starter and is documented in [Core nodes](core-nodes.md).
 
 ## Next step
 

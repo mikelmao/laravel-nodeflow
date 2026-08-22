@@ -1,6 +1,6 @@
 # Configuration reference
 
-Nodeflow has six current configuration paths. Publish the package configuration when you want an application-owned copy, then clear and rebuild Laravel's configuration cache after changing it.
+Nodeflow has nine current leaf keys across five configuration groups. Publish the package configuration when you want an application-owned copy, then clear and rebuild Laravel's configuration cache after changing it.
 
 ```bash
 php artisan vendor:publish --tag=nodeflow-config
@@ -12,7 +12,7 @@ php artisan config:cache
 
 | Path | Default | Accepted value | Environment value | Runtime effect and when to change it |
 | --- | --- | --- | --- | --- |
-| `nodeflow.tables.prefix` | `'nodeflow_'` | String; the package does not validate it. | None. | **Currently configuration-only.** The shipped migrations and the one raw insert use literal `nodeflow_*` table names, so changing this does not rename or redirect tables. Leave the default unless the package implementation and migrations are changed together. |
+| `nodeflow.tables.prefix` | `'nodeflow_'` | **No current runtime contract.** The runtime never reads or validates this key, so every configured value is inert. | None. | **Currently configuration-only.** The shipped migrations and the one raw insert use literal `nodeflow_*` table names, so changing this does not rename or redirect tables. Leave the default unless the package implementation and migrations are changed together. |
 | `nodeflow.retention.runs_days` | `90` | Any value Laravel can return; not validated here. `nodeflow:prune` casts its selected value to `int`. | None. | Default retention window for `nodeflow:prune` when `--days` is omitted or empty. Set it to the intended age, in calendar days, for terminal runs. |
 | `nodeflow.retention.node_executions_days` | `90` | Any value; not validated. | None. | **Currently configuration-only.** Pruning deletes node executions with their selected parent run and never reads this key. Keep it aligned with `runs_days` only as a statement of intended policy; it does not independently retain executions. |
 | `nodeflow.limits.max_steps_per_run` | `1000` | Integer-like value; it is cast to `int` when a run starts and is otherwise not validated. | None. | Caps interpreter node steps for each newly started engine workflow. Change only after considering loops and legitimate graph size. `0` or a negative value lets the interpreter complete without executing a node; a very high value weakens the loop guard. |
