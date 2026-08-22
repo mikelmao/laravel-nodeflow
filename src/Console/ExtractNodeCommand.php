@@ -931,7 +931,11 @@ class ExtractNodeCommand extends Command
      * text for the name, and left alone entirely (not an error) whenever
      * removing it is not provably safe: there is no reference left to
      * refuse over at this point, so the worst a wrong guess here could do is
-     * leave a harmless unused import, never break the host.
+     * leave a harmless unused import, never break the host. A write exception
+     * or silent false result is therefore non-fatal when the provider remains
+     * byte-identical. If a failed write changed any bytes, the original is
+     * restored and verified; failure to restore propagates into the outer
+     * journal path instead of reporting a successful extraction.
      */
     private function removeUnusedImportIfSafe(string $class, string $shortName, string $providerFile, ExtractJournal $journal): void
     {
@@ -953,50 +957,35 @@ class ExtractNodeCommand extends Command
         }
 
         $journal->recordWrite($providerFile);
-        $this->files->put($providerFile, $updated);
+        try {
+            $this->files->put($providerFile, $updated);
+        } catch (Throwable) {
+            if ($this->files->get($providerFile) === $contents) {
+                return;
+            }
 
-        // E11: re-verify rather than trust, the same reason every OTHER
-        // journaled write in this class does (writeJournaled(),
-        // updateHostComposerJson()) — a Minor review finding: this write
-        // was the one exception, silently trusting put() despite the
-        // report's own claim that every write re-verifies. Removing an
-        // import is never load-bearing for correctness (leaving it behind
-        // is merely untidy, never a stale reference), so a failed write
-        // here is downgraded to "leave the import alone" rather than
-        // aborting the whole extraction over a cosmetic cleanup step.
-        //
-        // THIS METHOD IS REACHABLE WITH A WRITE THAT FAILS — a round-3
-        // docblock claimed otherwise ("Removed is the one outcome that
-        // reaches this method"), and the review round 4 disproved it:
-        // deregisterFromHost()'s own match falls through on `NotPresent`,
-        // `ProviderMissing`, `AnchorMissing`, and `AnchorAmbiguous` too,
-        // not only `Removed` — an import that is never registered in the
-        // array at all (`NotPresent`) reaches this method with NO prior
-        // write to this file to lean on, because `removeFrom()` never
-        // attempts a write when nothing was found to remove. A persisted
-        // test (below) proves this reachable end to end, using an
-        // installed error handler that lets a permission-denied
-        // `file_put_contents()` return `false` rather than throw — the
-        // way PHPUnit's own handler would otherwise convert that failure
-        // into an exception before this comparison ever ran, which is
-        // what round 3's own probe actually observed and reported
-        // correctly, just for the wrong reason.
-        //
-        // WHAT REMAINS UNTESTABLE (confirmed by mutation, not merely
-        // argued): deleting this ENTIRE `if` block survives that same
-        // persisted test, because every constructible permission failure
-        // (a chmod'd file) makes `file_put_contents()` fail BEFORE writing
-        // any bytes at all — the file is left EXACTLY as it was whether or
-        // not this block runs, so "revert to the original" and "do
-        // nothing" are observably identical outcomes for that failure
-        // mode. The block would only differ from doing nothing for a
-        // PARTIAL or otherwise corrupted write (a race with another
-        // process, a disk that fills up mid-write) that no portable test
-        // can manufacture. Kept anyway, on principle: the guard costs one
-        // extra read, and a write mode this method cannot currently
-        // provoke is not proof no host ever will.
-        if ($this->files->get($providerFile) !== $updated) {
-            $this->files->put($providerFile, $contents);
+            $this->restoreProviderAfterFailedImportCleanup($providerFile, $contents);
+
+            return;
+        }
+
+        $written = $this->files->get($providerFile);
+
+        if ($written === $updated || $written === $contents) {
+            return;
+        }
+
+        $this->restoreProviderAfterFailedImportCleanup($providerFile, $contents);
+    }
+
+    private function restoreProviderAfterFailedImportCleanup(string $providerFile, string $contents): void
+    {
+        $this->files->put($providerFile, $contents);
+
+        if ($this->files->get($providerFile) !== $contents) {
+            throw new RuntimeException(
+                "[{$providerFile}] changed during unused-import cleanup and could not be restored."
+            );
         }
     }
 
@@ -1202,7 +1191,8 @@ class ExtractNodeCommand extends Command
     /**
      * Every top-level directory AND top-level scannable `*.php`-family
      * file directly under $hostBasePath — except `vendor/`,
-     * `node_modules/`, and any dot-prefixed entry (`.git` and similar) —
+     * `node_modules/`, and dot-prefixed directories (`.git` and similar;
+     * a scannable root config file such as `.php-cs-fixer.php` remains) —
      * unioned with the host's own PSR-4 directories (`hostPsr4Directories()`
      * — the SAME set G2 requires the node's own file to sit under, for the
      * same "must never admit ground the scan does not cover" reason that
@@ -1255,9 +1245,10 @@ class ExtractNodeCommand extends Command
      * loading a class that no longer exists, the exact failure this whole
      * command exists to prevent. `NodeReferenceScanner` now follows a
      * NESTED symlink instead (with cycle detection, refusing loudly on a
-     * cycle or an unreadable target) — this method's own containment
-     * check stays, but only for the narrower question of "should this
-     * TOP-LEVEL entry become a root at all."
+     * cycle, an unreadable target, or a target resolving to an ancestor of
+     * the original scan root) — this method's own containment check stays,
+     * but only for the narrower question of "should this TOP-LEVEL entry
+     * become a root at all."
      *
      * DOCUMENTED COST (round 3): this widening means a full non-vendor,
      * non-node_modules tree walk now happens TWICE per extraction — once
@@ -1277,11 +1268,15 @@ class ExtractNodeCommand extends Command
 
         foreach (scandir($hostBasePath) ?: [] as $entry) {
             if ($entry === '.' || $entry === '..' || $entry === self::VENDOR_DIR
-                || $entry === self::NODE_MODULES_DIR || str_starts_with($entry, '.')) {
+                || $entry === self::NODE_MODULES_DIR) {
                 continue;
             }
 
             $path = $hostBasePath.'/'.$entry;
+
+            if (str_starts_with($entry, '.') && $this->files->isDirectory($path)) {
+                continue;
+            }
 
             if (! $hostRoot->contains($path)) {
                 continue;

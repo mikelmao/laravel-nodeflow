@@ -588,7 +588,7 @@ it('BACKTICK shell-exec strings process escapes the same way and need the same p
 
         public function legacyAlias(): string
         {
-            return `App\Nodeflow\Nodes\BacktickNode`;
+            return `printf '%s' 'App\Nodeflow\Nodes\BacktickNode'`;
         }
     PHP;
 
@@ -605,12 +605,15 @@ it('BACKTICK shell-exec strings process escapes the same way and need the same p
     exec('php -l '.escapeshellarg($movedPath).' 2>&1', $out, $exit);
     expect($exit)->toBe(0);
 
-    $moved = file_get_contents($movedPath);
+    require $movedPath;
 
-    // The doubled backslash must be present in the SOURCE (shell_exec's
-    // own escape rules match double-quoted strings) -- checked textually
-    // here since actually shelling out is unnecessary to prove the point.
-    expect($moved)->toContain('`acme\\\\things\\\\Nodes\\\\BacktickNode`');
+    // Execute a fixed, deterministic printf command and inspect the returned
+    // bytes. Source text alone cannot distinguish the correct runtime "\\t"
+    // (hex 5c74) from the tab byte (09) PHP would produce if the replacement
+    // were not escaped before landing in this backtick token.
+    $value = (new \acme\things\Nodes\BacktickNode())->legacyAlias();
+    expect($value)->toBe('acme\things\Nodes\BacktickNode');
+    expect(bin2hex($value))->toContain('5c74')->not->toContain('09');
 });
 
 it('preserves the PLAIN spelling inside a NOWDOC when the original text was plain, never doubling it (mutation survivors 1 and 2, review round 4)', function () {
@@ -822,22 +825,34 @@ it('keeps the host import when its short name appears in a second place', functi
     expect($exit)->toBe(0);
 });
 
+it('continues extraction under the default error handler when only the unused-import write fails', function () {
+    $class = movesWriteNode($this->root, 'DefaultHandlerImportNode', 'defaulthandlerimport.node');
+    movesWriteProvider($this->root, '', 'use App\Nodeflow\Nodes\DefaultHandlerImportNode;');
+
+    $providerPath = $this->root.'/app/Providers/NodeflowServiceProvider.php';
+    $originalProvider = file_get_contents($providerPath);
+    chmod($providerPath, 0444);
+
+    try {
+        $exit = \Illuminate\Support\Facades\Artisan::call('nodeflow:extract-node', [
+            'class' => $class,
+            '--package' => 'acme/widgets',
+        ]);
+    } finally {
+        chmod($providerPath, 0644);
+    }
+
+    expect($exit)->toBe(0);
+    expect(file_get_contents($providerPath))->toBe($originalProvider);
+    expect($this->root.'/packages/acme/widgets/src/Nodes/DefaultHandlerImportNode.php')->toBeFile();
+    expect($this->root.'/app/Nodeflow/Nodes/DefaultHandlerImportNode.php')->not->toBeFile();
+});
+
 it('leaves the import in place, and the extraction still succeeds, when removeUnusedImportIfSafe() cannot write the host provider (review round 4, Minor N3)', function () {
-    // The round-3 docblock claimed removeUnusedImportIfSafe()'s own put()
-    // is reached only after NodeRegistrationWriter::removeFrom() already
-    // proved this SAME file writable -- the reviewer disproved that:
-    // deregisterFromHost()'s match falls through on NotPresent too (an
-    // import that is never registered in the array at all), and
-    // removeFrom() never attempts a write when nothing was found to
-    // remove. Under PHPUnit's own error handling, that put() failure
-    // THROWS before this method's re-verify comparison ever runs -- which
-    // is what round 3 actually observed and correctly reported (exit 1,
-    // nothing moved) -- but it is not the only way a real host could
-    // behave: a production error handler that logs a warning and lets
-    // file_put_contents() return false WITHOUT throwing reaches the
-    // comparison for real. Installing exactly that handler here is what
-    // makes this test genuinely exercise the revert logic, not merely
-    // observe the exception path round 3 already covered.
+    // A production error handler may swallow file_put_contents()'s warning
+    // and let Filesystem::put() return false instead of throwing. Keep this
+    // separate from the default-handler test above so both failure shapes
+    // remain explicit.
     $class = movesWriteNode($this->root, 'UnwritableImportNode', 'unwritableimport.node');
     movesWriteProvider($this->root, '', 'use App\Nodeflow\Nodes\UnwritableImportNode;');
 
@@ -855,11 +870,11 @@ it('leaves the import in place, and the extraction still succeeds, when removeUn
         chmod($providerPath, 0644);
     }
 
-    // The write failed silently (no throw, per the installed handler) and
-    // was correctly detected and reverted: the host provider is BYTE-FOR-
-    // BYTE what it was before, import and all -- not merely "still
-    // contains the import" (which a half-applied edit could also leave
-    // true of).
+    // chmod makes the write fail before changing any byte, so this proves
+    // only the portable silent-false branch: the original is retained and
+    // extraction continues. It deliberately does NOT claim to manufacture
+    // or cover a partial write; the production guard restores one if a real
+    // filesystem ever exposes that state.
     expect(file_get_contents($providerPath))->toBe($originalProvider);
 
     // And the rest of the extraction still completed -- this is a
@@ -1186,6 +1201,58 @@ it('refuses over a reference in a loose root-level .php file, end to end (review
     expect($this->root.'/packages/acme/widgets')->not->toBeDirectory();
 });
 
+it('refuses over a reference in a loose root-level PHP-family file with a non-php extension', function (string $shortClass, string $extension) {
+    $class = movesWriteNode($this->root, $shortClass, strtolower($shortClass).'.node');
+    $rootFile = $this->root.'/loose.'.$extension;
+    file_put_contents($rootFile, "<?php\n\nreturn \\{$class}::class;\n");
+
+    $before = movesTreeHash($this->root);
+
+    $this->artisan('nodeflow:extract-node', ['class' => $class, '--package' => 'acme/widgets'])
+        ->expectsOutputToContain('loose.'.$extension)
+        ->assertFailed();
+
+    expect(movesTreeHash($this->root))->toBe($before);
+    expect($this->root.'/app/Nodeflow/Nodes/'.$shortClass.'.php')->toBeFile();
+    expect($this->root.'/packages/acme/widgets')->not->toBeDirectory();
+})->with([
+    'phtml' => ['RootPhtmlNode', 'phtml'],
+    'inc' => ['RootIncNode', 'inc'],
+]);
+
+it('refuses over a reference in a scannable root-level dotfile', function () {
+    $class = movesWriteNode($this->root, 'DotConfigNode', 'dotconfig.node');
+    file_put_contents(
+        $this->root.'/.php-cs-fixer.php',
+        "<?php\n\nreturn \\App\\Nodeflow\\Nodes\\DotConfigNode::class;\n",
+    );
+
+    $before = movesTreeHash($this->root);
+
+    $this->artisan('nodeflow:extract-node', ['class' => $class, '--package' => 'acme/widgets'])
+        ->expectsOutputToContain('.php-cs-fixer.php')
+        ->assertFailed();
+
+    expect(movesTreeHash($this->root))->toBe($before);
+    expect($this->root.'/app/Nodeflow/Nodes/DotConfigNode.php')->toBeFile();
+    expect($this->root.'/packages/acme/widgets')->not->toBeDirectory();
+});
+
+it('continues to exclude an ordinary root-level dot-directory from the shared scan', function () {
+    $class = movesWriteNode($this->root, 'HiddenDirectoryNode', 'hiddendirectory.node');
+    mkdir($this->root.'/.hidden', 0777, true);
+    file_put_contents(
+        $this->root.'/.hidden/Consumer.php',
+        "<?php\n\nreturn \\App\\Nodeflow\\Nodes\\HiddenDirectoryNode::class;\n",
+    );
+
+    $this->artisan('nodeflow:extract-node', ['class' => $class, '--package' => 'acme/widgets'])
+        ->assertExitCode(0);
+
+    expect($this->root.'/packages/acme/widgets/src/Nodes/HiddenDirectoryNode.php')->toBeFile();
+    expect($this->root.'/app/Nodeflow/Nodes/HiddenDirectoryNode.php')->not->toBeFile();
+});
+
 it('refuses over a reference reached through a symlink NESTED inside a scan root, rather than silently deleting the original (review round 4, item B)', function () {
     // The sharper of the two: app/Linked symlinked to a directory OUTSIDE
     // the host, declaring App\Linked\Consumer and referencing the node.
@@ -1203,6 +1270,8 @@ it('refuses over a reference reached through a symlink NESTED inside a scan root
     $outside = sys_get_temp_dir().'/nodeflow-extract-node-symlink-target-'.bin2hex(random_bytes(6));
     mkdir($outside, 0777, true);
     $outside = realpath($outside);
+
+    expect(dirname($outside))->toBe(dirname($this->root));
 
     file_put_contents($outside.'/Consumer.php', <<<'PHP'
     <?php
@@ -1234,6 +1303,68 @@ it('refuses over a reference reached through a symlink NESTED inside a scan root
         unlink($this->root.'/app/Linked');
         movesDeleteTree($outside);
     }
+});
+
+it('refuses and leaves the extraction tree unchanged when a nested symlink target is unreadable', function () {
+    $class = movesWriteNode($this->root, 'UnreadableLinkedNode', 'unreadablelinked.node');
+
+    $outside = sys_get_temp_dir().'/nodeflow-extract-node-unreadable-target-'.bin2hex(random_bytes(6));
+    mkdir($outside, 0777, true);
+    $outside = realpath($outside);
+    symlink($outside, $this->root.'/app/Unreadable');
+
+    $before = movesTreeHash($this->root);
+    try {
+        chmod($outside, 0000);
+
+        try {
+            $exit = \Illuminate\Support\Facades\Artisan::call('nodeflow:extract-node', [
+                'class' => $class,
+                '--package' => 'acme/widgets',
+            ]);
+
+            expect($exit)->not->toBe(0);
+            expect(\Illuminate\Support\Facades\Artisan::output())
+                ->toContain('app/Unreadable')
+                ->toContain('could not be read');
+        } finally {
+            chmod($outside, 0755);
+        }
+
+        expect(movesTreeHash($this->root))->toBe($before);
+        expect($this->root.'/app/Nodeflow/Nodes/UnreadableLinkedNode.php')->toBeFile();
+        expect($this->root.'/packages/acme/widgets')->not->toBeDirectory();
+    } finally {
+        @chmod($outside, 0755);
+
+        if (is_link($this->root.'/app/Unreadable')) {
+            unlink($this->root.'/app/Unreadable');
+        }
+
+        movesDeleteTree($outside);
+    }
+});
+
+it('refuses a nested symlink to the host parent before traversing sibling projects', function () {
+    $class = movesWriteNode($this->root, 'HostParentLinkedNode', 'hostparentlinked.node');
+    $sourceLink = $this->root.'/app/HostParent';
+    $resolvedAncestor = dirname($this->root);
+    symlink($resolvedAncestor, $sourceLink);
+
+    $before = movesTreeHash($this->root);
+    $exit = \Illuminate\Support\Facades\Artisan::call('nodeflow:extract-node', [
+        'class' => $class,
+        '--package' => 'acme/widgets',
+    ]);
+
+    expect($exit)->not->toBe(0);
+    expect(\Illuminate\Support\Facades\Artisan::output())
+        ->toContain('app/HostParent')
+        ->toContain($resolvedAncestor)
+        ->toContain('ancestor of the original scan root');
+    expect(movesTreeHash($this->root))->toBe($before);
+    expect($this->root.'/app/Nodeflow/Nodes/HostParentLinkedNode.php')->toBeFile();
+    expect($this->root.'/packages/acme/widgets')->not->toBeDirectory();
 });
 
 // --- Restores byte-identically on failure injected at each step ------------
@@ -1605,4 +1736,3 @@ it('restores byte-identically when M7 (deleting the originals) fails, leaving no
     expect($this->root.'/packages/acme/widgets')->not->toBeDirectory();
     expect($this->root.'/app/Nodeflow/Nodes/M7FailNode.php')->toBeFile();
 });
-

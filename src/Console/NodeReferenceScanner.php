@@ -190,9 +190,10 @@ final class NodeReferenceScanner
      * @throws \RuntimeException when a scanned file declares more than one
      *                            `namespace` block, when a directory entry
      *                            (ordinarily a symlink) cannot be resolved
-     *                            to a real path, or when following one
-     *                            would revisit a directory already scanned
-     *                            in this same call (a symlink cycle)
+     *                            or read, when a nested symlink resolves to
+     *                            an ancestor of its original scan root, or
+     *                            when following one would revisit a directory
+     *                            already scanned in this same call (a cycle)
      */
     public static function scan(string $fqcn, array $absoluteRoots, array $excludedTopLevelNames = []): array
     {
@@ -250,6 +251,16 @@ final class NodeReferenceScanner
      * "found too little" failure this method exists to avoid, just
      * reached a different way.
      *
+     * A narrow bound prevents a different unbounded walk without restoring
+     * the old containment ban: a nested symlink may target an external
+     * sibling source directory, but may not resolve to an ANCESTOR of the
+     * original scan root. Following `app/HostParent -> <host>` or `app/Root
+     * -> /` widens the walk into every sibling project or the filesystem,
+     * while no descendant reached that way has a more legitimate PSR-4
+     * claim than the external sibling case already supports directly. The
+     * comparison is segment-wise through HostPath::segments(), never a raw
+     * string prefix (`/project` must not match `/project-evil`).
+     *
      * $excludedTopLevelNames is only ever tested against an entry when
      * `$directory === $scanRoot` — i.e. only for entries directly inside
      * the ORIGINAL root scan() was handed for this call, never for an
@@ -288,6 +299,20 @@ final class NodeReferenceScanner
             );
         }
 
+        if (is_link($directory)) {
+            $scanRootReal = realpath($scanRoot);
+            $resolvedSegments = HostPath::segments($real);
+            $scanRootSegments = HostPath::segments($scanRootReal === false ? $scanRoot : $scanRootReal);
+
+            if (count($resolvedSegments) < count($scanRootSegments)
+                && array_slice($scanRootSegments, 0, count($resolvedSegments)) === $resolvedSegments) {
+                throw new \RuntimeException(
+                    "[{$directory}] resolves to [{$real}], an ancestor of the original scan root ".
+                    "[{$scanRootReal}]; following it would widen the scan into an unrelated filesystem graph."
+                );
+            }
+        }
+
         if (isset($visitedRealPaths[$real])) {
             throw new \RuntimeException(
                 "[{$directory}] resolves to [{$real}], a directory this scan has already visited — ".
@@ -300,7 +325,10 @@ final class NodeReferenceScanner
         $entries = @scandir($directory);
 
         if ($entries === false) {
-            return;
+            throw new \RuntimeException(
+                "[{$directory}] could not be read — silently skipping an unreadable directory would "
+                .'hide references this scan could not then prove are absent.'
+            );
         }
 
         foreach ($entries as $entry) {

@@ -694,6 +694,41 @@ it('refuses loudly, naming the path, when a symlink target cannot be resolved at
     }
 });
 
+it('refuses a nested symlink whose resolved directory is an ancestor of the original scan root', function () {
+    $root = hostWith(['host/app/.keep' => '']);
+    $scanRoot = $root.'/host/app';
+    $sourceLink = $scanRoot.'/host-parent';
+    $resolvedAncestor = realpath($root.'/host');
+
+    symlink($resolvedAncestor, $sourceLink);
+
+    try {
+        NodeReferenceScanner::scan(target(), [$scanRoot]);
+        test()->fail('Expected the ancestor symlink to be refused.');
+    } catch (RuntimeException $e) {
+        expect($e->getMessage())
+            ->toContain("[{$sourceLink}] resolves to [{$resolvedAncestor}]")
+            ->toContain('ancestor of the original scan root');
+    }
+});
+
+it('refuses a nested symlink to the filesystem root before traversing it', function () {
+    $root = hostWith(['app/.keep' => '']);
+    $scanRoot = $root.'/app';
+    $sourceLink = $scanRoot.'/filesystem-root';
+
+    symlink('/', $sourceLink);
+
+    try {
+        NodeReferenceScanner::scan(target(), [$scanRoot]);
+        test()->fail('Expected the filesystem-root symlink to be refused.');
+    } catch (RuntimeException $e) {
+        expect($e->getMessage())
+            ->toContain("[{$sourceLink}] resolves to [/]")
+            ->toContain('ancestor of the original scan root');
+    }
+});
+
 it('accepts a single FILE as a scan root, not only a directory (review round 4, item A)', function () {
     // A loose *.php file at the host root (e.g. rector.php) has no
     // containing directory this class was ever told to walk -- accepting
