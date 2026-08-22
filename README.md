@@ -19,7 +19,7 @@ php artisan migrate
 ## Capabilities
 
 - Durable waits, resumption, and cancellation for long-running workflows.
-- Immutable published versions, tenant-scoped audiences, and per-subject execution.
+- Package-managed published-version snapshots that keep existing runs on their original graphs.
 - Custom nodes, triggers, and subject attributes for application-defined behavior.
 - Opt-in Inertia editor and run-inspection clients.
 - Health checks, pruning, package scaffolding, and node extraction tooling.
