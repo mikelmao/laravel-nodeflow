@@ -15,9 +15,11 @@ use App\Events\FloodAlertDispatched;
 use App\Events\OfferClicked;
 use App\Listeners\ExitFloodAlertRunsForOfferClick;
 use App\Models\FloodAlert;
+use App\Models\FloodAlertWorkflow;
 use App\Models\Organization;
 use App\Models\User;
 use App\Nodeflow\Nodes\SendMessage;
+use App\Nodeflow\OrganizationTenantResolver;
 use App\Nodeflow\Triggers\FloodAlertFires;
 use App\Nodeflow\UserSubjectResolver;
 use App\Support\FloodAlertGraph;
@@ -29,6 +31,7 @@ use Nodeflow\Engine\FakeWorkflowEngine;
 use Nodeflow\Engine\WorkflowEngine;
 use Nodeflow\Execution\NodeRunner;
 use Nodeflow\Execution\StartRun;
+use Nodeflow\Execution\SubjectContext;
 use Nodeflow\Graph\Graph;
 use Nodeflow\Models\Flow;
 use Nodeflow\Models\FlowVersion;
@@ -197,7 +200,7 @@ it('suppresses DemoMessage persistence in test mode while preserving routing', f
 
 ## Tenant drift is rejected before delivery
 
-The initial audience check does not freeze a user's organization membership for the duration of a wait. This focused test moves the user after the run starts and executes the node directly; the node must fail before it creates a `DemoMessage` row.
+The initial audience check does not freeze a user's organization membership for the duration of a wait. This focused test retains a stale resolved `User` instance, changes the database row's organization, then calls the node with that stale instance. The node must re-query the row and fail before it creates a `DemoMessage` record.
 
 ```php
 it('does not persist a message after the user leaves the run tenant', function (): void {
@@ -207,18 +210,56 @@ it('does not persist a message after the user leaves the run tenant', function (
     $flow = publishFloodFlow($organization);
     $run = app(StartRun::class)->forFlow($flow, 'user', [(string) $user->getKey()]);
 
-    $user->forceFill(['organization_id' => $otherOrganization->getKey()])->save();
+    $staleUser = User::query()->findOrFail($user->getKey());
+    User::query()
+        ->whereKey($user->getKey())
+        ->update(['organization_id' => $otherOrganization->getKey()]);
 
-    app(NodeRunner::class)->run(
+    $result = (new SendMessage)->forSubject(new SubjectContext(
         $run,
-        Graph::fromArray($run->flowVersion->graph),
         'send-alert',
-    );
+        ['message' => 'flood_alert'],
+        (string) $user->getKey(),
+        $staleUser,
+    ));
 
     expect(\App\Models\DemoMessage::query()->count())->toBe(0)
-        ->and(RunSubject::query()->where('run_id', $run->id)->value('status'))->toBe('failed');
+        ->and($result->failures())->not->toBeEmpty();
 });
 ```
+
+## Retried provisioning creates one flow
+
+This is a host HTTP test: load the application's `NodeflowServiceProvider` and `routes/web.php` so the authenticated route and its gates are present. It restores the real tenant resolver because the shared multi-organization fixture intentionally uses disabled tenancy.
+
+```php
+it('reuses the flood-alert workflow on a retried provisioning request', function (): void {
+    config(['nodeflow.tenancy' => 'resolver']);
+    app()->bind(TenantResolver::class, OrganizationTenantResolver::class);
+
+    $organization = makeOrganization('Organization');
+    $administrator = makeUser($organization, 'administrator@example.test');
+    $administrator->forceFill(['is_nodeflow_admin' => true])->save();
+
+    $this->actingAs($administrator)
+        ->post(route('flood-alert-workflow.store'))
+        ->assertRedirect();
+    $this->actingAs($administrator)
+        ->post(route('flood-alert-workflow.store'))
+        ->assertRedirect();
+
+    $mapping = FloodAlertWorkflow::query()
+        ->where('organization_id', $organization->getKey())
+        ->sole();
+
+    expect(Flow::withoutTenancy()->where('tenant_id', (string) $organization->getKey())->count())
+        ->toBe(1)
+        ->and(FlowVersion::withoutTenancy()->where('flow_id', $mapping->flow_id)->count())
+        ->toBe(1);
+});
+```
+
+The test proves sequential retries. Add a real concurrent provisioning test on the supported production database before claiming concurrent behavior; SQLite may report `SQLITE_BUSY` instead of providing row-level lock semantics.
 
 ## Conversion exits before a follow-up
 

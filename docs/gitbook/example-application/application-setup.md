@@ -249,6 +249,39 @@ public function isNodeflowAdministrator(): bool
 
 The `User` changes are additive: do not replace its existing authentication traits, fillable settings, hidden values, password casts, or other relationships.
 
+### Bootstrap the first administrator safely
+
+Use a trusted deployment-time seeder to promote a known user. Replace the email below with the already verified administrator selected by the operator, then run the seeder once.
+
+**File: `database/seeders/NodeflowAdministratorSeeder.php`**
+
+```php
+<?php
+
+namespace Database\Seeders;
+
+use App\Models\User;
+use Illuminate\Database\Seeder;
+
+class NodeflowAdministratorSeeder extends Seeder
+{
+    public function run(): void
+    {
+        $user = User::query()
+            ->where('email', 'owner@example.test')
+            ->firstOrFail();
+
+        $user->forceFill(['is_nodeflow_admin' => true])->save();
+    }
+}
+```
+
+```bash
+php artisan db:seed --class=NodeflowAdministratorSeeder
+```
+
+Never expose `is_nodeflow_admin` in request validation, profile updates, or a self-service promotion route. Role promotion is a trusted administrative operation, not user-controlled input.
+
 ## Define the dispatched event
 
 Dispatch this event after the `FloodAlert` record exists and the application has selected affected users. Its payload is deliberately enough for the trigger to work without looking up arbitrary request input.

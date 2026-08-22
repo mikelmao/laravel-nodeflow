@@ -16,13 +16,14 @@ namespace App\Nodeflow\Nodes;
 use App\Models\DemoMessage;
 use App\Models\User;
 use Illuminate\Database\QueryException;
+use Illuminate\Support\Facades\DB;
 use Nodeflow\Execution\NodeResult;
 use Nodeflow\Execution\SubjectContext;
+use Nodeflow\Models\Run;
 use Nodeflow\Nodes\HandlesSubject;
 use Nodeflow\Nodes\Node;
 use Nodeflow\Schema\Field;
 use Nodeflow\Schema\NodeDefinition;
-use Nodeflow\Models\Run;
 use Throwable;
 
 class SendMessage extends Node implements HandlesSubject
@@ -60,9 +61,9 @@ class SendMessage extends Node implements HandlesSubject
     {
         $message = (string) $context->config('message');
         $body = self::BODIES[$message] ?? null;
-        $user = $context->subject();
+        $resolvedSubject = $context->subject();
 
-        if (! $user instanceof User) {
+        if (! $resolvedSubject instanceof User) {
             return $context->fail('Message recipient is unavailable.');
         }
 
@@ -74,16 +75,6 @@ class SendMessage extends Node implements HandlesSubject
             return $context->continue('sent');
         }
 
-        // The original audience check happened when the run started. A wait can
-        // pass before this node runs, so re-check current host membership against
-        // the run's tenant before making any host-owned side effect.
-        $run = Run::withoutTenancy()->find($context->runId());
-        $tenantId = $run?->tenant_id;
-
-        if ($tenantId === null || (string) $user->organization_id !== (string) $tenantId) {
-            return $context->fail('Message recipient is no longer eligible.');
-        }
-
         $identity = [
             'run_id' => $context->runId(),
             'node_id' => $context->nodeId(),
@@ -91,13 +82,34 @@ class SendMessage extends Node implements HandlesSubject
         ];
 
         try {
-            DemoMessage::query()->firstOrCreate($identity, [
-                'organization_id' => $tenantId,
-                'message' => $message,
-                'body' => $body,
-            ]);
+            return DB::transaction(function () use ($context, $identity, $message, $body): NodeResult {
+                // Ignore the resolved model's organization. It can be stale after
+                // a durable wait; this transaction pairs the current membership
+                // decision with the host-owned message insert.
+                $run = Run::withoutTenancy()
+                    ->whereKey($context->runId())
+                    ->lockForUpdate()
+                    ->first(['id', 'tenant_id']);
+                $tenantId = $run?->tenant_id;
 
-            return $context->continue('sent');
+                $user = User::query()
+                    ->whereKey($context->subjectId())
+                    ->lockForUpdate()
+                    ->first();
+
+                if ($tenantId === null || $user === null
+                    || (string) $user->organization_id !== (string) $tenantId) {
+                    return $context->fail('Message recipient is no longer eligible.');
+                }
+
+                DemoMessage::query()->firstOrCreate($identity, [
+                    'organization_id' => $tenantId,
+                    'message' => $message,
+                    'body' => $body,
+                ]);
+
+                return $context->continue('sent');
+            });
         } catch (QueryException $exception) {
             // A competing retry may have won the unique insert. Treat that as
             // the same successful delivery record, but surface every other DB error.
@@ -117,7 +129,9 @@ class SendMessage extends Node implements HandlesSubject
 }
 ```
 
-Test mode must prevent externally visible work. Here it suppresses the `DemoMessage` write while retaining the normal `sent` route. In a live run, the node reads only the package-owned run selected by `runId()` and compares its tenant with the current `User` organization immediately before the write. Initial `ownsSubject()` validation cannot catch a membership change during a durable wait. A mismatch fails the subject before any host write or delivery attempt; the persisted `organization_id` always comes from the trusted run tenant, not request input. A real delivery adapter belongs behind the same branch and must use the same identity (or an equivalent provider idempotency key). The returned failure text is safe for run inspection; exception details go only to the application's error reporting.
+Test mode must prevent externally visible work. Here it suppresses the `DemoMessage` write while retaining the normal `sent` route. In a live run, the node uses the resolved subject only to distinguish an unavailable subject; it never trusts that model's organization. Inside one transaction it locks the package-owned run selected by `runId()`, re-reads and locks the current `User` selected by `subjectId()`, compares its organization with the trusted run tenant, and only then inserts or finds `DemoMessage`. Initial `ownsSubject()` validation cannot catch a membership change during a durable wait. A mismatch fails the subject before any host write or delivery attempt; the persisted `organization_id` always comes from the trusted run tenant, not request input.
+
+The transaction makes the membership decision and message/outbox record atomic. Do not make a non-transactional network call to an external provider in this node body. A real delivery integration should have a worker send from the committed outbox/message record with a provider idempotency key derived from the same run, node, and subject identity. The returned failure text is safe for run inspection; exception details go only to the application's error reporting.
 
 ## Implement the trigger
 
@@ -348,7 +362,7 @@ class FloodAlertFlowController
 }
 ```
 
-The mapping row's unique `organization_id` and the locked organization row make concurrent requests converge on one flow. The flow, publication, and mapping update share one transaction: a failed authorization or publish rolls back a newly created draft and mapping row. If a mapped flow has been manually made inactive, the endpoint refuses it rather than provisioning a second matching flow. `PublishFlow` validates the graph, creates an immutable version, then makes it current. Runs remain pinned to the version they started with. Publishing and concurrent draft saves need application-level coordination; see [Publishing flows](../building-automations/publishing-flows.md) and [Flows and versions](../building-automations/flows-and-versions.md) for those constraints.
+On MySQL and PostgreSQL, where `SELECT ... FOR UPDATE` provides effective row-level locking, the mapping row's unique `organization_id` and the locked organization row make concurrent requests converge on one flow. The flow, publication, and mapping update share one transaction: a failed authorization or publish rolls back a newly created draft and mapping row. If a mapped flow has been manually made inactive, the endpoint refuses it rather than provisioning a second matching flow. SQLite does not provide equivalent lock behavior; concurrent writers can receive `SQLITE_BUSY`, although sequential retries still reuse the unique mapping. Test concurrent provisioning on the production database and use a bounded retry for transient serialization or busy errors rather than treating this guarantee as database-portable. `PublishFlow` validates the graph, creates an immutable version, then makes it current. Runs remain pinned to the version they started with. Publishing and concurrent draft saves need application-level coordination; see [Publishing flows](../building-automations/publishing-flows.md) and [Flows and versions](../building-automations/flows-and-versions.md) for those constraints.
 
 ## Dispatch alerts and stop converted users
 
