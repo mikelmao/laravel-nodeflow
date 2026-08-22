@@ -201,3 +201,25 @@ This records what happened while executing
   TypeScript silent; Composer metadata valid; scoped Pint passed; and `git diff --check` clean.
 
 ## Final merged-main verification
+
+- Local integration: `plan-7-release-readiness` was merged into local `main` with merge commit
+  `f487cedc62a65727a69c989221bec8bb4bc8ae89`. The pre-merge `main` commit remained the approved
+  branch point `f9dea76`; no concurrent target-file change required reconciliation. An `origin`
+  remote was present at integration even though the starting plan expected none; it was not fetched,
+  pulled, pushed or otherwise changed.
+- Merged package gates: `COMPOSER_DISABLE_NETWORK=1 vendor/bin/pest --compact` passed **937 tests /
+  7,538 assertions** in 100.00s; Vitest passed **160 tests across 17 files**; TypeScript was silent;
+  Composer metadata was valid; and `git diff --check` passed. These totals match `README.md` and
+  `docs/documentation-changes.md`.
+- Final demo gates at `e15e5bd912fee2e248654861b826d9e1458707dc`: the package link resolved
+  exactly to merged package `main`; Pest passed **56 tests / 223 assertions** in 67.155s;
+  TypeScript was silent; the production build transformed 2,497 modules and passed in 2.20s;
+  Composer validation passed with the two known unbound local-package warnings; and demo diff/status
+  checks were clean.
+- G-5 remains **BLOCKED**, not passed, with the exact browser, network, graph-shape and SQLite
+  recovery evidence above. Its retained demo rows remain runs 5–6, subjects 17–24, executions
+  31–48 and messages 65–84. Final read-only high-water values remained runs 6/6, subjects 24/24,
+  executions 48/48, messages 68/84 and jobs 0/0.
+- Cleanup and hygiene before this record commit: package `main`, feature worktree and demo were
+  clean; no Plan 7 queue worker or TCP 9223 listener remained; `/tmp/nodeflow-chrome` was retained;
+  and the locked Plan 6 worktree was untouched.
