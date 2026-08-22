@@ -4,7 +4,7 @@ These focused Pest excerpts verify the flood-alert application boundary without 
 
 ## Test prerequisites
 
-The host test database must run the application migrations for `organizations`, `users`, `flood_alerts`, and `demo_messages`, plus the package migrations. The data contract is defined in [Application setup](application-setup.md). These excerpts create records directly, so the illustrative models must permit the shown attributes or use equivalent factories.
+The host test database must run the application migrations for `organizations`, `users`, `flood_alerts`, `demo_messages`, and `flood_alert_workflows`, plus the package migrations. The data contract is defined in [Application setup](application-setup.md). These excerpts create records directly, so the illustrative models must permit the shown attributes or use equivalent factories.
 
 Put the helpers and imports below at the top of `tests/Feature/FloodAlertWorkflowTest.php`. The local `FloodAlertTestTenantResolver` is a test fixture, not a package fake. It makes multi-organization setup explicit while preserving the real ownership query. The real application `UserSubjectResolver`, `SendMessage`, `FloodAlertFires`, graph class, and events are exercised.
 
@@ -192,6 +192,31 @@ it('suppresses DemoMessage persistence in test mode while preserving routing', f
     expect(\App\Models\DemoMessage::query()->count())->toBe(0)
         ->and(RunSubject::query()->where('run_id', $run->id)->value('current_node_id'))
             ->toBe('wait-before-offer');
+});
+```
+
+## Tenant drift is rejected before delivery
+
+The initial audience check does not freeze a user's organization membership for the duration of a wait. This focused test moves the user after the run starts and executes the node directly; the node must fail before it creates a `DemoMessage` row.
+
+```php
+it('does not persist a message after the user leaves the run tenant', function (): void {
+    $organization = makeOrganization('Organization');
+    $otherOrganization = makeOrganization('Other organization');
+    $user = makeUser($organization, 'user@example.test');
+    $flow = publishFloodFlow($organization);
+    $run = app(StartRun::class)->forFlow($flow, 'user', [(string) $user->getKey()]);
+
+    $user->forceFill(['organization_id' => $otherOrganization->getKey()])->save();
+
+    app(NodeRunner::class)->run(
+        $run,
+        Graph::fromArray($run->flowVersion->graph),
+        'send-alert',
+    );
+
+    expect(\App\Models\DemoMessage::query()->count())->toBe(0)
+        ->and(RunSubject::query()->where('run_id', $run->id)->value('status'))->toBe('failed');
 });
 ```
 

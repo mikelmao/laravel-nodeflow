@@ -8,12 +8,13 @@ Use the following minimum data contract. The application may have additional col
 
 | Model/table | Required columns and relationships | Why it is needed |
 | --- | --- | --- |
-| `Organization` / `organizations` | Primary key `id`; a stable, non-null `name` is useful for administration. | Its primary key is cast to a string whenever it becomes a Nodeflow tenant ID. |
-| `User` / `users` | Primary key `id`; indexed `organization_id` foreign key; `name`; unique `email`; non-null `password`; nullable timestamp `clicked_offer_at`; `organization()` belongs-to relationship. Cast `clicked_offer_at` to `datetime`. | A `User` is the `user` subject. `clicked_offer_at` is the source for `clicked_offer`. |
-| `FloodAlert` / `flood_alerts` | Primary key `id`; `severity` string; nullable `dispatched_at` timestamp. | The event carries the durable alert ID and severity. Do not create a new alert record for a redelivery. |
-| `DemoMessage` / `demo_messages` | Primary key `id`; indexed `organization_id`; `user_id`; `run_id`; `node_id`; `message` string; `body` text; timestamps; a unique index on `run_id`, `node_id`, and `user_id`. | This host-owned delivery ledger makes the illustrative message write idempotent. |
+| `Organization` / `organizations` | Bigint primary key `id`; a stable, non-null `name`. | Its primary key is cast to a string whenever it becomes a Nodeflow tenant ID. |
+| `User` / `users` | Bigint primary key `id`; indexed `organization_id` foreign key; `name`; unique `email`; non-null `password`; boolean `is_nodeflow_admin` defaulting to false; nullable timestamp `clicked_offer_at`; `organization()` belongs-to relationship. Cast the final two columns to `boolean` and `datetime`. | A `User` is the `user` subject. `is_nodeflow_admin` supplies the example's administration rule, and `clicked_offer_at` is the source for `clicked_offer`. |
+| `FloodAlert` / `flood_alerts` | Bigint primary key `id`; `severity` string; nullable `dispatched_at` timestamp. | The event carries the durable alert ID and severity. Do not create a new alert record for a redelivery. |
+| `DemoMessage` / `demo_messages` | Bigint primary key `id`; indexed `organization_id`; `user_id`; `run_id`; `node_id`; `message` string; `body` text; timestamps; a unique index on `run_id`, `node_id`, and `user_id`. | This host-owned operational delivery record makes the illustrative message write idempotent. |
+| `FloodAlertWorkflow` / `flood_alert_workflows` | Bigint primary key `id`; unique `organization_id`; nullable `flow_id` foreign key. | This is the stable, one-per-organization provisioning record for the flood-alert flow. |
 
-`Organization` and `User` may use integer or UUID keys. The package stores tenant and subject identities as strings, so always cast `getKey()`, `organization_id`, and event map keys to strings at the integration boundary. `User::organization_id` must identify the same organization checked by the tenant resolver; a relationship alone is not an ownership check.
+This concrete migration uses Laravel `id()` and `foreignId()`, so its application identities are bigint keys. Nodeflow stores tenant and subject identities as strings, so cast `getKey()`, `organization_id`, and event map keys to strings at the integration boundary. `User::organization_id` must identify the same organization checked by the tenant resolver; a relationship alone is not an ownership check.
 
 ### Create the host migrations
 
@@ -43,6 +44,7 @@ return new class extends Migration
                 ->constrained()
                 ->cascadeOnDelete();
             $table->index('organization_id');
+            $table->boolean('is_nodeflow_admin')->default(false);
             $table->timestamp('clicked_offer_at')->nullable();
         });
 
@@ -72,16 +74,31 @@ return new class extends Migration
 
             $table->unique(['run_id', 'node_id', 'user_id']);
         });
+
+        Schema::create('flood_alert_workflows', function (Blueprint $table): void {
+            $table->id();
+            $table->foreignId('organization_id')
+                ->constrained()
+                ->cascadeOnDelete();
+            $table->foreignId('flow_id')
+                ->nullable()
+                ->constrained('nodeflow_flows')
+                ->nullOnDelete();
+            $table->timestamps();
+
+            $table->unique('organization_id');
+        });
     }
 
     public function down(): void
     {
+        Schema::dropIfExists('flood_alert_workflows');
         Schema::dropIfExists('demo_messages');
         Schema::dropIfExists('flood_alerts');
 
         Schema::table('users', function (Blueprint $table): void {
             $table->dropForeign(['organization_id']);
-            $table->dropColumn(['organization_id', 'clicked_offer_at']);
+            $table->dropColumn(['organization_id', 'is_nodeflow_admin', 'clicked_offer_at']);
         });
 
         Schema::dropIfExists('organizations');
@@ -89,7 +106,148 @@ return new class extends Migration
 };
 ```
 
-`DemoMessage::firstOrCreate()` uses the same `run_id`, `node_id`, `user_id` identity as this unique index. The `run_id` foreign key intentionally points to Nodeflow's `nodeflow_runs` table, so publish and run the package migrations before this host migration.
+`DemoMessage::firstOrCreate()` uses the same `run_id`, `node_id`, `user_id` identity as this unique index. The `run_id` foreign key intentionally points to Nodeflow's `nodeflow_runs` table, so publish and run the package migrations before this host migration. Its cascading foreign key means a `DemoMessage` row is deleted when the related Nodeflow run is deleted or pruned. It is therefore an operational delivery record, not a durable business or audit ledger; retain an application-owned audit record separately if it must outlive run retention.
+
+## Implement the host models
+
+These compact application models expose only the relationships and mass-assignment surface used by this walkthrough. `DemoMessage` accepts the node's trusted `firstOrCreate()` attributes; do not mass-assign it from a request.
+
+**File: `app/Models/Organization.php`**
+
+```php
+<?php
+
+namespace App\Models;
+
+use Illuminate\Database\Eloquent\Model;
+use Illuminate\Database\Eloquent\Relations\HasMany;
+use Illuminate\Database\Eloquent\Relations\HasOne;
+
+class Organization extends Model
+{
+    protected $fillable = ['name'];
+
+    public function users(): HasMany
+    {
+        return $this->hasMany(User::class);
+    }
+
+    public function floodAlertWorkflow(): HasOne
+    {
+        return $this->hasOne(FloodAlertWorkflow::class);
+    }
+}
+```
+
+**File: `app/Models/FloodAlert.php`**
+
+```php
+<?php
+
+namespace App\Models;
+
+use Illuminate\Database\Eloquent\Model;
+
+class FloodAlert extends Model
+{
+    protected $fillable = ['severity', 'dispatched_at'];
+
+    protected $casts = [
+        'dispatched_at' => 'datetime',
+    ];
+}
+```
+
+**File: `app/Models/DemoMessage.php`**
+
+```php
+<?php
+
+namespace App\Models;
+
+use Illuminate\Database\Eloquent\Model;
+use Illuminate\Database\Eloquent\Relations\BelongsTo;
+use Nodeflow\Models\Run;
+
+class DemoMessage extends Model
+{
+    protected $fillable = [
+        'organization_id',
+        'user_id',
+        'run_id',
+        'node_id',
+        'message',
+        'body',
+    ];
+
+    public function organization(): BelongsTo
+    {
+        return $this->belongsTo(Organization::class);
+    }
+
+    public function user(): BelongsTo
+    {
+        return $this->belongsTo(User::class);
+    }
+
+    public function run(): BelongsTo
+    {
+        return $this->belongsTo(Run::class);
+    }
+}
+```
+
+**File: `app/Models/FloodAlertWorkflow.php`**
+
+```php
+<?php
+
+namespace App\Models;
+
+use Illuminate\Database\Eloquent\Model;
+use Illuminate\Database\Eloquent\Relations\BelongsTo;
+use Nodeflow\Models\Flow;
+
+class FloodAlertWorkflow extends Model
+{
+    protected $fillable = ['organization_id', 'flow_id'];
+
+    public function organization(): BelongsTo
+    {
+        return $this->belongsTo(Organization::class);
+    }
+
+    public function flow(): BelongsTo
+    {
+        return $this->belongsTo(Flow::class);
+    }
+}
+```
+
+**File: `app/Models/User.php` (modifications to the existing Laravel model)**
+
+```php
+// Add these imports beside the existing imports.
+use Illuminate\Database\Eloquent\Relations\BelongsTo;
+
+// Merge these entries into the existing $casts property or casts() method.
+// Preserve every existing cast.
+'clicked_offer_at' => 'datetime',
+'is_nodeflow_admin' => 'boolean',
+
+// Add these methods inside the existing User class.
+public function organization(): BelongsTo
+{
+    return $this->belongsTo(Organization::class);
+}
+
+public function isNodeflowAdministrator(): bool
+{
+    return $this->is_nodeflow_admin;
+}
+```
+
+The `User` changes are additive: do not replace its existing authentication traits, fillable settings, hidden values, password casts, or other relationships.
 
 ## Define the dispatched event
 
@@ -104,7 +262,7 @@ namespace App\Events;
 
 class FloodAlertDispatched
 {
-    /** @param array<string, list<int|string>> $userIdsByOrganization */
+    /** @param array<int|string, list<int|string>> $userIdsByOrganization */
     public function __construct(
         public readonly string $alertId,
         public readonly string $severity,
@@ -292,6 +450,9 @@ Route::middleware(['web', 'auth'])
     ->prefix('admin')
     ->group(function (): void {
         Nodeflow::routes();
+
+        Route::post('flood-alert-workflow', [\App\Http\Controllers\FloodAlertFlowController::class, 'store'])
+            ->name('flood-alert-workflow.store');
     });
 ```
 

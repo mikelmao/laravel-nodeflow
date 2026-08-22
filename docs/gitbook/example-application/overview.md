@@ -2,7 +2,7 @@
 
 > **Experimental:** Nodeflow is pre-release software. Treat this walkthrough as a starting point, review the package's current behavior, and test the application-owned side effects before using it for real alerts.
 
-This illustrative walkthrough builds a tenant-aware flood-alert journey. `Organization` is the tenant, `User` is the subject, and the application owns both message persistence and message delivery. Nodeflow owns the graph, durable waits, version pinning, and run routing.
+This illustrative walkthrough builds a tenant-aware flood-alert journey. `Organization` is the tenant, `User` is the subject, and the application owns both message records and message delivery. Nodeflow owns the graph, durable waits, version pinning, and run routing.
 
 This documentation provides code examples only; no downloadable or hosted demo application is provided.
 

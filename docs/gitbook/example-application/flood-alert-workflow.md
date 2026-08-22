@@ -1,6 +1,6 @@
 # Flood-alert workflow
 
-This page makes the flood-alert journey executable. The application owns the message ledger, alert event, and conversion event; Nodeflow provides the trigger listener, durable runtime, and graph validation.
+This page makes the flood-alert journey executable. The application owns the message records, alert event, and conversion event; Nodeflow provides the trigger listener, durable runtime, and graph validation.
 
 ## Implement the message node
 
@@ -22,6 +22,7 @@ use Nodeflow\Nodes\HandlesSubject;
 use Nodeflow\Nodes\Node;
 use Nodeflow\Schema\Field;
 use Nodeflow\Schema\NodeDefinition;
+use Nodeflow\Models\Run;
 use Throwable;
 
 class SendMessage extends Node implements HandlesSubject
@@ -59,8 +60,9 @@ class SendMessage extends Node implements HandlesSubject
     {
         $message = (string) $context->config('message');
         $body = self::BODIES[$message] ?? null;
+        $user = $context->subject();
 
-        if (! $context->subject() instanceof User) {
+        if (! $user instanceof User) {
             return $context->fail('Message recipient is unavailable.');
         }
 
@@ -72,6 +74,16 @@ class SendMessage extends Node implements HandlesSubject
             return $context->continue('sent');
         }
 
+        // The original audience check happened when the run started. A wait can
+        // pass before this node runs, so re-check current host membership against
+        // the run's tenant before making any host-owned side effect.
+        $run = Run::withoutTenancy()->find($context->runId());
+        $tenantId = $run?->tenant_id;
+
+        if ($tenantId === null || (string) $user->organization_id !== (string) $tenantId) {
+            return $context->fail('Message recipient is no longer eligible.');
+        }
+
         $identity = [
             'run_id' => $context->runId(),
             'node_id' => $context->nodeId(),
@@ -80,7 +92,7 @@ class SendMessage extends Node implements HandlesSubject
 
         try {
             DemoMessage::query()->firstOrCreate($identity, [
-                'organization_id' => (string) $context->subject()->organization_id,
+                'organization_id' => $tenantId,
                 'message' => $message,
                 'body' => $body,
             ]);
@@ -105,7 +117,7 @@ class SendMessage extends Node implements HandlesSubject
 }
 ```
 
-Test mode must prevent externally visible work. Here it suppresses the `DemoMessage` write while retaining the normal `sent` route. A real delivery adapter belongs behind the same branch and must use the same identity (or an equivalent provider idempotency key). The returned failure text is safe for run inspection; exception details go only to the application's error reporting.
+Test mode must prevent externally visible work. Here it suppresses the `DemoMessage` write while retaining the normal `sent` route. In a live run, the node reads only the package-owned run selected by `runId()` and compares its tenant with the current `User` organization immediately before the write. Initial `ownsSubject()` validation cannot catch a membership change during a durable wait. A mismatch fails the subject before any host write or delivery attempt; the persisted `organization_id` always comes from the trusted run tenant, not request input. A real delivery adapter belongs behind the same branch and must use the same identity (or an equivalent provider idempotency key). The returned failure text is safe for run inspection; exception details go only to the application's error reporting.
 
 ## Implement the trigger
 
@@ -189,6 +201,8 @@ class FloodAlertFires extends Trigger
 
 `TriggerMatch` holds one audience per tenant, so calling `forTenant()` twice with the same organization replaces the earlier audience. Merge IDs first if the application has more than one source. For every matched tenant, the listener starts each active flow with trigger type `app.flood_alert` whose `severities` configuration matches. The idempotency scope is a flow version: one event can still create separate runs for different organizations, matching flows, or later published versions.
 
+When a run already exists for the same flow version and idempotency key, `StartRun` returns that existing run and ignores newly supplied subject IDs and options. A redelivered `FloodAlertDispatched` must therefore replay the same immutable audience snapshot. If the business audience legitimately changes, define an explicit new event identity and versioned idempotency-key semantics; do not silently change the audience behind an existing key or generate a new key merely to bypass deduplication.
+
 The generated provider registration is the source of listener wiring. Keep these existing homes and add the two classes once:
 
 **File: `app/Providers/NodeflowServiceProvider.php` (partial)**
@@ -254,7 +268,7 @@ class FloodAlertGraph
 }
 ```
 
-Only an authorized, tenant-scoped host action should create and publish a flow. Do not accept a tenant, flow, version, or graph structural ID from a request; this example supplies the trusted graph class and derives tenant ownership from the authenticated actor.
+Only an authorized, tenant-scoped host action should create and publish a flow. Do not accept a tenant, flow, version, or graph structural ID from a request; this example supplies the trusted graph class and derives tenant ownership from the authenticated actor. `FloodAlertWorkflow` is the host-owned, unique mapping that makes this provisioning replay-safe: without it, two active `app.flood_alert` flows would both start and produce duplicate deliveries.
 
 **File: `app/Http/Controllers/FloodAlertFlowController.php`**
 
@@ -265,11 +279,15 @@ namespace App\Http\Controllers;
 
 use App\Nodeflow\Triggers\FloodAlertFires;
 use App\Support\FloodAlertGraph;
+use App\Models\FloodAlertWorkflow;
+use App\Models\Organization;
 use Illuminate\Http\RedirectResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Gate;
+use Illuminate\Support\Facades\DB;
 use Nodeflow\Models\Flow;
 use Nodeflow\Publishing\PublishFlow;
+use LogicException;
 
 class FloodAlertFlowController
 {
@@ -277,27 +295,60 @@ class FloodAlertFlowController
     {
         Gate::authorize('nodeflow.viewAny');
 
-        $flow = Flow::create([
-            'name' => 'Flood alert follow-up',
-            'trigger_type' => FloodAlertFires::type(),
-            'trigger_config' => ['severities' => ['severe']],
-            'status' => 'draft',
-        ]);
+        $organizationId = (int) $request->user()->organization_id;
 
-        Gate::authorize('publish', $flow);
+        $flow = DB::transaction(function () use ($organizationId, $request): Flow {
+            // Lock the actor's own organization before looking up or creating its
+            // unique mapping. This serializes concurrent and retried provisioning.
+            Organization::query()->whereKey($organizationId)->lockForUpdate()->firstOrFail();
 
-        app(PublishFlow::class)->publish(
-            $flow,
-            FloodAlertGraph::definition(),
-            (string) $request->user()->getKey(),
-        );
+            $mapping = FloodAlertWorkflow::query()
+                ->where('organization_id', $organizationId)
+                ->lockForUpdate()
+                ->first();
+
+            if ($mapping?->flow_id !== null) {
+                // This scoped lookup is safe because organizationId came from the
+                // authenticated actor and Flow is tenant-scoped by the resolver.
+                $flow = Flow::query()->findOrFail($mapping->flow_id);
+
+                if ($flow->status !== 'active' || $flow->current_version_id === null) {
+                    throw new LogicException('The provisioned flood-alert flow is not active.');
+                }
+
+                return $flow;
+            }
+
+            $mapping ??= FloodAlertWorkflow::create([
+                'organization_id' => $organizationId,
+            ]);
+
+            $flow = Flow::create([
+                'name' => 'Flood alert follow-up',
+                'trigger_type' => FloodAlertFires::type(),
+                'trigger_config' => ['severities' => ['severe']],
+                'status' => 'draft',
+            ]);
+
+            Gate::authorize('publish', $flow);
+
+            app(PublishFlow::class)->publish(
+                $flow,
+                FloodAlertGraph::definition(),
+                (string) $request->user()->getKey(),
+            );
+
+            $mapping->update(['flow_id' => $flow->id]);
+
+            return $flow;
+        });
 
         return to_route('nodeflow.flows.edit', ['flow' => $flow]);
     }
 }
 ```
 
-`PublishFlow` validates the graph, creates an immutable version, then makes it current. Runs remain pinned to the version they started with. Publishing and concurrent draft saves need application-level coordination; see [Publishing flows](../building-automations/publishing-flows.md) and [Flows and versions](../building-automations/flows-and-versions.md) for those constraints.
+The mapping row's unique `organization_id` and the locked organization row make concurrent requests converge on one flow. The flow, publication, and mapping update share one transaction: a failed authorization or publish rolls back a newly created draft and mapping row. If a mapped flow has been manually made inactive, the endpoint refuses it rather than provisioning a second matching flow. `PublishFlow` validates the graph, creates an immutable version, then makes it current. Runs remain pinned to the version they started with. Publishing and concurrent draft saves need application-level coordination; see [Publishing flows](../building-automations/publishing-flows.md) and [Flows and versions](../building-automations/flows-and-versions.md) for those constraints.
 
 ## Dispatch alerts and stop converted users
 
@@ -414,6 +465,8 @@ Event::listen(OfferClicked::class, ExitFloodAlertRunsForOfferClick::class);
 ```bash
 php artisan queue:work
 ```
+
+Configure a non-`sync` Laravel queue connection for durable waits, then keep workers running for that connection. A `sync` queue runs work inline and is not an appropriate worker-backed configuration for a long-lived automation.
 
 ## Next step
 
