@@ -23,7 +23,7 @@ Pest discovers the `Unit` and `Feature` test suites from the PHPUnit configurati
 
 The shared Testbench base case loads the package provider, migrates an in-memory SQLite database, and binds a fake workflow engine. That setup makes package behavior repeatable without booting a consuming application. See [Local development](local-development.md) for the boundaries of that test context.
 
-Architecture tests are intentional constraints, not style checks. They keep durable-workflow dependencies confined to the engine and workflow areas, and keep tenantless subject and execution records out of request-context code. When moving code across those boundaries, run the architecture test and decide whether the boundary should change before changing its allowlist.
+Architecture tests are intentional constraints, not style checks. They reject direct durable-workflow imports or fully qualified references outside the engine and workflow directories. They also scan the relevant source areas for static `RunSubject` or `NodeExecution` access and literal access to their tables, preserving the rule that tenantless records are reached through a scoped run. These are targeted guards, not an exhaustive proof of isolation. When moving code across those boundaries, run the architecture test and decide whether the boundary should change before changing its allowlist.
 
 Run a focused PHP test file with:
 

@@ -12,12 +12,12 @@ After reading this page, you can choose the right subsystem for a change without
 | --- | --- |
 | Registration | Laravel service providers register nodes, triggers, and subject attributes with singleton registries. |
 | Authoring | The editor receives server-authored palettes, saves an intentionally incomplete draft, and asks the server to publish a valid graph. |
-| Publishing | Graph validation creates a numbered, immutable flow-version snapshot and updates the flow's current version. |
+| Publishing | Graph validation creates a numbered flow-version snapshot that package services treat as immutable and updates the flow's current version. |
 | Starts and audiences | Manual and event starts select a published version, materialize an authorized audience, and create a durable run. |
 | Execution | The interpreter owns deterministic control flow; activities and the node runner read and write application state. |
 | Inspection | Run records become a read-only overlay and a cursor-paginated subject drill-down for the run's pinned graph. |
 
-The public integration surface is registration, the contracts, the flow and run services, and the React exports. The registry, graph, execution, workflow, and view-model internals are package implementation details. See [Project structure](project-structure.md) for the corresponding directories.
+The public integration surface is registration, including the registry registration and node-alias operations, the contracts, the flow and run services, and the React exports. Palette serialization, renderer behavior, and undocumented registry mechanics remain implementation details, along with the graph, execution, workflow, and view-model internals. See [Project structure](project-structure.md) for the corresponding directories.
 
 ## From registration to the editor
 
@@ -43,7 +43,7 @@ flowchart LR
     V --> I[Immutable flow-version snapshot]
 ```
 
-On a successful publish, the package creates the next numbered version, makes it the flow's current version, and clears the saved draft. Runs retain their own version reference, so a later publish cannot change an existing run. See [Flows and versions](../building-automations/flows-and-versions.md) and [Publishing flows](../building-automations/publishing-flows.md) for the API and validation contract.
+On a successful publish, the package creates the next numbered version, makes it the flow's current version, and clears the saved draft. Runs retain their own version reference, so a later publish cannot change an existing run. The package treats version graphs as immutable, but neither the model nor the database prevents host code from updating or deleting a version; do not alter versions that runs may still require. See [Flows and versions](../building-automations/flows-and-versions.md) and [Publishing flows](../building-automations/publishing-flows.md) for the API and validation contract.
 
 ## Starts become durable execution
 

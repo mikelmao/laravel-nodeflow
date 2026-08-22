@@ -6,14 +6,14 @@ Set up the package workspace to run the PHP package tests and the editor-source 
 
 The Composer manifest supports PHP `^8.3` and Laravel Illuminate components `^12.0|^13.0`. The JavaScript manifest declares React and React DOM peer ranges of `^18.0.0 || ^19.0.0`.
 
-The repository does not declare a Node.js `engines` range. Use a Node.js release compatible with the committed lockfile and your host application's Vite toolchain.
+The lockfile's current development dependency set requires Node.js `22.22.2` or later. The repository does not declare an npm `engines` field or make that a public runtime contract; use a compatible Node.js release for local tooling and your host application's Vite toolchain.
 
 ## Create a workspace
 
 Clone the repository and install its locked development dependencies:
 
 ```bash
-git clone <repository-url>
+git clone https://github.com/mikelmao/laravel-nodeflow.git
 cd laravel-nodeflow
 composer install
 npm ci
@@ -25,7 +25,7 @@ At this point, Composer can load the package and the local TypeScript toolchain 
 
 ## Understand the test context
 
-The PHP suite extends Orchestra Testbench. Its base test case loads the Nodeflow service provider, uses an in-memory SQLite test connection, loads the package migrations, and substitutes the workflow-engine facade with a fake. This gives package tests a small Laravel application without asking contributors to create or configure a host application.
+The PHP suite extends Orchestra Testbench. Its base test case loads the Nodeflow service provider, uses an in-memory SQLite test connection, loads the package migrations, and container-binds the `WorkflowEngine` contract to `FakeWorkflowEngine`. This gives package tests a small Laravel application without asking contributors to create or configure a host application.
 
 Use a real host application when checking integration details that Testbench cannot establish, such as a host's authentication middleware, route placement, tenancy bindings, queue backend, or deployment asset build.
 

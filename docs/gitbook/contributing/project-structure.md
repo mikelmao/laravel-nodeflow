@@ -36,9 +36,9 @@ You can identify whether a change belongs to a public integration surface, an in
 
 ## Public surface and internals
 
-`src/NodeflowServiceProvider.php` and `src/Nodeflow.php` are package entry points. The service provider loads configuration and migrations, registers the package services, and exposes commands; the facade offers the registration entry point. The contracts, node and trigger definitions, service APIs used by integrations, configuration, routes, and React exports are public surfaces that need compatibility-minded changes.
+`src/NodeflowServiceProvider.php` and `src/Nodeflow.php` are package entry points. The service provider loads configuration and migrations, registers the package services, and exposes commands; `Nodeflow` is an ordinary static entry-point helper for registration, not a Laravel facade. The contracts, node and trigger definitions, service APIs used by integrations, configuration, routes, and React exports are public surfaces that need compatibility-minded changes.
 
-The remaining `src` subsystems implement those surfaces. In particular, engine adapters, execution and workflow internals, graph validation, models, and read models should change behind their established boundaries unless a new integration capability requires an explicit public contract. The architecture constraints described in [Architecture](architecture.md) are part of those boundaries.
+The remaining `src` subsystems implement those surfaces. In particular, engine adapters, execution and workflow internals, graph validation, models, and read models should change behind their established boundaries unless a new integration capability requires an explicit public contract. Package publishing treats a flow version as immutable, but host code can still update or delete that model; preserve versions that existing runs need. See [Flows and versions](../building-automations/flows-and-versions.md) and [Publishing flows](../building-automations/publishing-flows.md). The architecture constraints described in [Architecture](architecture.md) are part of those boundaries.
 
 ## JavaScript source is host-compiled
 
