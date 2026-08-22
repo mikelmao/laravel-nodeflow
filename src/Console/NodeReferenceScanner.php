@@ -713,8 +713,12 @@ final class NodeReferenceScanner
     /**
      * A `string_literal` reference for each BOUNDED SUBSTRING occurrence of
      * $target inside a `T_INLINE_HTML` region (Blade markup, or any plain
-     * HTML mixed into a `.php` file outside `<?php ?>` tags) or a heredoc/
-     * nowdoc body (round-3 review, Critical 2).
+     * HTML mixed into a `.php` file outside `<?php ?>` tags) or a
+     * `T_ENCAPSED_AND_WHITESPACE` token — a heredoc/nowdoc body, but also
+     * the literal segments BETWEEN interpolated `$variables` in a
+     * double-quoted string or a backtick shell-exec string (round-3
+     * review, Critical 2, plus a round-4 correction to this docblock: an
+     * earlier version of it described only the heredoc/nowdoc case).
      *
      * WHY A DIFFERENT MATCHING RULE THAN scanStringLiterals(). A quoted
      * literal's VALUE is compared for exact equality, because the token
@@ -722,29 +726,34 @@ final class NodeReferenceScanner
      * token kinds works that way: `T_INLINE_HTML` is an entire block of
      * Blade/HTML markup the target FQCN might appear anywhere inside
      * (`{{ \App\…\SendMessage::class }}`, `@php(...)`, `@php … @endphp`),
-     * and a heredoc/nowdoc body is commonly a larger text — a code sample,
-     * a template — the FQCN appears inside, not the body's entire content
-     * (e.g. `<<<PHP\nuse App\…\SendMessage;\nPHP`, which
-     * `scanStringLiterals()`'s old exact-equality rule for this token type
-     * returned zero references for). So this scans for the target as a
-     * SUBSTRING instead — bounded so `App\Foo\SendMessage` cannot match
-     * inside `App\Foo\SendMessageExtra` or `App\Foo\SendMessage\Sub`: the
-     * character immediately after a candidate match may not be an
-     * identifier character or a backslash, or the match is rejected and
-     * scanning resumes one byte later. The character BEFORE a match is
-     * deliberately NOT bounded the same way — over-matching there costs a
-     * look, not a fatal, the same direction this scanner always errs in,
-     * and it is what lets `\App\…\SendMessage::class` (a leading backslash
-     * immediately before the match) succeed without special-casing it.
+     * and a heredoc/nowdoc body (or an interpolated string's literal
+     * segment) is commonly a larger text — a code sample, a template — the
+     * FQCN appears inside, not the body's entire content (e.g.
+     * `<<<PHP\nuse App\…\SendMessage;\nPHP`, which `scanStringLiterals()`'s
+     * old exact-equality rule for this token type returned zero references
+     * for). So this scans for the target as a SUBSTRING instead — bounded
+     * so `App\Foo\SendMessage` cannot match inside `App\Foo\SendMessageExtra`
+     * or `App\Foo\SendMessage\Sub`: the character immediately after a
+     * candidate match may not be an identifier character or a backslash,
+     * or the match is rejected and scanning resumes one byte later. The
+     * character BEFORE a match is deliberately NOT bounded the same way —
+     * over-matching there costs a look, not a fatal, the same direction
+     * this scanner always errs in, and it is what lets
+     * `\App\…\SendMessage::class` (a leading backslash immediately before
+     * the match) succeed without special-casing it.
      *
-     * A heredoc body is also searched for the ESCAPED form of $target
-     * (every `\` doubled to `\\`) as a second needle, because a heredoc
-     * (unlike a nowdoc) escapes like a double-quoted string — matching
-     * `foldEscapedBackslash()`'s own reasoning, but applied to the NEEDLE
-     * rather than the haystack this time, which is what lets the recorded
+     * BOTH token kinds are also searched for the ESCAPED form of $target
+     * (every `\` doubled to `\\`) as a second needle. `T_INLINE_HTML` is
+     * NOT plain, unescaped output text the way raw HTML is — round-3's
+     * docblock claimed otherwise, which was wrong: `{{ … }}` and a
+     * `@php(...)`/`@php … @endphp` body ARE PHP, so a string literal
+     * written inside either one (`@php $n = app('App\\Nodeflow\\Nodes\\
+     * SendMessage'); @endphp`) carries ordinary PHP string escaping —
+     * confirmed missed (0 references) before this fix, where the
+     * identical line inside a real `<?php` block already found 1.
+     * Doubling the NEEDLE rather than folding the HAYSTACK (matching
+     * `foldEscapedBackslash()`'s own reasoning) is what lets the recorded
      * byte range stay a plain, un-mapped slice of the RAW source text.
-     * `T_INLINE_HTML` has no such escaping concept (it is literal output
-     * text) and is searched with $target alone.
      *
      * STATED LIMIT, alongside E46: a Blade reference written as a bare
      * SHORT NAME (`{{ SendMessage::class }}`) is out of reach. Blade has no
@@ -752,20 +761,32 @@ final class NodeReferenceScanner
      * unlike PHP, there is no `use` statement anywhere in a `.blade.php`
      * file to establish what "SendMessage" alone would mean.
      *
+     * A SURPRISING ASYMMETRY, worth finding here rather than by
+     * inference: inside a `.blade.php` file, a `{{-- … --}}` Blade
+     * comment, an HTML `<!-- … -->` comment, or ordinary prose naming the
+     * class WILL match and cause extraction to refuse — this scanner has
+     * no notion of a "comment" inside `T_INLINE_HTML` the way
+     * `IGNORED_TOKEN_IDS` gives it one inside real PHP (a `// …` or
+     * `/** … *\/` comment there is invisible, per rule 5). That is the
+     * SAFE direction — a spurious refusal costs a look, never a fatal —
+     * but it is surprising enough to state rather than leave for an
+     * author to discover. For calibration, in the SAME markup: a URL
+     * using `/` separators, a JavaScript string escaping `\\`, and a
+     * lowercase spelling of the class name all correctly do NOT match —
+     * only the exact, case-sensitive, backslash-separated FQCN (or its
+     * doubled-backslash form) does.
+     *
      * @param  list<array{id: int|null, text: string, start: int, end: int, line: int}>  $meaningful
      * @return list<NodeReference>
      */
     private static function scanBoundedText(array $meaningful, string $target, string $file): array
     {
         $references = [];
+        $escaped = str_replace('\\', '\\\\', $target);
+        $needles = $escaped === $target ? [$target] : [$target, $escaped];
 
         foreach ($meaningful as $token) {
-            if ($token['id'] === T_INLINE_HTML) {
-                $needles = [$target];
-            } elseif ($token['id'] === T_ENCAPSED_AND_WHITESPACE) {
-                $escaped = str_replace('\\', '\\\\', $target);
-                $needles = $escaped === $target ? [$target] : [$target, $escaped];
-            } else {
+            if ($token['id'] !== T_INLINE_HTML && $token['id'] !== T_ENCAPSED_AND_WHITESPACE) {
                 continue;
             }
 

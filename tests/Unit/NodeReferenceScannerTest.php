@@ -438,6 +438,29 @@ it('records a byte range that isolates the reference', function () {
     expect($isolated)->toBe('\App\Nodeflow\Nodes\SendMessage');
 });
 
+it('records a byte range that isolates a bounded-substring match, not the whole token', function () {
+    // round-4 review, G2. E45's ENTIRE mechanism -- exemption per SPAN, not
+    // per file -- depends on the byte range actually isolating the
+    // matched text. Both `$token['start'] + $pos` -> `$token['start']` and
+    // `$token['start'] + $after` -> `$token['end']` survive the full suite
+    // otherwise, because every prior Blade/heredoc fixture put its match
+    // at the very start of the token or let it run to the token's very
+    // end. Real text surrounds the match on BOTH sides here specifically
+    // to make either mutation observable.
+    $contents = "<div>prefix text {{ \\App\\Nodeflow\\Nodes\\SendMessage::class }} suffix text</div>\n";
+
+    $root = hostWith(['resources/view.blade.php' => $contents]);
+
+    $found = NodeReferenceScanner::scan(target(), [$root.'/resources']);
+
+    expect($found)->toHaveCount(1);
+
+    $reference = $found[0];
+    $isolated = substr($contents, $reference->byteStart, $reference->byteEnd - $reference->byteStart);
+
+    expect($isolated)->toBe('App\Nodeflow\Nodes\SendMessage');
+});
+
 it('still finds a class_constant reference across a comment sitting between the name and ::class', function () {
     // Mutation-found gap: dropping T_COMMENT from IGNORED_TOKEN_IDS left the
     // whole suite green, because a comment's own token id never matches
@@ -1377,11 +1400,40 @@ it('finds an FQCN inside an @php ... @endphp Blade block', function () {
     expect($found)->toHaveCount(1);
 });
 
+it('finds an escaped-backslash FQCN spelling inside a Blade @php block', function () {
+    // round-4 review, G1. T_INLINE_HTML IS PHP inside {{ ... }} and
+    // @php(...)/@php...@endphp -- it carries ordinary PHP string escaping,
+    // so a class name passed through app('App\\Nodeflow\\Nodes\\
+    // SendMessage') (a real, idiomatic way to resolve a class by name)
+    // must be found the same way the identical line already is inside a
+    // real <?php block. Before this fix, scanBoundedText() searched
+    // T_INLINE_HTML with the un-escaped needle alone and this fixture
+    // returned 0.
+    $root = hostWith([
+        'resources/view.blade.php' => "<div>\n@php \$n = app('App\\\\Nodeflow\\\\Nodes\\\\SendMessage'); @endphp\n</div>\n",
+    ]);
+
+    $found = NodeReferenceScanner::scan(target(), [$root.'/resources']);
+
+    expect($found)->toHaveCount(1);
+    expect($found[0]->kind)->toBe('string_literal');
+});
+
 it('does not match a Blade FQCN that is a prefix of a longer name', function () {
     // The bounded half of "bounded substring": App\Nodeflow\Nodes\
     // SendMessage must not match inside ...SendMessageExtra.
     $root = hostWith([
         'resources/view.blade.php' => "<div>{{ \\App\\Nodeflow\\Nodes\\SendMessageExtra::class }}</div>\n",
+    ]);
+
+    $found = NodeReferenceScanner::scan(target(), [$root.'/resources']);
+
+    expect($found)->toHaveCount(0);
+});
+
+it('does not match a Blade FQCN followed by an underscore', function () {
+    $root = hostWith([
+        'resources/view.blade.php' => "<div>{{ \\App\\Nodeflow\\Nodes\\SendMessage_Extra::class }}</div>\n",
     ]);
 
     $found = NodeReferenceScanner::scan(target(), [$root.'/resources']);
