@@ -24,6 +24,7 @@ This records what happened while executing
 | 5 — tooling gate | `8a1383d` | Integrated gate and adversarial review clean, with two deferred Minor observations. |
 | 6 — G-5 | evidence `5918408`; clarification `56fa8e0` | Browser gate **BLOCKED**; independent review confirmed the record and scope. |
 | 7 — release documentation | measured source `56fa8e0`; release-documentation evidence `556206a` | README, documentation handoff and this record only. |
+| 8 — whole-branch remediation | RED `3f32dff`; production `10b982c` | Two Important alias-scanner findings repaired under TDD; both counterfactuals killed. |
 
 ## Counterfactuals
 
@@ -137,5 +138,32 @@ This records what happened while executing
   updated this execution record. It did not edit `docs/02-integration.md`,
   `docs/08-editor-client.md`, `docs/superpowers/open-issues.md`, or
   `docs/superpowers/specs/2026-08-21-remaining-tooling-design.md`.
+
+## Task 8 whole-branch review remediation
+
+- Whole-branch review found two Important G-7 defects. First, `ViteAliasValue::valueAt()` tracked
+  delimiter types independently, so a malformed cross-nested value could close out of LIFO order
+  and still be accepted. Second, alias keys were compared as raw source bytes, so escaped slash and
+  Unicode spellings of `@nodeflow/editor` could evade duplicate detection or make a lone valid
+  escaped key look absent. The same raw treatment made a Vite-valid escaped package-path literal a
+  false negative. The two previously noted Minors were also closed: the delimiter issue was raised
+  to Important by the whole-branch review, and the extra `PublishConfigStep` blank line was removed.
+- RED (test-only commit `3f32dff`): the complete focused file produced **12 intended failures, 24
+  passes and 48 assertions**. Direct extractor and `ViteAliasStep` cases reproduced malformed
+  cross-nesting; escaped-slash, `\\u002f` and `\\u{2f}` datasets reproduced semantic duplicate and
+  lone-key behavior; and an escaped package-path literal reproduced the Vite-semantic false
+  negative. PHP syntax and the diff check were clean before production changed.
+- GREEN (production commit `10b982c`): `valueAt()` now uses a LIFO opener stack. Quoted keys are
+  decoded for semantic comparison while their raw source offsets still govern scanning, and quoted
+  strings inside the extracted value are decoded before the package-path check. The focused file
+  passed **36 tests / 51 assertions**. `ViteAliasValue.php`, `ViteAliasStep.php`,
+  `PublishConfigStep.php` and `ViteStepsTest.php` all passed `php -l`; `git diff --check` passed.
+- Delimiter counterfactual: temporarily replacing the top-of-stack match with non-LIFO opener
+  removal made both stack-order regressions fail (**2 failures / 2 assertions**), accepting the
+  malformed value in both the direct extractor and step. LIFO matching was restored immediately.
+- Semantic-key counterfactual: temporarily comparing the quoted key's raw bytes instead of its
+  decoded value made all escaped-key regressions fail (**9 failures / 9 assertions**) across the
+  direct duplicate, step duplicate and lone-key datasets. Semantic comparison was restored
+  immediately, and the complete focused file passed again at **36 / 51**.
 
 ## Final merged-main verification

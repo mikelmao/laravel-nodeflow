@@ -19,6 +19,19 @@ not edit the target files below. Apply each change only when its named evidence 
   SQLite lock/recovery sequence prevented proof of mid-journey cancellation. Preserve the exact
   evidence and row IDs in the [Plan 7 execution record](superpowers/plans/2026-08-22-plan-7-release-readiness-execution-record.md#task-6-g-5--real-browser-acceptance-blocked).
 
+## Exact corrective evidence
+
+Use these commits and linked execution-record sections when reconciling the issue ledger or public
+guides. The RED commits prove the former gaps; the production/remediation commits and recorded
+counterfactuals prove the corrected behavior.
+
+| Gap | Exact evidence commits | Corrected behavior and execution evidence |
+|---|---|---|
+| G-12 | RED `90d3bd6`; production `012a6c7` | PHP follows installed Vite's complete config precedence, including `.cjs` and `.cts`. See [Task 1: G-12](superpowers/plans/2026-08-22-plan-7-release-readiness-execution-record.md#task-1-g-12--installed-vites-config-precedence). |
+| G-7 | RED `313f9a5`; production `89bc0d7`; first remediation `a553cb3`; whole-branch RED `3f32dff`; whole-branch production remediation `10b982c` | The package path is bound to one semantic `@nodeflow/editor` key; empty, nested, duplicate, escaped-duplicate and delimiter-malformed entries are rejected while Vite-valid escaped keys and paths remain accepted. See [Task 2: G-7](superpowers/plans/2026-08-22-plan-7-release-readiness-execution-record.md#task-2-g-7--bind-the-package-path-to-the-alias-entry) and [Task 8 remediation](superpowers/plans/2026-08-22-plan-7-release-readiness-execution-record.md#task-8-whole-branch-review-remediation). |
+| G-8 | RED `b220805`; production `ef0d82b` | Missing or customized published config is healthy and read-only; migration publication/drift behavior is unchanged. See [Task 3: G-8](superpowers/plans/2026-08-22-plan-7-release-readiness-execution-record.md#task-3-g-8--make-published-config-optional). |
+| G-9 | RED `183c9dd`; production `a152244` | Both generator fallback snippets execute without registry imports because they emit fully qualified registry classes. See [Task 4: G-9](superpowers/plans/2026-08-22-plan-7-release-readiness-execution-record.md#task-4-g-9--make-both-fallback-snippets-import-free). |
+
 ## docs/02-integration.md
 
 - Current stale claim: normal `nodeflow:install` publishes `config/nodeflow.php`.
