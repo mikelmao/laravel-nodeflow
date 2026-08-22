@@ -24,11 +24,24 @@ This records what happened while executing
 - Counterfactual B (`.cts`): temporarily removing `vite.config.cts`, then running `vendor/bin/pest tests/Feature/Install/ViteStepsTest.php --compact --filter='dataset "cts"'`, produced the expected single failure (3 assertions): the PHP step returned `CannotWire`. The candidate was restored immediately.
 - Formatting: `vendor/bin/pint` is unavailable in this worktree and is not declared in `composer.json`; only the two changed PHP files were manually kept in project style and syntax-checked.
 
+### Task 2: G-7 — bind the package path to the alias entry
+
+- RED (test-only discriminator commit `313f9a5`): `vendor/bin/pest tests/Feature/Install/ViteStepsTest.php --filter="does not combine" --compact` failed as intended with 1 failure / 1 assertion. The wrong alias plus standalone correct package path returned `AlreadyPresent` rather than `CannotWire`. The full file then showed exactly the three intended G-7 failures (wrong alias plus standalone path, duplicate live aliases, and wrong alias plus a nested other-property path), with 16 passes / 31 assertions; no fixture confounds were found.
+- GREEN: after adding `ViteAliasValue::extract()` and binding `ViteAliasStep::check()` to its one extracted value, `vendor/bin/pest tests/Feature/Install/ViteStepsTest.php --compact` passed 19 tests / 31 assertions. `php -l src/Console/Install/ViteAliasValue.php` and `php -l src/Console/Install/ViteAliasStep.php` both reported no syntax errors.
+- Accepted lexical cases: all four single/double-quote combinations for the `@nodeflow/editor` key and the package-path literal passed; `path.resolve(__dirname, 'vendor/atram/laravel-nodeflow/resources/js')` passed, proving the value scanner crosses its inner comma.
+- Rejected lexical cases: the existing commented correct alias remained rejected after comment stripping; the wrong alias plus a standalone correct path, duplicate live alias keys, and a wrong alias plus a correct path nested in another property all returned `CannotWire`. A missing config also remained rejected.
+- Counterfactual: temporarily replacing the value-bound condition with the original whole-file `str_contains()` checks made `vendor/bin/pest tests/Feature/Install/ViteStepsTest.php --filter="does not combine" --compact` fail as intended (1 failure / 1 assertion), returning `AlreadyPresent`. `ViteAliasValue::extract()` was restored immediately, then the full file passed again (19 tests / 31 assertions).
+- Formatting: `vendor/bin/pint` is unavailable and absent from `composer.json`; the two changed PHP files were retained in project style and syntax-checked. `git diff --check` passed after restoring production.
+
 ## Reviews and remediation
 
 ### Task 1: G-12 — independent spec-compliance and code-quality review
 
 - PASS: independent read-only review of base `f9dea76`, red evidence commit `90d3bd6`, and the pending production diff found no Critical, Important, or Minor findings. It confirmed the exact Vite 8.2.2 order, resolver-probe contract, `.js`/`.ts` and `.cjs`/`.cts` coverage, recursive teardown, and complete red/green/counterfactual record. The reviewer reran the focused test file (11 tests / 23 assertions), both changed PHP syntax checks, and `git diff --check`; all passed.
+
+### Task 2: G-7 — independent spec-compliance and code-quality review
+
+- PASS: independent read-only review of red commit `313f9a5` and the pending bounded-scanner implementation found no Critical, Important, or Minor findings. It confirmed the exact G-7 contract and execution record. The reviewer constructed a wrong `@nodeflow/editor: 'resources/js'` entry alongside a correct package path in a different alias entry; it returned `CannotWire`. Its delimiter-in-string input, `@nodeflow/editor: 'vendor/atram/laravel-nodeflow/resources/js,})'`, returned `AlreadyPresent`, confirming delimiters inside literals do not terminate the value scanner. The reviewer reran the focused Pest file (19 tests / 31 assertions), both changed PHP syntax checks, and `git diff --check`; all passed. No remediation was required.
 
 ## Browser acceptance
 

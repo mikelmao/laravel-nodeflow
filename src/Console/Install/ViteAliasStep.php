@@ -9,11 +9,10 @@ namespace Nodeflow\Console\Install;
  * TypeScript AST, which PHP does not have, and E11 permits only an edit whose
  * success can be re-verified.
  *
- * KNOWN LIMIT, stated rather than implied away: this proves the alias appears in
- * uncommented source. It does NOT prove the alias is in the configuration object
- * actually exported — a second defineConfig, or a dead conditional branch, would
- * satisfy this check. The failure it exists to catch is the setting being absent
- * or commented out, which is the one that happens.
+ * KNOWN LIMIT, stated rather than implied away: this binds the path to one
+ * uncommented alias property, but it still cannot prove that property's object is
+ * the actively exported Vite configuration. A second defineConfig, or a dead
+ * conditional branch, would satisfy this check.
  */
 final class ViteAliasStep extends ViteConfigStep
 {
@@ -37,7 +36,9 @@ final class ViteAliasStep extends ViteConfigStep
             return InstallOutcome::CannotWire;
         }
 
-        return str_contains($source, '@nodeflow/editor') && str_contains($source, self::PACKAGE_SOURCE)
+        $value = ViteAliasValue::extract($source);
+
+        return $value !== null && str_contains($value, self::PACKAGE_SOURCE)
             ? InstallOutcome::AlreadyPresent
             : InstallOutcome::CannotWire;
     }
