@@ -50,6 +50,20 @@ function viteSelectedConfig(string $root): string
     return trim(implode(PHP_EOL, $output));
 }
 
+function viteResolvedNodeflowAlias(string $root): string
+{
+    $output = [];
+    $command = 'node '
+        .escapeshellarg(__DIR__.'/../../Support/resolve-vite-alias.mjs').' '
+        .escapeshellarg($root).' 2>&1';
+
+    exec($command, $output, $exitCode);
+
+    expect($exitCode)->toBe(0, implode(PHP_EOL, $output));
+
+    return trim(implode(PHP_EOL, $output));
+}
+
 /** The accepted host's config, reduced to the two settings under test. */
 function wiredViteConfig(): string
 {
@@ -309,6 +323,54 @@ it('accepts an escaped package path value with Vite semantics', function () {
     })
     TS);
 
+    expect($this->alias->check())->toBe(InstallOutcome::AlreadyPresent);
+});
+
+it('rejects a CJS duplicate whose legacy-octal key overrides the correct alias', function () {
+    file_put_contents($this->root.'/vite.config.cjs', <<<'CJS'
+    module.exports = {
+        resolve: {
+            alias: {
+                '@nodeflow/editor': 'vendor/atram/laravel-nodeflow/resources/js',
+                '@nodeflow\057editor': 'resources/js',
+            },
+        },
+    }
+    CJS);
+
+    expect(viteResolvedNodeflowAlias($this->root))->toBe('resources/js');
+    expect($this->alias->check())->toBe(InstallOutcome::CannotWire);
+});
+
+it('accepts a lone CJS alias key with a legacy-octal slash', function () {
+    file_put_contents($this->root.'/vite.config.cjs', <<<'CJS'
+    module.exports = {
+        resolve: {
+            alias: {
+                '@nodeflow\057editor': 'vendor/atram/laravel-nodeflow/resources/js',
+            },
+        },
+    }
+    CJS);
+
+    expect(viteResolvedNodeflowAlias($this->root))
+        ->toBe('vendor/atram/laravel-nodeflow/resources/js');
+    expect($this->alias->check())->toBe(InstallOutcome::AlreadyPresent);
+});
+
+it('accepts a CJS package path with legacy-octal slashes', function () {
+    file_put_contents($this->root.'/vite.config.cjs', <<<'CJS'
+    module.exports = {
+        resolve: {
+            alias: {
+                '@nodeflow/editor': 'vendor\057atram\057laravel-nodeflow\057resources\057js',
+            },
+        },
+    }
+    CJS);
+
+    expect(viteResolvedNodeflowAlias($this->root))
+        ->toBe('vendor/atram/laravel-nodeflow/resources/js');
     expect($this->alias->check())->toBe(InstallOutcome::AlreadyPresent);
 });
 
