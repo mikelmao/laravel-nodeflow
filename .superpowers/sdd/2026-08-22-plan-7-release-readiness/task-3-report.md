@@ -91,7 +91,7 @@ drift semantics.
 ## Commits
 
 - `b220805 test: require optional merged config semantics`
-- `8e79d17 fix: make published config optional` (production, execution record,
+- `ef0d82b fix: make published config optional` (production, execution record,
   and report).
 
 ## Concerns
