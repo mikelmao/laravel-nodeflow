@@ -8,7 +8,7 @@ A node field describes both a configuration control and the Laravel validation r
 
 The exact factory API is `Field::text(string $key)`, `number(string $key)`, `boolean(string $key)`, `select(string $key)`, `multiselect(string $key)`, `duration(string $key)`, and `custom(string $key, string $type, string $baseRule = 'string')`.
 
-All field factories return a `Field` with these fluent methods:
+All field factories return a `Field` with these fluent methods. This is a partial field declaration for use inside `NodeDefinition::fields()`; the complete declaration below includes imports and surrounding array context.
 
 ```php
 Field::select('channel')
@@ -43,7 +43,7 @@ $fields = [
 
 ## Know the generated validation
 
-Every field begins with `required` or `nullable`, then its base rule. Static `options()` adds `in:` followed by the comma-joined option keys; dynamic options do not add that `in:` rule.
+Every field begins with `required` or `nullable`, then its base rule. Only a non-empty static `options()` array adds `in:` followed by the comma-joined option keys; empty static options and dynamic options do not add that `in:` rule.
 
 | Field factory | Type sent to the editor | Exact base validation rule |
 | --- | --- | --- |

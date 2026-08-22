@@ -103,7 +103,9 @@ If a node implements both interfaces, `NodeRunner` always prefers `HandlesAudien
 
 ## Use the context surface
 
-`SubjectContext` exposes these public methods:
+The following are the public methods intended for node bodies. Do not construct either context yourself: their public constructors are runtime-owned construction APIs, not node APIs. Their current signatures are `SubjectContext::__construct(Run $run, string $nodeId, array $config, string $subjectId, mixed $subject)` and `AudienceContext::__construct(Run $run, string $nodeId, array $config, string $subjectType, array $subjectIds)`.
+
+`SubjectContext` exposes these node-body methods:
 
 | Method | Purpose |
 | --- | --- |
@@ -117,7 +119,7 @@ If a node implements both interfaces, `NodeRunner` always prefers `HandlesAudien
 | `continue(string $output = 'default'): NodeResult` | Route this subject to an output. |
 | `fail(string $message): NodeResult` | Record a failure for this subject. |
 
-`AudienceContext` exposes these public methods:
+`AudienceContext` exposes these node-body methods:
 
 | Method | Purpose |
 | --- | --- |
@@ -159,7 +161,7 @@ Every node that sends, charges, or writes to another system must return a no-sid
 - Does it implement at least one cardinality interface and register with `Nodeflow::register()`?
 - Does each field have server-side rules appropriate to its value?
 - Does test mode avoid every external side effect?
-- Are side effects idempotent across retries?
+- Are side effects safe if the host invokes the node again or adds a retry policy?
 - Does each subject receive a deliberate output or failure?
 - If it implements both interfaces, do audience and subject paths have identical outcomes?
 

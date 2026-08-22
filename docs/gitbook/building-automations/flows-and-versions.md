@@ -35,28 +35,46 @@ The models allow mass assignment, so application code must set structural identi
 ```php
 <?php
 
+namespace App\Http\Controllers;
+
+use Illuminate\Http\JsonResponse;
+use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Gate;
 use Nodeflow\Editor\SaveDraft;
 use Nodeflow\Models\Flow;
 
-// This is an application-defined ability for creating flows.
-Gate::authorize('nodeflow.createFlow');
+class FlowController
+{
+    public function store(Request $request): JsonResponse
+    {
+        $data = $request->validate([
+            'name' => ['required', 'string'],
+            'graph' => ['required', 'array'],
+            'draft_revision' => ['nullable', 'integer'],
+        ]);
 
-$flow = Flow::create([
-    'name' => (string) $request->validated('name'),
-    'trigger_type' => 'manual',
-    'trigger_config' => [],
-    'status' => 'draft',
-]);
+        // This is an application-defined ability for creating flows.
+        Gate::authorize('nodeflow.createFlow');
 
-// For an existing, tenant-scoped flow, use the supplied per-flow policy.
-Gate::authorize('update', $flow);
+        $flow = Flow::create([
+            'name' => (string) $data['name'],
+            'trigger_type' => 'manual',
+            'trigger_config' => [],
+            'status' => 'draft',
+        ]);
 
-$revision = app(SaveDraft::class)->save(
-    $flow,
-    $request->input('graph'),
-    $request->integer('draft_revision') ?: null,
-);
+        // For an existing, tenant-scoped flow, use the supplied per-flow policy.
+        Gate::authorize('update', $flow);
+
+        $revision = app(SaveDraft::class)->save(
+            $flow,
+            $data['graph'],
+            $data['draft_revision'] ?? null,
+        );
+
+        return response()->json(['id' => $flow->id, 'draft_revision' => $revision], 201);
+    }
+}
 ```
 
 The tenant trait supplies the new flow's tenant from the trusted request context. Publishing derives the version's `flow_id` and `tenant_id` from this authorized flow, then alone updates `current_version_id`.
