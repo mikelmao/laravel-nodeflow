@@ -191,6 +191,25 @@ final class ViteAliasValue
             }
 
             $escape = $value[$i];
+
+            if ($escape >= '0' && $escape <= '7') {
+                $octal = $escape;
+                $maximum = $escape <= '3' ? 3 : 2;
+
+                while (
+                    strlen($octal) < $maximum
+                    && isset($value[$i + 1])
+                    && $value[$i + 1] >= '0'
+                    && $value[$i + 1] <= '7'
+                ) {
+                    $octal .= $value[++$i];
+                }
+
+                $decoded .= chr(octdec($octal));
+
+                continue;
+            }
+
             $simple = [
                 'b' => "\x08",
                 'f' => "\x0c",
