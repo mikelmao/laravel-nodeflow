@@ -163,12 +163,31 @@ final class NodeReferenceScanner
 
     /**
      * @param  list<string>  $absoluteRoots
+     * @param  list<string>  $excludedTopLevelNames  Directory NAMES to skip
+     *  recursing into, but ONLY when they sit directly inside one of
+     *  $absoluteRoots itself — never at any deeper nesting, and never
+     *  affecting a DIFFERENT root that happens to share a name. Added for
+     *  ExtractNodeCommand's shared scan-root method (G5 and M6a both call
+     *  it): `storage/framework/` and `bootstrap/cache/` hold COMPILED
+     *  artifacts, not source a developer wrote, and admitting `storage/`
+     *  or `bootstrap/` as real scan roots at all (E46 — `bootstrap/app.php`
+     *  is Laravel 11's own provider registration site) must not mean a
+     *  stale compiled Blade view or cached config file can abort a
+     *  legitimate move. Excluding the whole `storage/`/`bootstrap/`
+     *  directory would lose real, developer-authored siblings
+     *  (`storage/app/`, `bootstrap/providers.php`); excluding by bare name
+     *  at every depth (the way `vendor/` is excluded elsewhere) would risk
+     *  hiding a genuine reference sitting under some OTHER, unrelated
+     *  directory a developer happened to name `framework/` or `cache/` —
+     *  the wrong direction for a scanner whose whole job is to err toward
+     *  finding too much, never too little. Scoping the exclusion to
+     *  "immediate child of THIS root" is what avoids both.
      * @return list<NodeReference>
      *
      * @throws \RuntimeException when a scanned file declares more than one
      *                            `namespace` block
      */
-    public static function scan(string $fqcn, array $absoluteRoots): array
+    public static function scan(string $fqcn, array $absoluteRoots, array $excludedTopLevelNames = []): array
     {
         $target = ltrim($fqcn, '\\');
         $references = [];
@@ -176,7 +195,7 @@ final class NodeReferenceScanner
         foreach ($absoluteRoots as $root) {
             $hostPath = HostPath::root($root);
 
-            foreach (self::scannableFilesUnder($root) as $file) {
+            foreach (self::scannableFilesUnder($root, $excludedTopLevelNames, $root) as $file) {
                 // A file reached only through a symlink whose target escapes
                 // this root is not "inside" it (HostPath::contains() is
                 // canonical, per its own docblock) — skipping it here is
@@ -199,13 +218,22 @@ final class NodeReferenceScanner
      * `is_dir()` follows a symlinked directory (so a file reached only
      * through one is still found and handed to `scan()`'s own `contains()`
      * filter above, which is what actually decides whether it counts) —
-     * this method itself does no filtering.
+     * this method itself does no filtering beyond $excludedTopLevelNames.
      *
+     * $excludedTopLevelNames is only ever tested against an entry when
+     * `$directory === $scanRoot` — i.e. only for entries directly inside
+     * the ORIGINAL root scan() was handed for this call, never for an
+     * entry reached by recursing one or more levels deeper. That is what
+     * keeps the exclusion scoped to (say) `storage/framework/` alone,
+     * rather than ALSO matching a `framework/` directory nested somewhere
+     * else entirely under the same root.
+     *
+     * @param  list<string>  $excludedTopLevelNames
      * @return \Generator<string>
      */
-    private static function scannableFilesUnder(string $root): \Generator
+    private static function scannableFilesUnder(string $directory, array $excludedTopLevelNames, string $scanRoot): \Generator
     {
-        $entries = @scandir($root);
+        $entries = @scandir($directory);
 
         if ($entries === false) {
             return;
@@ -216,10 +244,14 @@ final class NodeReferenceScanner
                 continue;
             }
 
-            $path = $root.'/'.$entry;
+            if ($directory === $scanRoot && in_array($entry, $excludedTopLevelNames, true)) {
+                continue;
+            }
+
+            $path = $directory.'/'.$entry;
 
             if (is_dir($path)) {
-                yield from self::scannableFilesUnder($path);
+                yield from self::scannableFilesUnder($path, $excludedTopLevelNames, $scanRoot);
 
                 continue;
             }

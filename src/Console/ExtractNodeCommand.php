@@ -21,14 +21,18 @@ use Throwable;
  * `nodeflow:extract-node {class} --package=vendor/name` — moves a node class
  * out of the host application into its own Composer package.
  *
- * THIS TASK IMPLEMENTS THE EIGHT READ-ONLY GATES ONLY. `handle()` runs all
- * eight, in order, and returns `self::FAILURE` the moment any one refuses.
- * If every gate passes, it prints a "gates passed, nothing moved yet" notice
- * and returns `self::SUCCESS` — Task 9 replaces that notice with the actual
- * moves. Every gate is strictly read-only: none of the eight may write to
- * the host, and a refusal test asserting the host tree is byte-identical
- * before and after is the point of gating before moving at all.
+ * `handle()` runs all eight gates (Task 8), in order, and returns
+ * `self::FAILURE` the moment any one refuses — every gate is strictly
+ * read-only, and a refusal test asserting the host tree is byte-identical
+ * before and after is the point of gating before moving at all. Once every
+ * gate passes, `performMoves()` (Task 9) runs M1 through M7 plus M6a: it
+ * scaffolds the package, moves the class and its test into it, edits both
+ * providers and the host's own composer.json, re-scans the post-move tree
+ * (M6a, E45), and only then deletes the originals (M7). Any failure at any
+ * point in that sequence — including M6a's own abort — restores the host to
+ * exactly the bytes it had before `performMoves()` ran (`ExtractJournal`).
  *
+
  * THE CROSS-TASK OBLIGATION THIS CLASS OWNS. G5 refuses any reference to the
  * node class that the extraction will NOT itself rewrite. The set of spans
  * it WILL rewrite is defined by `rewritableSpans()` below — Task 9's moves
@@ -49,21 +53,36 @@ class ExtractNodeCommand extends Command
         {--path= : Path, relative to the host root, to scaffold into; default is packages/vendor/name}
         {--force : Overwrite an occupied target directory that is not already this package}';
 
-    protected $description = "Extract a node class into its own Composer package (gates only — this build doesn't move anything yet).";
+    protected $description = 'Extract a node class into its own Composer package.';
 
     /** The directory segment excluded from G2's containment rule at ANY depth below the host root — code already shipped as part of a Composer package, the host's own or a nested one, is not the host's own source (E51). */
     private const VENDOR_DIR = 'vendor';
 
+    /** Excluded from sharedScanRoots() the same way VENDOR_DIR is: a JS dependency tree is never the host's own source. */
+    private const NODE_MODULES_DIR = 'node_modules';
+
     /**
-     * The NAMED directories E46 requires G5 to scan, beyond whatever the
-     * host's own composer.json PSR-4 maps (hostPsr4Directories(), unioned
-     * in below): a reference can live in config, a route file, a Blade
-     * view, a migration, the host's own bootstrap file (bootstrap/app.php
-     * is Laravel 11's own provider registration site), or the host's own
-     * test suite — none of which a PSR-4 autoload entry is expected to
-     * cover.
+     * Top-level directory NAME => the subdirectory NAMES sharedScanRoots()
+     * excludes from it specifically (via NodeReferenceScanner's own
+     * $excludedTopLevelNames parameter), for a review-round finding: the
+     * gate that USED TO be a fixed, narrow allowlist (REFERENCE_SCAN_DIRS
+     * — app, bootstrap, config, database, resources, routes, tests) missed
+     * real references sitting in an ordinary top-level directory it never
+     * scanned at all (scripts/, public/, a sibling local package under
+     * packages/), while M6a's own separately-derived wider scan admitted
+     * `storage/framework/` and `bootstrap/cache/` — COMPILED artifacts,
+     * not source — and could abort a legitimate move over a stale cached
+     * Blade view. sharedScanRoots() fixes both directions at once by
+     * scanning every top-level directory (which is what E46's own
+     * bootstrap/app.php requirement always needed anyway) and excluding
+     * only the two known-artifact subdirectories, by name, scoped to their
+     * OWN parent only — never the whole storage/ or bootstrap/ tree, and
+     * never a same-named directory anywhere else.
      */
-    private const REFERENCE_SCAN_DIRS = ['app', 'bootstrap', 'config', 'database', 'resources', 'routes', 'tests'];
+    private const ARTIFACT_SUBDIRECTORIES = [
+        'storage' => ['framework'],
+        'bootstrap' => ['cache'],
+    ];
 
     /** Where MakeNodeCommand::writeTest() puts a generated node's test — the one convention this command has to guess a test file's location by. */
     private const TEST_DIR = 'tests/Feature/Nodeflow';
@@ -379,7 +398,51 @@ class ExtractNodeCommand extends Command
             }
         }
 
-        (new PackageScaffolder($this->files, $hostBasePath))->scaffold($target);
+        // try/finally, not a plain sequential call, and this is the
+        // SECOND CRITICAL fix this exact method needed. scaffold() writes
+        // its own files one at a time (composer.json, README.md, the
+        // provider, the example test) with no transaction of its own —
+        // and, decisively, `Filesystem::put()` calls a BARE
+        // `file_put_contents()` with no `@` suppression, so a write that
+        // fails (a `src/` or `tests/` directory a foreign occupant, or an
+        // already-matching prior run, left read-only — E43's foreign/
+        // --force AND matching-existing target states both) does not
+        // return false for scaffold() to notice: it raises a warning that
+        // PHPUnit's own error handler (and plenty of production error
+        // handlers) turns into a THROWN exception, propagating stright out
+        // of scaffold() itself. Journaling AFTER a plain `scaffold($target);`
+        // call — even journaling that ran before some LATER throw — never
+        // executes at all when scaffold() is what throws, and restore()
+        // then has nothing to undo: the command would report "the host has
+        // been restored to its original state" while whatever scaffold()
+        // DID manage to write before failing sits there, unaccounted for.
+        // `finally` guarantees this journaling runs whether scaffold()
+        // returns normally or throws, and BEFORE that exception (if any)
+        // is allowed to continue propagating to performMoves()'s own catch.
+        try {
+            (new PackageScaffolder($this->files, $hostBasePath))->scaffold($target);
+        } finally {
+            if (! $existedBefore) {
+                // The whole subtree, from the shallowest missing ancestor
+                // down, is new; one entry undoes all of it, whatever
+                // fraction of it scaffold() actually managed to write
+                // before failing, if it failed at all.
+                $journal->recordCreate($missingRoot);
+            } else {
+                $after = $this->treeEntries($target->absolutePath);
+                $newRelatives = array_values(array_diff(array_keys($after), array_keys($before)));
+
+                // Shallowest first, so a later restore() (which processes
+                // entries in REVERSE) removes the deepest new paths before
+                // the directories that contain them — see ExtractJournal's
+                // own docblock.
+                usort($newRelatives, static fn (string $a, string $b): int => substr_count($a, '/') <=> substr_count($b, '/'));
+
+                foreach ($newRelatives as $relative) {
+                    $journal->recordCreate($target->absolutePath.'/'.$relative);
+                }
+            }
+        }
 
         // E11: re-verify rather than trust. PackageScaffolder validates every
         // rendered .php file parses BEFORE it writes anything, but does not
@@ -396,26 +459,6 @@ class ExtractNodeCommand extends Command
                 "Scaffolding [{$target->composerName}] did not produce its own provider at "
                 ."[{$providerPath}]; nothing was moved."
             );
-        }
-
-        if (! $existedBefore) {
-            // The whole subtree, from the shallowest missing ancestor down,
-            // is new; one entry undoes all of it.
-            $journal->recordCreate($missingRoot);
-
-            return;
-        }
-
-        $after = $this->treeEntries($target->absolutePath);
-        $newRelatives = array_values(array_diff(array_keys($after), array_keys($before)));
-
-        // Shallowest first, so a later restore() (which processes entries in
-        // REVERSE) removes the deepest new paths before the directories that
-        // contain them — see ExtractJournal's own docblock.
-        usort($newRelatives, static fn (string $a, string $b): int => substr_count($a, '/') <=> substr_count($b, '/'));
-
-        foreach ($newRelatives as $relative) {
-            $journal->recordCreate($target->absolutePath.'/'.$relative);
         }
     }
 
@@ -532,21 +575,17 @@ class ExtractNodeCommand extends Command
         ]];
 
         foreach ($this->fileOwnReferences($class, $nodeFile, $source) as $reference) {
-            $original = substr($source, $reference->byteStart, $reference->byteEnd - $reference->byteStart);
-
             $replacements[] = [
                 'start' => $reference->byteStart,
                 'end' => $reference->byteEnd,
-                // A string literal's VALUE does not resolve through PHP's own
-                // namespace rules the way a name token does, so it must be
-                // re-spelled as the full new FQCN; every other kind (a bare
-                // self-reference such as `Foo::make()`) keeps resolving to
+                // A bare self-reference (`Foo::make()`) keeps resolving to
                 // itself correctly once written as the short name alone,
                 // because a name unqualified in its own (new) namespace
-                // always resolves to a sibling declared in that namespace.
-                'text' => $reference->kind === 'string_literal'
-                    ? $this->requote($original, $newFqcn)
-                    : $shortName,
+                // always resolves to a sibling declared in that namespace —
+                // $preferShortName is true here for exactly that reason.
+                // referenceReplacement() handles 'import' and
+                // 'string_literal' the same way regardless of caller.
+                'text' => $this->referenceReplacement($reference, $source, $class, $newFqcn, $shortName, true),
             ];
         }
 
@@ -585,25 +624,133 @@ class ExtractNodeCommand extends Command
             throw new RuntimeException("[{$testFile}] could not be read; extraction cannot move it.");
         }
 
-        $importSpan = $this->importSpanFor($class, $testFile, $source);
+        $references = $this->fileOwnReferences($class, $testFile, $source);
 
-        if ($importSpan === null) {
+        if ($references === []) {
+            // rewritableSpans()'s own fileReferencesClass() already proved
+            // this file references $class before performMoves() ever
+            // called this method — reached defensively rather than
+            // expected, since fileOwnReferences() runs the identical scan
+            // with the identical filter.
             throw new RuntimeException(
-                "[{$testFile}] references [{$class}] but extraction could not find a rewritable `use` "
-                .'import for it; nothing was moved.'
+                "[{$testFile}] was proven to reference [{$class}] but no rewritable reference could be ".
+                'found; nothing was moved.'
             );
         }
 
-        $rewritten = substr_replace($source, $newFqcn, $importSpan['start'], $importSpan['end'] - $importSpan['start']);
+        $replacements = [];
+
+        foreach ($references as $reference) {
+            $replacements[] = [
+                'start' => $reference->byteStart,
+                'end' => $reference->byteEnd,
+                // CRITICAL review finding: stubs/node.test.stub declares NO
+                // namespace at all, so — unlike moveClassFile()'s own bare
+                // short name, which resolves correctly only because that
+                // file DOES declare $newNamespace — a bare name here has no
+                // enclosing namespace to resolve against. Every non-import,
+                // non-string-literal self-reference is therefore rewritten
+                // FULLY QUALIFIED ($preferShortName = false), which resolves
+                // correctly whether or not the `use` import to which it
+                // might have deferred survives elsewhere in this same file.
+                // Rewriting EVERY recorded span — not the import alone — is
+                // what makes rewritableSpans()'s whole-file exemption for
+                // this file honest, rather than narrower than what G5
+                // actually certified as covered.
+                'text' => $this->referenceReplacement($reference, $source, $class, $newFqcn, $shortName, false),
+            ];
+        }
+
+        $rewritten = $this->applySpanReplacements($source, $replacements);
 
         if (! $this->parses($rewritten)) {
             throw new RuntimeException(
-                "Rewriting [{$testFile}]'s import to [{$newFqcn}] produced PHP that does not parse; "
+                "Rewriting [{$testFile}]'s references to [{$newFqcn}] produced PHP that does not parse; "
                 .'nothing was moved.'
             );
         }
 
         $this->writeJournaled($target->absolutePath.'/tests/'.$shortName.'Test.php', $rewritten, $journal);
+    }
+
+    /**
+     * The replacement TEXT for one found self-reference to $class, shared
+     * by moveClassFile() (M2) and moveTestFile() (M3) so the two decide
+     * "what does this span become" by the SAME rule rather than two
+     * independently maintained ones.
+     *
+     * - `import`: the `use` statement's own member span, replaced with the
+     *   plain new FQCN (correct in a `use` statement's name position
+     *   regardless of enclosing namespace).
+     * - `string_literal`: delegated to stringLiteralReplacement() — a
+     *   string's VALUE does not resolve through PHP's namespace rules the
+     *   way a name token does, and (Important 3) NOT every `string_literal`
+     *   reference's span carries its own surrounding quotes.
+     * - anything else (a bare self-reference such as `Foo::make()`, an
+     *   `extends` clause, …): the bare short name when $preferShortName is
+     *   true — correct ONLY inside a file that itself declares the new
+     *   namespace (M2's class file) — or the fully-qualified new FQCN
+     *   otherwise (M3's namespace-less test file), which resolves correctly
+     *   with or without whatever `use` import happens to survive.
+     */
+    private function referenceReplacement(
+        NodeReference $reference,
+        string $source,
+        string $class,
+        string $newFqcn,
+        string $shortName,
+        bool $preferShortName,
+    ): string {
+        if ($reference->kind === 'import') {
+            return $newFqcn;
+        }
+
+        $original = substr($source, $reference->byteStart, $reference->byteEnd - $reference->byteStart);
+
+        if ($reference->kind === 'string_literal') {
+            return $this->stringLiteralReplacement($original, $class, $newFqcn);
+        }
+
+        return $preferShortName ? $shortName : '\\'.$newFqcn;
+    }
+
+    /**
+     * Important 3 (review round). `NodeReferenceScanner` finds a
+     * `string_literal` reference two structurally different ways, and
+     * requote() alone is only correct for one of them:
+     *
+     *   - `scanStringLiterals()` matches a whole quoted
+     *     `T_CONSTANT_ENCAPSED_STRING` token — its span INCLUDES the
+     *     opening and closing quote characters, so requote() (replacing
+     *     the whole span with a freshly quoted new FQCN) is correct.
+     *   - `scanBoundedText()` matches a BOUNDED SUBSTRING inside a
+     *     heredoc/nowdoc body or Blade/inline-HTML markup
+     *     (`T_ENCAPSED_AND_WHITESPACE` / `T_INLINE_HTML`) — its span covers
+     *     ONLY the matched bytes, with NO surrounding quotes at all (see
+     *     that method's own docblock). Calling requote() on such a span
+     *     would splice literal quote characters into the middle of a
+     *     heredoc body or HTML markup, corrupting the value the moved file
+     *     evaluates at runtime — `php -l` still passes (quotes inside a
+     *     heredoc body are just text) and the command would exit 0 having
+     *     silently broken the reference it was supposed to fix.
+     *
+     * Distinguished here by the ONE fact that actually differs: whether
+     * $original itself starts with a quote character. A bounded match is
+     * replaced with the SAME plain-vs-escaped spelling it was matched with
+     * (NodeReferenceScanner::scanBoundedText() searches for both the FQCN
+     * and its every-backslash-doubled form as two separate needles, for
+     * exactly this reason).
+     */
+    private function stringLiteralReplacement(string $original, string $class, string $newFqcn): string
+    {
+        if ($original !== '' && ($original[0] === "'" || $original[0] === '"')) {
+            return $this->requote($original, $newFqcn);
+        }
+
+        $oldPlain = ltrim($class, '\\');
+        $oldEscaped = str_replace('\\', '\\\\', $oldPlain);
+
+        return $original === $oldEscaped ? str_replace('\\', '\\\\', $newFqcn) : $newFqcn;
     }
 
     /**
@@ -714,6 +861,19 @@ class ExtractNodeCommand extends Command
 
         $journal->recordWrite($providerFile);
         $this->files->put($providerFile, $updated);
+
+        // E11: re-verify rather than trust, the same reason every OTHER
+        // journaled write in this class does (writeJournaled(),
+        // updateHostComposerJson()) — a Minor review finding: this write
+        // was the one exception, silently trusting put() despite the
+        // report's own claim that every write re-verifies. Removing an
+        // import is never load-bearing for correctness (leaving it behind
+        // is merely untidy, never a stale reference), so a failed write
+        // here is downgraded to "leave the import alone" rather than
+        // aborting the whole extraction over a cosmetic cleanup step.
+        if ($this->files->get($providerFile) !== $updated) {
+            $this->files->put($providerFile, $contents);
+        }
     }
 
     /**
@@ -830,24 +990,23 @@ class ExtractNodeCommand extends Command
     }
 
     /**
-     * M6a (E45) — re-runs the SAME reference scan G5 already ran, over a
-     * WIDER set of roots than G5's own named-directory allowlist
-     * (postMoveScanRoots()'s own docblock explains why), subtracting
-     * exactly the set `rewritableSpans()` proves the extraction transforms —
-     * the SAME method G5 itself calls, recomputed fresh rather than reused
-     * from earlier in this same run, because the provider file's own content
-     * has since changed (M5 already edited it). Any survivor aborts BEFORE
-     * M7 deletes anything (E45): a reference the gates could not see, caught
-     * here instead, while restoring is still cheap.
+     * M6a (E45) — re-runs the SAME reference scan G5 already ran, over the
+     * SAME shared roots (scanSharedRoots(), G5's own docblock explains why
+     * it is shared rather than derived twice), subtracting exactly the set
+     * `rewritableSpans()` proves the extraction transforms — recomputed
+     * fresh rather than reused from earlier in this same run, because the
+     * provider file's own content has since changed (M5 already edited
+     * it). Any survivor aborts BEFORE M7 deletes anything (E45): a
+     * reference the ORIGINAL gates could not see (this run's own moves had
+     * not created the package directory yet when G5 ran), caught here
+     * instead, while restoring is still cheap.
      *
      * @throws RuntimeException
      */
     private function rescanPostMoveTree(string $class, string $hostBasePath): void
     {
-        $roots = $this->postMoveScanRoots($hostBasePath);
-
         try {
-            $found = NodeReferenceScanner::scan($class, $roots);
+            $found = $this->scanSharedRoots($class, $hostBasePath);
         } catch (RuntimeException $e) {
             throw new RuntimeException('Post-move reference rescan (E45) failed: '.$e->getMessage());
         }
@@ -879,35 +1038,80 @@ class ExtractNodeCommand extends Command
     }
 
     /**
-     * Every top-level directory under $hostBasePath except `vendor` and any
-     * dot-prefixed directory (`.git` and similar) — deliberately WIDER than
-     * G5's own REFERENCE_SCAN_DIRS allowlist. That width is the entire
-     * reason M6a exists: a reference living in some OTHER top-level
-     * directory — one that is neither one of G5's conventional names nor
-     * mapped by the host's own PSR-4 — is invisible to every gate, because
-     * no gate ever scans it, yet it is just as fatal once the class moves.
-     * Run once, after the moves, immediately before an irreversible delete
-     * — the cost of a full-tree walk is acceptable exactly there, not on
-     * every gate check.
+     * Scans `sharedScanRoots()` for every reference to $class — the ONE
+     * scan both G5 (gate5()) and M6a (rescanPostMoveTree()) run, so the two
+     * can never independently drift about what ground is worth checking.
+     * `ARTIFACT_SUBDIRECTORIES` is applied per matching root here, not
+     * baked into `sharedScanRoots()` itself, so that method can stay a
+     * plain list of directories reusable by anything that just wants
+     * "every root," while the artifact exclusion — a NodeReferenceScanner
+     * concept — stays where the scanning happens.
+     *
+     * @return list<NodeReference>
+     *
+     * @throws RuntimeException when NodeReferenceScanner::scan() finds a
+     *                           multi-namespace file
+     */
+    private function scanSharedRoots(string $class, string $hostBasePath): array
+    {
+        $found = [];
+
+        foreach ($this->sharedScanRoots($hostBasePath) as $root) {
+            $excluded = self::ARTIFACT_SUBDIRECTORIES[basename($root)] ?? [];
+
+            // basename() alone would also match a PSR-4 directory that
+            // happens to be named "storage" or "bootstrap" somewhere other
+            // than directly under the host root — guarded against by only
+            // ever applying the exclusion to the TOP-LEVEL host directory
+            // of that exact name, never a same-named root reached some
+            // other way.
+            if ($excluded !== [] && $root !== $hostBasePath.'/'.basename($root)) {
+                $excluded = [];
+            }
+
+            array_push($found, ...NodeReferenceScanner::scan($class, [$root], $excluded));
+        }
+
+        return $found;
+    }
+
+    /**
+     * Every top-level directory under $hostBasePath except `vendor/`,
+     * `node_modules/`, and any dot-prefixed directory (`.git` and
+     * similar), unioned with the host's own PSR-4 directories
+     * (`hostPsr4Directories()` — the SAME set G2 requires the node's own
+     * file to sit under, for the same "must never admit ground the scan
+     * does not cover" reason that method's own docblock already gives).
+     *
+     * WIDER than the gate's own OLD, narrow REFERENCE_SCAN_DIRS allowlist
+     * (app, bootstrap, config, database, resources, routes, tests) —
+     * deliberately, following a review-round finding: that allowlist
+     * missed a real reference sitting in an ordinary top-level directory
+     * it never scanned (`scripts/`, `public/`, a sibling local package
+     * under `packages/`), which is fatal the same way any other missed
+     * reference is (E46). `ARTIFACT_SUBDIRECTORIES` (applied by
+     * `scanSharedRoots()`, not here) is what keeps this width from ALSO
+     * admitting a compiled cache artifact as if it were source.
      *
      * A candidate is dropped, not included, when it canonically escapes the
      * host root through a symlink (E51's own rule, checked here the same
-     * way `isUnderAnyMappedRoot()` checks it for G2/G5's scan roots): a
+     * way `isUnderAnyMappedRoot()` checks it for G2's own scan roots): a
      * top-level entry that is itself a symlink pointing outside the host —
-     * exactly the shape Important N2's own PSR-4 guard exists to keep out of
-     * G5's roots — must not become a wider-scanning M6a root either, or this
-     * rescan would find, and wrongly abort on, a reference planted only in
-     * whatever the symlink happens to point at.
+     * exactly the shape Important N2's own PSR-4 guard exists to keep out
+     * of G5's roots — must not become a scan root here either, or this
+     * scan would find, and wrongly refuse or abort on, a reference planted
+     * only in whatever the symlink happens to point at.
      *
      * @return list<string>
      */
-    private function postMoveScanRoots(string $hostBasePath): array
+    private function sharedScanRoots(string $hostBasePath): array
     {
         $hostRoot = HostPath::root($hostBasePath);
         $roots = [];
 
         foreach (scandir($hostBasePath) ?: [] as $entry) {
-            if ($entry === '.' || $entry === '..' || $entry === self::VENDOR_DIR || str_starts_with($entry, '.')) {
+            if ($entry === '.' || $entry === '..' || $entry === self::VENDOR_DIR
+                || $entry === self::NODE_MODULES_DIR || str_starts_with($entry, '.')) {
                 continue;
             }
 
@@ -918,7 +1122,10 @@ class ExtractNodeCommand extends Command
             }
         }
 
-        return $roots;
+        return array_values(array_unique(array_merge(
+            $roots,
+            $this->hostPsr4Directories($hostBasePath),
+        )));
     }
 
     /**
@@ -1674,36 +1881,24 @@ class ExtractNodeCommand extends Command
     }
 
     /**
-     * G5 — scans the widened set of host roots (E46) for every reference to
-     * $class, then subtracts exactly the spans `rewritableSpans()` proves
-     * the extraction will itself transform (E45). Any survivor refuses,
-     * named as `file:line`. `NodeReferenceScanner::scan()` throws a
+     * G5 — scans `sharedScanRoots()` (E46) for every reference to $class,
+     * then subtracts exactly the spans `rewritableSpans()` proves the
+     * extraction will itself transform (E45). Any survivor refuses, named
+     * as `file:line`. `NodeReferenceScanner::scan()` throws a
      * `RuntimeException` naming a file with more than one `namespace` block
      * — allowed to propagate into a clean refusal here rather than caught
      * and re-wrapped, since it already names the file and the reason.
+     *
+     * `sharedScanRoots()`/`scanSharedRoots()` are the SAME methods M6a's own
+     * `rescanPostMoveTree()` calls — not two independently derived
+     * root sets that happen to agree, the same reasoning
+     * `rewritableSpans()`'s own docblock gives for why the gate and the
+     * moves share ONE definition of what counts as covered ground.
      */
     private function gate5(string $class, string $hostBasePath): ?string
     {
-        // Unioned with hostPsr4Directories() — the SAME set G2 requires the
-        // node's own file to sit under — rather than two independently
-        // maintained lists: G2 must never admit ground this scan does not
-        // cover, and sharing one method is what makes that true by
-        // construction instead of by the two lists happening to agree.
-        $namedRoots = array_values(array_filter(
-            array_map(
-                static fn (string $dir): string => $hostBasePath.'/'.$dir,
-                self::REFERENCE_SCAN_DIRS,
-            ),
-            fn (string $root): bool => $this->files->isDirectory($root),
-        ));
-
-        $roots = array_values(array_unique(array_merge(
-            $namedRoots,
-            $this->hostPsr4Directories($hostBasePath),
-        )));
-
         try {
-            $found = NodeReferenceScanner::scan($class, $roots);
+            $found = $this->scanSharedRoots($class, $hostBasePath);
         } catch (RuntimeException $e) {
             return $e->getMessage();
         }

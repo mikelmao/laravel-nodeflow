@@ -43,6 +43,9 @@ afterEach(function () {
     // recursive delete below cannot finish.
     @chmod($this->root.'/composer.json', 0644);
     @chmod($this->root.'/app/Nodeflow/Nodes', 0755);
+    @chmod($this->root.'/packages/acme/widgets/tests', 0755);
+    @chmod($this->root.'/packages/acme/widgets/src', 0755);
+    @chmod($this->root.'/packages/acme', 0755);
 
     movesDeleteTree($this->root);
 });
@@ -406,6 +409,47 @@ it('rewrites a self-referencing DOUBLE-quoted class-string literal to the new FQ
     expect((new \Acme\Widgets\Nodes\DoubleQuotedRefNode())->legacyAlias())->toBe('Acme\Widgets\Nodes\DoubleQuotedRefNode');
 });
 
+it('rewrites a self-referencing HEREDOC body to the new FQCN without splicing in literal quote characters', function () {
+    // IMPORTANT review finding. NodeReferenceScanner::scanBoundedText()
+    // matches a heredoc/nowdoc body (T_ENCAPSED_AND_WHITESPACE) as a
+    // BOUNDED SUBSTRING -- its span covers ONLY the matched bytes, with NO
+    // surrounding quotes at all, unlike a quoted T_CONSTANT_ENCAPSED_STRING
+    // token. Calling requote() on a span like that would splice literal
+    // quote characters into the middle of the heredoc body -- valid PHP
+    // (php -l still passes) but a corrupted VALUE at runtime. This proves
+    // the fix by actually calling the method and checking the value, not
+    // just parsing the file.
+    $extraBody = <<<'PHP'
+
+        public function legacyAlias(): string
+        {
+            return <<<TEXT
+            App\Nodeflow\Nodes\HeredocRefNode
+            TEXT;
+        }
+    PHP;
+
+    $class = movesWriteNode($this->root, 'HeredocRefNode', 'heredocref.node', $extraBody);
+
+    $this->artisan('nodeflow:extract-node', ['class' => $class, '--package' => 'acme/widgets'])
+        ->assertExitCode(0);
+
+    $movedPath = $this->root.'/packages/acme/widgets/src/Nodes/HeredocRefNode.php';
+    $moved = file_get_contents($movedPath);
+
+    // No quote character was spliced into the heredoc body: the rewritten
+    // line is the bare FQCN, nothing else.
+    expect($moved)->toContain("Acme\Widgets\Nodes\HeredocRefNode\n");
+    expect($moved)->not->toContain("'Acme\Widgets\Nodes\HeredocRefNode'");
+    expect($moved)->not->toContain('"Acme\Widgets\Nodes\HeredocRefNode"');
+
+    exec('php -l '.escapeshellarg($movedPath).' 2>&1', $out, $exit);
+    expect($exit)->toBe(0);
+
+    require $movedPath;
+    expect((new \Acme\Widgets\Nodes\HeredocRefNode())->legacyAlias())->toBe('Acme\Widgets\Nodes\HeredocRefNode');
+});
+
 it("moves the class's test and rewrites its import, adding no namespace declaration", function () {
     $class = movesWriteNode($this->root, 'TestMoveNode', 'test.move.node');
     movesWriteHostTest($this->root, 'TestMoveNode', $class);
@@ -554,14 +598,19 @@ it("refuses when the host's own composer.json does not require atram/laravel-nod
     expect($this->root.'/packages')->not->toBeDirectory();
 });
 
-// --- M6a: the post-move rescan (E45) ----------------------------------------
+// --- G5 and M6a share ONE root set (Important 4, review round) -------------
 
-it('aborts at M6a when a reference survives in a location the earlier gates could not see, restoring the host byte-identically', function () {
-    // "scripts/" is neither one of G5's REFERENCE_SCAN_DIRS nor mapped by
-    // the host's own PSR-4 ("App\\" => "app/" only) -- G5 cannot see this
-    // reference and passes every gate. M6a's own rescan is deliberately
-    // WIDER (every top-level directory except vendor/), so it is the one
-    // that catches it -- and it must abort BEFORE M7 deletes the original.
+it('G5 itself now refuses a reference sitting in an ordinary top-level directory, for free -- no moves attempted at all', function () {
+    // Review-round finding: G5 and M6a used to derive their own scan roots
+    // independently, and G5's OLD allowlist (REFERENCE_SCAN_DIRS) missed a
+    // reference in an ordinary top-level directory like "scripts/" that
+    // was neither a conventional name nor PSR-4-mapped. That meant a
+    // refusal which should be FREE was instead paid for with six moves and
+    // a rollback (M6a caught it only after M1-M6 had already run). Now
+    // that gate5() and rescanPostMoveTree() both call the SAME
+    // scanSharedRoots(), this refuses immediately, at G5, before
+    // buildPackageTarget() or performMoves() ever runs -- provably, by
+    // asserting the package directory was never even attempted.
     $class = movesWriteNode($this->root, 'BlindSpotNode', 'blindspot.node');
 
     mkdir($this->root.'/scripts', 0777, true);
@@ -580,10 +629,70 @@ it('aborts at M6a when a reference survives in a location the earlier gates coul
     $before = movesTreeHash($this->root);
 
     $this->artisan('nodeflow:extract-node', ['class' => $class, '--package' => 'acme/widgets'])
+        ->expectsOutputToContain('scripts/legacy.php')
         ->assertFailed();
 
     expect(movesTreeHash($this->root))->toBe($before);
     expect($this->root.'/packages/acme/widgets')->not->toBeDirectory();
+});
+
+it('does not refuse over a reference sitting in storage/framework/ -- a compiled artifact, not source', function () {
+    // Review-round finding, second direction: a NAIVE widening of G5 to
+    // "every top-level directory" would ALSO admit storage/ as a whole,
+    // and storage/framework/ holds a COMPILED Blade view -- not source a
+    // developer wrote. A stale compiled artifact naming the class must
+    // never be able to refuse (G5) or abort (M6a) a legitimate move.
+    // storage/ itself (e.g. storage/app/) is still real ground and stays
+    // covered; only the framework/ subdirectory specifically is excluded.
+    $class = movesWriteNode($this->root, 'CompiledViewNode', 'compiledview.node');
+
+    mkdir($this->root.'/storage/framework/views', 0777, true);
+    file_put_contents($this->root.'/storage/framework/views/0123456789abcdef.php', <<<'PHP'
+    <?php $x = new \App\Nodeflow\Nodes\CompiledViewNode(); ?>
+    PHP);
+
+    $this->artisan('nodeflow:extract-node', ['class' => $class, '--package' => 'acme/widgets'])
+        ->assertExitCode(0);
+
+    expect($this->root.'/packages/acme/widgets/src/Nodes/CompiledViewNode.php')->toBeFile();
+});
+
+it('does not refuse over a reference sitting in bootstrap/cache/ -- a compiled artifact, not source', function () {
+    // Same reasoning as storage/framework/, for bootstrap/cache/ (Laravel's
+    // own compiled config/routes/services cache). bootstrap/ itself stays
+    // a real scan root (E46: bootstrap/app.php is Laravel 11's own
+    // provider registration site) -- only cache/ is excluded.
+    $class = movesWriteNode($this->root, 'CompiledConfigNode', 'compiledconfig.node');
+
+    mkdir($this->root.'/bootstrap/cache', 0777, true);
+    file_put_contents($this->root.'/bootstrap/cache/config.php', <<<'PHP'
+    <?php return ['binding' => \App\Nodeflow\Nodes\CompiledConfigNode::class];
+    PHP);
+
+    $this->artisan('nodeflow:extract-node', ['class' => $class, '--package' => 'acme/widgets'])
+        ->assertExitCode(0);
+
+    expect($this->root.'/packages/acme/widgets/src/Nodes/CompiledConfigNode.php')->toBeFile();
+});
+
+it('DOES still refuse over a reference sitting in bootstrap/app.php -- E46, Laravel 11\'s own provider registration site', function () {
+    // The counterfactual proving the bootstrap/cache/ exclusion is scoped
+    // correctly: bootstrap/ itself must still be scanned, or this would
+    // silently regress E46.
+    $class = movesWriteNode($this->root, 'BootstrapAppNode', 'bootstrapapp.node');
+
+    mkdir($this->root.'/bootstrap', 0777, true);
+    file_put_contents($this->root.'/bootstrap/app.php', <<<'PHP'
+    <?php $x = \App\Nodeflow\Nodes\BootstrapAppNode::class;
+    PHP);
+
+    $before = movesTreeHash($this->root);
+
+    $this->artisan('nodeflow:extract-node', ['class' => $class, '--package' => 'acme/widgets'])
+        ->expectsOutputToContain('bootstrap/app.php')
+        ->assertFailed();
+
+    expect(movesTreeHash($this->root))->toBe($before);
 });
 
 it('does not scan a top-level vendor/ directory, so extraction succeeds even though a reference sits there', function () {
@@ -632,6 +741,75 @@ it('restores byte-identically when M1 (scaffold) fails, leaving no package direc
     expect($this->root.'/packages/acme/widgets')->not->toBeDirectory();
 });
 
+it('restores byte-identically when M1 fails partway through its own write loop (target ABSENT)', function () {
+    // CRITICAL review finding: PackageScaffolder::scaffold() writes its
+    // files one at a time via a BARE file_put_contents() (Filesystem::put()
+    // applies no `@` suppression), so a write that fails does not return
+    // false for scaffold() to notice -- it throws straight out of
+    // scaffold() itself, before scaffoldPackage() ever reaches its OWN
+    // provider-existence check. Blocking `packages/acme/` itself (chmod
+    // 0555) makes the very FIRST mkdir() scaffold() attempts fail, so
+    // nothing is written at all -- proving the fix holds even when
+    // scaffold() fails at its earliest possible point, not merely when a
+    // LATER check (the provider-existence one) is what throws.
+    $class = movesWriteNode($this->root, 'M1LoopFailNode', 'm1.loopfail.node');
+
+    mkdir($this->root.'/packages/acme', 0777, true);
+    chmod($this->root.'/packages/acme', 0555);
+
+    $before = movesTreeHash($this->root);
+
+    try {
+        $this->artisan('nodeflow:extract-node', ['class' => $class, '--package' => 'acme/widgets'])
+            ->assertFailed();
+    } finally {
+        chmod($this->root.'/packages/acme', 0755);
+    }
+
+    expect(movesTreeHash($this->root))->toBe($before);
+    expect($this->root.'/packages/acme/widgets')->not->toBeDirectory();
+});
+
+it('restores byte-identically when M1 writes composer.json and README.md but the provider write fails, over a FOREIGN directory under --force', function () {
+    // The reviewer's own constructed counterexample: a foreign occupant
+    // (E43, --force) whose own src/ is read-only. src/Nodes/ is
+    // pre-created so ensureDirectoryExists('src/Nodes') is a no-op (it
+    // never needs to WRITE into the read-only src/ at all) -- so
+    // scaffold()'s write loop successfully writes composer.json and
+    // README.md (both directly in the package root, writable) BEFORE
+    // reaching src/{ShortClass}.php, which fails because CREATING that new
+    // file needs write permission on its read-only parent. That failure
+    // throws OUT of scaffold() itself rather than returning normally, so
+    // the provider-existence check inside scaffoldPackage() is never even
+    // reached. The finally-wrapped journaling is what still records those
+    // two successful writes.
+    $class = movesWriteNode($this->root, 'M1PartialWriteNode', 'm1.partialwrite.node');
+
+    mkdir($this->root.'/packages/acme/widgets', 0777, true);
+    file_put_contents($this->root.'/packages/acme/widgets/composer.json', json_encode(['name' => 'someone/else']));
+    mkdir($this->root.'/packages/acme/widgets/src/Nodes', 0777, true);
+    file_put_contents($this->root.'/packages/acme/widgets/src/NOTES.txt', 'do not touch');
+    chmod($this->root.'/packages/acme/widgets/src', 0555);
+
+    $before = movesTreeHash($this->root);
+
+    try {
+        $this->artisan('nodeflow:extract-node', [
+            'class' => $class,
+            '--package' => 'acme/widgets',
+            '--force' => true,
+        ])->assertFailed();
+    } finally {
+        chmod($this->root.'/packages/acme/widgets/src', 0755);
+    }
+
+    expect(movesTreeHash($this->root))->toBe($before);
+
+    $decoded = json_decode(file_get_contents($this->root.'/packages/acme/widgets/composer.json'), true);
+    expect($decoded['name'])->toBe('someone/else');
+    expect($this->root.'/packages/acme/widgets/src/NOTES.txt')->toBeFile();
+});
+
 it('restores byte-identically when M2 (moving the class) fails, leaving no package directory (target ABSENT)', function () {
     // A node with NO namespace declaration at all passes every gate (G2
     // only requires the FILE sit under a mapped PSR-4 directory) but gives
@@ -648,11 +826,82 @@ it('restores byte-identically when M2 (moving the class) fails, leaving no packa
     expect($this->root.'/packages/acme/widgets')->not->toBeDirectory();
 });
 
-it('restores byte-identically when M3 (moving the test) fails, leaving no package directory (target ABSENT)', function () {
-    // References the class only through a FULLY QUALIFIED name, never a
-    // `use` import -- rewritableSpans()'s own fileReferencesClass() still
-    // proves this file references $class (so M3 is attempted), but
-    // importSpanFor() finds no import span to rewrite.
+it("moves a test that references the class only by a FULLY QUALIFIED name, with no `use` import at all", function () {
+    // CRITICAL review finding: rewritableSpans() exempts this test file
+    // WHOLE, but the first draft of M3 only ever rewrote the import span
+    // -- leaving a fully-qualified reference (or any reference not routed
+    // through an import) stale under the old FQCN, caught only later by
+    // M6a, which refused otherwise-valid work with no workaround but
+    // hand-editing. M3 must rewrite EVERY recorded reference span, mirror-
+    // ing M2, which is exactly what makes this file — with no `use`
+    // import to rewrite at all — still move successfully.
+    $class = movesWriteNode($this->root, 'NoImportRefNode', 'noimportref.node');
+
+    $directory = $this->root.'/tests/Feature/Nodeflow';
+    mkdir($directory, 0777, true);
+    file_put_contents($directory.'/NoImportRefNodeTest.php', <<<'PHP'
+    <?php
+
+    it('keeps its type stable', function () {
+        expect(\App\Nodeflow\Nodes\NoImportRefNode::type())->toBe('noimportref.node');
+    });
+    PHP);
+
+    $this->artisan('nodeflow:extract-node', ['class' => $class, '--package' => 'acme/widgets'])
+        ->assertExitCode(0);
+
+    $movedPath = $this->root.'/packages/acme/widgets/tests/NoImportRefNodeTest.php';
+    $moved = file_get_contents($movedPath);
+
+    expect($moved)->toContain('\Acme\Widgets\Nodes\NoImportRefNode::type()');
+    expect($moved)->not->toContain('App\Nodeflow\Nodes\NoImportRefNode');
+    expect($this->root.'/tests/Feature/Nodeflow/NoImportRefNodeTest.php')->not->toBeFile();
+
+    exec('php -l '.escapeshellarg($movedPath).' 2>&1', $out, $exit);
+    expect($exit)->toBe(0);
+});
+
+it("moves a test with BOTH a `use` import and a fully-qualified reference, rewriting every span (M6a never needs to catch a leftover)", function () {
+    // The reviewer's own constructed counterexample: an ordinary host test
+    // containing both `use App\Nodeflow\Nodes\...;` AND a fully-qualified
+    // `\App\Nodeflow\Nodes\...::type()` call. Before this fix, M3 rewrote
+    // only the import, M6a found the untouched fully-qualified reference
+    // in the copy it had just written, and refused valid work.
+    $class = movesWriteNode($this->root, 'BothFormsNode', 'bothforms.node');
+
+    $directory = $this->root.'/tests/Feature/Nodeflow';
+    mkdir($directory, 0777, true);
+    file_put_contents($directory.'/BothFormsNodeTest.php', <<<'PHP'
+    <?php
+
+    use App\Nodeflow\Nodes\BothFormsNode;
+
+    it('keeps its type stable', function () {
+        expect(BothFormsNode::type())->toBe('bothforms.node');
+        expect(\App\Nodeflow\Nodes\BothFormsNode::type())->toBe('bothforms.node');
+    });
+    PHP);
+
+    $this->artisan('nodeflow:extract-node', ['class' => $class, '--package' => 'acme/widgets'])
+        ->assertExitCode(0);
+
+    $movedPath = $this->root.'/packages/acme/widgets/tests/BothFormsNodeTest.php';
+    $moved = file_get_contents($movedPath);
+
+    expect($moved)->toContain('use Acme\Widgets\Nodes\BothFormsNode;');
+    expect($moved)->toContain('\Acme\Widgets\Nodes\BothFormsNode::type()');
+    expect($moved)->not->toContain('App\Nodeflow\Nodes\BothFormsNode');
+
+    exec('php -l '.escapeshellarg($movedPath).' 2>&1', $out, $exit);
+    expect($exit)->toBe(0);
+});
+
+it('restores byte-identically when M3 (moving the test) fails, over an ALREADY-MATCHING pre-existing package', function () {
+    // A pre-existing package (E43's "matching existing" target state)
+    // whose OWN tests/ directory is read-only: M1's scaffold() writes
+    // tests/ExampleTest.php successfully (that directory already exists,
+    // so no mkdir is even attempted), M2 succeeds, but M3's own write into
+    // the SAME read-only tests/ directory fails.
     $class = movesWriteNode($this->root, 'M3FailNode', 'm3.fail.node');
 
     $directory = $this->root.'/tests/Feature/Nodeflow';
@@ -660,18 +909,30 @@ it('restores byte-identically when M3 (moving the test) fails, leaving no packag
     file_put_contents($directory.'/M3FailNodeTest.php', <<<'PHP'
     <?php
 
+    use App\Nodeflow\Nodes\M3FailNode;
+
     it('keeps its type stable', function () {
-        expect(\App\Nodeflow\Nodes\M3FailNode::type())->toBe('m3.fail.node');
+        expect(M3FailNode::type())->toBe('m3.fail.node');
     });
     PHP);
 
+    mkdir($this->root.'/packages/acme/widgets', 0777, true);
+    file_put_contents($this->root.'/packages/acme/widgets/composer.json', json_encode(['name' => 'acme/widgets']));
+    mkdir($this->root.'/packages/acme/widgets/tests', 0777, true);
+    file_put_contents($this->root.'/packages/acme/widgets/tests/DUMMY.txt', 'from an earlier run');
+    chmod($this->root.'/packages/acme/widgets/tests', 0555);
+
     $before = movesTreeHash($this->root);
 
-    $this->artisan('nodeflow:extract-node', ['class' => $class, '--package' => 'acme/widgets'])
-        ->assertFailed();
+    try {
+        $this->artisan('nodeflow:extract-node', ['class' => $class, '--package' => 'acme/widgets'])
+            ->assertFailed();
+    } finally {
+        chmod($this->root.'/packages/acme/widgets/tests', 0755);
+    }
 
     expect(movesTreeHash($this->root))->toBe($before);
-    expect($this->root.'/packages/acme/widgets')->not->toBeDirectory();
+    expect($this->root.'/packages/acme/widgets/tests/DUMMY.txt')->toBeFile();
 });
 
 it('restores byte-identically when M4 (registering in the package provider) fails, over a FOREIGN directory taken with --force', function () {
@@ -829,3 +1090,4 @@ it('restores byte-identically when M7 (deleting the originals) fails, leaving no
     expect($this->root.'/packages/acme/widgets')->not->toBeDirectory();
     expect($this->root.'/app/Nodeflow/Nodes/M7FailNode.php')->toBeFile();
 });
+
