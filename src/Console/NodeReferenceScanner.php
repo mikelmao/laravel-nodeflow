@@ -38,7 +38,10 @@ namespace Nodeflow\Console;
  *                         `interface I extends \Other\T, Target` reference
  *                         is not missed).
  *   - `import`          — a `use` statement member (see below).
- *   - `string_literal`  — a quoted, heredoc, or nowdoc string body.
+ *   - `string_literal`  — a quoted string literal's exact value, or a
+ *                         bounded substring match inside Blade markup or a
+ *                         heredoc/nowdoc body (see "THREE DIFFERENT
+ *                         MATCHING RULES" below).
  *   - `reference`       — everything else this rule now also catches:
  *                         `new`, a static call, `instanceof`, `catch`, a
  *                         typed property/parameter/return, `implements`,
@@ -89,6 +92,23 @@ namespace Nodeflow\Console;
  * asserted by a persisted test rather than special-cased, per the
  * instruction not to keep a kind nothing distinguishes.
  *
+ * THREE DIFFERENT MATCHING RULES, by token kind — stated together because a
+ * reader comparing two of these methods without this note would reasonably
+ * expect one rule, not three:
+ *   1. A NAME token (`T_STRING`, `T_NAME_QUALIFIED`, …) is resolved through
+ *      `PhpNameResolver` and compared for FQCN equality — see "DETECTION IS
+ *      UNIVERSAL" above.
+ *   2. A quoted string literal (`T_CONSTANT_ENCAPSED_STRING`) is unquoted
+ *      and compared for exact VALUE equality — see scanStringLiterals().
+ *      The token unambiguously denotes one value and nothing else, so
+ *      exact equality is both correct and precise.
+ *   3. Blade markup (`T_INLINE_HTML`) and a heredoc/nowdoc body
+ *      (`T_ENCAPSED_AND_WHITESPACE`) are scanned for the target as a
+ *      BOUNDED SUBSTRING — see scanBoundedText(). Neither token
+ *      unambiguously denotes the FQCN alone: both are commonly a LARGER
+ *      block of text (HTML markup, a code sample) the FQCN appears inside,
+ *      not the token's entire content.
+ *
  * KNOWN LIMITS, stated rather than silently missed:
  *   - E46: a class name built or stored dynamically — string concatenation,
  *     a database column, a config value read at runtime — is out of reach
@@ -100,6 +120,11 @@ namespace Nodeflow\Console;
  *     for `\\` (folded to one literal backslash); every other backslash
  *     sequence is left exactly as written, matching real PHP — see
  *     foldEscapedBackslash()'s docblock for the bug this fixed.
+ *   - A Blade reference written as a bare SHORT NAME (`{{ SendMessage::class
+ *     }}`) is out of reach: Blade has no `use`/import mechanism this
+ *     scanner could resolve a short name against the way it resolves one
+ *     inside real PHP. Only a name that is already fully qualified in the
+ *     Blade source (with or without a leading `\`) is found.
  */
 final class NodeReferenceScanner
 {
@@ -243,6 +268,7 @@ final class NodeReferenceScanner
 
         $references = self::scanTokens($meaningful, $resolver, $target, $file);
         array_push($references, ...self::scanStringLiterals($meaningful, $target, $file));
+        array_push($references, ...self::scanBoundedText($meaningful, $target, $file));
 
         return $references;
     }
@@ -367,8 +393,7 @@ final class NodeReferenceScanner
 
             if ($token['id'] === T_USE) {
                 // A `use` inside a non-namespace brace is a trait use in a
-                // class body or a closure's captured-variable list, neither
-                // an import.
+                // class body, neither an import.
                 if (in_array('other', $braceKinds, true)) {
                     $i++;
 
@@ -376,6 +401,27 @@ final class NodeReferenceScanner
                 }
 
                 $following = $meaningful[$i + 1] ?? null;
+
+                // A closure's captured-variable list PRECEDES its own `{`,
+                // so the brace-kind guard above cannot see it: at this exact
+                // point we may not be inside any brace at all (we could be
+                // inside a function call's parens instead, as in
+                // `Route::get('/x', function () use ($router) { ... })`).
+                // An import's `use` is always followed by a NAME; a capture
+                // list's `use` is always followed by `(`. Without this
+                // check, parseUseStatement() reads the captured variable as
+                // an alias and matches it against $imports under that
+                // variable's own (garbage) key -- proven by a top-level
+                // `use App\Nodeflow\Nodes\SendMessage;` followed later by
+                // `function () use ($router) { return new SendMessage(); }`
+                // in routes/web.php, which returned 0 references before this
+                // fix (the capture list consumed tokens all the way to the
+                // closure body's own first `;`, past the real usage).
+                if ($following !== null && $following['id'] === null && $following['text'] === '(') {
+                    $i++;
+
+                    continue;
+                }
 
                 if ($following !== null && $following['id'] !== null && in_array($following['id'], [T_FUNCTION, T_CONST], true)) {
                     $i = self::indexOfSemicolon($meaningful, $i + 1) + 1;
@@ -640,17 +686,13 @@ final class NodeReferenceScanner
         $references = [];
 
         foreach ($meaningful as $token) {
-            if ($token['id'] === T_CONSTANT_ENCAPSED_STRING) {
-                $candidates = self::unquote($token['text']);
-            } elseif ($token['id'] === T_ENCAPSED_AND_WHITESPACE) {
-                $candidates = self::heredocCandidates($token['text']);
-            } else {
+            if ($token['id'] !== T_CONSTANT_ENCAPSED_STRING) {
                 continue;
             }
 
             $matches = false;
 
-            foreach ($candidates as $candidate) {
+            foreach (self::unquote($token['text']) as $candidate) {
                 if (ltrim($candidate, '\\') === $target) {
                     $matches = true;
 
@@ -669,12 +711,138 @@ final class NodeReferenceScanner
     }
 
     /**
+     * A `string_literal` reference for each BOUNDED SUBSTRING occurrence of
+     * $target inside a `T_INLINE_HTML` region (Blade markup, or any plain
+     * HTML mixed into a `.php` file outside `<?php ?>` tags) or a heredoc/
+     * nowdoc body (round-3 review, Critical 2).
+     *
+     * WHY A DIFFERENT MATCHING RULE THAN scanStringLiterals(). A quoted
+     * literal's VALUE is compared for exact equality, because the token
+     * unambiguously denotes one value and nothing else. Neither of these
+     * token kinds works that way: `T_INLINE_HTML` is an entire block of
+     * Blade/HTML markup the target FQCN might appear anywhere inside
+     * (`{{ \App\…\SendMessage::class }}`, `@php(...)`, `@php … @endphp`),
+     * and a heredoc/nowdoc body is commonly a larger text — a code sample,
+     * a template — the FQCN appears inside, not the body's entire content
+     * (e.g. `<<<PHP\nuse App\…\SendMessage;\nPHP`, which
+     * `scanStringLiterals()`'s old exact-equality rule for this token type
+     * returned zero references for). So this scans for the target as a
+     * SUBSTRING instead — bounded so `App\Foo\SendMessage` cannot match
+     * inside `App\Foo\SendMessageExtra` or `App\Foo\SendMessage\Sub`: the
+     * character immediately after a candidate match may not be an
+     * identifier character or a backslash, or the match is rejected and
+     * scanning resumes one byte later. The character BEFORE a match is
+     * deliberately NOT bounded the same way — over-matching there costs a
+     * look, not a fatal, the same direction this scanner always errs in,
+     * and it is what lets `\App\…\SendMessage::class` (a leading backslash
+     * immediately before the match) succeed without special-casing it.
+     *
+     * A heredoc body is also searched for the ESCAPED form of $target
+     * (every `\` doubled to `\\`) as a second needle, because a heredoc
+     * (unlike a nowdoc) escapes like a double-quoted string — matching
+     * `foldEscapedBackslash()`'s own reasoning, but applied to the NEEDLE
+     * rather than the haystack this time, which is what lets the recorded
+     * byte range stay a plain, un-mapped slice of the RAW source text.
+     * `T_INLINE_HTML` has no such escaping concept (it is literal output
+     * text) and is searched with $target alone.
+     *
+     * STATED LIMIT, alongside E46: a Blade reference written as a bare
+     * SHORT NAME (`{{ SendMessage::class }}`) is out of reach. Blade has no
+     * import mechanism this scanner could resolve a short name against —
+     * unlike PHP, there is no `use` statement anywhere in a `.blade.php`
+     * file to establish what "SendMessage" alone would mean.
+     *
+     * @param  list<array{id: int|null, text: string, start: int, end: int, line: int}>  $meaningful
+     * @return list<NodeReference>
+     */
+    private static function scanBoundedText(array $meaningful, string $target, string $file): array
+    {
+        $references = [];
+
+        foreach ($meaningful as $token) {
+            if ($token['id'] === T_INLINE_HTML) {
+                $needles = [$target];
+            } elseif ($token['id'] === T_ENCAPSED_AND_WHITESPACE) {
+                $escaped = str_replace('\\', '\\\\', $target);
+                $needles = $escaped === $target ? [$target] : [$target, $escaped];
+            } else {
+                continue;
+            }
+
+            array_push($references, ...self::findBoundedMatches($token, $needles, $file));
+        }
+
+        return $references;
+    }
+
+    /**
+     * Every bounded-substring match of any of $needles inside $token's own
+     * text, each as its own `string_literal` reference spanning exactly
+     * the matched bytes (not the whole token).
+     *
+     * @param  array{id: int|null, text: string, start: int, end: int, line: int}  $token
+     * @param  list<string>  $needles
+     * @return list<NodeReference>
+     */
+    private static function findBoundedMatches(array $token, array $needles, string $file): array
+    {
+        $references = [];
+        $text = $token['text'];
+        $length = strlen($text);
+
+        foreach ($needles as $needle) {
+            if ($needle === '') {
+                continue;
+            }
+
+            $needleLength = strlen($needle);
+            $offset = 0;
+
+            while (($pos = strpos($text, $needle, $offset)) !== false) {
+                $after = $pos + $needleLength;
+                $afterChar = $after < $length ? $text[$after] : null;
+
+                if ($afterChar !== null && ($afterChar === '\\' || self::isIdentifierChar($afterChar))) {
+                    // The candidate is a PREFIX of a longer name (an extra
+                    // identifier character extends the last segment; a
+                    // trailing backslash extends into a deeper or sibling
+                    // symbol). Resume scanning one byte past where this
+                    // candidate started, not past its end, so an
+                    // overlapping real match starting inside the rejected
+                    // span is never skipped.
+                    $offset = $pos + 1;
+
+                    continue;
+                }
+
+                $references[] = new NodeReference(
+                    $file,
+                    $token['line'] + substr_count(substr($text, 0, $pos), "\n"),
+                    $token['start'] + $pos,
+                    $token['start'] + $after,
+                    'string_literal',
+                );
+
+                $offset = $after;
+            }
+        }
+
+        return $references;
+    }
+
+    private static function isIdentifierChar(string $char): bool
+    {
+        return $char === '_' || ctype_alnum($char);
+    }
+
+    /**
      * Every value a single- or double-quoted T_CONSTANT_ENCAPSED_STRING
      * token could denote, as a list to check against — normally exactly
-     * one candidate, empty only for a quote style this does not decode (a
+     * one candidate, empty only for a quote style this does not decode. A
      * heredoc or nowdoc body is a different token type —
-     * T_ENCAPSED_AND_WHITESPACE — and never reaches this method; see
-     * heredocCandidates()).
+     * T_ENCAPSED_AND_WHITESPACE — and is matched by scanBoundedText()
+     * instead, via a substring rule rather than this method's exact-value
+     * one; see that method's own docblock for why.
      *
      * Single-quoted strings only ever escape `\'` and `\\`; every other
      * backslash is literal — which is exactly what leaves a class name's own
@@ -697,35 +865,6 @@ final class NodeReferenceScanner
         }
 
         return [self::foldEscapedBackslash($inner)];
-    }
-
-    /**
-     * Every value a T_ENCAPSED_AND_WHITESPACE token (a heredoc or nowdoc
-     * body's literal content, with no interpolated variable) could denote.
-     *
-     * The token's own text always carries exactly one trailing newline —
-     * PHP's grammar requires the closing identifier to start its own line —
-     * which is stripped before comparison. A nowdoc body is entirely
-     * literal; a heredoc body escapes like a double-quoted string. Which
-     * one this token came from depends on the OPENING `<<<` marker, several
-     * tokens earlier, which this method does not have access to — rather
-     * than thread that context through the whole walk, both the raw and
-     * the folded form are returned as candidates, so either a nowdoc's
-     * literal backslash or a heredoc's escaped one is checked.
-     *
-     * @return list<string>
-     */
-    private static function heredocCandidates(string $raw): array
-    {
-        $trimmed = rtrim($raw, "\r\n");
-
-        if ($trimmed === '') {
-            return [];
-        }
-
-        $folded = self::foldEscapedBackslash($trimmed);
-
-        return $folded === $trimmed ? [$trimmed] : [$trimmed, $folded];
     }
 
     /**

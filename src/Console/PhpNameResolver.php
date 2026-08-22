@@ -176,9 +176,25 @@ final class PhpNameResolver
                 continue;
             }
 
-            // `use function …` and `use const …` import symbols, not classes.
+            // A closure's captured-variable list precedes its OWN `{`, so the
+            // brace-kind guard above cannot see it: at this exact point we may
+            // not be inside any brace at all (we could be inside a function
+            // call's parens instead, as in `Route::get('/x', function () use
+            // ($router) { ... })`). The decisive rule is the token immediately
+            // after `use`: an import's `use` is always followed by a NAME; a
+            // capture list's `use` is always followed by `(`. Without this
+            // check, readOneUseStatement() reads the captured variable as an
+            // alias and OVERWRITES a real import sharing that short name --
+            // proven by a top-level `use App\Nodeflow\Nodes\SendMessage;`
+            // followed later by `function () use ($router) { ... }`, which
+            // left imports() empty instead of containing the real import.
             $following = $tokens[$i + 1] ?? null;
 
+            if ($following === '(') {
+                continue;
+            }
+
+            // `use function …` and `use const …` import symbols, not classes.
             if (is_array($following) && in_array($following[0], [T_FUNCTION, T_CONST], true)) {
                 continue;
             }

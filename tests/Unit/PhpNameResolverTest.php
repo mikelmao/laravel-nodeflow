@@ -76,6 +76,24 @@ it('ignores a use statement inside a closure', function () {
     expect(PhpNameResolver::forSource($source)->imports())->toBe([]);
 });
 
+it('does not let a later closure capture list overwrite a real import sharing its short name', function () {
+    // round-2/round-3 review, Critical 1. The 'other'-brace guard cannot see
+    // a capture list, because a closure's `use` PRECEDES its own `{` --
+    // at the point readImports() sees this `use`, it may not be inside any
+    // brace at all (it can be inside a function call's parens instead, the
+    // exact shape of `Route::get('/x', function () use ($router) { ... })`).
+    // Before the fix, readOneUseStatement() read the closure's captured
+    // variable as if it were importing an alias named "sendmessage" (the
+    // variable's own name, lowercased) and OVERWROTE the real import's
+    // entry in the SAME map -- confirmed: imports() came back empty
+    // instead of containing the real import at all.
+    $source = "<?php\nuse App\\Nodeflow\\Nodes\\SendMessage;\n"
+        ."Route::get('/x', function () use (\$router) { return new SendMessage(); });\n";
+
+    expect(PhpNameResolver::forSource($source)->imports())
+        ->toBe(['sendmessage' => 'App\Nodeflow\Nodes\SendMessage']);
+});
+
 it('ignores a function import and a constant import', function () {
     $source = "<?php\nnamespace App\\Providers;\n"
         ."use function App\\Helpers\\send;\nuse const App\\Limits\\MAX;\n";

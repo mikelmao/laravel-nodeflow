@@ -35,6 +35,36 @@ function target(): string
     return 'App\Nodeflow\Nodes\SendMessage';
 }
 
+it('accepts a target FQCN argument written with a leading backslash', function () {
+    // round-3 review, IMPORTANT: `ltrim($fqcn, '\\')` on scan()'s OWN
+    // target argument, not the string-literal comparison value tested
+    // elsewhere. A caller writing `scan('\App\Nodeflow\Nodes\SendMessage',
+    // ...)` -- a common way to spell a class name, e.g. copied straight
+    // from a `::class` constant's own leading backslash -- must be
+    // stripped the same way the target passed to string/name comparisons
+    // already is internally, or NOTHING would ever match: every FQCN this
+    // scanner computes internally (from PhpNameResolver::resolve(), from
+    // an import lookup) never carries a leading backslash, so an
+    // unstripped target with one could never equal any of them.
+    $root = hostWith([
+        'app/Foo.php' => <<<'PHP'
+        <?php
+
+        class Foo
+        {
+            public function bar(): string
+            {
+                return \App\Nodeflow\Nodes\SendMessage::class;
+            }
+        }
+        PHP,
+    ]);
+
+    $found = NodeReferenceScanner::scan('\App\Nodeflow\Nodes\SendMessage', [$root.'/app']);
+
+    expect($found)->toHaveCount(1);
+});
+
 it('finds a fully-qualified reference', function () {
     $root = hostWith([
         'app/Foo.php' => <<<'PHP'
@@ -640,8 +670,82 @@ it('reports a legacy register() call in the provider as a reference the provider
     expect(array_unique(array_map(fn ($r) => $r->file, $found)))->toHaveCount(1);
 });
 
+// --- Round-3 review fix: Critical 1, a closure capture list clobbering a
+// real import (shared root cause with PhpNameResolverTest.php). ---
+
+it('does not let a closure capture list swallow a real import and the reference after it', function () {
+    // round-3 review, Critical 1. Two lint-clean, idiomatic routes/web.php
+    // shapes, both given by the reviewer verbatim. Before the fix,
+    // parseUseStatement() read the closure's captured variable ($router,
+    // $prefix) as if it were importing an alias, and because that read
+    // shares the SAME lookup map as the real `use
+    // App\Nodeflow\Nodes\SendMessage;` import, it silently clobbered that
+    // real entry -- confirmed: this fixture returned 0 references before
+    // the fix, on `routes/`, one of the scanned roots, which is exactly
+    // the miss-then-boot-fatal path the gate exists to prevent.
+    $root = hostWith([
+        'routes/web1.php' => <<<'PHP'
+        <?php
+
+        use App\Nodeflow\Nodes\SendMessage;
+
+        Route::get('/x', function () use ($router) { return new SendMessage(); });
+        PHP,
+        'routes/web2.php' => <<<'PHP'
+        <?php
+
+        use App\Nodeflow\Nodes\SendMessage;
+
+        Route::middleware(['web'])->group(function () use ($prefix) {
+            Route::get('/', [SendMessage::class, 'handle']);
+        });
+        PHP,
+    ]);
+
+    $found = NodeReferenceScanner::scan(target(), [$root.'/routes']);
+
+    expect($found)->toHaveCount(4);
+    expect(array_map(fn ($r) => $r->kind, $found))
+        ->toEqualCanonicalizing(['import', 'reference', 'import', 'class_constant']);
+});
+
 // --- Round-2 review fixes below: Critical 1 (braced-namespace brace-kind
 // bug), Critical 2 (universal detection), and the four surviving mutants. ---
+
+it('pops the brace-kind stack when a function body closes, so a later top-level use is still an import', function () {
+    // round-3 review, IMPORTANT: `array_pop($braceKinds)` on `}`. Without
+    // it, an empty function body's `{` pushes 'other' and it is NEVER
+    // popped, so braceKinds stays ['other'] for the REST of the file --
+    // and a top-level `use` declared AFTER that function is wrongly read
+    // as if it were inside a class body, so parseUseStatement() is never
+    // called for it and its own `import` reference is lost. The later
+    // `SendMessage::class` usage still resolves correctly regardless,
+    // because it goes through PhpNameResolver's OWN, separately-correct
+    // import tracking, not this scanner's -- which is exactly why the
+    // count alone (2 either way once resolve() rescues one occurrence
+    // through the universal name-run scan in the no-namespace case) is
+    // not always enough to catch this; asserting the KIND is.
+    $root = hostWith([
+        'app/Foo.php' => <<<'PHP'
+        <?php
+
+        namespace App\Providers;
+
+        function g()
+        {
+        }
+
+        use App\Nodeflow\Nodes\SendMessage;
+
+        $x = SendMessage::class;
+        PHP,
+    ]);
+
+    $found = NodeReferenceScanner::scan(target(), [$root.'/app']);
+
+    expect($found)->toHaveCount(2);
+    expect(array_map(fn ($r) => $r->kind, $found))->toEqualCanonicalizing(['import', 'class_constant']);
+});
 
 it('finds a use import inside a braced namespace, not just a bracket-free one', function () {
     // round-2 review, Critical 1. namespaceBraceIndexes() used
@@ -954,6 +1058,38 @@ it('does not classify a static method call as class_constant', function () {
     expect($kinds)->not->toContain('class_constant');
 });
 
+it('does not classify an instanceof check followed by an unrelated class declaration as class_constant', function () {
+    // round-3 review, IMPORTANT: the T_DOUBLE_COLON half of classify()'s
+    // guard, discriminated from the T_CLASS half above. `$y instanceof
+    // SendMessage;` is immediately followed by `class D {}` -- with only
+    // the T_CLASS half checked (ignoring what the token right after the
+    // name-run actually is), the statement's own terminating `;` is
+    // accepted as if it were `::`, and the `class` keyword starting the
+    // NEXT, unrelated declaration is accepted as `::class`'s own `class`.
+    $root = hostWith([
+        'app/Foo.php' => <<<'PHP'
+        <?php
+
+        namespace App\Providers;
+
+        use App\Nodeflow\Nodes\SendMessage;
+
+        $b = $y instanceof SendMessage;
+
+        class D
+        {
+        }
+        PHP,
+    ]);
+
+    $found = NodeReferenceScanner::scan(target(), [$root.'/app']);
+
+    expect($found)->toHaveCount(2);
+    $kinds = array_map(fn ($r) => $r->kind, $found);
+    expect($kinds)->toEqualCanonicalizing(['import', 'reference']);
+    expect($kinds)->not->toContain('class_constant');
+});
+
 it('finds a target that is not first in a comma-separated extends list', function () {
     // IMPORTANT mutation #4: the old scanExtends()'s comma-walk survived a
     // `break` mutation because nothing put the target second in the list.
@@ -1182,4 +1318,133 @@ it('does not scan a file whose extension is outside php, blade.php, phtml, and i
     $found = NodeReferenceScanner::scan(target(), [$root.'/app']);
 
     expect($found)->toHaveCount(0);
+});
+
+
+// --- Round-3 review fix: Critical 2, Blade support via bounded substring
+// matching, which also resolves the heredoc/nowdoc Important raised
+// separately (an exact-body-equality rule missed the FQCN appearing inside
+// a LARGER heredoc body). ---
+
+it('records the correct line for a Blade match that is not on the tokens own first line', function () {
+    // Mutation-found gap: using the T_INLINE_HTML token's own starting
+    // line unconditionally (instead of adding the newline count before
+    // the match's own position within that token's text) left every
+    // existing Blade test green, because none of them put the match
+    // anywhere but the token's first line.
+    $root = hostWith([
+        'resources/view.blade.php' => "<div>\n<p>\n<span>{{ \\App\\Nodeflow\\Nodes\\SendMessage::class }}</span>\n</p>\n</div>\n",
+    ]);
+
+    $found = NodeReferenceScanner::scan(target(), [$root.'/resources']);
+
+    expect($found)->toHaveCount(1);
+    expect($found[0]->line)->toBe(3);
+});
+
+it('finds an FQCN inside Blade double-curly output, with no <?php tag at all', function () {
+    // round-3 review, Critical 2. A pure Blade template has no `<?php`
+    // tag, so PHP's own tokeniser reads the WHOLE file as one
+    // T_INLINE_HTML token -- verified directly against token_get_all()
+    // before writing this test.
+    $root = hostWith([
+        'resources/view.blade.php' => "<div>{{ \\App\\Nodeflow\\Nodes\\SendMessage::class }}</div>\n",
+    ]);
+
+    $found = NodeReferenceScanner::scan(target(), [$root.'/resources']);
+
+    expect($found)->toHaveCount(1);
+    expect($found[0]->kind)->toBe('string_literal');
+});
+
+it('finds an FQCN inside an inline @php(...) Blade directive', function () {
+    $root = hostWith([
+        'resources/view.blade.php' => "<div>\n@php(\$x = \\App\\Nodeflow\\Nodes\\SendMessage::class)\n</div>\n",
+    ]);
+
+    $found = NodeReferenceScanner::scan(target(), [$root.'/resources']);
+
+    expect($found)->toHaveCount(1);
+});
+
+it('finds an FQCN inside an @php ... @endphp Blade block', function () {
+    $root = hostWith([
+        'resources/view.blade.php' => "<div>\n@php\n\$x = \\App\\Nodeflow\\Nodes\\SendMessage::class;\n@endphp\n</div>\n",
+    ]);
+
+    $found = NodeReferenceScanner::scan(target(), [$root.'/resources']);
+
+    expect($found)->toHaveCount(1);
+});
+
+it('does not match a Blade FQCN that is a prefix of a longer name', function () {
+    // The bounded half of "bounded substring": App\Nodeflow\Nodes\
+    // SendMessage must not match inside ...SendMessageExtra.
+    $root = hostWith([
+        'resources/view.blade.php' => "<div>{{ \\App\\Nodeflow\\Nodes\\SendMessageExtra::class }}</div>\n",
+    ]);
+
+    $found = NodeReferenceScanner::scan(target(), [$root.'/resources']);
+
+    expect($found)->toHaveCount(0);
+});
+
+it('does not match a Blade FQCN that is a prefix of a deeper, unrelated symbol', function () {
+    // Mutation-found gap: dropping the `$afterChar === '\\'` half of the
+    // boundary check (keeping only the identifier-character half) left
+    // every existing test green, because none of them put a FURTHER
+    // namespace separator right after the match. Without it,
+    // App\Nodeflow\Nodes\SendMessage wrongly matches inside
+    // App\Nodeflow\Nodes\SendMessage\Sub -- a different, deeper symbol,
+    // not the target.
+    $root = hostWith([
+        'resources/view.blade.php' => "<div>{{ \\App\\Nodeflow\\Nodes\\SendMessage\\Sub::class }}</div>\n",
+    ]);
+
+    $found = NodeReferenceScanner::scan(target(), [$root.'/resources']);
+
+    expect($found)->toHaveCount(0);
+});
+
+it('does not match an unrelated FQCN sharing the target short name in Blade', function () {
+    $root = hostWith([
+        'resources/view.blade.php' => "<div>{{ \\App\\Sms\\SendMessage::class }}</div>\n",
+    ]);
+
+    $found = NodeReferenceScanner::scan(target(), [$root.'/resources']);
+
+    expect($found)->toHaveCount(0);
+});
+
+it('ignores a Blade reference written as a bare short name, a stated limit', function () {
+    // Blade has no `use`/import mechanism this scanner could resolve a
+    // short name against -- documented in the class docblock alongside
+    // E46's dynamic-and-database-stored-names limit, not silently missed.
+    $root = hostWith([
+        'resources/view.blade.php' => "<div>{{ SendMessage::class }}</div>\n",
+    ]);
+
+    $found = NodeReferenceScanner::scan(target(), [$root.'/resources']);
+
+    expect($found)->toHaveCount(0);
+});
+
+it('finds the FQCN as a substring inside a larger heredoc body, not only when the body equals it exactly', function () {
+    // The Important the reviewer raised separately, resolved by the SAME
+    // substring rule as Blade: `<<<PHP\nuse App\…\SendMessage;\nPHP`
+    // returned 0 under the old exact-body-equality rule.
+    $root = hostWith([
+        'app/Foo.php' => <<<'PHP'
+        <?php
+
+        $template = <<<CODE
+        use App\Nodeflow\Nodes\SendMessage;
+        CODE;
+        PHP,
+    ]);
+
+    $found = NodeReferenceScanner::scan(target(), [$root.'/app']);
+
+    expect($found)->toHaveCount(1);
+    expect($found[0]->kind)->toBe('string_literal');
 });
