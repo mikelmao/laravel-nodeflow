@@ -24,7 +24,7 @@ This records what happened while executing
 | 5 — tooling gate | `8a1383d` | Integrated gate and adversarial review clean, with two deferred Minor observations. |
 | 6 — G-5 | evidence `5918408`; clarification `56fa8e0` | Browser gate **BLOCKED**; independent review confirmed the record and scope. |
 | 7 — release documentation | measured source `56fa8e0`; release-documentation evidence `556206a` | README, documentation handoff and this record only. |
-| 8 — whole-branch remediation | RED `3f32dff`; production `10b982c`; CJS RED `1cc9970`; CJS production `c2fa80e` | Three Important alias-scanner findings repaired under TDD; all counterfactuals killed. |
+| 8 — whole-branch remediation | RED `3f32dff`, `1cc9970`; production `10b982c`, `c2fa80e`; evidence/style `c60e996`, `539fc23`, `cb43942`, `8430d70` | All Critical/Important findings closed; final spec review clean and one non-blocking fidelity Minor deferred. |
 
 ## Counterfactuals
 
@@ -191,5 +191,13 @@ This records what happened while executing
   same scoped `--test` command passed, and the six-file focused Pest surface passed **79 tests / 199
   assertions** afterward. This closes the earlier unavailable/never-passed limitation without
   adding Pint to the repository.
+- Final review disposition: both independent reviewers reported zero Critical and zero Important
+  findings after Fix Round 2. Spec review reported zero Minors. Adversarial review retained one
+  non-blocking fidelity Minor: legacy octal code units above ASCII are decoded as raw bytes rather
+  than UTF-8. This cannot affect the ASCII `@nodeflow/editor` key or package-path substring and is
+  deferred rather than included in G-7 scope.
+- Post-remediation branch gates at source `8430d7055d1505526f6e046024ae8e08e768989e`
+  passed: Pest **937 tests / 7,538 assertions** in 97.13s; Vitest **160 tests across 17 files**;
+  TypeScript silent; Composer metadata valid; scoped Pint passed; and `git diff --check` clean.
 
 ## Final merged-main verification

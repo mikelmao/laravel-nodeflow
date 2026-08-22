@@ -9,7 +9,7 @@ actually do.
 
 > **Status: tooling shipped; final browser acceptance remains open.** The durable engine, node
 > generator, installer, opt-in editor, run view, node-package scaffolder and node extractor all
-> ship. The package is verified by 922 PHP tests with 7,514 assertions and 160 client Vitest tests
+> ship. The package is verified by 937 PHP tests with 7,538 assertions and 160 client Vitest tests
 > across 17 files. Earlier acceptance work exercised the interpreter locally with a real queue
 > worker; real-queue execution is not yet part of CI. See
 > [Known limitations](docs/05-execution-model.md#known-limitations) before you depend on it.

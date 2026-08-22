@@ -5,8 +5,8 @@ not edit the target files below. Apply each change only when its named evidence 
 
 ## Measured release-readiness evidence
 
-- Package source commit `56fa8e064b344083c36d8ad7b3d98b19607dd636`: Pest passed 922 tests
-  with 7,514 assertions; Vitest passed 160 tests across 17 files; `npx tsc --noEmit` was silent;
+- Package source commit `8430d7055d1505526f6e046024ae8e08e768989e`: Pest passed 937 tests
+  with 7,538 assertions; Vitest passed 160 tests across 17 files; `npx tsc --noEmit` was silent;
   `composer validate --no-check-publish` reported valid metadata; and `git diff --check` passed.
 - Demo commit `e15e5bd912fee2e248654861b826d9e1458707dc`, with
   `vendor/atram/laravel-nodeflow` resolving exactly to package main: Pest passed 56 tests with 223
