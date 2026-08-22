@@ -23,6 +23,8 @@ Field::select('channel')
 
 `options(array $options)` supplies static `value => label` choices. `optionsFrom(string $sourceClass)` marks the field dynamic. The source class must implement `OptionSource` with `options(): array`, and is available to server code through `optionsSourceClass(): ?string`; its class name is never serialized to the browser.
 
+**File: `app/Nodeflow/Nodes/SendMessage.php` (inside `definition()`):**
+
 ```php
 <?php
 

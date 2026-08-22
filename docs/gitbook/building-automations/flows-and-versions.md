@@ -93,7 +93,7 @@ Publishing is transactional: Nodeflow creates the `FlowVersion`, points `current
 
 Nodeflow treats published versions as immutable, and package services never update their graph rows. The `FlowVersion` model and database do not prevent host code from updating or deleting a version, however. Never mutate or delete versions that existing runs require.
 
-Draft saving uses compare-and-swap, but `PublishFlow::publish()` accepts no draft revision. A second author can save a newer draft after the final draft `PUT` and before the publish `POST`; the publish transaction can then clear that newer draft. The transaction makes one publish atomic, not serialized against other requests. Until publish revision checking exists, serialize draft/publish work per flow in the application or allow only one publisher for that flow.
+Draft saving uses compare-and-swap, but `PublishFlow::publish()` accepts no draft revision. A second author can save a newer draft after the final draft `PUT` and before the publish `POST`; the publish transaction can then clear that newer draft. The transaction makes one publish atomic, not serialized against other requests. Until publish revision checking exists, serialize every draft-save and publish request per flow in the application, or restrict the flow to one editor/author at a time. Restricting only publishers does not prevent another updater from creating this race.
 
 ## Next step
 

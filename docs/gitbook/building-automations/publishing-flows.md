@@ -102,7 +102,7 @@ The successful work happens in one database transaction: it creates a `FlowVersi
 
 Nodeflow treats the version graph as immutable, and its publishing services never mutate it. The `FlowVersion` model and database do not enforce update/delete immutability, so host code must never mutate or delete a version required by a run. Runs retain their own `flow_version_id`, so old runs continue on their pinned version after a later publish. The flow's `draft_revision` is deliberately not cleared or reset; it remains monotonic for open editors and subsequent draft saves.
 
-The publish transaction does not coordinate with draft saves from other requests. `SaveDraft` uses a revision compare-and-swap, but `PublishFlow` accepts no revision: a draft saved after the final draft `PUT` and before the publish `POST` can be cleared by publishing. Serialize application-level draft/publish work per flow, or permit only one publisher per flow, until revision-aware publishing is available.
+The publish transaction does not coordinate with draft saves from other requests. `SaveDraft` uses a revision compare-and-swap, but `PublishFlow` accepts no revision: a draft saved after the final draft `PUT` and before the publish `POST` can be cleared by publishing. Until revision-aware publishing is available, serialize every application-level draft-save and publish request per flow, or restrict the flow to one editor/author at a time. Restricting only publishers does not prevent another updater's draft race.
 
 ## Next step
 

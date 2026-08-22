@@ -172,7 +172,7 @@ Every node that sends, charges, or writes to another system must return a no-sid
 - Does each field have server-side rules appropriate to its value?
 - Does test mode avoid every external side effect?
 - Are side effects safe if the host invokes the node again or adds a retry policy?
-- Does each subject receive a deliberate output or failure?
+- Does each subject receive an output, a failure, or deliberate completion?
 - Does an audience result contain each current chunk ID at most once and no external IDs?
 - If it implements both interfaces, do audience and subject paths have identical outcomes?
 
