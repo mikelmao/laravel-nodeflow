@@ -3,7 +3,9 @@
 use Illuminate\Console\Command;
 use Illuminate\Support\Facades\Gate;
 use Nodeflow\Console\Install\InstallOutcome;
+use Nodeflow\Console\Install\ProviderRegistrationStep;
 use Nodeflow\Console\Install\ProviderStep;
+use Nodeflow\Console\InstallCommand;
 
 beforeEach(function () {
     $this->root = sys_get_temp_dir().'/nodeflow-install-cmd-'.bin2hex(random_bytes(6));
@@ -76,7 +78,7 @@ it('exits zero on a host it could fully wire', function () {
     $this->artisan('nodeflow:install')->assertExitCode(0);
 
     expect($this->root.'/'.ProviderStep::PATH)->toBeFile();
-    expect($this->root.'/config/nodeflow.php')->toBeFile();
+    expect($this->root.'/config/nodeflow.php')->not->toBeFile();
     expect(file_get_contents($this->root.'/bootstrap/providers.php'))
         ->toContain('NodeflowServiceProvider::class');
     expect(file_get_contents($this->root.'/resources/css/app.css'))
@@ -92,7 +94,6 @@ it('is idempotent: a second run writes nothing and still exits zero', function (
         'provider' => file_get_contents($this->root.'/'.ProviderStep::PATH),
         'bootstrap' => file_get_contents($this->root.'/bootstrap/providers.php'),
         'css' => file_get_contents($this->root.'/resources/css/app.css'),
-        'config' => file_get_contents($this->root.'/config/nodeflow.php'),
     ];
 
     $this->artisan('nodeflow:install')->assertExitCode(0);
@@ -100,7 +101,29 @@ it('is idempotent: a second run writes nothing and still exits zero', function (
     expect(file_get_contents($this->root.'/'.ProviderStep::PATH))->toBe($before['provider']);
     expect(file_get_contents($this->root.'/bootstrap/providers.php'))->toBe($before['bootstrap']);
     expect(file_get_contents($this->root.'/resources/css/app.css'))->toBe($before['css']);
-    expect(file_get_contents($this->root.'/config/nodeflow.php'))->toBe($before['config']);
+});
+
+it('keeps the optional config healthy when every other step is wired', function () {
+    writeClientWiring($this->root);
+
+    $this->artisan('nodeflow:install')->assertExitCode(0);
+
+    expect($this->root.'/'.ProviderStep::PATH)->toBeFile();
+    expect($this->root.'/'.ProviderRegistrationStep::PATH)->toBeFile();
+    expect(file_get_contents($this->root.'/bootstrap/providers.php'))
+        ->toContain('NodeflowServiceProvider::class');
+    expect(file_get_contents($this->root.'/resources/css/app.css'))
+        ->toContain('atram/laravel-nodeflow/resources/js');
+    expect(file_get_contents($this->root.'/vite.config.ts'))
+        ->toContain("'@nodeflow/editor'")
+        ->toContain('dedupe');
+    expect(json_decode(file_get_contents($this->root.'/tsconfig.json'), true)['compilerOptions']['paths'])
+        ->toHaveKeys(['@nodeflow/editor', '@nodeflow/editor/*']);
+    expect(json_decode(file_get_contents($this->root.'/package.json'), true)['dependencies'])
+        ->toHaveKey('@xyflow/react');
+    expect($this->root.'/config/nodeflow.php')->not->toBeFile();
+
+    $this->artisan('nodeflow:install', ['--check' => true])->assertExitCode(0);
 });
 
 it('writes nothing under --check and exits non-zero when anything is unwired', function () {
@@ -198,7 +221,7 @@ it('fails on a residual Writable outcome in either mode, not only under --check'
     // fragile invariant ("no future step's apply() may ever return Writable")
     // that nothing enforces. Testing exitCode() directly, by reflection, pins
     // the hardening itself rather than a scenario that does not exist yet.
-    $command = $this->app->make(\Nodeflow\Console\InstallCommand::class);
+    $command = $this->app->make(InstallCommand::class);
 
     $exitCode = new ReflectionMethod($command, 'exitCode');
     $exitCode->setAccessible(true);

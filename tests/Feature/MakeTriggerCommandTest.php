@@ -1,9 +1,37 @@
 <?php
 
+use App\Providers\ManualRegistrationProbe;
+use Illuminate\Support\Facades\Artisan;
 use Nodeflow\Schema\TriggerDefinition;
 use Nodeflow\Triggers\Trigger;
 use Nodeflow\Triggers\TriggerMatch;
 use Nodeflow\Triggers\TriggerRegistry;
+
+function triggerManualRegistrationSnippet(string $output): string
+{
+    $lines = preg_split('/\R/', $output) ?: [];
+    $start = null;
+
+    foreach ($lines as $index => $line) {
+        if (str_contains($line, 'app(') && str_contains($line, 'TriggerRegistry::class')) {
+            $start = $index;
+
+            break;
+        }
+    }
+
+    if ($start === null) {
+        return '';
+    }
+
+    for ($end = $start; $end < count($lines); $end++) {
+        if (trim($lines[$end]) === ');') {
+            return implode(PHP_EOL, array_slice($lines, $start, $end - $start + 1));
+        }
+    }
+
+    return '';
+}
 
 /** A stand-in host event, so --event can name a class that genuinely exists. */
 class MakeTriggerTestEvent
@@ -140,16 +168,40 @@ it('registers the trigger in the provider through the trigger anchor', function 
         ->toContain('\App\Nodeflow\Triggers\RegisteredTrigger::class,');
 });
 
-it('prints the registration line when there is no provider, and still exits zero', function () {
+it('prints the line that registers the trigger when there is no provider, and still exits zero', function () {
     // Same contract as make-node: never guess, always explain, and generating the
     // file is still a success.
-    $this->artisan('nodeflow:make-trigger', [
-        'name' => 'UnregisteredTrigger',
+    $exitCode = Artisan::call('nodeflow:make-trigger', [
+        'name' => 'ManualTrigger',
         '--event' => MakeTriggerTestEvent::class,
-        '--type' => 'shop.unregistered',
-    ])
-        ->expectsOutputToContain('TriggerRegistry')
-        ->assertExitCode(0);
+        '--type' => 'shop.manual',
+    ]);
+    $output = Artisan::output();
+
+    expect($exitCode)->toBe(0);
+    expect($output)->toContain('TriggerRegistry');
+    $snippet = triggerManualRegistrationSnippet($output);
+    expect($snippet)->not->toBe('');
+
+    mkdir($this->root.'/app/Providers', 0777, true);
+
+    $probePath = $this->root.'/app/Providers/ManualRegistrationProbe.php';
+    file_put_contents(
+        $probePath,
+        "<?php\n\nnamespace App\\Providers;\n\n"
+        ."final class ManualRegistrationProbe\n{\n"
+        ."    public static function run(): void\n    {\n"
+        .$snippet."\n    }\n}\n",
+    );
+
+    expectParseablePhp($probePath);
+
+    require $this->root.'/app/Nodeflow/Triggers/ManualTrigger.php';
+    require $probePath;
+
+    ManualRegistrationProbe::run();
+
+    expect(app(TriggerRegistry::class)->has('shop.manual'))->toBeTrue();
 });
 
 it('warns but still generates when the event class does not exist', function () {

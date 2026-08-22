@@ -122,7 +122,7 @@ class MakeSubjectAttributeCommand extends Command
     {
         $this->components->warn($because.' Register the attribute yourself:');
         $this->newLine();
-        $this->line('    app(SubjectAttributeRegistry::class)->register(');
+        $this->line('    app(\\Nodeflow\\Schema\\SubjectAttributeRegistry::class)->register(');
         $this->line('        '.$entry.',');
         $this->line('    );');
         $this->newLine();

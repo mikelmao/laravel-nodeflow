@@ -3,6 +3,7 @@
 use Illuminate\Filesystem\Filesystem;
 use Nodeflow\Console\Install\InstallOutcome;
 use Nodeflow\Console\Install\ViteAliasStep;
+use Nodeflow\Console\Install\ViteAliasValue;
 use Nodeflow\Console\Install\ViteDedupeStep;
 
 beforeEach(function () {
@@ -18,11 +19,50 @@ beforeEach(function () {
 });
 
 afterEach(function () {
-    foreach (glob($this->root.'/*') ?: [] as $file) {
-        unlink($file);
+    $delete = function (string $dir) use (&$delete) {
+        foreach (scandir($dir) as $entry) {
+            if ($entry === '.' || $entry === '..') {
+                continue;
+            }
+
+            $path = $dir.'/'.$entry;
+            is_dir($path) ? $delete($path) : unlink($path);
+        }
+        rmdir($dir);
+    };
+
+    if (is_dir($this->root)) {
+        $delete($this->root);
     }
-    @rmdir($this->root);
 });
+
+function viteSelectedConfig(string $root): string
+{
+    $output = [];
+    $command = 'node '
+        .escapeshellarg(__DIR__.'/../../Support/resolve-vite-config.mjs').' '
+        .escapeshellarg($root).' 2>&1';
+
+    exec($command, $output, $exitCode);
+
+    expect($exitCode)->toBe(0, implode(PHP_EOL, $output));
+
+    return trim(implode(PHP_EOL, $output));
+}
+
+function viteResolvedNodeflowAlias(string $root): string
+{
+    $output = [];
+    $command = 'node '
+        .escapeshellarg(__DIR__.'/../../Support/resolve-vite-alias.mjs').' '
+        .escapeshellarg($root).' 2>&1';
+
+    exec($command, $output, $exitCode);
+
+    expect($exitCode)->toBe(0, implode(PHP_EOL, $output));
+
+    return trim(implode(PHP_EOL, $output));
+}
 
 /** The accepted host's config, reduced to the two settings under test. */
 function wiredViteConfig(): string
@@ -46,6 +86,55 @@ it('accepts the accepted host\'s configuration', function () {
     expect($this->alias->check())->toBe(InstallOutcome::AlreadyPresent);
     expect($this->dedupe->check())->toBe(InstallOutcome::AlreadyPresent);
 });
+
+it('inspects the same config file Vite loads when candidates coexist', function () {
+    file_put_contents($this->root.'/vite.config.js', <<<'JS'
+    export default {
+        resolve: {
+            alias: { '@nodeflow/editor': 'vendor/atram/laravel-nodeflow/resources/js' },
+            dedupe: ['react', 'react-dom', '@xyflow/react'],
+        },
+    }
+    JS);
+
+    file_put_contents($this->root.'/vite.config.ts', <<<'TS'
+    export default {
+        resolve: {
+            alias: { '@nodeflow/editor': 'resources/js' },
+            dedupe: ['lodash'],
+        },
+    }
+    TS);
+
+    expect(viteSelectedConfig($this->root))->toBe('vite.config.js');
+    expect($this->alias->check())->toBe(InstallOutcome::AlreadyPresent);
+    expect($this->dedupe->check())->toBe(InstallOutcome::AlreadyPresent);
+});
+
+it('accepts the Vite-selected CommonJS config candidates', function (string $filename, string $contents) {
+    file_put_contents($this->root.'/'.$filename, $contents);
+
+    expect(viteSelectedConfig($this->root))->toBe($filename);
+    expect($this->alias->check())->toBe(InstallOutcome::AlreadyPresent);
+    expect($this->dedupe->check())->toBe(InstallOutcome::AlreadyPresent);
+})->with([
+    'cjs' => ['vite.config.cjs', <<<'CJS'
+    module.exports = {
+        resolve: {
+            alias: { '@nodeflow/editor': 'vendor/atram/laravel-nodeflow/resources/js' },
+            dedupe: ['react', 'react-dom', '@xyflow/react'],
+        },
+    }
+    CJS],
+    'cts' => ['vite.config.cts', <<<'CTS'
+    export default {
+        resolve: {
+            alias: { '@nodeflow/editor': 'vendor/atram/laravel-nodeflow/resources/js' },
+            dedupe: ['react', 'react-dom', '@xyflow/react'],
+        },
+    }
+    CTS],
+]);
 
 it('rejects a commented-out alias', function () {
     // The test that distinguishes E22 from naive text matching. Counterfactual:
@@ -72,6 +161,259 @@ it('rejects an alias pointing at a sibling packages/ directory without the vendo
             alias: {
                 '@nodeflow/editor': path.resolve(__dirname, 'packages/atram/laravel-nodeflow/resources/js'),
             },
+        },
+    })
+    TS);
+
+    expect($this->alias->check())->toBe(InstallOutcome::CannotWire);
+});
+
+it('does not combine a wrong alias with the package path elsewhere in the file', function () {
+    ($this->write)(<<<'TS'
+    export default defineConfig({
+        resolve: {
+            alias: {
+                '@nodeflow/editor': path.resolve(__dirname, 'resources/js'),
+            },
+        },
+    })
+
+    const documentationPath = 'vendor/atram/laravel-nodeflow/resources/js'
+    TS);
+
+    expect($this->alias->check())->toBe(InstallOutcome::CannotWire);
+});
+
+it('accepts every single- and double-quoted alias key and package-path combination', function (string $keyQuote, string $pathQuote) {
+    ($this->write)(<<<TS
+    export default defineConfig({
+        resolve: {
+            alias: {
+                {$keyQuote}@nodeflow/editor{$keyQuote}: {$pathQuote}vendor/atram/laravel-nodeflow/resources/js{$pathQuote},
+            },
+        },
+    })
+    TS);
+
+    expect($this->alias->check())->toBe(InstallOutcome::AlreadyPresent);
+})->with([
+    'single key and single path' => ["'", "'"],
+    'single key and double path' => ["'", '"'],
+    'double key and single path' => ['"', "'"],
+    'double key and double path' => ['"', '"'],
+]);
+
+it('scans an alias path.resolve value through its inner comma', function () {
+    ($this->write)(<<<'TS'
+    export default defineConfig({
+        resolve: {
+            alias: {
+                '@nodeflow/editor': path.resolve(__dirname, 'vendor/atram/laravel-nodeflow/resources/js'),
+            },
+        },
+    })
+    TS);
+
+    expect($this->alias->check())->toBe(InstallOutcome::AlreadyPresent);
+});
+
+it('rejects two live nodeflow editor alias properties', function () {
+    ($this->write)(<<<'TS'
+    export default defineConfig({
+        resolve: {
+            alias: {
+                '@nodeflow/editor': 'vendor/atram/laravel-nodeflow/resources/js',
+                '@nodeflow/editor': 'vendor/atram/laravel-nodeflow/resources/js',
+            },
+        },
+    })
+    TS);
+
+    expect($this->alias->check())->toBe(InstallOutcome::CannotWire);
+});
+
+it('returns null when an alias value closes delimiters out of stack order', function () {
+    expect(ViteAliasValue::extract(
+        <<<'TS'
+        {
+            '@nodeflow/editor': ([
+                'vendor/atram/laravel-nodeflow/resources/js'
+            )]
+        }
+        TS,
+    ))->toBeNull();
+});
+
+it('rejects an alias value that closes delimiters out of stack order', function () {
+    ($this->write)(<<<'TS'
+    export default defineConfig({
+        resolve: {
+            alias: {
+                '@nodeflow/editor': ([
+                    'vendor/atram/laravel-nodeflow/resources/js'
+                )],
+            },
+        },
+    })
+    TS);
+
+    expect($this->alias->check())->toBe(InstallOutcome::CannotWire);
+});
+
+it('returns null for duplicate semantic alias keys', function (string $escapedKey) {
+    expect(ViteAliasValue::extract(<<<TS
+    {
+        '@nodeflow/editor': 'vendor/atram/laravel-nodeflow/resources/js',
+        '{$escapedKey}': 'vendor/atram/laravel-nodeflow/resources/js',
+    }
+    TS))->toBeNull();
+})->with([
+    'escaped slash' => ['@nodeflow\\/editor'],
+    'unicode slash' => ['@nodeflow\\u002feditor'],
+    'braced unicode slash' => ['@nodeflow\\u{2f}editor'],
+]);
+
+it('rejects duplicate semantic alias keys', function (string $escapedKey) {
+    ($this->write)(<<<TS
+    export default defineConfig({
+        resolve: {
+            alias: {
+                '@nodeflow/editor': 'vendor/atram/laravel-nodeflow/resources/js',
+                '{$escapedKey}': 'vendor/atram/laravel-nodeflow/resources/js',
+            },
+        },
+    })
+    TS);
+
+    expect($this->alias->check())->toBe(InstallOutcome::CannotWire);
+})->with([
+    'escaped slash' => ['@nodeflow\\/editor'],
+    'unicode slash' => ['@nodeflow\\u002feditor'],
+    'braced unicode slash' => ['@nodeflow\\u{2f}editor'],
+]);
+
+it('accepts a lone semantically escaped alias key', function (string $escapedKey) {
+    ($this->write)(<<<TS
+    export default defineConfig({
+        resolve: {
+            alias: {
+                '{$escapedKey}': 'vendor/atram/laravel-nodeflow/resources/js',
+            },
+        },
+    })
+    TS);
+
+    expect(ViteAliasValue::extract(file_get_contents($this->root.'/vite.config.ts')))
+        ->toBe("'vendor/atram/laravel-nodeflow/resources/js'");
+    expect($this->alias->check())->toBe(InstallOutcome::AlreadyPresent);
+})->with([
+    'escaped slash' => ['@nodeflow\\/editor'],
+    'unicode slash' => ['@nodeflow\\u002feditor'],
+    'braced unicode slash' => ['@nodeflow\\u{2f}editor'],
+]);
+
+it('accepts an escaped package path value with Vite semantics', function () {
+    ($this->write)(<<<'TS'
+    export default defineConfig({
+        resolve: {
+            alias: {
+                '@nodeflow/editor': 'vendor\/atram\/laravel-nodeflow\/resources\/js',
+            },
+        },
+    })
+    TS);
+
+    expect($this->alias->check())->toBe(InstallOutcome::AlreadyPresent);
+});
+
+it('rejects a CJS duplicate whose legacy-octal key overrides the correct alias', function () {
+    file_put_contents($this->root.'/vite.config.cjs', <<<'CJS'
+    module.exports = {
+        resolve: {
+            alias: {
+                '@nodeflow/editor': 'vendor/atram/laravel-nodeflow/resources/js',
+                '@nodeflow\057editor': 'resources/js',
+            },
+        },
+    }
+    CJS);
+
+    expect(viteResolvedNodeflowAlias($this->root))->toBe('resources/js');
+    expect($this->alias->check())->toBe(InstallOutcome::CannotWire);
+});
+
+it('accepts a lone CJS alias key with a legacy-octal slash', function () {
+    file_put_contents($this->root.'/vite.config.cjs', <<<'CJS'
+    module.exports = {
+        resolve: {
+            alias: {
+                '@nodeflow\057editor': 'vendor/atram/laravel-nodeflow/resources/js',
+            },
+        },
+    }
+    CJS);
+
+    expect(viteResolvedNodeflowAlias($this->root))
+        ->toBe('vendor/atram/laravel-nodeflow/resources/js');
+    expect($this->alias->check())->toBe(InstallOutcome::AlreadyPresent);
+});
+
+it('accepts a CJS package path with legacy-octal slashes', function () {
+    file_put_contents($this->root.'/vite.config.cjs', <<<'CJS'
+    module.exports = {
+        resolve: {
+            alias: {
+                '@nodeflow/editor': 'vendor\057atram\057laravel-nodeflow\057resources\057js',
+            },
+        },
+    }
+    CJS);
+
+    expect(viteResolvedNodeflowAlias($this->root))
+        ->toBe('vendor/atram/laravel-nodeflow/resources/js');
+    expect($this->alias->check())->toBe(InstallOutcome::AlreadyPresent);
+});
+
+it('returns null for an alias property with no value', function (string $source) {
+    expect(ViteAliasValue::extract($source))->toBeNull();
+})->with([
+    'before a comma' => ['{"@nodeflow/editor":,}'],
+    'before an enclosing object end' => ['{"@nodeflow/editor":}'],
+    'at end of file' => ['{"@nodeflow/editor":'],
+]);
+
+it('returns null for a nested duplicate alias property', function () {
+    expect(ViteAliasValue::extract(
+        '{"@nodeflow/editor":{"@nodeflow/editor":"vendor/atram/laravel-nodeflow/resources/js"}}',
+    ))->toBeNull();
+});
+
+it('rejects a nested duplicate nodeflow editor alias property', function () {
+    ($this->write)(<<<'TS'
+    export default defineConfig({
+        resolve: {
+            alias: {
+                '@nodeflow/editor': {
+                    '@nodeflow/editor': 'vendor/atram/laravel-nodeflow/resources/js',
+                },
+            },
+        },
+    })
+    TS);
+
+    expect($this->alias->check())->toBe(InstallOutcome::CannotWire);
+});
+
+it('does not let a package path in another nested property rescue a wrong alias', function () {
+    ($this->write)(<<<'TS'
+    export default defineConfig({
+        resolve: {
+            alias: {
+                '@nodeflow/editor': 'resources/js',
+            },
+        },
+        metadata: {
+            documentationPath: path.resolve(__dirname, 'vendor/atram/laravel-nodeflow/resources/js'),
         },
     })
     TS);

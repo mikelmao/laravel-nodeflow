@@ -1,5 +1,7 @@
 <?php
 
+use App\Providers\ManualAttributeRegistrationProbe;
+use Illuminate\Support\Facades\Artisan;
 use Nodeflow\Schema\SubjectAttribute;
 use Nodeflow\Schema\SubjectAttributeRegistry;
 
@@ -21,6 +23,32 @@ function renderedEntryFrom(string $providerPath): string
     );
 
     return $matches[1] ?? '';
+}
+
+function attributeManualRegistrationSnippet(string $output): string
+{
+    $lines = preg_split('/\R/', $output) ?: [];
+    $start = null;
+
+    foreach ($lines as $index => $line) {
+        if (str_contains($line, 'app(') && str_contains($line, 'SubjectAttributeRegistry::class')) {
+            $start = $index;
+
+            break;
+        }
+    }
+
+    if ($start === null) {
+        return '';
+    }
+
+    for ($end = $start; $end < count($lines); $end++) {
+        if (trim($lines[$end]) === ');') {
+            return implode(PHP_EOL, array_slice($lines, $start, $end - $start + 1));
+        }
+    }
+
+    return '';
 }
 
 beforeEach(function () {
@@ -162,9 +190,33 @@ it('rejects a key a published graph could not resolve', function () {
 it('prints the line and exits zero when there is no provider', function () {
     unlink($this->providerPath);
 
-    $this->artisan('nodeflow:make-subject-attribute', ['key' => 'plan'])
-        ->expectsOutputToContain('SubjectAttributeRegistry')
-        ->assertExitCode(0);
+    $exitCode = Artisan::call('nodeflow:make-subject-attribute', [
+        'key' => 'manual_plan',
+    ]);
+    $output = Artisan::output();
+
+    expect($exitCode)->toBe(0);
+    expect($output)->toContain('SubjectAttributeRegistry');
+
+    $snippet = attributeManualRegistrationSnippet($output);
+    expect($snippet)->not->toBe('');
+
+    $probePath = $this->root.'/app/Providers/ManualAttributeRegistrationProbe.php';
+    file_put_contents(
+        $probePath,
+        "<?php\n\nnamespace App\\Providers;\n\n"
+        ."final class ManualAttributeRegistrationProbe\n{\n"
+        ."    public static function run(): void\n    {\n"
+        .$snippet."\n    }\n}\n",
+    );
+
+    expectParseablePhp($probePath);
+
+    require $probePath;
+
+    ManualAttributeRegistrationProbe::run();
+
+    expect(app(SubjectAttributeRegistry::class)->has('manual_plan'))->toBeTrue();
 });
 
 it('prints the line when the method anchor is missing', function () {

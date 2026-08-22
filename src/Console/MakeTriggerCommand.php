@@ -112,7 +112,7 @@ class MakeTriggerCommand extends GeneratorCommand
     {
         $this->components->warn($because.' Register the trigger yourself:');
         $this->newLine();
-        $this->line('    app(TriggerRegistry::class)->register(');
+        $this->line('    app(\\Nodeflow\\Triggers\\TriggerRegistry::class)->register(');
         $this->line('        \\'.$triggerClass.'::class,');
         $this->line('    );');
         $this->newLine();

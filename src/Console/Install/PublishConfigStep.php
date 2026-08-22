@@ -5,51 +5,36 @@ namespace Nodeflow\Console\Install;
 use Illuminate\Filesystem\Filesystem;
 
 /**
- * Publishes config/nodeflow.php, and never overwrites one that exists.
+ * Reports the optional host-owned config publication.
  *
- * Deliberately not `vendor:publish --tag=nodeflow-config`: this step has to
- * report AlreadyPresent distinctly from Wired, and vendor:publish exits 0 either
- * way. The file it copies is the same one that tag publishes.
+ * An absent config/nodeflow.php uses the package defaults merged by the service
+ * provider. A present file is host-owned customization, not drift, and is never
+ * overwritten by install. Explicit publication is `php artisan
+ * vendor:publish --tag=nodeflow-config`.
  */
 final class PublishConfigStep implements InstallStep
 {
     public const PATH = 'config/nodeflow.php';
 
-    public function __construct(private Filesystem $files, private string $basePath) {}
+    public function __construct(Filesystem $files, string $basePath) {}
 
     public function describe(): string
     {
-        return 'Config ('.self::PATH.')';
+        return 'Config (optional; package defaults are merged)';
     }
 
     public function check(): InstallOutcome
     {
-        return $this->files->exists($this->path())
-            ? InstallOutcome::AlreadyPresent
-            : InstallOutcome::Writable;
+        return InstallOutcome::AlreadyPresent;
     }
 
     public function apply(): InstallOutcome
     {
-        if ($this->files->exists($this->path())) {
-            return InstallOutcome::AlreadyPresent;
-        }
-
-        $this->files->ensureDirectoryExists(dirname($this->path()));
-        $this->files->copy(__DIR__.'/../../../config/nodeflow.php', $this->path());
-
-        return $this->files->exists($this->path())
-            ? InstallOutcome::Wired
-            : InstallOutcome::CannotWire;
+        return $this->check();
     }
 
     public function snippet(): ?string
     {
         return null;
-    }
-
-    private function path(): string
-    {
-        return $this->basePath.'/'.self::PATH;
     }
 }
