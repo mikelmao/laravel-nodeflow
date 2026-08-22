@@ -4,7 +4,7 @@ This page installs Nodeflow, explains what its installer verifies, and identifie
 
 ## Requirements
 
-Nodeflow requires PHP 8.3 or newer (the Composer constraint is `^8.3`). Its `illuminate/console`, `illuminate/filesystem`, `illuminate/support`, and `illuminate/database` constraints are each `^12.0|^13.0`, which supports Laravel 12 or 13; its durable execution dependency is `durable-workflow/workflow ^2.0@rc`.
+Nodeflow requires PHP `^8.3` (PHP 8.3 or later releases before PHP 9.0). Its `illuminate/console`, `illuminate/filesystem`, `illuminate/support`, and `illuminate/database` constraints are each `^12.0|^13.0`, which supports Laravel 12 or 13; its durable execution dependency is `durable-workflow/workflow ^2.0@rc`.
 
 Use a queue connection other than `sync`. A durable workflow must be able to yield for a wait and later resume in a real worker process. The durable-workflow dependency also uses Laravel atomic cache locks while coordinating workflow work, so configure a cache store that supports atomic locks.
 
