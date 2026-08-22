@@ -169,15 +169,34 @@ class MakeNodePackageCommand extends Command
 
         $providerClass = $namespace.'\\'.$shortClassBase.'ServiceProvider';
 
-        // Validated on the FULL provider class, not the base namespace alone:
-        // that covers every base-namespace segment (a prefix of the provider
-        // class's own segments) AND the derived short class name in one pass.
-        // (This is provably redundant with validating $namespace alone as
-        // long as $shortClassBase is always drawn from one of $namespace's
-        // own segments, as it now is — see the report's mutation-testing
-        // section for why. Kept as the full provider class anyway, both for
-        // robustness against a future change to how the short class is
-        // derived and because it is what actually gets rendered.)
+        // Validated on the FULL provider class, not the base namespace alone.
+        // The two are INCOMPARABLE, not redundant — an earlier version of
+        // this comment claimed validating $namespace alone would catch
+        // everything validating $providerClass does, because $shortClassBase
+        // is drawn from one of $namespace's own segments. That reasoning
+        // missed that Str::studly() is applied to that segment on the way to
+        // becoming $shortClassBase, and Str::studly() does not preserve
+        // validity in either direction:
+        //   - $namespace can be valid while $providerClass is not.
+        //     Str::studly('_2captcha') strips the leading underscore that
+        //     made the segment a legal identifier, exposing the leading
+        //     digit: `--namespace=Acme\_2captcha` passes as a namespace
+        //     (leading '_' is legal) but studly-cases its own last segment
+        //     to `2captcha`, an invalid identifier — caught here, by
+        //     validating $providerClass, and ONLY here.
+        //   - $providerClass can be valid while $namespace is not.
+        //     `--namespace=\` trims to an empty $namespace, whose own single
+        //     (empty) segment fails validation on its own — but the FULL
+        //     $providerClass's short-class segment ('ServiceProvider', with
+        //     the empty leading segment trimmed away by
+        //     assertValidNamespaceSegments()'s own trim()) is fine, so
+        //     validating $providerClass alone lets this through to the
+        //     scaffolder's own pre-write check instead of refusing it here
+        //     with a specific message.
+        // The code deliberately keeps the STRONGER form (validating
+        // $providerClass): it is what actually gets rendered, and the first
+        // bullet above is a real defect $namespace-only validation would
+        // silently miss.
         $this->assertValidNamespaceSegments($providerClass);
 
         // Whitespace-trimmed only — NOT slash-trimmed. HostPath::resolveWithin()

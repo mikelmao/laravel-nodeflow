@@ -154,6 +154,50 @@ it('lets --namespace rescue a package name that cannot studly-case into a valid 
     expect($composer['extra']['laravel']['providers'])->toBe(['Acme\\Captcha\\CaptchaServiceProvider']);
 });
 
+it('StudlyCases an underscored --namespace segment before appending ServiceProvider', function () {
+    // Str::studly() is applied to $namespace's own last segment on the way
+    // to $shortClassBase — not just end(explode(...)) verbatim. Both
+    // "MyCoolServiceProvider" (with Str::studly) and "my_coolServiceProvider"
+    // (without it — an underscore is a legal, if unconventional, PHP
+    // identifier character, so the un-studlied form is ALSO valid PHP) parse
+    // fine, so nothing else backstops this: the scaffolder's own pre-write
+    // parse check passes either way, and only this test's exact filename and
+    // content assertions can tell the two apart.
+    $this->artisan('nodeflow:make-node-package', [
+        'name' => 'acme/widgets',
+        '--namespace' => 'Acme\\my_cool',
+    ])->assertExitCode(0);
+
+    expect($this->root.'/packages/acme/widgets/src/MyCoolServiceProvider.php')->toBeFile();
+    expect($this->root.'/packages/acme/widgets/src/my_coolServiceProvider.php')->not->toBeFile();
+
+    $provider = file_get_contents($this->root.'/packages/acme/widgets/src/MyCoolServiceProvider.php');
+    expect($provider)->toContain('class MyCoolServiceProvider');
+});
+
+it('refuses a namespace whose last segment studly-cases into an invalid identifier, even though the namespace itself is valid', function () {
+    // The "incomparable, not redundant" case: validating $providerClass (the
+    // FULL fully-qualified class, short class included) catches this;
+    // validating $namespace alone would not. A leading underscore is a
+    // legal first character for a PHP namespace segment, so "_2captcha"
+    // passes as $namespace's own last segment on its own — but
+    // Str::studly('_2captcha') strips that very underscore, exposing the
+    // leading digit and producing "2captchaServiceProvider", an invalid
+    // identifier. Str::studly() does not preserve validity in either
+    // direction, which is exactly why the two checks are incomparable
+    // rather than one subsuming the other (see resolveTarget()'s own
+    // comment above assertValidNamespaceSegments($providerClass) for the
+    // full writeup, including the converse case).
+    $this->artisan('nodeflow:make-node-package', [
+        'name' => 'acme/widgets',
+        '--namespace' => 'Acme\\_2captcha',
+    ])
+        ->expectsOutputToContain('[2captchaServiceProvider]')
+        ->assertFailed();
+
+    expect($this->root.'/packages')->not->toBeDirectory();
+});
+
 it('strips a --namespace value carrying stray leading/trailing backslashes', function () {
     // Counterfactual: drop the trim($namespaceOption, '\\') and the provider
     // renders `namespace \Custom\Space;` — a leading namespace separator is a
