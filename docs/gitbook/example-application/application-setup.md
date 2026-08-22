@@ -15,6 +15,80 @@ Use the following minimum data contract. The application may have additional col
 
 `Organization` and `User` may use integer or UUID keys. The package stores tenant and subject identities as strings, so always cast `getKey()`, `organization_id`, and event map keys to strings at the integration boundary. `User::organization_id` must identify the same organization checked by the tenant resolver; a relationship alone is not an ownership check.
 
+### Create the host migrations
+
+The following is a complete **host migration** for a fresh application that already has Laravel's normal `users` table (`id`, `name`, `email`, and `password`) and has run the Nodeflow migrations first. It creates only application-owned tables and columns. For an application that already has users, backfill `organization_id` in a separate deployment before adding the non-null foreign key.
+
+**File: `database/migrations/2026_08_22_000001_create_flood_alert_example_tables.php`**
+
+```php
+<?php
+
+use Illuminate\Database\Migrations\Migration;
+use Illuminate\Database\Schema\Blueprint;
+use Illuminate\Support\Facades\Schema;
+
+return new class extends Migration
+{
+    public function up(): void
+    {
+        Schema::create('organizations', function (Blueprint $table): void {
+            $table->id();
+            $table->string('name');
+            $table->timestamps();
+        });
+
+        Schema::table('users', function (Blueprint $table): void {
+            $table->foreignId('organization_id')
+                ->constrained()
+                ->cascadeOnDelete();
+            $table->timestamp('clicked_offer_at')->nullable();
+        });
+
+        Schema::create('flood_alerts', function (Blueprint $table): void {
+            $table->id();
+            $table->string('severity');
+            $table->timestamp('dispatched_at')->nullable()->index();
+            $table->timestamps();
+        });
+
+        Schema::create('demo_messages', function (Blueprint $table): void {
+            $table->id();
+            $table->foreignId('organization_id')
+                ->constrained()
+                ->cascadeOnDelete();
+            $table->foreignId('user_id')
+                ->constrained()
+                ->cascadeOnDelete();
+            $table->foreignId('run_id')
+                ->constrained('nodeflow_runs')
+                ->cascadeOnDelete();
+            $table->string('node_id');
+            $table->string('message');
+            $table->text('body');
+            $table->timestamps();
+
+            $table->unique(['run_id', 'node_id', 'user_id']);
+        });
+    }
+
+    public function down(): void
+    {
+        Schema::dropIfExists('demo_messages');
+        Schema::dropIfExists('flood_alerts');
+
+        Schema::table('users', function (Blueprint $table): void {
+            $table->dropForeign(['organization_id']);
+            $table->dropColumn(['organization_id', 'clicked_offer_at']);
+        });
+
+        Schema::dropIfExists('organizations');
+    }
+};
+```
+
+`DemoMessage::firstOrCreate()` uses the same `run_id`, `node_id`, `user_id` identity as this unique index. The `run_id` foreign key intentionally points to Nodeflow's `nodeflow_runs` table, so publish and run the package migrations before this host migration.
+
 ## Define the dispatched event
 
 Dispatch this event after the `FloodAlert` record exists and the application has selected affected users. Its payload is deliberately enough for the trigger to work without looking up arbitrary request input.

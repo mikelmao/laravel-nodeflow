@@ -90,6 +90,7 @@ function publishFloodFlow(Organization $organization): Flow
 }
 
 beforeEach(function (): void {
+    config(['nodeflow.tenancy' => 'disabled']);
     app()->bind(TenantResolver::class, FloodAlertTestTenantResolver::class);
     app()->bind(SubjectResolver::class, UserSubjectResolver::class);
     app()->singleton(WorkflowEngine::class, FakeWorkflowEngine::class);
@@ -99,7 +100,7 @@ beforeEach(function (): void {
 });
 ```
 
-`RefreshDatabase` is Laravel's database fixture tool. `FakeWorkflowEngine` is the package binding used here to observe workflow starts and audience-empty signals; it does not invoke node code. `Event::fake()` is intentionally absent from trigger tests because it would suppress the listener that is under test.
+`RefreshDatabase` is Laravel's database fixture tool. This fixture sets `nodeflow.tenancy` to `disabled` only because it creates flows for two organizations without authenticating an actor. It explicitly asserts each resulting `tenant_id`; it does not test tenant-scoped reads. Production uses the real `OrganizationTenantResolver` and a tenant-aware request or worker context. `FakeWorkflowEngine` is the package binding used here to observe workflow starts and audience-empty signals; it does not invoke node code. `Event::fake()` is intentionally absent from trigger tests because it would suppress the listener that is under test.
 
 ## One event isolates tenant runs
 

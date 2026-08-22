@@ -4,7 +4,7 @@ This page makes the flood-alert journey executable. The application owns the mes
 
 ## Implement the message node
 
-`DemoMessage` is a host record, not a package model. Its unique `run_id`, `node_id`, `user_id` index is required: retries of the same node for the same user must not create a second delivery record. This node routes a message to `sent` or `failed`; those exact outputs are used by the graph below.
+`DemoMessage` is a host record, not a package model. Its unique `run_id`, `node_id`, `user_id` index is required: retries of the same node for the same user must not create a second delivery record. This node declares the `sent` output used by the graph below. A `fail()` result is terminal for that subject; it records a sanitized error and does not follow a graph edge.
 
 **File: `app/Nodeflow/Nodes/SendMessage.php`**
 
@@ -42,7 +42,7 @@ class SendMessage extends Node implements HandlesSubject
         return NodeDefinition::make('Send message')
             ->group('Messaging')
             ->description('Record one application-owned message for each user.')
-            ->outputs(['sent', 'failed'])
+            ->outputs(['sent'])
             ->fields([
                 Field::select('message')
                     ->label('Message')
@@ -212,7 +212,7 @@ The complete provider, including `Nodeflow::register($this->nodes)` and `Trigger
 
 ## Create and publish the graph
 
-The graph is acyclic, uses one edge per `from` and `output` pair, and includes the `sent` and `failed` outputs declared by `app.send_message`.
+The graph is acyclic, uses one edge per `from` and `output` pair, and includes the `sent` output declared by `app.send_message`.
 
 **File: `app/Support/FloodAlertGraph.php`**
 
@@ -242,15 +242,12 @@ class FloodAlertGraph
             ],
             'edges' => [
                 ['from' => 'send-alert', 'output' => 'sent', 'to' => 'wait-before-offer'],
-                ['from' => 'send-alert', 'output' => 'failed', 'to' => 'exit'],
                 ['from' => 'wait-before-offer', 'output' => 'default', 'to' => 'send-offer'],
                 ['from' => 'send-offer', 'output' => 'sent', 'to' => 'wait-for-response'],
-                ['from' => 'send-offer', 'output' => 'failed', 'to' => 'exit'],
                 ['from' => 'wait-for-response', 'output' => 'default', 'to' => 'clicked-offer'],
                 ['from' => 'clicked-offer', 'output' => 'yes', 'to' => 'exit'],
                 ['from' => 'clicked-offer', 'output' => 'no', 'to' => 'send-follow-up'],
                 ['from' => 'send-follow-up', 'output' => 'sent', 'to' => 'exit'],
-                ['from' => 'send-follow-up', 'output' => 'failed', 'to' => 'exit'],
             ],
         ];
     }
