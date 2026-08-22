@@ -18,11 +18,36 @@ beforeEach(function () {
 });
 
 afterEach(function () {
-    foreach (glob($this->root.'/*') ?: [] as $file) {
-        unlink($file);
+    $delete = function (string $dir) use (&$delete) {
+        foreach (scandir($dir) as $entry) {
+            if ($entry === '.' || $entry === '..') {
+                continue;
+            }
+
+            $path = $dir.'/'.$entry;
+            is_dir($path) ? $delete($path) : unlink($path);
+        }
+        rmdir($dir);
+    };
+
+    if (is_dir($this->root)) {
+        $delete($this->root);
     }
-    @rmdir($this->root);
 });
+
+function viteSelectedConfig(string $root): string
+{
+    $output = [];
+    $command = 'node '
+        .escapeshellarg(__DIR__.'/../../Support/resolve-vite-config.mjs').' '
+        .escapeshellarg($root).' 2>&1';
+
+    exec($command, $output, $exitCode);
+
+    expect($exitCode)->toBe(0, implode(PHP_EOL, $output));
+
+    return trim(implode(PHP_EOL, $output));
+}
 
 /** The accepted host's config, reduced to the two settings under test. */
 function wiredViteConfig(): string
@@ -46,6 +71,55 @@ it('accepts the accepted host\'s configuration', function () {
     expect($this->alias->check())->toBe(InstallOutcome::AlreadyPresent);
     expect($this->dedupe->check())->toBe(InstallOutcome::AlreadyPresent);
 });
+
+it('inspects the same config file Vite loads when candidates coexist', function () {
+    file_put_contents($this->root.'/vite.config.js', <<<'JS'
+    export default {
+        resolve: {
+            alias: { '@nodeflow/editor': 'vendor/atram/laravel-nodeflow/resources/js' },
+            dedupe: ['react', 'react-dom', '@xyflow/react'],
+        },
+    }
+    JS);
+
+    file_put_contents($this->root.'/vite.config.ts', <<<'TS'
+    export default {
+        resolve: {
+            alias: { '@nodeflow/editor': 'resources/js' },
+            dedupe: ['lodash'],
+        },
+    }
+    TS);
+
+    expect(viteSelectedConfig($this->root))->toBe('vite.config.js');
+    expect($this->alias->check())->toBe(InstallOutcome::AlreadyPresent);
+    expect($this->dedupe->check())->toBe(InstallOutcome::AlreadyPresent);
+});
+
+it('accepts the Vite-selected CommonJS config candidates', function (string $filename, string $contents) {
+    file_put_contents($this->root.'/'.$filename, $contents);
+
+    expect(viteSelectedConfig($this->root))->toBe($filename);
+    expect($this->alias->check())->toBe(InstallOutcome::AlreadyPresent);
+    expect($this->dedupe->check())->toBe(InstallOutcome::AlreadyPresent);
+})->with([
+    'cjs' => ['vite.config.cjs', <<<'CJS'
+    module.exports = {
+        resolve: {
+            alias: { '@nodeflow/editor': 'vendor/atram/laravel-nodeflow/resources/js' },
+            dedupe: ['react', 'react-dom', '@xyflow/react'],
+        },
+    }
+    CJS],
+    'cts' => ['vite.config.cts', <<<'CTS'
+    export default {
+        resolve: {
+            alias: { '@nodeflow/editor': 'vendor/atram/laravel-nodeflow/resources/js' },
+            dedupe: ['react', 'react-dom', '@xyflow/react'],
+        },
+    }
+    CTS],
+]);
 
 it('rejects a commented-out alias', function () {
     // The test that distinguishes E22 from naive text matching. Counterfactual:
