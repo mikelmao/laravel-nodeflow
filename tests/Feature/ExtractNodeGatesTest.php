@@ -326,6 +326,54 @@ it('refuses a node whose file lives under vendor/, outside the host application 
     expect(hostTreeHash($this->root))->toBe($before);
 });
 
+it('does not refuse a node living outside app/ but still inside the host root, e.g. a src/ PSR-4 root (Important 5)', function () {
+    // G2's rule is "inside the host root, and not under vendor/" -- NOT
+    // "inside app/ specifically". A host mapping its own root namespace to
+    // src/ (a legitimate, if less common, PSR-4 choice) has every right to
+    // keep its own node classes there; refusing it just because it is not
+    // literally under app/ would fail safe but block real, legitimate work
+    // for no reason this gate actually needs to enforce.
+    $directory = $this->root.'/src/Nodeflow/Nodes';
+    mkdir($directory, 0777, true);
+    $path = $directory.'/SrcRootNode.php';
+
+    file_put_contents($path, <<<'PHP'
+    <?php
+
+    namespace App\Nodeflow\Nodes;
+
+    use Nodeflow\Execution\NodeResult;
+    use Nodeflow\Execution\SubjectContext;
+    use Nodeflow\Nodes\HandlesSubject;
+    use Nodeflow\Nodes\Node;
+    use Nodeflow\Schema\NodeDefinition;
+
+    class SrcRootNode extends Node implements HandlesSubject
+    {
+        public static function type(): string
+        {
+            return 'src.root.node';
+        }
+
+        public function definition(): NodeDefinition
+        {
+            return NodeDefinition::make('SrcRootNode')->outputs(['default']);
+        }
+
+        public function forSubject(SubjectContext $context): NodeResult
+        {
+            return $context->continue('default');
+        }
+    }
+    PHP);
+    require $path;
+
+    $this->artisan('nodeflow:extract-node', [
+        'class' => 'App\Nodeflow\Nodes\SrcRootNode',
+        '--package' => 'acme/widgets',
+    ])->assertExitCode(0);
+});
+
 it('refuses a node whose file also declares a trait, naming the trait', function () {
     // E47. M2 rewrites the file's namespace, which moves EVERY declaration in it,
     // while the scan only looks for references to the node. Without this gate the
@@ -439,6 +487,69 @@ it('refuses a node whose file also declares a top-level function, naming it (E47
     expect(hostTreeHash($this->root))->toBe($before);
 });
 
+it('refuses a node whose file also declares a top-level BY-REF function, naming it (C1)', function () {
+    // Critical 1. On PHP 8.1+, the '&' in `function &foo()` is NOT the bare
+    // string token nextFunctionName()'s old code checked for -- token_get_all()
+    // emits T_AMPERSAND_NOT_FOLLOWED_BY_VAR_OR_VARARG, an ARRAY token, since the
+    // '&' is followed by an identifier rather than a $variable or '...'. The old
+    // check `! is_array($token) && $token === '&'` can never match that array
+    // form, so a by-ref top-level function was read as having no name at all and
+    // silently passed G2. Counterfactual: change nextFunctionName()'s skip list
+    // back to the bare-string check and this test fails (exit 0, and the
+    // function's own name never appears in the refusal at all because the loop
+    // returns null for it instead of the function's real name).
+    $directory = $this->root.'/app/Nodeflow/Nodes';
+    mkdir($directory, 0777, true);
+    $path = $directory.'/ByRefCompanionNode.php';
+
+    file_put_contents($path, <<<'PHP'
+    <?php
+
+    namespace App\Nodeflow\Nodes;
+
+    use Nodeflow\Execution\NodeResult;
+    use Nodeflow\Execution\SubjectContext;
+    use Nodeflow\Nodes\HandlesSubject;
+    use Nodeflow\Nodes\Node;
+    use Nodeflow\Schema\NodeDefinition;
+
+    function &byRefCompanion(array &$a): array
+    {
+        return $a;
+    }
+
+    class ByRefCompanionNode extends Node implements HandlesSubject
+    {
+        public static function type(): string
+        {
+            return 'byref.companion.node';
+        }
+
+        public function definition(): NodeDefinition
+        {
+            return NodeDefinition::make('ByRefCompanionNode')->outputs(['default']);
+        }
+
+        public function forSubject(SubjectContext $context): NodeResult
+        {
+            return $context->continue('default');
+        }
+    }
+    PHP);
+    require $path;
+
+    $before = hostTreeHash($this->root);
+
+    $this->artisan('nodeflow:extract-node', [
+        'class' => 'App\Nodeflow\Nodes\ByRefCompanionNode',
+        '--package' => 'acme/widgets',
+    ])
+        ->expectsOutputToContain('byRefCompanion')
+        ->assertFailed();
+
+    expect(hostTreeHash($this->root))->toBe($before);
+});
+
 it('refuses a node whose file also declares a top-level const, naming it (E47)', function () {
     $directory = $this->root.'/app/Nodeflow/Nodes';
     mkdir($directory, 0777, true);
@@ -547,6 +658,74 @@ it('does not refuse a node file that declares only itself, with an anonymous cla
         'class' => 'App\Nodeflow\Nodes\AnonymousInsideNode',
         '--package' => 'acme/widgets',
     ])->assertExitCode(0);
+});
+
+it('refuses a node inside a BRACED namespace block that also declares a companion trait, naming it (C3)', function () {
+    // Critical 3. `namespace App\Nodeflow\Nodes { ... }` (the braced form) is
+    // valid PHP, and everything it contains sits at brace depth 1 under a
+    // NAIVE depth counter -- so a plain '{'/'}' counter never sees the class
+    // OR the trait at "depth 0" and the whole companion check finds nothing.
+    // findCompanionSymbol() must skip the brace that OPENS a namespace
+    // statement specifically (the same distinction PhpNameResolver and
+    // NodeReferenceScanner already make for their own, different reasons),
+    // not merely brace-count everything uniformly. Counterfactual: revert
+    // findCompanionSymbol() to a bare $depth counter (no brace-KIND stack) and
+    // this test fails at exit 0, with the trait moving silently.
+    $directory = $this->root.'/app/Nodeflow/Nodes';
+    mkdir($directory, 0777, true);
+    $path = $directory.'/BracedNode.php';
+
+    file_put_contents($path, <<<'PHP'
+    <?php
+
+    namespace App\Nodeflow\Nodes {
+
+        use Nodeflow\Execution\NodeResult;
+        use Nodeflow\Execution\SubjectContext;
+        use Nodeflow\Nodes\HandlesSubject;
+        use Nodeflow\Nodes\Node;
+        use Nodeflow\Schema\NodeDefinition;
+
+        trait BracedCompanionTrait
+        {
+            public function help(): void
+            {
+            }
+        }
+
+        class BracedNode extends Node implements HandlesSubject
+        {
+            use BracedCompanionTrait;
+
+            public static function type(): string
+            {
+                return 'braced.node';
+            }
+
+            public function definition(): NodeDefinition
+            {
+                return NodeDefinition::make('BracedNode')->outputs(['default']);
+            }
+
+            public function forSubject(SubjectContext $context): NodeResult
+            {
+                return $context->continue('default');
+            }
+        }
+    }
+    PHP);
+    require $path;
+
+    $before = hostTreeHash($this->root);
+
+    $this->artisan('nodeflow:extract-node', [
+        'class' => 'App\Nodeflow\Nodes\BracedNode',
+        '--package' => 'acme/widgets',
+    ])
+        ->expectsOutputToContain('BracedCompanionTrait')
+        ->assertFailed();
+
+    expect(hostTreeHash($this->root))->toBe($before);
 });
 
 // --- G3: type() must be a proven literal (E36) ------------------------------
@@ -718,6 +897,120 @@ it('does not refuse when the host provider carries only the exempted use import 
         ->assertExitCode(0);
 });
 
+it('refuses a same-named import sitting in a SIBLING provider file, not just the host NodeflowServiceProvider (Minor 1)', function () {
+    // providerSpans() scans app/Providers/ as a whole (NodeReferenceScanner::
+    // scan() only accepts a directory), so a sibling file living right next
+    // to the real provider -- an AppServiceProvider, say -- is scanned too.
+    // Its own `use` import of the class being extracted must NOT be folded
+    // into the exemption set: AppServiceProvider.php is not one of the files
+    // Task 9 rewrites, so a reference living there is a genuine survivor, and
+    // exempting it here would silently certify a rewrite that never happens
+    // to it. Counterfactual: drop the canonical same-file filter from
+    // providerSpans() (fold every reference found anywhere in the directory
+    // into the exemption set) and this test fails at exit 0.
+    $class = writeAppNode($this->root, 'MinorOneNode', 'minor.one.node');
+
+    $providerDirectory = $this->root.'/app/Providers';
+    mkdir($providerDirectory, 0777, true);
+
+    file_put_contents($providerDirectory.'/NodeflowServiceProvider.php', <<<'PHP'
+    <?php
+
+    namespace App\Providers;
+
+    use App\Nodeflow\Nodes\MinorOneNode;
+
+    class NodeflowServiceProvider
+    {
+        protected array $nodes = [
+            MinorOneNode::class,
+        ];
+
+        public function boot(): void
+        {
+        }
+    }
+    PHP);
+
+    file_put_contents($providerDirectory.'/AppServiceProvider.php', <<<'PHP'
+    <?php
+
+    namespace App\Providers;
+
+    use App\Nodeflow\Nodes\MinorOneNode;
+
+    class AppServiceProvider
+    {
+    }
+    PHP);
+
+    $before = hostTreeHash($this->root);
+
+    $this->artisan('nodeflow:extract-node', ['class' => $class, '--package' => 'acme/widgets'])
+        ->expectsOutputToContain('AppServiceProvider.php')
+        ->assertFailed();
+
+    expect(hostTreeHash($this->root))->toBe($before);
+});
+
+it('refuses (safe, over-refusal) rather than mis-locate the $nodes array when the anchor text appears more than once in the provider file (Minor 2)', function () {
+    // NodeRegistrationWriter::findClassEntrySpans() guards against the SAME
+    // ambiguity appendTo()/removeFrom() already guard against: a SECOND,
+    // real occurrence of the anchor text 'protected array $nodes = [' --
+    // here, a second class left in the same file -- makes WHICH array a raw
+    // strpos() would find genuinely ambiguous. This is the fixture that
+    // actually discriminates the guard: a string-literal repro (e.g. `const
+    // HINT = 'protected array $nodes = [';`) turned out NOT to, because
+    // arraySpan()'s own token-alignment check (openIndex must land on a REAL
+    // '[' token) already rejects an anchor position landing inside a string
+    // token regardless of this guard -- confirmed by executing that fixture
+    // against a build with the guard removed: it still refused safely, for a
+    // DIFFERENT reason. Two REAL property declarations don't have that
+    // accidental protection: raw strpos() finds the FIRST one, which parses
+    // as a perfectly valid (if wrong) array either way. Counterfactual:
+    // delete the substr_count($contents, $anchor) !== 1 guard from
+    // findClassEntrySpans() and this test fails at exit 0 -- the FIRST
+    // class's $nodes entry is silently exempted, its own ambiguity with the
+    // second occurrence never detected.
+    $class = writeAppNode($this->root, 'MinorTwoNode', 'minor.two.node');
+
+    $providerDirectory = $this->root.'/app/Providers';
+    mkdir($providerDirectory, 0777, true);
+
+    file_put_contents($providerDirectory.'/NodeflowServiceProvider.php', <<<'PHP'
+    <?php
+
+    namespace App\Providers;
+
+    use App\Nodeflow\Nodes\MinorTwoNode;
+
+    class NodeflowServiceProvider
+    {
+        protected array $nodes = [
+            MinorTwoNode::class,
+        ];
+
+        public function boot(): void
+        {
+        }
+    }
+
+    class LeftoverDuplicateProvider
+    {
+        protected array $nodes = [
+        ];
+    }
+    PHP);
+
+    $before = hostTreeHash($this->root);
+
+    $this->artisan('nodeflow:extract-node', ['class' => $class, '--package' => 'acme/widgets'])
+        ->expectsOutputToContain('NodeflowServiceProvider.php')
+        ->assertFailed();
+
+    expect(hostTreeHash($this->root))->toBe($before);
+});
+
 it('does not refuse a node file that names its own FQCN inside itself, not just via self/static', function () {
     // Exercises RewritableSpan::wholeFile()'s own [0, filesize) range against a
     // REAL found reference at a byte offset greater than zero: the node's own
@@ -767,6 +1060,64 @@ it('does not refuse a node file that names its own FQCN inside itself, not just 
         'class' => 'App\Nodeflow\Nodes\SelfReferencingNode',
         '--package' => 'acme/widgets',
     ])->assertExitCode(0);
+});
+
+it('does not claim a same-short-name test file that tests a DIFFERENT class (Important 3)', function () {
+    // rewritableSpans() locates a candidate test file by SHORT CLASS NAME
+    // alone (the only convention MakeNodeCommand::writeTest() gives it to go
+    // by) -- but two classes in different namespaces can share a short name,
+    // and both would collide on the exact same conventional test path. If the
+    // candidate were trusted unconditionally, extracting App\Nodeflow\Nodes\
+    // CollideNode would claim tests/Feature/Nodeflow/CollideNodeTest.php even
+    // though that file actually tests the UNRELATED App\Other\CollideNode --
+    // handing Task 9's moves a file to move that does not belong to the class
+    // being extracted at all. Counterfactual: drop the
+    // fileReferencesClass() check from rewritableSpans() (trust the
+    // conventional path unconditionally) and this test's assertion fails --
+    // the wrong-owner test file is included as a span regardless of what it
+    // actually contains.
+    $target = writeAppNode($this->root, 'CollideNode', 'collide.target');
+
+    $decoyDirectory = $this->root.'/app/Other';
+    mkdir($decoyDirectory, 0777, true);
+    file_put_contents($decoyDirectory.'/CollideNode.php', <<<'PHP'
+    <?php
+
+    namespace App\Other;
+
+    class CollideNode
+    {
+    }
+    PHP);
+    require $decoyDirectory.'/CollideNode.php';
+
+    $testDirectory = $this->root.'/tests/Feature/Nodeflow';
+    mkdir($testDirectory, 0777, true);
+    $testFile = $testDirectory.'/CollideNodeTest.php';
+
+    file_put_contents($testFile, <<<'PHP'
+    <?php
+
+    namespace Tests\Feature\Nodeflow;
+
+    use App\Other\CollideNode;
+
+    class CollideNodeTest
+    {
+        public function it_exercises_the_OTHER_collide_node(): void
+        {
+            new CollideNode();
+        }
+    }
+    PHP);
+
+    $command = app(\Nodeflow\Console\ExtractNodeCommand::class);
+    $spans = $command->rewritableSpans($target, $this->root);
+
+    $canonicalTestFile = realpath($testFile);
+    $matching = array_filter($spans, fn ($span) => (realpath($span->file) ?: $span->file) === $canonicalTestFile);
+
+    expect($matching)->toBeEmpty();
 });
 
 it('refuses when the $nodes array also carries an element the writer cannot classify, rather than exempting the whole array (Important 2)', function () {
@@ -828,6 +1179,64 @@ it('refuses a node whose FQCN appears only in config/, proving the widened scan 
 
     $this->artisan('nodeflow:extract-node', ['class' => $class, '--package' => 'acme/widgets'])
         ->expectsOutputToContain('nodeflow_custom.php')
+        ->assertFailed();
+
+    expect(hostTreeHash($this->root))->toBe($before);
+});
+
+it('refuses a node whose FQCN appears only in bootstrap/app.php, Laravel 11\'s own registration site (G5, Important 1)', function () {
+    // Without bootstrap/ in the scanned roots, a reference sitting in exactly
+    // the file Laravel 11 itself uses to register providers/bindings would go
+    // completely undetected -- the widened-roots probe (E46) only proved
+    // config/ was reached, not this file specifically.
+    $class = writeAppNode($this->root, 'BootstrapOnlyNode', 'bootstrap.only');
+
+    mkdir($this->root.'/bootstrap', 0777, true);
+    file_put_contents($this->root.'/bootstrap/app.php', <<<'PHP'
+    <?php
+
+    return [
+        'node' => 'App\Nodeflow\Nodes\BootstrapOnlyNode',
+    ];
+    PHP);
+
+    $before = hostTreeHash($this->root);
+
+    $this->artisan('nodeflow:extract-node', ['class' => $class, '--package' => 'acme/widgets'])
+        ->expectsOutputToContain('bootstrap/app.php')
+        ->assertFailed();
+
+    expect(hostTreeHash($this->root))->toBe($before);
+});
+
+it('refuses a node whose FQCN appears only in tests/Unit/, proving the test suite itself is scanned (G5, Important 1)', function () {
+    // Symmetric with rewritableSpans() exempting the conventional TEST FILE
+    // (tests/Feature/Nodeflow/{Class}Test.php): if G5 never scans tests/ at
+    // all, a reference sitting in some OTHER test file under tests/Unit/ --
+    // one Task 9 will not move -- would silently survive undetected.
+    $class = writeAppNode($this->root, 'TestsOnlyNode', 'tests.only');
+
+    mkdir($this->root.'/tests/Unit', 0777, true);
+    file_put_contents($this->root.'/tests/Unit/SomeOtherTest.php', <<<'PHP'
+    <?php
+
+    namespace Tests\Unit;
+
+    use App\Nodeflow\Nodes\TestsOnlyNode;
+
+    class SomeOtherTest
+    {
+        public function it_uses_the_node(): void
+        {
+            new TestsOnlyNode();
+        }
+    }
+    PHP);
+
+    $before = hostTreeHash($this->root);
+
+    $this->artisan('nodeflow:extract-node', ['class' => $class, '--package' => 'acme/widgets'])
+        ->expectsOutputToContain('SomeOtherTest.php')
         ->assertFailed();
 
     expect(hostTreeHash($this->root))->toBe($before);
@@ -947,6 +1356,37 @@ it('does not refuse when the matching path repository url is a glob, not a liter
 
     $this->artisan('nodeflow:extract-node', ['class' => $class, '--package' => 'acme/widgets'])
         ->assertExitCode(0);
+});
+
+it('refuses when a single-segment glob does not cross a "/" to cover a nested target (C2)', function () {
+    // Critical 2. "packages/*" is Composer's own idiomatic monorepo form and
+    // covers exactly one path SEGMENT under packages/ (e.g. packages/foo) --
+    // it does NOT cover packages/acme/widgets, a TWO-segment target, the same
+    // way Composer's own path repository resolution would not treat it as a
+    // match. The old code used a bare fnmatch() with no FNM_PATHNAME flag,
+    // under which '*' crosses '/' freely and "packages/*" wrongly matches ANY
+    // path nested arbitrarily deep under packages/ -- a segment-wise glob
+    // doing a "starts with this prefix" job, the substring-shaped mistake
+    // this codebase's own HostPath docblock names as its most recent
+    // recurrence. Counterfactual: drop FNM_PATHNAME from the fnmatch() call
+    // and this test fails (exit 0) because "packages/*" wrongly matches
+    // "packages/acme/widgets".
+    $class = writeAppNode($this->root, 'GateSixGlobCrossSlashNode', 'gate6.globcrossslash');
+
+    file_put_contents($this->root.'/composer.json', json_encode([
+        'require' => ['atram/laravel-nodeflow' => '^2.0', 'acme/widgets' => '^1.0'],
+        'repositories' => [
+            ['type' => 'path', 'url' => 'packages/*'],
+        ],
+    ]));
+
+    $before = hostTreeHash($this->root);
+
+    $this->artisan('nodeflow:extract-node', ['class' => $class, '--package' => 'acme/widgets'])
+        ->expectsOutputToContain('acme/widgets')
+        ->assertFailed();
+
+    expect(hostTreeHash($this->root))->toBe($before);
 });
 
 it('refuses when extra.laravel.dont-discover covers the new package with a "*" entry (G6, adversarial probe 3)', function () {
@@ -1129,6 +1569,64 @@ it('refuses with no --package given, before ever touching composer.json or the t
 
     $this->artisan('nodeflow:extract-node', ['class' => $class])
         ->expectsOutputToContain('--package')
+        ->assertFailed();
+
+    expect(hostTreeHash($this->root))->toBe($before);
+});
+
+it('refuses a --package that is not a valid Composer name, before ever reaching G6 or G7 (Important 4)', function () {
+    // Without this check, an invalid --package (bad characters, no vendor/name
+    // separator, uppercase) flowed through all eight gates and reported
+    // success -- G6/G7 only ever compare the string as given, they never
+    // validate its SHAPE.
+    $class = writeAppNode($this->root, 'InvalidPackageNameNode', 'invalid.package.name');
+
+    $before = hostTreeHash($this->root);
+
+    $this->artisan('nodeflow:extract-node', [
+        'class' => $class,
+        '--package' => 'Not A Valid Name!!',
+    ])
+        ->expectsOutputToContain('not a valid Composer package name')
+        ->assertFailed();
+
+    expect(hostTreeHash($this->root))->toBe($before);
+});
+
+it('refuses a --package with no vendor/name separator', function () {
+    $class = writeAppNode($this->root, 'NoSuffixPackageNode', 'no.suffix.package');
+
+    $this->artisan('nodeflow:extract-node', [
+        'class' => $class,
+        '--package' => 'nosuffix',
+    ])
+        ->expectsOutputToContain('not a valid Composer package name')
+        ->assertFailed();
+});
+
+it('refuses an uppercase --package, closing a real G6 case-sensitivity bypass (Important 4)', function () {
+    // The exact reported repro: dont-discover: ["acme/widgets"] with
+    // --package=ACME/Widgets used to PASS G6, because that check compares
+    // with an exact `===` and "ACME/Widgets" !== "acme/widgets" byte-for-byte
+    // -- an uppercase spelling of the very same package silently defeated
+    // E49's own refusal. Composer's own package name pattern is
+    // lowercase-only, so validating --package against it BEFORE G6 ever runs
+    // closes this as a side effect of a single, reused check rather than a
+    // second, bespoke case-folding rule bolted onto G6 alone.
+    $class = writeAppNode($this->root, 'UppercasePackageBypassNode', 'uppercase.package.bypass');
+
+    file_put_contents($this->root.'/composer.json', json_encode([
+        'require' => ['atram/laravel-nodeflow' => '^2.0'],
+        'extra' => ['laravel' => ['dont-discover' => ['acme/widgets']]],
+    ]));
+
+    $before = hostTreeHash($this->root);
+
+    $this->artisan('nodeflow:extract-node', [
+        'class' => $class,
+        '--package' => 'ACME/Widgets',
+    ])
+        ->expectsOutputToContain('not a valid Composer package name')
         ->assertFailed();
 
     expect(hostTreeHash($this->root))->toBe($before);
