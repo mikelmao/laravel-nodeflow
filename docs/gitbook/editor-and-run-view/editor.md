@@ -62,7 +62,9 @@ The flow's `version` reports the current published version even while the draft 
 
 Each save sends the integer `draft_revision`; do not substitute `draft_updated_at`. The server increments the revision for accepted saves, returns it, and the client sends that returned value on the next save. The value is monotonic and publishing does not reset it.
 
-If a save receives HTTP 409, autosave stops rather than overwriting a newer draft. The response carries the newer `graph` and `draft_revision`. The editor shows a conflict choice: **Keep mine** adopts the server revision and saves the local graph over it; **Use theirs** mounts the returned graph and saves nothing. Other refused saves and network failures leave the graph on screen but stop saving until the author changes context or resolves the problem.
+If a save receives HTTP 409, autosave stops rather than overwriting a newer draft. The response carries the newer `graph` and `draft_revision`. The editor shows a conflict choice: **Keep mine** adopts the server revision and saves the local graph over it; **Use theirs** mounts the returned graph and saves nothing. Resolving that conflict is the explicit autosave restart path.
+
+After any other refused save, including HTTP 419, or a network failure, the hook remains halted for that mounted editor session and offers no retry control. The local graph stays visible, but preserve the changes elsewhere before reloading. A reload or remount with fresh server props, or changing to another flow context, is required before autosave can run again.
 
 Publishing first waits for an accepted draft save. Its outcomes are intentionally separate:
 
@@ -71,8 +73,8 @@ Publishing first waits for an accepted draft save. Its outcomes are intentionall
 | Success | Shows the new version and adopts the returned `draft_revision`. |
 | HTTP 422 without `node_errors` | Structural request validation; rendered as a developer-facing client/payload problem. |
 | HTTP 422 with `node_errors` | Semantic graph validation; `errors` are banner messages and each `{ node, field, message }` entry is attached to its node when possible. Graph-level or unknown-node entries remain in the banner. |
-| HTTP 419 | Shows session-expired guidance. |
-| Other HTTP status or network failure | Shows a request failure without discarding the local graph. |
+| HTTP 419 | Shows session-expired guidance; autosave remains halted until reload or remount. |
+| Other HTTP status or network failure | Shows a request failure without discarding the local graph; autosave remains halted until reload or remount. |
 
 > **Note:** A valid draft is not necessarily publishable. Publishing is the point at which graph meaning, node types, and field values are validated.
 

@@ -88,9 +88,9 @@ Run a read-only check after making the changes:
 php artisan nodeflow:install --check
 ```
 
-The installer may write only steps it can safely re-check, including the package configuration/provider registration and a uniquely identifiable Tailwind `@source` entry. In `--check` mode, **Writable** means it found a safe change it would make but wrote nothing, so the command remains non-zero until it is applied.
+The installer may write only steps it can safely re-check, including the package configuration/provider registration and a uniquely identifiable Tailwind `@source` entry. In `--check` mode, the table label **NOT WIRED (would be written)** means it found a safe change it would make but wrote nothing (internally, this is a writable outcome), so the command remains non-zero until it is applied.
 
-TypeScript paths, Vite alias, Vite dedupe, and the `@xyflow/react` dependency are **verify-only**. The installer prints the required snippet or npm command instead of rewriting an arbitrary `vite.config.ts`, JSONC file, or package manifest. A **CannotWire** result means it could not verify the setting and is non-zero in either mode.
+TypeScript paths, Vite alias, Vite dedupe, and the `@xyflow/react` dependency are **verify-only**. The installer prints the required snippet or npm command instead of rewriting an arbitrary `vite.config.ts`, JSONC file, or package manifest. The table label **NOT WIRED** means it could not verify the setting (internally, a cannot-wire outcome) and is non-zero in either mode.
 
 ## Use a normal installation or a local package deliberately
 

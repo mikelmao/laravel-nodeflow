@@ -40,7 +40,7 @@ export default function Run(props: FlowRunProps) {
 }
 ```
 
-Put this page behind a host error boundary. `FlowRun` validates the initial overlay payload at mount time, and an invalid server payload is intentionally treated as a contract failure rather than silently displayed as false run data.
+Put this page behind a host error boundary. At mount time, `FlowRun` throws when the initial overlay is not an object with a boolean `terminal` and an object `nodes`; that top-level contract failure is intentionally not rendered as false run data. A malformed `status` or per-node field does not throw: the package normalizes it to an empty string or safe `false`/zero/`null` values, respectively.
 
 ## Read overlay badges
 
@@ -96,7 +96,7 @@ An empty panel uses the overlay's `reached` flag to distinguish “no subjects a
 
 `useOverlayPolling` uses a **5000 ms** default interval. It does not poll a terminal initial snapshot, stops when a successful response becomes terminal, avoids overlapping requests, and cleans up when the view unmounts.
 
-HTTP statuses resolve as responses so the view can render errors. Polling halts for **401, 403, 404, and 419**, because the run is unavailable, no longer visible, or the session has expired. Other HTTP failures remain visible and polling continues. Network failures also remain visible but are retried on the next interval; a later successful snapshot clears the error.
+HTTP statuses resolve as responses so the view can render errors. Polling halts for **401, 403, 404, and 419**, because the run is unavailable, no longer visible, or the session has expired. Other HTTP failures remain visible and polling continues. Network failures also remain visible but are retried on the next interval; a later successful snapshot clears the error. A successful HTTP response with a malformed top-level overlay records a visible contract error and polling continues; it does not halt or reach the host error boundary.
 
 > **Note:** The client trusts the server's `terminal` boolean instead of hard-coding a list of terminal run statuses.
 

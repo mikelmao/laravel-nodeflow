@@ -39,13 +39,15 @@ Use the unprefixed canonical route names as the simplest integration. Do not add
 
 ## Preserve tenant reachability
 
-`{flow}` and `{run}` use the package models' tenant-scoped route-model binding. An ID from another tenant is not reachable and returns **404** before controller authorization. A reachable row that the current actor may not operate returns **403** from the policy gate. Keep both boundaries: tenant scoping avoids revealing a row exists, while the policy implements your application's roles and permissions.
+When a non-null tenant is resolved, `{flow}` and `{run}` use the package models' tenant-scoped route-model binding. In that scoped case, an ID from another tenant is not reachable and returns **404** before controller authorization. A reachable row that the current actor may not operate returns **403** from the policy gate. Keep both boundaries: tenant scoping avoids revealing a row exists, while the policy implements your application's roles and permissions.
+
+That 404 isolation guarantee depends on an active tenant scope. In `disabled` mode, and in `auto` mode when the package's no-tenancy resolver is in use, reads with a null tenant are unscoped. In `auto` or `resolver` mode, a bound custom resolver that returns null throws `TenancyUnresolvedException` instead. Configure and bind the resolver deliberately; see [Tenancy](tenancy.md).
 
 The `{node}` segment in the subjects endpoint is not a database ID. It must name a node in that run's pinned graph; an unknown node returns 404 rather than an ambiguous empty subject list.
 
 ## Add the Inertia page adapters
 
-The package owns the controllers, prop shapes, and endpoint URLs. The host owns the layout, Inertia resolver, and the pages named by `Inertia::render()`. In a case-sensitive deployment, create these lower-case files exactly at `resources/js/pages/nodeflow/editor.tsx` and `resources/js/pages/nodeflow/run.tsx`.
+The package owns the controllers, prop shapes, and endpoint URLs. The host owns the layout, Inertia resolver, and the pages named by `Inertia::render('nodeflow/editor')` and `Inertia::render('nodeflow/run')`. Place lower-case `nodeflow/editor.tsx` and `nodeflow/run.tsx` beneath the page root and casing your resolver already uses. For a resolver rooted at lower-case `resources/js/pages`, the files are `resources/js/pages/nodeflow/editor.tsx` and `resources/js/pages/nodeflow/run.tsx`; a `resources/js/Pages` or custom-root resolver must retain that configured root and casing.
 
 ```tsx
 import { FlowEditor, type FlowEditorProps } from '@nodeflow/editor'
