@@ -61,9 +61,13 @@ There is no persisted “signal already sent” marker. A duplicate or concurren
 
 Cancelling a subject is not a workflow-wide cancellation. It removes that subject from its current cursor; remaining subjects keep progressing. The engine facade also has `cancel()`, but Nodeflow does not expose a run-level cancellation service or promise a run-status transition for it.
 
-## Replay and deploy safety
+## Replay, failure, and deploy safety
 
 On a restart, the durable engine replays `FlowInterpreter` history and re-runs only deterministic control flow. Its activity boundaries keep Nodeflow database writes and node side effects outside that replayed workflow code. Preserve the `FlowInterpreter` class and registered node types required by live versions when deploying; check them before workers take work with [Health checks](health-checks.md).
+
+The current interpreter writes Nodeflow run status `pending` → `running` → `completed`. A missing node type or activity exception can fail the durable engine execution while the Nodeflow `Run` remains `running`; there is no automatic transition to `failed` or `blocked`, status reconciliation, or packaged resume/recovery service. A direct alias prevents a future affected activity from failing only when it is registered before that activity attempts resolution; it does not automatically recover an execution that already failed.
+
+For an already failed engine execution, inspect its durable history, current engine state, and `workflow:v2:doctor` output after fixing the root cause. Then use an application-defined repair process, or start a safe new idempotent run when the business operation permits it. Do not invent a generic resume command or mark the Nodeflow run complete by hand.
 
 The pinned durable-workflow dependency also provides history export and replay-verification commands for its own workflow histories. Those commands are engine operations, not Nodeflow graph validation; use the dependency's installed command help before including them in a release gate.
 

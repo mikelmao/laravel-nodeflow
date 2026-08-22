@@ -11,16 +11,17 @@ Start from an authorized, tenant-scoped flow or run view, then use logs and the 
 **Verify:** inspect the authorized run overlay and worker logs, then run:
 
 ```bash
-php artisan queue:failed
 php artisan workflow:v2:doctor --strict
 php artisan nodeflow:check-node-types
 ```
 
-**Correct:** start or restore the host's queue workers, repair the backend capability reported by the doctor, and register or alias a missing type. Do not mark the run complete manually; that loses its durable execution state. See [Queues and workers](queues-and-workers.md).
+When the host uses Laravel failed-job storage and has its `failed_jobs` table, also run `php artisan queue:failed`.
+
+**Correct:** start or restore the host's queue workers, repair the backend capability reported by the doctor, and register or alias a missing type before its next affected activity. A missing type or activity exception can leave the Nodeflow run `running` while the durable execution has failed. For that already failed execution, inspect durable history and current engine state; after fixing the root cause, use an application-defined repair or create a safe new idempotent run. Do not mark the Nodeflow run complete manually or invent a generic resume command. See [Queues and workers](queues-and-workers.md).
 
 ## An audience is empty
 
-**Likely cause:** the caller supplied no IDs, duplicate IDs collapsed during materialization, or the trigger's tenant audience was empty.
+**Likely cause:** the caller supplied no IDs after normalization, or the trigger's tenant audience was empty. Duplicate IDs only shrink an audience: any non-empty set of repeated IDs still materializes one subject.
 
 **Verify:** log the host-owned audience immediately before `StartRun::forFlow()` and inspect the run's authorized subject panel. Materialization string-casts and removes duplicate IDs before inserting rows.
 
@@ -112,11 +113,11 @@ php artisan nodeflow:check-node-types
 
 ## Subjects remain active at a node
 
-**Likely cause:** the worker stopped mid-node, the node returned an invalid or incomplete audience result, or code incorrectly moved subjects outside `NodeRunner`.
+**Likely cause:** an activity was interrupted or failed before `NodeRunner` advanced and reconciled its subjects, application code mutated a cursor or status outside the runner, or durable-engine and Nodeflow state diverged.
 
 **Verify:** use the authorized run's node-subject endpoint and overlay. NodeRunner reconciles only subjects it actually processed at that node: an ID absent from both outputs and failures completes the flow, while each returned ID must be from the current chunk and appear at most once.
 
-**Correct:** restore workers first. Then correct the node to return an output or failure for every subject that should continue, or deliberately omit it only to complete that subject. Do not perform an unscoped child-table update to clear a cursor; that bypasses the run's isolation and can make audience-empty signaling incorrect. See [Writing nodes](../building-automations/writing-nodes.md).
+**Correct:** restore workers first, then diagnose the durable history and Nodeflow parent run together. A subject omitted from a `NodeResult` is completed, not left active; correct the node to return an output or failure for every subject that should continue, and omit an ID only to complete it. Do not perform an unscoped child-table update to clear a cursor; that bypasses the run's isolation and can make audience-empty signaling incorrect. See [Writing nodes](../building-automations/writing-nodes.md).
 
 ## Next step
 

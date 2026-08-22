@@ -23,6 +23,16 @@ For local development, configure a real queue driver and run a Laravel worker in
 QUEUE_CONNECTION=database
 ```
 
+Nodeflow and Durable Workflow migrations do not create Laravel's `jobs` or `failed_jobs` tables. If this Laravel application does not already have those queue migrations, generate and run them first:
+
+```bash
+php artisan make:queue-table
+php artisan make:queue-failed-table
+php artisan migrate
+```
+
+For Redis, SQS, or another queue backend, provision that backend and its Laravel connection according to the host application's normal queue setup.
+
 ```bash
 php artisan queue:work
 ```
@@ -50,9 +60,10 @@ After an authorized start, Nodeflow commits a `pending` run and its subjects bef
 Verify the worker and backend rather than attempting to “replay” the Nodeflow run manually:
 
 ```bash
-php artisan queue:failed
 php artisan workflow:v2:doctor --strict
 ```
+
+When the host uses Laravel's failed-job storage and has its `failed_jobs` table, also run `php artisan queue:failed`.
 
 The doctor reports the durable v2 database, queue, cache, codec, matching role, and local topology. `--strict` exits non-zero when required capabilities are missing. It is separate from `nodeflow:install --check` and from Nodeflow's node-type check.
 
@@ -72,13 +83,13 @@ php artisan workflow:v2:doctor
 
 ## Deploy long-running work deliberately
 
-Before restarting workers, deploy code that can still resolve every node type used by live runs. A run may resume days later from its pinned graph, so deleting or renaming a type can block its next node activity. Keep a direct `NodeRegistry::alias()` for a renamed type when appropriate, then run:
+Before restarting workers, deploy code that can still resolve every node type used by live runs. A run may resume days later from its pinned graph, so deleting or renaming a type can fail its next node activity. Keep a direct `NodeRegistry::alias()` for a renamed type when appropriate, then run:
 
 ```bash
 php artisan nodeflow:check-node-types
 ```
 
-Run database migrations once in the deployment sequence before rolling application and worker processes. Restart workers only after code and migrations are compatible. The durable dependency has worker-compatibility and replay facilities, but their configuration is optional and version-specific; do not claim zero-downtime compatibility merely by restarting a generic Laravel worker.
+Run database migrations once in the deployment sequence before rolling application and worker processes. Restart workers only after code and migrations are compatible. The node-type check and aliases are prevention, not recovery: an already failed durable execution requires history and engine-state inspection plus an application-defined repair or a safe new idempotent run after its root cause is fixed. The durable dependency has worker-compatibility and replay facilities, but their configuration is optional and version-specific; do not claim zero-downtime compatibility merely by restarting a generic Laravel worker.
 
 A practical release order is:
 

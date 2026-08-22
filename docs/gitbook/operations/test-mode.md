@@ -6,7 +6,7 @@ Test mode creates a durable run that follows the normal Nodeflow execution path 
 
 ## Start an authorized test run
 
-Authorize the flow first, supply `is_test => true`, and use an idempotency key from a namespace that cannot collide with a live start for the same flow version.
+Authorize the flow first, supply `is_test => true`, and use an idempotency key from a namespace that cannot collide with a live start for the same flow version. Generate one operation UUID before the first request and reuse it for retries of that same requested test run.
 
 **File: `app/Http/Controllers/FlowTestRunController.php`**
 
@@ -31,6 +31,7 @@ class FlowTestRunController
             'subject_type' => ['required', 'string'],
             'subject_ids' => ['required', 'array'],
             'subject_ids.*' => ['string'],
+            'operation_id' => ['required', 'uuid'],
         ]);
 
         $run = app(StartRun::class)->forFlow(
@@ -38,8 +39,9 @@ class FlowTestRunController
             subjectType: $data['subject_type'],
             subjectIds: $data['subject_ids'],
             options: [
-                // Include the operator and a fresh nonce; do not reuse a live key.
-                'idempotency_key' => 'test:'.$request->user()->getAuthIdentifier().':'.(string) str()->uuid(),
+                // The client creates operation_id once and reuses it on a retry.
+                // This test/operator namespace cannot collide with a live key.
+                'idempotency_key' => 'test:'.$request->user()->getAuthIdentifier().':'.$data['operation_id'],
                 'strategy' => 'cohort',
                 'is_test' => true,
             ],
@@ -50,7 +52,7 @@ class FlowTestRunController
 }
 ```
 
-The route model binding must remain tenant-scoped, and the application must define `runManually` appropriately. Do not take a tenant ID, flow version ID, or `flow_version_id` from the request. See [Starting runs](../building-automations/starting-runs.md) for the start contract.
+The key is unique within the current flow version, so the same operation ID can be used safely only for retries of that requested test start on that version. The route model binding must remain tenant-scoped, and the application must define `runManually` appropriately. Do not take a tenant ID, flow version ID, or `flow_version_id` from the request. See [Starting runs](../building-automations/starting-runs.md) for the start contract.
 
 ## What still runs and persists
 
