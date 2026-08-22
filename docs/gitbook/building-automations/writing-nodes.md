@@ -25,6 +25,8 @@ The generator registers the class in the host provider when it can safely locate
 
 This complete node sends one message per subject. `MessageDelivery` is an application service whose `send()` method must make the supplied idempotency key safe to repeat.
 
+**File: `app/Nodeflow/Nodes/SendMessage.php`**
+
 ```php
 <?php
 
@@ -80,12 +82,18 @@ class SendMessage extends Node implements HandlesSubject
                 subject: $context->subject(),
                 channel: (string) $context->config('channel'),
                 message: (string) $context->config('message'),
-                idempotencyKey: implode(':', [$context->runId(), $context->nodeId(), $context->subjectId()]),
+                idempotencyKey: hash('sha256', json_encode([
+                    $context->runId(),
+                    $context->nodeId(),
+                    $context->subjectId(),
+                ], JSON_THROW_ON_ERROR)),
             );
 
             return $context->continue('sent');
         } catch (Throwable $exception) {
-            return $context->fail($exception->getMessage());
+            report($exception);
+
+            return $context->fail('Message delivery failed.');
         }
     }
 }
@@ -103,7 +111,7 @@ If a node implements both interfaces, `NodeRunner` always prefers `HandlesAudien
 
 ## Use the context surface
 
-The following are the public methods intended for node bodies. Do not construct either context yourself: their public constructors are runtime-owned construction APIs, not node APIs. Their current signatures are `SubjectContext::__construct(Run $run, string $nodeId, array $config, string $subjectId, mixed $subject)` and `AudienceContext::__construct(Run $run, string $nodeId, array $config, string $subjectType, array $subjectIds)`.
+The following are the public methods intended for node bodies. Both constructors are public for runtime wiring, but are runtime-owned construction APIs: host and node code must not instantiate either context.
 
 `SubjectContext` exposes these node-body methods:
 
@@ -153,7 +161,9 @@ Contexts intentionally do not expose the mutable `Run` model. Keep application w
 
 For subject nodes, an uncaught exception becomes `ClassName: message` on that subject, marks it failed, and the remaining subjects continue. Returning `fail()` has the same per-subject isolation with your chosen message. An exception from an audience node propagates from `NodeRunner`; batch implementations must decide whether to partition recoverable failures or abort the batch.
 
-Every node that sends, charges, or writes to another system must return a no-side-effect test result when `isTest()` is true. The current runtime does not consume `$tries`, so do not rely on it for retries. Still make external work idempotent with a stable key such as run ID, node ID, and subject ID: a host can invoke a node again and a future retry policy must not duplicate a completed side effect.
+An audience result may contain only IDs from that call's `subjectIds()`, and each ID may appear at most once across all outputs and failures. Any current chunk ID absent from both outputs and failures completes and leaves the flow, even when another ID has an output. Current runner updates do not constrain returned IDs to the node that just ran, so an extraneous active ID in the same run and subject type can advance or fail a subject at another node. Validate or filter IDs in node code before returning the result.
+
+Every node that sends, charges, or writes to another system must return a no-side-effect test result when `isTest()` is true. The current runtime does not consume `$tries`, so do not rely on it for retries. Still make external work idempotent with a stable key such as run ID, node ID, and subject ID: a host can invoke a node again and a future retry policy must not duplicate a completed side effect. Report provider exceptions server-side and return a safe failure message. Do not pass raw provider messages to `fail()` or let them escape unhandled: they may persist in `last_error` and the run view.
 
 ## Node review checklist
 
@@ -163,6 +173,7 @@ Every node that sends, charges, or writes to another system must return a no-sid
 - Does test mode avoid every external side effect?
 - Are side effects safe if the host invokes the node again or adds a retry policy?
 - Does each subject receive a deliberate output or failure?
+- Does an audience result contain each current chunk ID at most once and no external IDs?
 - If it implements both interfaces, do audience and subject paths have identical outcomes?
 
 ## Next step

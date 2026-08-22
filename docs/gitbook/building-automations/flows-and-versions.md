@@ -32,6 +32,8 @@ It returns the new revision. A `null` last-seen revision means revision zero; it
 
 The models allow mass assignment, so application code must set structural identifiers itself. Do not accept `tenant_id`, `current_version_id`, a version ID, `flow_id`, or a version's `flow_id` from request input. Authorize creation and each direct mutation in the host application.
 
+**File: `app/Http/Controllers/FlowController.php`**
+
 ```php
 <?php
 
@@ -39,51 +41,59 @@ namespace App\Http\Controllers;
 
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
+use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Gate;
 use Nodeflow\Editor\SaveDraft;
 use Nodeflow\Models\Flow;
 
-class FlowController
+final class FlowController
 {
     public function store(Request $request): JsonResponse
     {
         $data = $request->validate([
-            'name' => ['required', 'string'],
+            'name' => ['required', 'string', 'max:255'],
             'graph' => ['required', 'array'],
-            'draft_revision' => ['nullable', 'integer'],
         ]);
 
         // This is an application-defined ability for creating flows.
         Gate::authorize('nodeflow.createFlow');
 
-        $flow = Flow::create([
-            'name' => (string) $data['name'],
-            'trigger_type' => 'manual',
-            'trigger_config' => [],
-            'status' => 'draft',
-        ]);
+        [$flow, $revision] = DB::transaction(function () use ($data): array {
+            $flow = Flow::create([
+                'name' => (string) $data['name'],
+                'trigger_type' => 'manual',
+                'trigger_config' => [],
+                'status' => 'draft',
+            ]);
 
-        // For an existing, tenant-scoped flow, use the supplied per-flow policy.
-        Gate::authorize('update', $flow);
+            // For an existing, tenant-scoped flow, use the supplied per-flow policy.
+            Gate::authorize('update', $flow);
 
-        $revision = app(SaveDraft::class)->save(
-            $flow,
-            $data['graph'],
-            $data['draft_revision'] ?? null,
-        );
+            $revision = app(SaveDraft::class)->save(
+                $flow,
+                $data['graph'],
+                null, // The first save always compares against revision zero.
+            );
+
+            return [$flow, $revision];
+        });
 
         return response()->json(['id' => $flow->id, 'draft_revision' => $revision], 201);
     }
 }
 ```
 
-The tenant trait supplies the new flow's tenant from the trusted request context. Publishing derives the version's `flow_id` and `tenant_id` from this authorized flow, then alone updates `current_version_id`.
+The tenant trait supplies the new flow's tenant from the trusted request context. The transaction rolls back the newly created flow if per-flow authorization or the initial draft save fails, so it does not leave an orphan. Publishing derives the version's `flow_id` and `tenant_id` from this authorized flow, then alone updates `current_version_id`.
 
 ## Publish snapshots, not edits
 
-Each publish creates the next per-flow integer version and stores the submitted graph. `content_hash` is the SHA-256 hash of that graph's JSON encoding; equal submitted graph arrays produce the same hash even when they are published as separate versions. It identifies the stored content; it does not deduplicate versions.
+Each publish creates the next per-flow integer version and stores the submitted graph. `content_hash` is exactly `hash('sha256', json_encode($graph))`: it hashes the raw PHP-array JSON encoding. It is insertion-order sensitive and non-canonical, so it does not establish semantic graph equality or deduplicate versions.
 
 Publishing is transactional: Nodeflow creates the `FlowVersion`, points `current_version_id` at it, marks the flow active, and clears `draft_graph` and `draft_updated_at` together. It intentionally leaves `draft_revision` unchanged so an editor that remains open can continue from its current token without reusing an old revision.
+
+Nodeflow treats published versions as immutable, and package services never update their graph rows. The `FlowVersion` model and database do not prevent host code from updating or deleting a version, however. Never mutate or delete versions that existing runs require.
+
+Draft saving uses compare-and-swap, but `PublishFlow::publish()` accepts no draft revision. A second author can save a newer draft after the final draft `PUT` and before the publish `POST`; the publish transaction can then clear that newer draft. The transaction makes one publish atomic, not serialized against other requests. Until publish revision checking exists, serialize draft/publish work per flow in the application or allow only one publisher for that flow.
 
 ## Next step
 

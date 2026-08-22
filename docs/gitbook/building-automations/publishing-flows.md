@@ -4,6 +4,8 @@
 
 Publishing validates a graph and, when it passes, creates the next immutable `FlowVersion`. A graph uses `start`, `nodes`, and `edges`; nodes require `id`, `type`, and optional `config`, while edges require `from`, `output`, and `to`.
 
+**Graph payload partial:**
+
 ```php
 $graph = [
     'start' => 'send',
@@ -26,6 +28,8 @@ $graph = [
 
 The current call is `PublishFlow::publish(Flow $flow, array $graph, ?string $publishedBy = null): FlowVersion`.
 
+**File: `app/Http/Controllers/FlowPublishController.php` (partial controller action; `$flow` is a tenant-scoped route model and `$graph` is the validated payload above):**
+
 ```php
 <?php
 
@@ -44,6 +48,8 @@ $version = app(PublishFlow::class)->publish(
 ```
 
 Do not call the service with a flow found from an untrusted ID or accept `flow_id`, version IDs, `tenant_id`, or `current_version_id` from a request. The service derives identifiers from the authorized `Flow`; authorization remains the host's responsibility for direct service calls.
+
+`GraphInvalidException` is semantic validation after `Graph::fromArray()` receives a structurally valid graph. Direct callers do not receive the editor controller's request validation, so they must validate the documented array shape before calling `publish()`; malformed nodes or edges can otherwise fail before a structured graph error is available.
 
 ## Fix blocking validation errors
 
@@ -70,7 +76,7 @@ The one current non-blocking warning is exactly: “Two or more branches contain
 array<int, array{node: ?string, field: ?string, message: string}>
 ```
 
-Field failures use their node ID and field key. Graph-level failures, including a missing start and a cycle, use `node: null` and `field: null`; other node-level failures have `field: null`.
+Field failures use their node ID and field key. An empty start and a cycle use `node: null` and `field: null`. A named start that does not exist is attributed to that missing node ID with `field: null`; other node-level failures also have `field: null`.
 
 The editor's publish endpoint returns this semantic validation response with HTTP `422`:
 
@@ -94,7 +100,9 @@ Malformed HTTP graph payloads are rejected earlier by Laravel request validation
 
 The successful work happens in one database transaction: it creates a `FlowVersion` with the next per-flow version number, graph, SHA-256 `content_hash`, publication time, and publisher; then it sets the flow's `current_version_id`, marks it active, and clears `draft_graph` plus `draft_updated_at`.
 
-The version graph is immutable. Runs retain their own `flow_version_id`, so old runs continue on their pinned version after a later publish. The flow's `draft_revision` is deliberately not cleared or reset; it remains monotonic for open editors and subsequent draft saves.
+Nodeflow treats the version graph as immutable, and its publishing services never mutate it. The `FlowVersion` model and database do not enforce update/delete immutability, so host code must never mutate or delete a version required by a run. Runs retain their own `flow_version_id`, so old runs continue on their pinned version after a later publish. The flow's `draft_revision` is deliberately not cleared or reset; it remains monotonic for open editors and subsequent draft saves.
+
+The publish transaction does not coordinate with draft saves from other requests. `SaveDraft` uses a revision compare-and-swap, but `PublishFlow` accepts no revision: a draft saved after the final draft `PUT` and before the publish `POST` can be cleared by publishing. Serialize application-level draft/publish work per flow, or permit only one publisher per flow, until revision-aware publishing is available.
 
 ## Next step
 
