@@ -164,7 +164,7 @@ export function useEditorController(options: UseEditorControllerOptions): UseEdi
     const built = useMemo(() => toGraph(document, document.startId, defs), [document, defs])
     const builtRef = useRef(built)
     builtRef.current = built
-    const autosave = useAutosave({ url: options.urls.draft, initialRevision: options.flow.draft_revision, graph: built.graph, debounceMs: options.autosaveDebounceMs })
+    const autosave = useAutosave({ url: options.urls.draft, sessionIdentity: options.urls.publish, initialRevision: options.flow.draft_revision, graph: built.graph, debounceMs: options.autosaveDebounceMs })
 
     useEffect(() => {
         mounted.current = true

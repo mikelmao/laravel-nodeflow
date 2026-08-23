@@ -527,4 +527,18 @@ describe('useAutosave', () => {
         await act(async () => resolveNewSave(Response.json({ draft_revision: 8 })))
         expect(fetchMock).toHaveBeenCalledTimes(2)
     })
+
+    it('resets the publish lease when an owning publish identity changes without changing the draft URL', async () => {
+        const { result, rerender } = renderHook(
+            (props: { identity: string }) => useAutosave({ url: URL, sessionIdentity: props.identity, initialRevision: 4, graph: graph('stable'), debounceMs: 10 }),
+            { initialProps: { identity: 'publish-old' } },
+        )
+        const oldFinish = result.current.finishPublish
+        await act(async () => expect(result.current.preparePublish()).resolves.toBe(true))
+
+        rerender({ identity: 'publish-new' })
+        await act(async () => expect(result.current.preparePublish()).resolves.toBe(true))
+        act(() => oldFinish(99))
+        expect(result.current.revision).toBe(4)
+    })
 })

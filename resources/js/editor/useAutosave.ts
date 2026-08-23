@@ -96,16 +96,19 @@ export function useAutosave({
     initialRevision,
     graph,
     debounceMs = 1000,
+    sessionIdentity = '',
 }: {
     url: string
     initialRevision: number
     graph: Graph
     debounceMs?: number
+    /** Invalidates a publish lease when its owning endpoint/session changes. */
+    sessionIdentity?: string
 }): Autosave {
     const serialised = JSON.stringify(graph)
 
-    /** URL is the flow identity; the epoch prevents callbacks surviving a leave-and-return. */
-    const flowIdentity = useRef({ url, epoch: 0 })
+    /** Draft URL plus owner identity prevent callbacks and publish leases crossing sessions. */
+    const flowIdentity = useRef({ url, sessionIdentity, epoch: 0 })
     const revision = useRef(initialRevision)
     /** The serialisation the server is known to hold. */
     const baseline = useRef(serialised)
@@ -145,13 +148,13 @@ export function useAutosave({
     const ownerEpoch = flowIdentity.current.epoch
 
     useLayoutEffect(() => {
-        if (flowIdentity.current.url === url) {
+        if (flowIdentity.current.url === url && flowIdentity.current.sessionIdentity === sessionIdentity) {
             return
         }
 
         const supersededRequest = activeRequest.current
 
-        flowIdentity.current = { url, epoch: flowIdentity.current.epoch + 1 }
+        flowIdentity.current = { url, sessionIdentity, epoch: flowIdentity.current.epoch + 1 }
         generation.current += 1
         activeRequest.current = null
         supersededRequest?.settle()
@@ -172,7 +175,7 @@ export function useAutosave({
         }
 
         setState({ status: 'idle', revision: initialRevision, message: null, conflict: null, lastSavedAt: null })
-    }, [url, initialRevision, serialised])
+    }, [url, sessionIdentity, initialRevision, serialised])
 
     useEffect(() => {
         mounted.current = true

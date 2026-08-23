@@ -222,10 +222,12 @@ describe('useEditorController', () => {
     it('invalidates pending validation and publish responses when their URL props change', async () => {
         let resolveValidation!: (response: Response) => void
         let resolvePublish!: (response: Response) => void
+        let resolveNewPublish!: (response: Response) => void
         let currentUrls: EditorUrls = urls
         vi.stubGlobal('fetch', vi.fn((url: string) => {
             if (url === urls.validate) return new Promise<Response>((resolve) => { resolveValidation = resolve })
             if (url === urls.publish) return new Promise<Response>((resolve) => { resolvePublish = resolve })
+            if (url === '/new-publish') return new Promise<Response>((resolve) => { resolveNewPublish = resolve })
             return Promise.resolve(Response.json({ draft_revision: 8 }))
         }))
         const view = renderHook(() => useEditorController({ flow, graph, palette: [send, exit], triggers: [{ type: 'app.started', label: 'Started', description: null, fields: [] }], urls: currentUrls, autosaveDebounceMs: 1 }))
@@ -233,9 +235,13 @@ describe('useEditorController', () => {
         await waitFor(() => expect(resolvePublish).toBeTypeOf('function'))
         currentUrls = { ...urls, validate: '/new-validate', publish: '/new-publish' }
         view.rerender()
+        act(() => { void view.result.current.actions.publish() })
+        await waitFor(() => expect(resolveNewPublish).toBeTypeOf('function'))
         await act(async () => { resolveValidation(Response.json({ valid: true, warnings: [] })); resolvePublish(Response.json({ version: 4, draft_revision: 8 })) })
 
         expect(view.result.current.toolbarProps.validation.status).toBe('unchecked')
         expect(view.result.current.toolbarProps.publishedVersion).toBe(3)
+        await act(async () => resolveNewPublish(Response.json({ version: 5, draft_revision: 9 })))
+        expect(view.result.current.toolbarProps.publishedVersion).toBe(5)
     })
 })

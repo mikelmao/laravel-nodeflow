@@ -363,6 +363,19 @@
   controller/autosave session. Regressions cover focused active-editor unmount and old/new publish
   endpoint isolation.
 
+### Task 10 final blocker follow-up — autosave-owned publish identity
+
+- RED: directly rerendering `useAutosave` with the same draft URL but a new publish owner identity
+  left the old publish barrier active, so the new `preparePublish()` returned false. The direct
+  controller regression verifies a new publish endpoint can start after an old pending request and
+  that the stale response cannot alter the new result.
+- GREEN: `useAutosave` accepts optional `sessionIdentity` (stable empty default for existing
+  callers) and folds it into its epoch comparison with the real draft URL. Either identity change
+  now uses the existing authoritative reset path: settles old requests, clears publish lease and
+  queue state, resets the supplied revision/state, and preserves PUT routing to the actual draft
+  URL. The controller supplies its publish URL as that identity; FlowEditor's publish-url session
+  key remains a defensive public remount boundary.
+
 ## Documentation and demo verification
 
 ## Reviews and final gates
