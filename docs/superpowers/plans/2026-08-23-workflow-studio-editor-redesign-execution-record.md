@@ -254,6 +254,9 @@
 
 ## Task 9 — toolbar, notices, and shell
 
+- RED: `npx vitest run resources/js/editor/EditorChrome.test.tsx resources/js/editor/EditorShell.test.tsx` failed as expected because `CanvasHud`, `EditorToolbar`, and `EditorShell` did not yet exist. The focused contract was committed in `12b53e7` (`test: define Workflow Studio chrome`).
+- GREEN: the same focused suite passed with 17 tests. `npx tsc --noEmit` and `git diff --check` passed after adding the pure toolbar/notices/HUD view components and one-DOM responsive shell. The shell owns only view-state widths (library 240–400 px, inspector 288–480 px); no controller or `FlowEditor` integration changed.
+
 ## Task 10 — controller integration
 
 ## Documentation and demo verification

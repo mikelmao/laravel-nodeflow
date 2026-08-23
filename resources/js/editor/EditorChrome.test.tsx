@@ -1,4 +1,4 @@
-import { fireEvent, render, screen, within } from '@testing-library/react'
+import { render, screen, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { describe, expect, it, vi } from 'vitest'
 import { CanvasHud } from './CanvasHud'
@@ -77,7 +77,7 @@ describe('EditorToolbar', () => {
     it('represents validation and publishing actions, results, and disabled work states', async () => {
         const user = userEvent.setup()
         const { props, rerender } = toolbar({ validation: { status: 'warning', count: 2 }, publish: { status: 'published', version: 8 } })
-        expect(screen.getByText('2 warnings')).toBeInTheDocument()
+        expect(screen.getByText('Ready with 2 warnings')).toBeInTheDocument()
         expect(screen.getByText('Published v8')).toBeInTheDocument()
         await user.click(screen.getByRole('button', { name: 'Validate flow' }))
         await user.click(screen.getByRole('button', { name: 'Publish flow' }))
@@ -92,10 +92,10 @@ describe('EditorToolbar', () => {
     it('keeps secondary actions in a named narrow overflow without duplicating primary actions', () => {
         toolbar()
         const overflow = screen.getByRole('group', { name: 'More workflow actions' })
-        expect(within(overflow).getByRole('button', { name: 'Auto layout' })).toBeInTheDocument()
-        expect(within(overflow).getByRole('button', { name: 'Fit canvas' })).toBeInTheDocument()
-        expect(within(overflow).getByRole('button', { name: 'Undo' })).toBeInTheDocument()
-        expect(within(overflow).getByRole('button', { name: 'Redo' })).toBeInTheDocument()
+        expect(within(overflow).getByRole('button', { name: 'Auto layout (more actions)' })).toBeInTheDocument()
+        expect(within(overflow).getByRole('button', { name: 'Fit canvas (more actions)' })).toBeInTheDocument()
+        expect(within(overflow).getByRole('button', { name: 'Undo (more actions)' })).toBeInTheDocument()
+        expect(within(overflow).getByRole('button', { name: 'Redo (more actions)' })).toBeInTheDocument()
         expect(screen.getAllByRole('button', { name: 'Save status: Saved' })).toHaveLength(1)
         expect(screen.getAllByRole('button', { name: 'Validate flow' })).toHaveLength(1)
         expect(screen.getAllByRole('button', { name: 'Publish flow' })).toHaveLength(1)
@@ -112,7 +112,8 @@ describe('EditorNotices and CanvasHud', () => {
             structuralError="The editor could not build this graph."
             graphMessages={['Start node is required', 'The node legacy is unplaceable']}
             publish={{ status: 'error', message: 'Publish failed.' }}
-            validation={{ status: 'failed', message: 'Validation service unavailable.' }}
+            validation={{ status: 'failed' }}
+            validationMessage="Validation service unavailable."
             onKeepMine={keepMine}
             onUseTheirs={useTheirs}
         />)

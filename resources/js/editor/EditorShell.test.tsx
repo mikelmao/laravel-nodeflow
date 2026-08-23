@@ -53,14 +53,13 @@ describe('EditorShell', () => {
     it('opens focusable drawer headings, closes the top panel with Escape, and returns focus to its trigger', async () => {
         const user = userEvent.setup()
         const { props, rerender } = shell()
-        const inspectorTrigger = screen.getByRole('button', { name: 'Open Inspector' })
-        await user.click(inspectorTrigger)
+        await user.click(screen.getByRole('button', { name: 'Open Inspector' }))
         rerender(<EditorShell {...props} inspectorOpen />)
         expect(screen.getByRole('heading', { name: 'Inspector' })).toHaveFocus()
         fireEvent.keyDown(document, { key: 'Escape' })
         expect(props.onInspectorOpenChange).toHaveBeenLastCalledWith(false)
         rerender(<EditorShell {...props} inspectorOpen={false} />)
-        expect(inspectorTrigger).toHaveFocus()
+        expect(screen.getByRole('button', { name: 'Open Inspector' })).toHaveFocus()
     })
 
     it('clamps keyboard and pointer resizing and exposes exact CSS custom properties', () => {
