@@ -48,16 +48,12 @@ function subject(options: {
     controls?: Record<string, (props: FieldControlProps) => React.ReactElement | null>
     errors?: NodeErrorEntry[]
     onConfigChange?: (key: string, value: unknown) => void
-    onMakeStart?: () => void
-    onDelete?: () => void
 } = {}) {
     const selected = options.selected ?? node
     const def = Object.prototype.hasOwnProperty.call(options, 'def') ? options.def : definition()
     const controls = options.controls ?? mergeControls()
     const errors = options.errors ?? []
     const onConfigChange = options.onConfigChange ?? vi.fn()
-    const onMakeStart = options.onMakeStart ?? vi.fn()
-    const onDelete = options.onDelete ?? vi.fn()
 
     return render(
         <FieldOptionsContext.Provider
@@ -71,10 +67,7 @@ function subject(options: {
                 def={def}
                 controls={controls}
                 errors={errors}
-                isStart={selected.isStart}
                 onConfigChange={onConfigChange}
-                onMakeStart={onMakeStart}
-                onDelete={onDelete}
             />
         </FieldOptionsContext.Provider>,
     )
@@ -163,13 +156,12 @@ describe('ConfigPanel', () => {
         expect(screen.getByRole('alert')).toHaveTextContent('node is unreachable')
     })
 
-    // Unknown definitions are legal drafts; counterfactual returning early traps a node that cannot be deleted.
-    it('keeps delete available when the node definition is missing', () => {
-        const onDelete = vi.fn()
-        subject({ def: undefined, onDelete })
+    // This component owns only configurable content; counterfactual keeping its old aside/actions duplicates inspector policy.
+    it('contains the unknown-type notice inside the node configuration region only', () => {
+        subject({ def: undefined })
 
-        expect(screen.getByRole('alert')).toHaveTextContent('app.send')
-        fireEvent.click(screen.getByRole('button', { name: 'Delete node' }))
-        expect(onDelete).toHaveBeenCalledOnce()
+        expect(screen.getByLabelText('Node configuration')).toContainElement(screen.getByRole('alert'))
+        expect(screen.queryByRole('complementary')).toBeNull()
+        expect(screen.queryByRole('button', { name: /delete|start/i })).toBeNull()
     })
 })
