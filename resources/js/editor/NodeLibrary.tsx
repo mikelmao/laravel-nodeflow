@@ -56,10 +56,23 @@ export function filterNodeDefinitions(definitions: NodeTypePayload[], query: str
         .map(({ definition }) => definition)
 }
 
+const conciseDescriptionLimit = 120
+
+function visibleCharacters(text: string): string[] {
+    if (typeof Intl.Segmenter === 'function') {
+        return Array.from(new Intl.Segmenter('en', { granularity: 'grapheme' }).segment(text), ({ segment }) => segment)
+    }
+
+    return Array.from(text)
+}
+
 function conciseDescription(description: string | null): string {
     const text = description?.trim()
     if (!text) return 'No description provided.'
-    return text.length > 120 ? `${text.slice(0, 119)}…` : text
+    const characters = visibleCharacters(text)
+    return characters.length > conciseDescriptionLimit
+        ? `${characters.slice(0, conciseDescriptionLimit - 1).join('')}…`
+        : text
 }
 
 function groupLabel(definition: NodeTypePayload): string {

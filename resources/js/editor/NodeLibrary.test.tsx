@@ -121,6 +121,17 @@ describe('NodeLibrary', () => {
         expect(onAdd).toHaveBeenCalledTimes(2)
     })
 
+    // Code-unit slicing can turn an astral emoji into replacement text; descriptions must remain readable at the limit.
+    it('truncates a multi-code-point grapheme without splitting it', () => {
+        const prefix = 'a'.repeat(118)
+        const expected = `${prefix}👩‍💻…`
+        render(<NodeLibrary palette={[entry({ description: `${prefix}👩‍💻 after the limit` })]} onAdd={vi.fn()} />)
+
+        const description = screen.getByText(expected)
+        expect(description).toHaveTextContent(expected)
+        expect(description.textContent).not.toContain('\uFFFD')
+    })
+
     it('renders accessible grouped add controls with presentation details and attached search and close controls', () => {
         const inputRef = createRef<HTMLInputElement>()
         const onRequestClose = vi.fn()

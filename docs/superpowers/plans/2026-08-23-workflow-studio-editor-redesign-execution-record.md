@@ -185,6 +185,13 @@
 - GREEN verification: `npx vitest run resources/js/editor/NodeLibrary.test.tsx` passed 1 file / 12
   tests. `rg "Palette" resources/js` has no results, `npx tsc --noEmit` passed silently, and
   `git diff --check` passed.
+- Quality follow-up RED: a description whose 119th code unit was the first surrogate of the
+  multi-code-point `👩‍💻` grapheme rendered a replacement character before the ellipsis.
+- Quality follow-up GREEN: concise descriptions now segment graphemes with a fixed-locale
+  `Intl.Segmenter` when available, retaining 119 visible units plus the ellipsis. Older SSR/runtime
+  environments use deterministic `Array.from()` code-point segmentation, which still avoids broken
+  astral characters. Focused verification passed 1 file / 13 tests; TypeScript and diff checks
+  passed silently.
 
 ## Task 8 — inspector
 
