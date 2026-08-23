@@ -1,7 +1,7 @@
 import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import { StrictMode } from 'react'
 import userEvent from '@testing-library/user-event'
-import { beforeEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { CanvasProps } from '../canvas/Canvas'
 import type { FieldControlProps } from '../controls/types'
 import type { Graph, NodeTypePayload } from '../graph/types'
@@ -133,12 +133,75 @@ function successfulFetch(publishRevision = 8) {
     })
 }
 
+function installMediaQuery(initiallyNarrow: boolean) {
+    const media = {
+        matches: initiallyNarrow,
+        media: '(max-width: 1023px)',
+        onchange: null,
+        addListener: vi.fn(),
+        removeListener: vi.fn(),
+        addEventListener: vi.fn(),
+        removeEventListener: vi.fn(),
+        dispatchEvent: vi.fn(),
+    }
+    vi.stubGlobal('matchMedia', vi.fn(() => media))
+}
+
 beforeEach(() => {
     canvasProbe.current = null
     vi.stubGlobal('fetch', vi.fn().mockResolvedValue(Response.json({ draft_revision: 8 })))
 })
 
+afterEach(() => vi.unstubAllGlobals())
+
 describe('FlowEditor', () => {
+    it('keeps the desktop inspector open for overview after genuine pane deselection but respects an explicit collapse', () => {
+        installMediaQuery(false)
+        renderEditor()
+
+        expect(screen.getByRole('complementary', { name: 'Flow overview' })).toBeInTheDocument()
+        fireEvent.click(canvasNode('send1'))
+        expect(screen.getByRole('complementary', { name: 'Node inspector' })).toBeInTheDocument()
+
+        const pane = document.querySelector('.react-flow__pane')
+        if (!(pane instanceof HTMLElement)) throw new Error('Could not find the React Flow pane.')
+        fireEvent.click(pane)
+        expect(screen.getByRole('complementary', { name: 'Flow overview' })).toBeInTheDocument()
+        expect(screen.getByRole('button', { name: 'Collapse Inspector' })).toBeInTheDocument()
+        expect(screen.queryByRole('button', { name: 'Open Inspector' })).toBeNull()
+
+        fireEvent.click(screen.getByRole('button', { name: 'Collapse Inspector' }))
+        expect(screen.queryByRole('complementary', { name: 'Flow overview' })).toBeNull()
+        fireEvent.click(canvasNode('send1'))
+        expect(screen.getByRole('complementary', { name: 'Node inspector' })).toBeInTheDocument()
+
+        fireEvent.click(screen.getByRole('button', { name: 'Collapse Inspector' }))
+        fireEvent.click(pane)
+        expect(screen.queryByRole('complementary', { name: 'Flow overview' })).toBeNull()
+        expect(screen.getByRole('button', { name: 'Open Inspector' })).toBeInTheDocument()
+    })
+
+    it('keeps the narrow inspector drawer closed after pane deselection but opens it for node selection', async () => {
+        installMediaQuery(true)
+        renderEditor()
+        await waitFor(() => expect(screen.getByRole('dialog', { name: 'Inspector' })).toBeInTheDocument())
+
+        fireEvent.keyDown(document, { key: 'Escape' })
+        expect(screen.getByRole('button', { name: 'Open Inspector' })).toBeInTheDocument()
+        fireEvent.click(canvasNode('send1'))
+        const dialog = await screen.findByRole('dialog', { name: 'Inspector' })
+        expect(within(dialog).getByRole('complementary', { name: 'Node inspector' })).toBeInTheDocument()
+
+        const pane = document.querySelector('.react-flow__pane')
+        if (!(pane instanceof HTMLElement)) throw new Error('Could not find the React Flow pane.')
+        fireEvent.click(pane)
+        expect(within(screen.getByRole('dialog', { name: 'Inspector' })).getByRole('complementary', { name: 'Flow overview' })).toBeInTheDocument()
+        fireEvent.keyDown(document, { key: 'Escape' })
+        fireEvent.click(pane)
+        expect(screen.queryByRole('dialog', { name: 'Inspector' })).toBeNull()
+        expect(screen.getByRole('button', { name: 'Open Inspector' })).toBeInTheDocument()
+    })
+
     // Trigger metadata is server-authored and read-only; counterfactual showing only the key hides author guidance.
     it('names the flow and resets the whole editor only when its authoritative identity changes', async () => {
         let resolveOldPublish!: (response: Response) => void
@@ -199,7 +262,6 @@ describe('FlowEditor', () => {
         expect(screen.getByText(/published v5/i)).toBeInTheDocument()
         expect(screen.getByText(/Start: new1/i)).toBeInTheDocument()
         expect(canvasNode('new1')).toBeInTheDocument()
-        fireEvent.click(screen.getByRole('button', { name: 'Open Inspector' }))
         expect(screen.getByRole('complementary', { name: 'Flow overview' })).toBeInTheDocument()
         await new Promise((resolve) => setTimeout(resolve, 15))
         expect(fetchMock.mock.calls.filter(([url]) => url === nextUrls.draft)).toHaveLength(0)
@@ -361,7 +423,6 @@ describe('FlowEditor', () => {
         expect(await screen.findByText(/Start: none/i)).toBeInTheDocument()
         expect(canvasNode('exit2')).toBeInTheDocument()
         expect(canvasNode('theirs2')).toBeInTheDocument()
-        fireEvent.click(screen.getByRole('button', { name: 'Open Inspector' }))
         expect(screen.getByRole('complementary', { name: 'Flow overview' })).toBeInTheDocument()
         fireEvent.click(screen.getByRole('button', { name: 'Publish' }))
         expect((await screen.findAllByText(/Published v4/)).length).toBeGreaterThan(0)

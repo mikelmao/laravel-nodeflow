@@ -188,7 +188,7 @@ describe('useEditorController', () => {
         expect(view.result.current.document.nodes[0]).not.toHaveProperty('selected')
         act(() => view.result.current.actions.nodesChange([{ id: 'send1', type: 'select', selected: false }]))
         expect(view.result.current.selected).toBeUndefined()
-        expect(view.result.current.view.inspectorOpen).toBe(false)
+        expect(view.result.current.view.inspectorOpen).toBe(true)
 
         act(() => view.result.current.actions.edgesChange([{ id: edgeId, type: 'select', selected: true }]))
         expect(view.result.current.view.selectedEdgeId).toBe(edgeId)

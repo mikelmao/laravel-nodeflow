@@ -463,3 +463,24 @@
   passed **3 files / 30 tests**; `vendor/bin/pest
   tests/Feature/WorkflowStudioDocumentationTest.php --compact` passed **1 test / 40 assertions**;
   `npx tsc --noEmit` and `git diff --check` passed silently.
+
+### Inspector visibility-preference follow-up
+
+- Review finding: making desktop panels controlled exposed a controller mismatch. A newly mounted
+  no-selection editor started with the Inspector closed, and pane/React Flow deselection forcibly
+  closed it, so Flow Overview was unavailable unless the author reopened the panel. This also made
+  an explicit collapse indistinguishable from ordinary selection changes.
+- RED: the FlowEditor desktop regression installs a wide media query and requires default Flow
+  Overview, Node Inspector after node selection, and Flow Overview after a real React Flow pane
+  click without an `Open Inspector` action. It failed at the initial overview because
+  `inspectorOpen` was false. The test also pins that an explicit collapse stays closed through
+  pane deselection, while a node selection explicitly reopens it.
+- GREEN: the controller starts with the Inspector open; node selection opens it deliberately,
+  while node/edge/pane deselection, node deletion, and conflict adoption preserve its current
+  visibility preference. The canvas pane callback now delegates only to `selectNode(null)`. A
+  narrow-drawer regression proves Escape/collapse remains closed through pane clicks, selection
+  opens the drawer, and an open drawer changes to Flow Overview on pane deselection.
+- Verification: `npx vitest run resources/js/editor/FlowEditor.test.tsx
+  resources/js/editor/useEditorController.test.tsx resources/js/editor/EditorShell.test.tsx
+  --reporter=dot` passed **3 files / 51 tests**. Full Vitest passed **26 files / 304 tests**;
+  `npx tsc --noEmit` and `git diff --check` passed silently.

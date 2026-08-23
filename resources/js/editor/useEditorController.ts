@@ -139,7 +139,7 @@ export function useEditorController(options: UseEditorControllerOptions): UseEdi
     const historyRef = useRef(history)
     historyRef.current = history
     const [selected, setSelected] = useState<EditorSelection>({ nodeId: null, edgeId: null })
-    const [view, setView] = useState<EditorView>({ libraryOpen: true, inspectorOpen: false, selectedEdgeId: null })
+    const [view, setView] = useState<EditorView>({ libraryOpen: true, inspectorOpen: true, selectedEdgeId: null })
     const [validation, setValidation] = useState<ValidationOutcome | null>(null)
     const [publishOutcome, setPublishOutcome] = useState<PublishOutcome | null>(null)
     const [validationState, setValidationState] = useState<ValidationIndicator>({ status: 'unchecked' })
@@ -251,12 +251,12 @@ export function useEditorController(options: UseEditorControllerOptions): UseEdi
     const selectNode = useCallback((id: string | null) => {
         setSelected({ nodeId: id, edgeId: null })
         setIssueToFocus(null)
-        setView((current) => ({ ...current, inspectorOpen: id !== null, selectedEdgeId: null }))
+        setView((current) => ({ ...current, inspectorOpen: id === null ? current.inspectorOpen : true, selectedEdgeId: null }))
     }, [])
     const selectEdge = useCallback((id: string | null) => {
         setSelected({ nodeId: null, edgeId: id })
         setIssueToFocus(null)
-        setView((current) => ({ ...current, inspectorOpen: false, selectedEdgeId: id }))
+        setView((current) => ({ ...current, selectedEdgeId: id }))
     }, [])
 
     const deleteNode = useCallback((id: string) => {
@@ -265,7 +265,7 @@ export function useEditorController(options: UseEditorControllerOptions): UseEdi
         if (nextNodes.length === current.nodes.length) return
         commit({ nodes: nextNodes, edges: current.edges.filter((edge) => edge.source !== id && edge.target !== id), startId: current.startId === id ? '' : current.startId })
         setSelected((selection) => selection.nodeId === id ? { nodeId: null, edgeId: null } : selection)
-        setView((current) => ({ ...current, inspectorOpen: false, selectedEdgeId: null }))
+        setView((current) => ({ ...current, selectedEdgeId: null }))
     }, [commit])
 
     const nodesChange = useCallback((changes: NodeChange<NodeflowNode>[]) => {
@@ -275,7 +275,7 @@ export function useEditorController(options: UseEditorControllerOptions): UseEdi
         if (selectedNode !== undefined) selectNode(selectedNode.id)
         else if (selectionChanges.some((change) => !change.selected)) {
             setSelected((current) => current.nodeId !== null && selectionChanges.some((change) => change.id === current.nodeId && !change.selected) ? { nodeId: null, edgeId: null } : current)
-            setView((current) => ({ ...current, inspectorOpen: false, selectedEdgeId: null }))
+            setView((current) => ({ ...current, selectedEdgeId: null }))
         }
         const removed = new Set(graphChanges.filter((change) => change.type === 'remove').map((change) => change.id))
         if (graphChanges.every((change) => change.type === 'dimensions')) return
@@ -369,7 +369,7 @@ export function useEditorController(options: UseEditorControllerOptions): UseEdi
         clearValidation()
         setPublishOutcome(null)
         setSelected({ nodeId: null, edgeId: null })
-        setView((current) => ({ ...current, inspectorOpen: false, selectedEdgeId: null }))
+        setView((current) => ({ ...current, selectedEdgeId: null }))
         autosave.resolveConflict('theirs', toGraph(next, next.startId, defs).graph)
     }, [autosave, clearValidation, defs])
 
@@ -481,7 +481,7 @@ export function useEditorController(options: UseEditorControllerOptions): UseEdi
         view,
         actions,
         optionsSource,
-        canvasProps: { nodes: canvasNodes, edges: canvasEdges, defs, renderers: options.nodeRenderers, nodeErrors, onNodesChange: nodesChange, onEdgesChange: edgesChange, onConnect: connect, onNodeClick: selectNode, onEdgeClick: selectEdge, onPaneClick: () => { selectNode(null); setView((current) => ({ ...current, inspectorOpen: false })) }, onDropNodeType: (type, point) => { if (Object.prototype.hasOwnProperty.call(defs, type)) addNode(defs[type]!, point) }, onReady: (next) => { canvas.current = next }, onDispose: (old) => { if (canvas.current === old) canvas.current = null }, interactive: true, deleteKeyCode: null },
+        canvasProps: { nodes: canvasNodes, edges: canvasEdges, defs, renderers: options.nodeRenderers, nodeErrors, onNodesChange: nodesChange, onEdgesChange: edgesChange, onConnect: connect, onNodeClick: selectNode, onEdgeClick: selectEdge, onPaneClick: () => { selectNode(null) }, onDropNodeType: (type, point) => { if (Object.prototype.hasOwnProperty.call(defs, type)) addNode(defs[type]!, point) }, onReady: (next) => { canvas.current = next }, onDispose: (old) => { if (canvas.current === old) canvas.current = null }, interactive: true, deleteKeyCode: null },
         canvasHudProps: { nodeCount: document.nodes.length, connectionCount: document.edges.length, validation: validationState },
         toolbarProps: { flowName: options.flow.name, triggerLabel: trigger?.label ?? options.flow.trigger_type, publishedVersion, save, validation: validationState, publish: publishIndicator, canUndo: history.past.length > 0, canRedo: history.future.length > 0, hasSelection: selected.nodeId !== null || selected.edgeId !== null, onUndo: () => moveHistory('undo'), onRedo: () => moveHistory('redo'), onAutoLayout: autoLayout, onFit: () => canvas.current?.fit(), onDeleteSelected: deleteSelection, onValidate: () => { void validate() }, onPublish: () => { void publish() } },
         noticeProps: { save, publish: publishIndicator, validation: validationState, structuralError: message.structural, graphMessages: [...message.graph, ...(message.failed === undefined ? [] : [message.failed])], validationMessage: validation?.kind === 'failed' ? validation.message : undefined, onKeepMine: () => resolveConflict('mine'), onUseTheirs: () => resolveConflict('theirs') },
