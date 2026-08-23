@@ -90,7 +90,7 @@ class FloodAlertTrigger extends Trigger
         $match = TriggerMatch::make();
 
         foreach ($event->residentIdsByOrganization as $organizationId => $residentIds) {
-            $match->forTenant(
+            $match = $match->forTenant(
                 tenantId: (string) $organizationId,
                 subjectType: 'resident',
                 subjectIds: $residentIds,
@@ -129,18 +129,17 @@ public function resolve(object $event): TriggerMatch;
 
 `type()` is the stored, stable trigger type. `event()` returns the event class to listen for. `definition()` supplies the editor label, optional description, and fields. `resolve()` returns the audience selected from one event. The inherited `matchesConfig(object $event, array $config): bool` accepts every event by default; override it when each flow's `trigger_config` should narrow the event. The inherited `idempotencyKey(object $event): ?string` returns `null`; override it only with a stable identity for this event delivery, such as the alert ID above.
 
-`TriggerMatch::forTenant(string $tenantId, string $subjectType, iterable $subjectIds): self` records one audience per tenant. Its stored shape is:
+`TriggerMatch::forTenant(string $tenantId, string $subjectType, iterable $subjectIds): self` returns a new immutable match containing one typed audience per tenant. Reassign `$match` each time, as in the example above. Each audience contains normalized string identifiers equivalent to:
 
 ```php
-[
-    'organization-42' => [
-        'subject_type' => 'resident',
-        'subject_ids' => ['101', '102'],
-    ],
-]
+new TriggerTenantMatch(
+    tenantId: 'organization-42',
+    subjectType: 'resident',
+    subjectIds: ['101', '102'],
+)
 ```
 
-Calling `forTenant()` again for the same tenant replaces that tenant's earlier audience; merge IDs before calling it when one event has several sources for that tenant. The match preserves the supplied IDs until run materialization. Materialization then string-normalizes them and removes repeated IDs.
+Calling `forTenant()` again for the same tenant replaces that tenant's earlier audience in the returned match; merge IDs before calling it when one event has several sources for that tenant.
 
 ## Register at application boot
 
