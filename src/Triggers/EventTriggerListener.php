@@ -17,9 +17,9 @@ class EventTriggerListener
         foreach ($this->triggers->forEvent($event::class) as $trigger) {
             $match = $trigger->resolve($event);
 
-            foreach ($match->tenants() as $tenantId => $audience) {
+            foreach ($match->tenants() as $tenantMatch) {
                 $flows = Flow::withoutTenancy()
-                    ->where('tenant_id', $tenantId)
+                    ->where('tenant_id', $tenantMatch->tenantId)
                     ->where('trigger_type', $trigger::type())
                     ->where('status', 'active')
                     ->whereNotNull('current_version_id')
@@ -39,8 +39,8 @@ class EventTriggerListener
                     try {
                         $this->startRun->forFlow(
                             $flow,
-                            $audience['subject_type'],
-                            $audience['subject_ids'],
+                            $tenantMatch->subjectType,
+                            $tenantMatch->subjectIds,
                             ['idempotency_key' => $trigger->idempotencyKey($event)],
                         );
                     } catch (\Throwable $e) {

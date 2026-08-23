@@ -72,7 +72,7 @@ class FakeMultiTenantAlertTrigger extends Trigger
         $match = TriggerMatch::make();
 
         foreach ($event->tenantUserIds as $tenantId => $userIds) {
-            $match->forTenant($tenantId, 'user', $userIds);
+            $match = $match->forTenant($tenantId, 'user', $userIds);
         }
 
         return $match;
