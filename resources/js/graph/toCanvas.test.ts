@@ -56,6 +56,7 @@ describe('toCanvas', () => {
     // Counterfactual: dropping output names would disconnect multi-output nodes semantically.
     expect(toCanvas(baseGraph).edges[0]).toMatchObject({
       source: 'n1',
+      type: 'nodeflowEdge',
       sourceHandle: 'sent',
       target: 'n2',
       label: 'sent',

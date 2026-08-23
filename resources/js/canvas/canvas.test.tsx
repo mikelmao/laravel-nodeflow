@@ -1,6 +1,6 @@
-import { Position, ReactFlowProvider, useStoreApi, type NodeProps } from '@xyflow/react'
+import { Position, ReactFlowProvider, useReactFlow, useStoreApi, type NodeProps } from '@xyflow/react'
 import { fireEvent, render, screen, waitFor } from '@testing-library/react'
-import { useLayoutEffect, useRef } from 'react'
+import { useEffect, useLayoutEffect, useRef } from 'react'
 import { describe, expect, it, vi } from 'vitest'
 import type { CanvasEdge, CanvasNode, NodeCardData, NodeTypePayload } from '../graph/types'
 import { Canvas, canvasBehavior, interactionProps, type NodeflowNode } from './Canvas'
@@ -37,9 +37,30 @@ const canvasNode: CanvasNode = {
 }
 const canvasEdge: CanvasEdge = {
     id: 'n1-sent-n2',
+    type: 'nodeflowEdge',
     source: 'n1',
     sourceHandle: 'sent',
     target: 'n2',
+}
+
+function FlowInstanceProbe({ onInstance }: { onInstance: (instance: ReturnType<typeof useReactFlow>) => void }) {
+    const instance = useReactFlow()
+
+    useEffect(() => onInstance(instance), [instance, onInstance])
+
+    return null
+}
+
+function nodeTypeTransfer(type: string | null): DataTransfer {
+    return {
+        getData: vi.fn((mime: string) => mime === 'application/x-nodeflow-node-type' ? type ?? '' : ''),
+    } as unknown as DataTransfer
+}
+
+type CanvasActions = {
+    fit: () => void
+    centerNode: (id: string) => void
+    screenToFlowPosition: (point: { x: number; y: number }) => { x: number; y: number }
 }
 const nodeProps: NodeProps<NodeflowNode> = {
     id: 'n1',
@@ -485,4 +506,129 @@ describe('Canvas', () => {
         expect(onEdgesChange).not.toHaveBeenCalled()
         expect(onConnect).not.toHaveBeenCalled()
     })
+
+    it('routes pane clicks without treating a node or edge click as a pane click', async () => {
+        const onPaneClick = vi.fn()
+        const onEdgeClick = vi.fn()
+        const { container } = render(
+            <Canvas
+                nodes={[canvasNode]}
+                edges={[canvasEdge]}
+                defs={{ 'app.send': def() }}
+                onPaneClick={onPaneClick}
+                onEdgeClick={onEdgeClick}
+            />,
+        )
+
+        await waitFor(() => expect(container.querySelector('.react-flow__edge')).not.toBeNull())
+        expect(screen.getByLabelText('Connection output: sent')).toBeInTheDocument()
+        fireEvent.click(screen.getByTestId('rf__node-n1'))
+        fireEvent.click(container.querySelector('.react-flow__edge')!)
+
+        expect(onPaneClick).not.toHaveBeenCalled()
+        expect(onEdgeClick).toHaveBeenCalledOnce()
+        expect(onEdgeClick).toHaveBeenCalledWith('n1-sent-n2')
+
+        fireEvent.click(container.querySelector('.react-flow__pane')!)
+        expect(onPaneClick).toHaveBeenCalledOnce()
+    })
+
+    it('converts only an exact node-type drag payload to a flow position', async () => {
+        const onDropNodeType = vi.fn()
+        let instance: ReturnType<typeof useReactFlow> | null = null
+        const { container } = render(
+            <ReactFlowProvider>
+                <Canvas nodes={[canvasNode]} edges={[]} defs={{ 'app.send': def() }} onDropNodeType={onDropNodeType} />
+                <FlowInstanceProbe onInstance={(value) => { instance = value }} />
+            </ReactFlowProvider>,
+        )
+        const pane = container.querySelector('.react-flow__pane')!
+        const dataTransfer = nodeTypeTransfer('app.send')
+        await waitFor(() => expect(instance).not.toBeNull())
+        const screenToFlowPosition = vi.spyOn(instance!, 'screenToFlowPosition').mockReturnValue({ x: 11, y: 12 })
+
+        expect(fireEvent.dragOver(pane, { dataTransfer })).toBe(false)
+        expect(fireEvent.drop(pane, { dataTransfer, clientX: 123, clientY: 456 })).toBe(false)
+        expect(screenToFlowPosition).toHaveBeenCalledWith({ x: 123, y: 456 })
+        expect(onDropNodeType).toHaveBeenCalledWith('app.send', { x: 11, y: 12 })
+    })
+
+    it('rejects unsupported or empty drops and every drop in read-only mode', () => {
+        const onDropNodeType = vi.fn()
+        const { container } = render(
+            <Canvas nodes={[canvasNode]} edges={[]} defs={{ 'app.send': def() }} onDropNodeType={onDropNodeType} interactive={false} />,
+        )
+        const pane = container.querySelector('.react-flow__pane')!
+
+        expect(fireEvent.dragOver(pane, { dataTransfer: nodeTypeTransfer(null) })).toBe(true)
+        expect(fireEvent.drop(pane, { dataTransfer: nodeTypeTransfer(null), clientX: 1, clientY: 2 })).toBe(true)
+        expect(fireEvent.drop(pane, { dataTransfer: nodeTypeTransfer('app.send'), clientX: 1, clientY: 2 })).toBe(true)
+        expect(onDropNodeType).not.toHaveBeenCalled()
+    })
+
+    it('exposes instance-backed fit, centering, and coordinate actions once ready', async () => {
+        const onReady = vi.fn()
+        let instance: ReturnType<typeof useReactFlow> | null = null
+        const rendered = render(
+            <ReactFlowProvider>
+                <Canvas nodes={[canvasNode]} edges={[]} defs={{ 'app.send': def() }} onReady={onReady} />
+                <FlowInstanceProbe onInstance={(value) => { instance = value }} />
+            </ReactFlowProvider>,
+        )
+
+        await waitFor(() => expect(onReady).toHaveBeenCalledOnce())
+        await waitFor(() => expect(instance).not.toBeNull())
+        rendered.rerender(
+            <ReactFlowProvider>
+                <Canvas nodes={[canvasNode]} edges={[]} defs={{ 'app.send': def() }} onReady={onReady} />
+                <FlowInstanceProbe onInstance={(value) => { instance = value }} />
+            </ReactFlowProvider>,
+        )
+        expect(onReady).toHaveBeenCalledOnce()
+        const actions = onReady.mock.calls[0]?.[0] as CanvasActions
+        const fitView = vi.spyOn(instance!, 'fitView').mockResolvedValue(true)
+        const getNode = vi.spyOn(instance!, 'getNode').mockReturnValue({ position: { x: 40, y: 80 } } as never)
+        const getZoom = vi.spyOn(instance!, 'getZoom').mockReturnValue(0.5)
+        const setCenter = vi.spyOn(instance!, 'setCenter').mockResolvedValue(true)
+        const screenToFlowPosition = vi.spyOn(instance!, 'screenToFlowPosition').mockReturnValue({ x: 8, y: 9 })
+
+        actions.fit()
+        actions.centerNode('n1')
+        actions.centerNode('missing')
+
+        expect(fitView).toHaveBeenCalledWith({ padding: 0.22, duration: 220 })
+        expect(getNode).toHaveBeenNthCalledWith(1, 'n1')
+        expect(setCenter).toHaveBeenCalledWith(168, 136, { zoom: 0.85, duration: 220 })
+        expect(getNode).toHaveBeenLastCalledWith('missing')
+        expect(actions.screenToFlowPosition({ x: 1, y: 2 })).toEqual({ x: 8, y: 9 })
+        expect(screenToFlowPosition).toHaveBeenCalledWith({ x: 1, y: 2 })
+    })
+
+    it('uses zero-duration controls when the OS asks for reduced motion', async () => {
+        vi.stubGlobal('matchMedia', vi.fn(() => ({ matches: true })))
+        const onReady = vi.fn()
+        let instance: ReturnType<typeof useReactFlow> | null = null
+        render(
+            <ReactFlowProvider>
+                <Canvas nodes={[canvasNode]} edges={[]} defs={{ 'app.send': def() }} onReady={onReady} />
+                <FlowInstanceProbe onInstance={(value) => { instance = value }} />
+            </ReactFlowProvider>,
+        )
+
+        await waitFor(() => expect(onReady).toHaveBeenCalledOnce())
+        const fitView = vi.spyOn(instance!, 'fitView').mockResolvedValue(true)
+        ;(onReady.mock.calls[0]?.[0] as CanvasActions).fit()
+
+        expect(fitView).toHaveBeenCalledWith({ padding: 0.22, duration: 0 })
+    })
+
+    it('renders a pannable, zoomable minimap only when explicitly requested', () => {
+        const hidden = render(<Canvas nodes={[canvasNode]} edges={[]} defs={{ 'app.send': def() }} />)
+        expect(hidden.container.querySelector('.react-flow__minimap')).toBeNull()
+        hidden.unmount()
+
+        const visible = render(<Canvas nodes={[canvasNode]} edges={[]} defs={{ 'app.send': def() }} showMinimap />)
+        expect(visible.container.querySelector('.react-flow__minimap')).not.toBeNull()
+    })
+
 })

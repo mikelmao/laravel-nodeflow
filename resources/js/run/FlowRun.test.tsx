@@ -102,6 +102,22 @@ describe('FlowRun', () => {
         expect(container.querySelectorAll('.selectable').length).toBe(0)
     })
 
+    it('does not expose a node-type drop path on the frozen run canvas', () => {
+        vi.stubGlobal('fetch', vi.fn().mockResolvedValue(Response.json(overlay())))
+        const { container } = render(
+            <FlowRun run={run} graph={graph} palette={palette} overlay={overlay()} urls={urls} />,
+        )
+        const pane = container.querySelector('.react-flow__pane')!
+        const dataTransfer = {
+            getData: (mime: string) => mime === 'application/x-nodeflow-node-type' ? 'app.send' : '',
+        } as DataTransfer
+
+        // A run canvas has no graph mutation callback and explicitly disables
+        // the Canvas drop path, so even a valid editor payload is not accepted.
+        expect(fireEvent.drop(pane, { dataTransfer, clientX: 12, clientY: 34 })).toBe(true)
+        expect(container.querySelectorAll('.react-flow__node')).toHaveLength(graph.nodes?.length ?? 0)
+    })
+
     it('refreshes its badges from the polled overlay', async () => {
         // Counterfactual: render the initial prop and never re-read the hook's
         // snapshot, and the counts freeze at page load while requests continue.
