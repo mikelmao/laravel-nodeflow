@@ -166,6 +166,9 @@
 - Quality follow-up GREEN: dragover now recognizes the exact MIME through `Array.from(dataTransfer.types)`, while drop alone reads the non-empty payload. `centerNode` uses React Flow's public `getNodesBounds([node])` absolute measured rectangle and falls back to the shared card dimensions only for zero-size bounds. The minimap has semantic classes and CSS-variable background/border colors, and `CanvasActions` is exported from the package root.
 - A real mounted, measured React Flow edge regression fired exactly one edge callback, zero pane callbacks, and then a genuine pane click. React Flow's own pane listener guards on the event target, so this did not reproduce bubbling and no `stopPropagation` was needed.
 - Quality follow-up verification: `npx vitest run resources/js/canvas/canvas.test.tsx resources/js/run/FlowRun.test.tsx resources/js/graph/toCanvas.test.ts resources/js/index.test.ts` passed 4 files / 45 tests; `npx tsc --noEmit` and `git diff --check` passed silently.
+- Final review RED: a nested node with absolute bounds `{x: 500, y: 600}` and zero dimensions was incorrectly centered from its parent-relative stored position; a partial zero-width bound had the same flaw. The minimap assertion also exposed bare HSL-channel variables as invalid color values.
+- Final review GREEN: `centerNode` now always uses the bounds origin and independently replaces only non-positive dimensions with the shared node width/height. The minimap uses `hsl(var(--background))` for its inline SVG-compatible background, while its semantic `border-border` Tailwind class supplies the border without an ineffective SVG inline border override.
+- Final review verification: `npx vitest run resources/js/canvas/canvas.test.tsx resources/js/run/FlowRun.test.tsx resources/js/graph/toCanvas.test.ts resources/js/index.test.ts` passed 4 files / 45 tests; `npx tsc --noEmit` and `git diff --check` passed silently.
 
 ## Task 7 — node library
 

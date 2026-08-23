@@ -647,11 +647,14 @@ describe('Canvas', () => {
         const getNode = vi.fn((id: string) => {
             if (id === 'n1') return { id, position: { x: 40, y: 80 } }
             if (id === 'nested') return { id, position: { x: 20, y: 30 }, parentId: 'parent' }
+            if (id === 'partial') return { id, position: { x: 10, y: 20 }, parentId: 'parent' }
             return undefined
         })
-        const getNodesBounds = vi.fn((nodes: Array<{ id: string }>) => nodes[0]?.id === 'nested'
-            ? { x: 500, y: 600, width: 420, height: 180 }
-            : { x: 0, y: 0, width: 0, height: 0 })
+        const getNodesBounds = vi.fn((nodes: Array<{ id: string }>) => {
+            if (nodes[0]?.id === 'nested') return { x: 500, y: 600, width: 0, height: 0 }
+            if (nodes[0]?.id === 'partial') return { x: 100, y: 200, width: 0, height: 180 }
+            return { x: 40, y: 80, width: 0, height: 0 }
+        })
         const getZoom = vi.fn(() => 0.5)
         const setCenter = vi.fn()
         const screenToFlowPosition = vi.fn(() => ({ x: 8, y: 9 }))
@@ -663,6 +666,7 @@ describe('Canvas', () => {
         actions.fit()
         actions.centerNode('n1')
         actions.centerNode('nested')
+        actions.centerNode('partial')
         actions.centerNode('missing')
 
         expect(fitView).toHaveBeenCalledWith({ padding: 0.22, duration: 220 })
@@ -670,7 +674,8 @@ describe('Canvas', () => {
         expect(getNodesBounds).toHaveBeenCalledWith([{ id: 'n1', position: { x: 40, y: 80 } }])
         expect(setCenter).toHaveBeenCalledWith(168, 136, { zoom: 0.85, duration: 220 })
         expect(getNodesBounds).toHaveBeenCalledWith([{ id: 'nested', position: { x: 20, y: 30 }, parentId: 'parent' }])
-        expect(setCenter).toHaveBeenCalledWith(710, 690, { zoom: 0.85, duration: 220 })
+        expect(setCenter).toHaveBeenCalledWith(628, 656, { zoom: 0.85, duration: 220 })
+        expect(setCenter).toHaveBeenCalledWith(228, 290, { zoom: 0.85, duration: 220 })
         expect(getNode).toHaveBeenLastCalledWith('missing')
         expect(actions.screenToFlowPosition({ x: 1, y: 2 })).toEqual({ x: 8, y: 9 })
         expect(screenToFlowPosition).toHaveBeenCalledWith({ x: 1, y: 2 })
@@ -701,7 +706,9 @@ describe('Canvas', () => {
         const visible = render(<Canvas nodes={[canvasNode]} edges={[]} defs={{ 'app.send': def() }} showMinimap />)
         expect(visible.container.querySelector('.react-flow__minimap')).not.toBeNull()
         expect(visible.container.querySelector('.react-flow__minimap')).toHaveClass('border', 'border-border', 'bg-background')
-        expect(visible.container.querySelector('.react-flow__minimap')).toHaveStyle({ background: 'var(--background)' })
+        expect(visible.container.querySelector('.react-flow__minimap')).toHaveStyle({
+            background: 'hsl(var(--background))',
+        })
     })
 
     it('registers the workflow edge renderer at module scope', () => {

@@ -82,10 +82,11 @@ export function canvasActions(
 
             if (node !== undefined) {
                 const bounds = instance.getNodesBounds([node])
-                const hasMeasuredBounds = bounds.width > 0 && bounds.height > 0
+                const width = bounds.width > 0 ? bounds.width : NODE_WIDTH
+                const height = bounds.height > 0 ? bounds.height : NODE_MIN_HEIGHT
                 void instance.setCenter(
-                    hasMeasuredBounds ? bounds.x + bounds.width / 2 : node.position.x + NODE_WIDTH / 2,
-                    hasMeasuredBounds ? bounds.y + bounds.height / 2 : node.position.y + NODE_MIN_HEIGHT / 2,
+                    bounds.x + width / 2,
+                    bounds.y + height / 2,
                     { zoom: Math.max(instance.getZoom(), 0.85), duration },
                 )
             }
@@ -274,7 +275,7 @@ export function Canvas({
                             pannable
                             zoomable
                             className="border border-border bg-background"
-                            style={{ background: 'var(--background)', borderColor: 'var(--border)' }}
+                            style={{ background: 'hsl(var(--background))' }}
                         />
                     )}
                 </ReactFlow>
