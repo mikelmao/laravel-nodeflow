@@ -13,7 +13,7 @@ nodeflow:install
 
 **Outcome:** wires the host integration where it can prove a safe edit, then verifies every requirement. It exits `0` only when every requirement is wired or already present; it exits `1` for a requirement it cannot wire or that remains writable. `--check` is strictly verify-only and writes nothing. `--force-migrations` implies `--publish-migrations`.
 
-Without `--check`, it can publish `config/nodeflow.php`, optionally publish package migrations into `database/migrations`, create the host Nodeflow provider, register that provider in `bootstrap/providers.php`, and add the recognised Tailwind, Vite alias/dedupe, TypeScript path, and Xyflow dependency wiring. It prints a manual snippet for a requirement it cannot safely edit. It also reports undefined Nodeflow authorization gates and the effective tenancy mode; those reports do not decide the exit code.
+Without `--check`, it can create the host Nodeflow provider, register that provider in `bootstrap/providers.php`, add the recognised Tailwind source, and optionally publish package migrations into `database/migrations`. Configuration publication is optional: package defaults are merged when `config/nodeflow.php` is absent, the installer never writes or overwrites that file, and an application-owned copy can be published explicitly with `php artisan vendor:publish --tag=nodeflow-config`. Vite alias/dedupe, TypeScript paths, and the `@xyflow/react` dependency are verify-only; the command prints a manual snippet or command when it cannot verify them. It also reports undefined Nodeflow authorization gates and the effective tenancy mode; those reports do not decide the exit code.
 
 ```bash
 php artisan nodeflow:install

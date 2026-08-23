@@ -30,6 +30,12 @@ php artisan migrate
 
 The package loads its migrations itself, so `php artisan migrate` discovers them without publishing copies into your application.
 
+The package also merges its configuration defaults when the application has no `config/nodeflow.php`. Publish an application-owned copy only when you need to customize those defaults:
+
+```bash
+php artisan vendor:publish --tag=nodeflow-config
+```
+
 > **Note:** `nodeflow:install` is idempotent. Re-running it keeps already-wired files unchanged and reports their status.
 
 ## Understand migration publication
@@ -56,7 +62,7 @@ Use this command in continuous integration or whenever you want a read-only chec
 php artisan nodeflow:install --check
 ```
 
-The installer can create the package configuration when it is absent, create or update an application Nodeflow provider, register that provider in `bootstrap/providers.php`, and add the Tailwind source entry. It never overwrites an existing configuration file. It verifies, but does not safely rewrite, the TypeScript path mappings, Vite alias and React deduplication settings, or the `@xyflow/react` dependency. When it cannot make one of those changes, it prints the exact snippet or command for you to apply and exits non-zero until the wiring is complete.
+The installer treats configuration publication as optional and read-only: an absent host copy uses the merged package defaults, while a customized host copy remains untouched. It can create or update an application Nodeflow provider, register that provider in `bootstrap/providers.php`, and add the Tailwind source entry. It verifies, but does not safely rewrite, the TypeScript path mappings, Vite alias and React deduplication settings, or the `@xyflow/react` dependency. When it cannot make one of those changes, it prints the exact snippet or command for you to apply and exits non-zero until the wiring is complete.
 
 The installer also reports whether the four Nodeflow authorization gates are defined. Undefined gates are denied by the package, but their absence is a report rather than an installer failure so you can add application-specific rules next.
 
