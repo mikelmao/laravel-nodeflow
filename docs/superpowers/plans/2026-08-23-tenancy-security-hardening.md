@@ -66,6 +66,8 @@ Pest 4, Laravel Pint 1.x, Composer, Vitest, TypeScript, Git.
 - `src/Tenancy/TenancyDecisionResolver.php` — the only interpreter of `nodeflow.tenancy` and the
   current `TenantResolver` binding.
 - `src/Models/InvalidFlowVersionReferenceException.php` — missing/null write-time version reference.
+- `src/Models/FlowVersionReferenceGuard.php` — shared existence and tenant comparison used by the
+  two model-local event boundaries.
 - `src/Execution/CrossTenantExecutionException.php` — persisted run/version mismatch at execution.
 - `tests/Feature/TenancyDecisionTest.php` — public API, freshness and scope/API agreement.
 - `tests/Feature/FlowVersionReferenceGuardTest.php` — Flow and Run create/update invariants, query
@@ -260,6 +262,10 @@ use Nodeflow\Tenancy\TenancyDecision;
 use Nodeflow\Tenancy\TenancyDecisionResolver;
 
 beforeEach(function () {
+    // Keep the first RED run as an assertion failure, not an autoload error.
+    expect(class_exists(TenancyDecisionResolver::class))
+        ->toBeTrue('TenancyDecisionResolver has not been implemented yet.');
+
     $this->bindResolver = function (?string $tenantId): void {
         app()->bind(TenantResolver::class, fn () => new class($tenantId) implements TenantResolver
         {
@@ -682,6 +688,7 @@ git commit -m "feat: expose effective tenancy decisions"
 **Files:**
 
 - Create: `src/Models/InvalidFlowVersionReferenceException.php`
+- Create: `src/Models/FlowVersionReferenceGuard.php`
 - Create: `tests/Feature/FlowVersionReferenceGuardTest.php`
 - Modify: `src/Models/CrossTenantWriteException.php`
 - Modify: `src/Models/Flow.php`
@@ -691,7 +698,8 @@ git commit -m "feat: expose effective tenancy decisions"
 
 - Produces: `InvalidFlowVersionReferenceException::forMissing(string $modelClass, string $attribute, mixed $attemptedId): self`
 - Produces: `CrossTenantWriteException::forReferenceMismatch(string $modelClass, string $attribute, mixed $referenceId, mixed $modelTenant, mixed $referenceTenant): self`
-- Consumed by Task 3: both exception constructors.
+- Produces: `FlowVersionReferenceGuard::assert(Model $model, string $attribute, bool $nullable): void`
+- Consumed by Task 3: the shared guard and both exception constructors.
 
 - [ ] **Step 1: Write the failing Flow guard fixtures and tests**
 
@@ -891,7 +899,57 @@ public static function forReferenceMismatch(
 
 Update the exception class docblock with this fourth shape.
 
-- [ ] **Step 4: Implement the Flow event guard**
+- [ ] **Step 4: Implement the focused shared guard and Flow event boundary**
+
+Create `src/Models/FlowVersionReferenceGuard.php`:
+
+```php
+<?php
+
+namespace Nodeflow\Models;
+
+use Illuminate\Database\Eloquent\Model;
+
+final class FlowVersionReferenceGuard
+{
+    public static function assert(Model $model, string $attribute, bool $nullable): void
+    {
+        $referenceId = $model->getAttribute($attribute);
+
+        if ($referenceId === null) {
+            if ($nullable) {
+                return;
+            }
+
+            throw InvalidFlowVersionReferenceException::forMissing(
+                $model::class,
+                $attribute,
+                null,
+            );
+        }
+
+        $version = FlowVersion::withoutTenancy()->find($referenceId);
+
+        if ($version === null) {
+            throw InvalidFlowVersionReferenceException::forMissing(
+                $model::class,
+                $attribute,
+                $referenceId,
+            );
+        }
+
+        if ((string) $version->tenant_id !== (string) $model->getAttribute('tenant_id')) {
+            throw CrossTenantWriteException::forReferenceMismatch(
+                $model::class,
+                $attribute,
+                $version->id,
+                $model->getAttribute('tenant_id'),
+                $version->tenant_id,
+            );
+        }
+    }
+}
+```
 
 In `Flow::booted()` register listeners after trait booting:
 
@@ -909,29 +967,7 @@ protected static function booted(): void
 
 private function assertCurrentVersionReference(): void
 {
-    if ($this->current_version_id === null) {
-        return;
-    }
-
-    $version = FlowVersion::withoutTenancy()->find($this->current_version_id);
-
-    if ($version === null) {
-        throw InvalidFlowVersionReferenceException::forMissing(
-            self::class,
-            'current_version_id',
-            $this->current_version_id,
-        );
-    }
-
-    if ((string) $version->tenant_id !== (string) $this->tenant_id) {
-        throw CrossTenantWriteException::forReferenceMismatch(
-            self::class,
-            'current_version_id',
-            $version->id,
-            $this->tenant_id,
-            $version->tenant_id,
-        );
-    }
+    FlowVersionReferenceGuard::assert($this, 'current_version_id', nullable: true);
 }
 ```
 
@@ -964,6 +1000,7 @@ database behavior. Restore the listeners, rerun the complete GREEN command, and 
 ```bash
 /Users/mikelmao/Sites/test-workflow/vendor/bin/pint --test \
   src/Models/InvalidFlowVersionReferenceException.php \
+  src/Models/FlowVersionReferenceGuard.php \
   src/Models/CrossTenantWriteException.php \
   src/Models/Flow.php \
   tests/Feature/FlowVersionReferenceGuardTest.php
@@ -974,6 +1011,7 @@ Apply scoped formatting only if required, rerun Step 5, update the execution rec
 
 ```bash
 git add src/Models/InvalidFlowVersionReferenceException.php \
+  src/Models/FlowVersionReferenceGuard.php \
   src/Models/CrossTenantWriteException.php src/Models/Flow.php \
   tests/Feature/FlowVersionReferenceGuardTest.php \
   docs/superpowers/plans/2026-08-23-tenancy-security-hardening-execution-record.md
@@ -996,7 +1034,7 @@ git commit -m "feat: guard flow version references"
 
 **Interfaces:**
 
-- Consumes: both Task 2 exception constructors.
+- Consumes: `FlowVersionReferenceGuard::assert()` and both Task 2 exception constructors.
 - Produces: `Run` create/update enforcement used by every package run writer.
 
 - [ ] **Step 1: Append the failing Run cases**
@@ -1143,33 +1181,7 @@ protected static function booted(): void
 
 private function assertFlowVersionReference(): void
 {
-    if ($this->flow_version_id === null) {
-        throw InvalidFlowVersionReferenceException::forMissing(
-            self::class,
-            'flow_version_id',
-            null,
-        );
-    }
-
-    $version = FlowVersion::withoutTenancy()->find($this->flow_version_id);
-
-    if ($version === null) {
-        throw InvalidFlowVersionReferenceException::forMissing(
-            self::class,
-            'flow_version_id',
-            $this->flow_version_id,
-        );
-    }
-
-    if ((string) $version->tenant_id !== (string) $this->tenant_id) {
-        throw CrossTenantWriteException::forReferenceMismatch(
-            self::class,
-            'flow_version_id',
-            $version->id,
-            $this->tenant_id,
-            $version->tenant_id,
-        );
-    }
+    FlowVersionReferenceGuard::assert($this, 'flow_version_id', nullable: false);
 }
 ```
 
@@ -1642,6 +1654,7 @@ Expected: all pass. Record measured tests/assertions.
   src/Models/Concerns/BelongsToTenant.php \
   src/Console/InstallCommand.php \
   src/Models/InvalidFlowVersionReferenceException.php \
+  src/Models/FlowVersionReferenceGuard.php \
   src/Models/CrossTenantWriteException.php \
   src/Models/Flow.php \
   src/Models/Run.php \
