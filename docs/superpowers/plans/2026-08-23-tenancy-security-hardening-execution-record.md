@@ -16,6 +16,9 @@
 
 Completed.
 
+- GREEN implementation commit: `f75dbcb266130bbd9675dd1611746648a901d53c`
+  (`feat: expose effective tenancy decisions`).
+
 - RED command: `vendor/bin/pest tests/Feature/TenancyDecisionTest.php tests/Feature/InstallCommandTest.php --compact`
   failed as intended: six decision tests raised `BindingResolutionException` for missing
   `Nodeflow\\Tenancy\\TenancyDecisionResolver`; both updated installer reports failed their
@@ -42,6 +45,10 @@ Completed.
 
 Completed.
 
+- GREEN implementation commit: `b345e2e0c6c14884d808a729edfefd91bb1ed5af`
+  (`feat: guard flow version references`). Evidence-record commit:
+  `c93c5c9db44394365dbf30334622e08923a377a8` (`docs: record Task 2 full test gate`).
+
 - RED command: `vendor/bin/pest tests/Feature/FlowVersionReferenceGuardTest.php --compact`
   failed as intended: missing and cross-tenant `current_version_id` writes raised no exception,
   suspended contradictory writes raised no exception, and no FlowVersion lookup occurred on a
@@ -63,6 +70,9 @@ Completed.
 ## Task 3 — Run version-reference guard
 
 Completed.
+
+- GREEN implementation commit: `24c9b44b4f685dd242de8d5bcfc297432194bc55`
+  (`feat: guard run version references`).
 
 - RED command: `vendor/bin/pest tests/Feature/FlowVersionReferenceGuardTest.php --filter="run" --compact`
   failed as intended: a null `flow_version_id` reached SQLite's NOT NULL constraint instead of
@@ -91,6 +101,9 @@ Completed.
 ## Task 4 — D-2 durable execution assertion
 
 Completed.
+
+- GREEN implementation commit: `44f4829d701bfb530fd1eff58240d677a1bc8fc4`
+  (`feat: assert tenants before node execution`).
 
 - RED command: `vendor/bin/pest tests/Feature/RunNodeActivityTest.php --compact` failed as
   intended before the production guard existed: persisted tenant corruption threw no
@@ -122,14 +135,70 @@ Completed.
 
 Completed.
 
+- Documentation GREEN commit: `c24e1f6d5c7bbf1d7b7ab1b4f0b312c86b4ddec5`
+  (`docs: publish tenancy hardening guarantees`). Subsequent wording clarification:
+  `5dfaa62dc19559834ef16718d146a92255984831` (`docs: clarify tenancy event guard boundary`).
+
 - Contradiction search: `rg -n "application code must preserve|unimplemented|security-hardening plan|saving guard|parent-child tenant invariants|D-1|D-2|G-3|current_version_id|flow_version_id" README.md docs/gitbook docs/documentation-changes.md docs/superpowers/open-issues.md` found the resolved D-1/D-2/G-3 ledger entries, the Plan 8 applied handoff, current pointer guidance, and clearly time-scoped historical Plan 6/Plan 5 records. It found no current public claim that these three gaps remain unimplemented or wholly host-enforced. `git diff --check` passed.
 - Focused documentation behavior gate: `vendor/bin/pest tests/Feature/TenancyDecisionTest.php tests/Feature/InstallCommandTest.php tests/Feature/FlowVersionReferenceGuardTest.php tests/Feature/RunNodeActivityTest.php --compact` passed 36 tests / 127 assertions.
 - Scope check: the documentation diff is limited to `README.md`, the merged GitBook tenancy and known-limitations pages, `docs/documentation-changes.md`, `docs/superpowers/open-issues.md`, and this execution record. The updated guidance preserves historical Plan 3–7 counts and does not claim same-Flow identity enforcement or an audit of existing rows.
 
 ## Whole-branch reviews and remediation
 
-Pending.
+- Task-level reviews: approved; no unresolved Critical or Important finding remained before
+  integration gates.
+- Fresh whole-branch review of the `5dfaa62dc19559834ef16718d146a92255984831` branch tip found
+  0 Critical, 0 Important, and 1 Minor finding. The Minor was the stale public-exception
+  docblock overview; it was remediated in
+  `ffc5b5d85470b328489c52ff701b315acf40b370`
+  (`docs: correct cross-tenant exception overview`). A scoped re-review then approved
+  the change with 0 Critical, 0 Important, and 0 Minor findings.
+- The review explicitly covered D-1 mode precedence and deferred resolver lookup; cached-service
+  behavior after bindings/configuration change; Flow and Run create/update, suspension, and
+  query-builder boundaries; reference-guard query counts; D-2 ordering before mutations, graph
+  construction, and node execution; matching persisted tenant pairs with null ambient tenancy;
+  and documentation non-overclaims.
+- The implementation RED/GREEN commits are: `caa5303` → `f75dbcb` (D-1),
+  `fc08c8d` → `b345e2e` (Flow guard), `daded3e` → `24c9b44` (Run guard), and
+  `5c0c067` → `44f4829` (D-2). Counterfactual mutations and their required failures are recorded
+  in the individual task sections above; all temporary mutations were restored before their
+  corresponding GREEN verification.
 
 ## Final gates and integration
 
-Pending.
+- Dependency setup correction: the initial shared `vendor` symlink was replaced with an offline,
+  worktree-local Composer install before acceptance testing because the symlink resolved package
+  namespaces into main. This preserved package main and made both `Nodeflow\\` and `Tests\\`
+  resolve to the Plan 8 worktree. The correction and focused confirmation are recorded in
+  Starting state.
+- Final package gates were run at `5dfaa62dc19559834ef16718d146a92255984831`:
+  - Focused security Pest: 100 passed / 250 assertions in 1.06s.
+  - Required scoped Pint `--test` over every changed PHP file: passed
+    (`{"tool":"pint","result":"passed"}`) in 0.464s.
+  - `COMPOSER_DISABLE_NETWORK=1 vendor/bin/pest --compact`: 959 passed / 7,616 assertions in
+    103.22s.
+  - `npx vitest run`: 17 files / 160 tests passed in 2.37s.
+  - `npx tsc --noEmit`, `composer validate --no-check-publish`, and `git diff --check`: passed;
+    the pre-record worktree status was clean.
+- The later `ffc5b5d85470b328489c52ff701b315acf40b370` change was docblock-only. Its scoped Pint
+  gate and targeted re-review passed; it did not require a repeat of the package-wide gates.
+- Demo integration gate link evidence:
+  - before: `/Users/mikelmao/Sites/test-workflow/vendor/atram/laravel-nodeflow` was a symlink
+    resolving to package main, `/Users/mikelmao/Projects/laravel-nodeflow`;
+  - during: it resolved to the Plan 8 worktree,
+    `/Users/mikelmao/Projects/laravel-nodeflow/.claude/worktrees/plan-8-tenancy-security-hardening`;
+  - after: it was restored and revalidated to package main,
+    `/Users/mikelmao/Projects/laravel-nodeflow`.
+- Demo gates while linked to Plan 8:
+  - `vendor/bin/pest --compact`: 56 passed / 223 assertions in 67.388s;
+  - `npx tsc --noEmit`: passed with no diagnostics (2.291s wall time);
+  - `npm run build`: passed, transforming 2,497 modules; Vite reported 2.34s build time
+    (2.524s wall time). The existing Vite `__dirname` future-default notice and optional
+    `fontaine` notice were emitted but did not fail the build;
+  - `composer validate --no-check-publish`: passed with the two pre-existing unbound local-package
+    constraint warnings for `atram/laravel-nodeflow` (`@dev`) and
+    `atram/nodeflow-demo-nodes` (`*`);
+  - demo `git status --short` was empty both during and after the gates.
+- No demo tracked files, package main, locked Plan 6 worktree, manifests, or remote were mutated.
+  No remote operation was performed. Deferred items remain the integration choice in Task 7;
+  no merge, push, or worktree deletion has been performed.
