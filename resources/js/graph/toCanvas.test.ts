@@ -13,18 +13,20 @@ const baseGraph: Graph = {
 }
 
 describe('toCanvas', () => {
-  it('keeps a stored node position', () => {
-    // Counterfactual: regenerating every position would move a saved canvas on reload.
-    expect(toCanvas(baseGraph).nodes[0]?.position).toEqual({ x: 40, y: 80 })
-  })
+  it('keeps every valid stored node position exactly', () => {
+    // Counterfactual: regenerating stored positions would move a saved canvas on reload.
+    const graph: Graph = {
+      ...baseGraph,
+      nodes: [
+        { id: 'n1', type: 'app.send', position: { x: 40.5, y: -80.25 } },
+        { id: 'n2', type: 'core.exit', position: { x: 0, y: 900.75 } },
+      ],
+    }
 
-  it('places the second positionless node on the deterministic grid', () => {
-    // Counterfactual: using a random or first-slot fallback would make layout unstable.
-    const first = toCanvas(baseGraph).nodes[1]?.position
-    const second = toCanvas(baseGraph).nodes[1]?.position
-
-    expect(first).toEqual({ x: 300, y: 60 })
-    expect(second).toEqual(first)
+    expect(toCanvas(graph).nodes.map((node) => node.position)).toEqual([
+      { x: 40.5, y: -80.25 },
+      { x: 0, y: 900.75 },
+    ])
   })
 
   it('marks only the graph start node as the start', () => {
