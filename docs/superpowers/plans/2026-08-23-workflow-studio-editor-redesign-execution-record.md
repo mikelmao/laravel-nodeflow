@@ -412,6 +412,13 @@
   at the visible seeded login credentials: browser safety policy requires immediate confirmation
   before submitting `demo@nodeflow.test` / `password`. No editor-side browser action was skipped
   silently; consequently no Studio screenshots or console evidence were recorded in this pass.
+- Browser retry: after explicit approval to submit those seeded credentials, the feature link was
+  restored temporarily and a fresh `php artisan serve` process served `http://127.0.0.1:8000`.
+  The browser opened a fresh `/login` tab, but Chrome reported that another extension UI was open
+  whenever automation tried to fill or submit the form. A new tab plus the documented DOM-control
+  fallback reproduced the same block. No alternative browser surface was used. This is an external
+  browser-control blocker, so the authenticated Studio checklist, screenshots, and console scan
+  remain unperformed; the original vendor link was restored and the local server stopped.
 - Symlink safety: the original demo vendor link target
   `/Users/mikelmao/Projects/laravel-nodeflow/` was recorded before redirecting it to this feature
   worktree for build verification. It is restored before the final commits; the temporary backup
