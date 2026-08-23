@@ -267,6 +267,26 @@ describe('NodeCard', () => {
         expect(screen.getAllByText('Send message')).toHaveLength(1)
         expect(screen.queryByText('Sends one message')).toBeNull()
     })
+
+    it('centers each source handle in its own fixed-height output row when the host body is empty', () => {
+        const EmptyBody = () => null
+        render(
+            <ReactFlowProvider>
+                <CanvasContext.Provider value={{ defs: { 'app.send': def() }, renderers: { 'app.send': EmptyBody }, nodeErrors: {}, decorations: {} }}>
+                    <NodeCard {...nodeProps} />
+                </CanvasContext.Provider>
+            </ReactFlowProvider>,
+        )
+
+        const rows = screen.getByLabelText('Outputs').querySelectorAll<HTMLElement>('[data-output-row]')
+        expect(rows).toHaveLength(2)
+        for (const row of rows) {
+            const handle = row.querySelector<HTMLElement>('.react-flow__handle-right')
+            expect(row).toHaveClass('relative', 'h-7')
+            expect(handle?.parentElement).toBe(row)
+            expect(handle).toHaveStyle({ top: '50%', transform: 'translateY(-50%)' })
+        }
+    })
 })
 
 describe('WorkflowEdge', () => {
