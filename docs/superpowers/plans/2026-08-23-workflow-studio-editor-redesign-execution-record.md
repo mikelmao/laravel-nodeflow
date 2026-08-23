@@ -127,6 +127,17 @@
 - GREEN verification: `npx vitest run resources/js/presentation/node.test.tsx
   resources/js/canvas/canvas.test.tsx resources/js/run/FlowRun.test.tsx` passed
   3 files / 32 tests; `npx tsc --noEmit` passed silently.
+- Spec-review follow-up RED: the focused `NodeCard` regression failed because
+  each output row had `h-6` with no positioning context while its child handle
+  used the whole-card `outputHandleTop` offset. The failing test was committed
+  as `85e92cb` (`test: cover output row handle alignment`).
+- Spec-review GREEN: output rows are now relative, fixed 28px (`h-7`) owners;
+  their `Position.Right` source handles are vertically centered with
+  `top: 50%` and `translateY(-50%)`. The shared layout API remains unchanged,
+  and NodeCard no longer imports the card-global output offset helper.
+- Follow-up verification: `npx vitest run resources/js/presentation/node.test.tsx
+  resources/js/canvas/canvas.test.tsx resources/js/run/FlowRun.test.tsx` passed
+  3 files / 33 tests; `npx tsc --noEmit` and `git diff --check` passed silently.
 
 ## Task 6 — canvas controls
 

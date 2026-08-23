@@ -4,7 +4,7 @@ import { NodeflowIcon } from '../presentation/icons'
 import { categoryClasses, categoryPresentation, nodeSummary } from '../presentation/node'
 import { CanvasContext, type NodeRenderer, type NodeRendererMap } from './context'
 import type { NodeflowNode } from './Canvas'
-import { NODE_WIDTH, outputHandleTop } from './layout'
+import { NODE_WIDTH } from './layout'
 
 export function rendererFor(type: string, renderers: NodeRendererMap): NodeRenderer {
     return Object.prototype.hasOwnProperty.call(renderers, type) ? renderers[type]! : defaultNodeRenderer
@@ -74,15 +74,15 @@ export function NodeCard({ id, data, selected, isConnectable }: NodeProps<Nodefl
             )}
             {outputs.length > 0 && (
                 <div aria-label="Outputs" className="border-t border-border/70 py-1">
-                    {outputs.map((output, index) => (
-                        <div key={output} data-output-row className="flex h-6 items-center px-3 pr-5 text-[10px] text-muted-foreground">
+                    {outputs.map((output) => (
+                        <div key={output} data-output-row className="relative flex h-7 items-center px-3 pr-5 text-[10px] text-muted-foreground">
                             <span className="truncate">{output}</span>
                             <Handle
                                 id={output}
                                 type="source"
                                 position={Position.Right}
                                 isConnectable={isConnectable}
-                                style={{ top: outputHandleTop(index, outputs.length) }}
+                                style={{ top: '50%', transform: 'translateY(-50%)' }}
                                 className="!size-2 !bg-primary"
                             />
                         </div>
