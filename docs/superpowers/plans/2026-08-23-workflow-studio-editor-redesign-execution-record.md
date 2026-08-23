@@ -438,3 +438,28 @@
   link is removed and the original target is rechecked.
 
 ## Reviews and final gates
+
+### Release-contract audit follow-up
+
+- Review findings: on a wide viewport the controlled Node Library and Inspector props did not
+  collapse either region; both retained a visible width and active resize separator. Semantic
+  validation accepted a 422 payload without a trustworthy server message. The editor guide also
+  referenced `ToolbarSlots` without importing it and omitted several implemented shortcuts,
+  `urls.validate`, and the collision-aware drop-position wording.
+- RED: `299a9c5` (`test: cover Workflow Studio release gaps`) added controlled desktop panel,
+  focus-return, zero-track, retained-width, semantic-message, and documentation assertions.
+  `npx vitest run resources/js/editor/EditorShell.test.tsx resources/js/editor/validation.test.ts`
+  failed in the intended ways: desktop toggles/tracks did not exist, closed content remained
+  exposed, and malformed semantic payloads were accepted. The focused documentation test failed
+  because the type import and contract wording were absent.
+- GREEN: the shell now has one responsive toggle row; wide panels obey their controlled state,
+  become hidden/inert with a zero track and handle when closed, return in-panel focus to their
+  toggle, and preserve their bounded width preference. Narrow drawers retain their existing
+  exclusive behavior. The validation parser requires an own string `message` before accepting a
+  semantic 422. The guide imports `ToolbarSlots`, names all four server URLs, documents every
+  implemented shortcut and editable suppression, and describes collision-aware drop placement.
+- Focused verification: `npx vitest run resources/js/editor/EditorShell.test.tsx
+  resources/js/editor/validation.test.ts resources/js/editor/publish.test.ts --reporter=dot`
+  passed **3 files / 30 tests**; `vendor/bin/pest
+  tests/Feature/WorkflowStudioDocumentationTest.php --compact` passed **1 test / 40 assertions**;
+  `npx tsc --noEmit` and `git diff --check` passed silently.

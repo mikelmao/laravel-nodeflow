@@ -16,6 +16,7 @@ import type {
     Graph,
     NodeRendererMap,
     NodeTypePayload,
+    ToolbarSlots,
     TriggerPayload,
 } from '@nodeflow/editor'
 
@@ -67,7 +68,7 @@ For a page, dialog, or panel that provides its own constrained frame, choose the
 
 The editor inherits the host's semantic theme tokens in either mode. It requires no new dependency and no CSS installation step.
 
-`urls.draft`, `urls.publish`, and `urls.options` are server-owned. The options URL is a template containing `__NODEFLOW_TYPE__` and `__NODEFLOW_FIELD__`; the package replaces those sentinels with encoded values. Never reconstruct these URLs from a flow ID or a route string in the browser—your host's prefix, domain, and route-name configuration have already been resolved on the server.
+`urls.draft`, `urls.validate`, `urls.publish`, and `urls.options` are server-owned. The options URL is a template containing `__NODEFLOW_TYPE__` and `__NODEFLOW_FIELD__`; the package replaces those sentinels with encoded values. Never reconstruct these URLs from a flow ID or a route string in the browser—your host's prefix, domain, and route-name configuration have already been resolved on the server.
 
 The package's HTTP helper sends same-origin requests with JSON, `Accept: application/json`, and `X-Requested-With: XMLHttpRequest`. It reads Laravel's decoded `XSRF-TOKEN` cookie first and falls back to a `meta[name="csrf-token"]` tag. Keep normal Laravel session/CSRF middleware on the containing route group; a 419 from a draft save stops autosave and tells the author to reload. The later publish-results table describes the separate behavior of a publish `POST` 419.
 
@@ -83,18 +84,21 @@ The flow's `version` reports the current published version even while the draft 
 
 ## Build and navigate a graph
 
-Use the **Node Library** to search node labels, groups, descriptions, and type names. Click a result to add it at a sensible open canvas position, or drag it onto the canvas to place it exactly where it is dropped. Select a card to configure fields in **Configure**; use **Advanced** for node metadata, making a node the start, or deletion. With no selection, the inspector shows **Flow Overview** and its readiness issues.
+Use the **Node Library** to search node labels, groups, descriptions, and type names. Click a result to add it at a sensible open canvas position, or drag it onto the canvas to place it at the drop point, nudged only when needed to avoid overlap. Select a card to configure fields in **Configure**; use **Advanced** for node metadata, making a node the start, or deletion. With no selection, the inspector shows **Flow Overview** and its readiness issues.
 
 The package toolbar and canvas expose the same actions for pointer and keyboard users:
 
 | Action | Control and shortcut |
 | --- | --- |
 | Undo / Redo | Toolbar buttons; `Cmd/Ctrl+Z` and `Cmd/Ctrl+Shift+Z`. |
+| Delete selection | Toolbar button; `Delete` / `Backspace`. |
+| Focus Node Library search | `Cmd/Ctrl+K`. |
 | Auto layout | **Auto layout** arranges every node; it is an ordinary graph edit and can be undone. |
-| Frame the graph | **Fit** frames all nodes. Use canvas zoom controls or gestures for closer inspection. |
+| Auto layout shortcut | `Shift+L`. |
+| Frame the graph | **Fit** frames all nodes; `F` frames the graph. Use canvas zoom controls or gestures for closer inspection. |
 | Orientation | The minimap shows the current viewport and supports pan/zoom navigation. |
 
-Shortcuts do not run while typing in inputs, textareas, selects, contenteditable elements, or host controls. On narrow viewports, the Node Library and inspector become drawers; `Escape` closes an open drawer and returns focus to its trigger.
+Shortcuts are suppressed while typing in inputs, textareas, selects, contenteditable elements, or host controls. On narrow viewports, the Node Library and inspector become drawers; `Escape` closes an open drawer and returns focus to its trigger.
 
 ## Save, validate, and publish safely
 

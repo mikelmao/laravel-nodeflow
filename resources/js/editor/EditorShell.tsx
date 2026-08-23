@@ -31,10 +31,14 @@ function clamp(value: number, bounds: { min: number; max: number }): number {
     return Math.max(bounds.min, Math.min(bounds.max, value))
 }
 
-function shellStyle(libraryWidth: number, inspectorWidth: number): CSSProperties {
+function shellStyle(libraryWidth: number, inspectorWidth: number, libraryOpen: boolean, inspectorOpen: boolean): CSSProperties {
     return {
         '--nodeflow-library-width': `${libraryWidth}px`,
         '--nodeflow-inspector-width': `${inspectorWidth}px`,
+        '--nodeflow-library-track': libraryOpen ? `${libraryWidth}px` : '0px',
+        '--nodeflow-library-handle': libraryOpen ? '4px' : '0px',
+        '--nodeflow-inspector-track': inspectorOpen ? `${inspectorWidth}px` : '0px',
+        '--nodeflow-inspector-handle': inspectorOpen ? '4px' : '0px',
     } as CSSProperties
 }
 
@@ -71,9 +75,15 @@ export function EditorShell({ mode, toolbar, library, canvas, inspector, notices
     const inspectorHeading = useRef<HTMLHeadingElement>(null)
     const wasLibraryOpen = useRef(false)
     const wasInspectorOpen = useRef(false)
+    const wasLibraryNarrow = useRef(isNarrow)
+    const wasInspectorNarrow = useRef(isNarrow)
     const activeResizeSession = useRef<ResizeDragSession | null>(null)
     const libraryDrawerOpen = isNarrow && libraryOpen && !inspectorOpen
     const inspectorDrawerOpen = isNarrow && inspectorOpen
+    const libraryPanelOpen = isNarrow ? libraryDrawerOpen : libraryOpen
+    const inspectorPanelOpen = isNarrow ? inspectorDrawerOpen : inspectorOpen
+    const libraryDesktopClosed = !isNarrow && !libraryOpen
+    const inspectorDesktopClosed = !isNarrow && !inspectorOpen
 
     useEffect(() => () => activeResizeSession.current?.cleanup(), [])
 
@@ -82,24 +92,20 @@ export function EditorShell({ mode, toolbar, library, canvas, inspector, notices
     }, [isNarrow, libraryOpen, inspectorOpen, onLibraryOpenChange])
 
     useEffect(() => {
-        if (!isNarrow) {
-            wasLibraryOpen.current = false
-            return
-        }
-        if (libraryDrawerOpen && !wasLibraryOpen.current) libraryHeading.current?.focus()
-        if (!libraryDrawerOpen && wasLibraryOpen.current && libraryPanel.current?.contains(document.activeElement)) libraryTrigger.current?.focus()
-        wasLibraryOpen.current = libraryDrawerOpen
-    }, [isNarrow, libraryDrawerOpen])
+        if (isNarrow && !wasLibraryNarrow.current) wasLibraryOpen.current = false
+        if (isNarrow && libraryPanelOpen && !wasLibraryOpen.current) libraryHeading.current?.focus()
+        if (!libraryPanelOpen && wasLibraryOpen.current && libraryPanel.current?.contains(document.activeElement)) libraryTrigger.current?.focus()
+        wasLibraryOpen.current = libraryPanelOpen
+        wasLibraryNarrow.current = isNarrow
+    }, [isNarrow, libraryPanelOpen])
 
     useEffect(() => {
-        if (!isNarrow) {
-            wasInspectorOpen.current = false
-            return
-        }
-        if (inspectorDrawerOpen && !wasInspectorOpen.current) inspectorHeading.current?.focus()
-        if (!inspectorDrawerOpen && wasInspectorOpen.current && inspectorPanel.current?.contains(document.activeElement)) inspectorTrigger.current?.focus()
-        wasInspectorOpen.current = inspectorDrawerOpen
-    }, [isNarrow, inspectorDrawerOpen])
+        if (isNarrow && !wasInspectorNarrow.current) wasInspectorOpen.current = false
+        if (isNarrow && inspectorPanelOpen && !wasInspectorOpen.current) inspectorHeading.current?.focus()
+        if (!inspectorPanelOpen && wasInspectorOpen.current && inspectorPanel.current?.contains(document.activeElement)) inspectorTrigger.current?.focus()
+        wasInspectorOpen.current = inspectorPanelOpen
+        wasInspectorNarrow.current = isNarrow
+    }, [isNarrow, inspectorPanelOpen])
 
     useEffect(() => {
         function onKeyDown(event: KeyboardEvent) {
@@ -122,12 +128,14 @@ export function EditorShell({ mode, toolbar, library, canvas, inspector, notices
     }
 
     function resizeKeyboard(which: 'library' | 'inspector', event: ReactKeyboardEvent<HTMLDivElement>) {
+        if (isNarrow || (which === 'library' ? !libraryOpen : !inspectorOpen)) return
         if (event.key !== 'ArrowLeft' && event.key !== 'ArrowRight') return
         event.preventDefault()
         resize(which, event.key === 'ArrowRight' ? 16 : -16)
     }
 
     function resizePointer(which: 'library' | 'inspector', event: ReactPointerEvent<HTMLDivElement>) {
+        if (isNarrow || (which === 'library' ? !libraryOpen : !inspectorOpen)) return
         if (activeResizeSession.current !== null || event.isPrimary === false || event.button !== 0) return
         const target = event.currentTarget
         const session: ResizeDragSession = {
@@ -171,12 +179,12 @@ export function EditorShell({ mode, toolbar, library, canvas, inspector, notices
         : 'min-h-[42rem] overflow-hidden rounded-xl border bg-background'
 
     function openLibrary() {
-        if (inspectorOpen) onInspectorOpenChange(false)
+        if (isNarrow && inspectorOpen) onInspectorOpenChange(false)
         onLibraryOpenChange(true)
     }
 
     function openInspector() {
-        if (libraryOpen) onLibraryOpenChange(false)
+        if (isNarrow && libraryOpen) onLibraryOpenChange(false)
         onInspectorOpenChange(true)
     }
 
@@ -187,22 +195,25 @@ export function EditorShell({ mode, toolbar, library, canvas, inspector, notices
         ? `fixed inset-y-0 right-0 z-30 flex w-[var(--nodeflow-inspector-width)] max-w-[calc(100vw-2rem)] flex-col bg-background shadow-xl transition-transform motion-reduce:transition-none ${inspectorDrawerOpen ? 'translate-x-0' : 'invisible pointer-events-none translate-x-full'}`
         : 'flex min-h-0 flex-col lg:col-start-5'
 
-    return <section data-testid="editor-shell" className={`${modeClass} flex flex-col ${className ?? ''}`.trim()} style={shellStyle(libraryWidth, inspectorWidth)}>
+    const libraryToggleLabel = isNarrow || !libraryOpen ? 'Open Node Library' : 'Collapse Node Library'
+    const inspectorToggleLabel = isNarrow || !inspectorOpen ? 'Open Inspector' : 'Collapse Inspector'
+
+    return <section data-testid="editor-shell" className={`${modeClass} flex flex-col ${className ?? ''}`.trim()} style={shellStyle(libraryWidth, inspectorWidth, isNarrow || libraryOpen, isNarrow || inspectorOpen)}>
         {toolbar}
-        {isNarrow && <div className="flex shrink-0 items-center justify-between gap-2 border-b border-border bg-background px-3 py-2">
-            {!libraryDrawerOpen && <button ref={libraryTrigger} type="button" aria-label="Open Node Library" title="Open Node Library" onClick={openLibrary} className="rounded-md border border-border px-2 py-1 text-sm">Node Library</button>}
-            {!inspectorDrawerOpen && <button ref={inspectorTrigger} type="button" aria-label="Open Inspector" title="Open Inspector" onClick={openInspector} className="rounded-md border border-border px-2 py-1 text-sm">Inspector</button>}
-        </div>}
+        <div className="flex shrink-0 items-center justify-between gap-2 border-b border-border bg-background px-3 py-2">
+            {(!isNarrow || !libraryDrawerOpen) && <button ref={libraryTrigger} type="button" aria-label={libraryToggleLabel} title={libraryToggleLabel} onClick={isNarrow ? openLibrary : () => onLibraryOpenChange(!libraryOpen)} className="rounded-md border border-border px-2 py-1 text-sm">Node Library</button>}
+            {(!isNarrow || !inspectorDrawerOpen) && <button ref={inspectorTrigger} type="button" aria-label={inspectorToggleLabel} title={inspectorToggleLabel} onClick={isNarrow ? openInspector : () => onInspectorOpenChange(!inspectorOpen)} className="rounded-md border border-border px-2 py-1 text-sm">Inspector</button>}
+        </div>
         {notices && <div className="shrink-0">{notices}</div>}
-        <div data-nodeflow-shell-body className="grid flex-1 min-h-0 grid-cols-1 lg:grid-cols-[var(--nodeflow-library-width)_4px_minmax(0,1fr)_4px_var(--nodeflow-inspector-width)]">
-            <aside ref={libraryPanel} role={libraryDrawerOpen ? 'dialog' : undefined} aria-label="Node Library" aria-hidden={isNarrow && !libraryDrawerOpen ? true : undefined} inert={isNarrow && !libraryDrawerOpen} className={libraryClass}>
+        <div data-nodeflow-shell-body className="grid flex-1 min-h-0 grid-cols-1 lg:grid-cols-[var(--nodeflow-library-track)_var(--nodeflow-library-handle)_minmax(0,1fr)_var(--nodeflow-inspector-handle)_var(--nodeflow-inspector-track)]">
+            <aside ref={libraryPanel} hidden={libraryDesktopClosed} role={libraryDrawerOpen ? 'dialog' : undefined} aria-label="Node Library" aria-hidden={!libraryPanelOpen ? true : undefined} inert={!libraryPanelOpen} className={libraryClass}>
                 {isNarrow && <div className="flex items-center justify-between border-b border-border p-3"><h2 ref={libraryHeading} tabIndex={-1} className="font-semibold">Node Library</h2><button type="button" aria-label="Close Node Library" title="Close Node Library" onClick={() => onLibraryOpenChange(false)} className="rounded p-1">Close</button></div>}
                 <div className="min-h-0 grow overflow-auto">{library}</div>
             </aside>
-            <div role="separator" aria-label="Resize Node Library" aria-orientation="vertical" aria-valuemin={libraryBounds.min} aria-valuemax={libraryBounds.max} aria-valuenow={libraryWidth} tabIndex={0} onKeyDown={(event) => resizeKeyboard('library', event)} onPointerDown={(event) => resizePointer('library', event)} className="hidden w-1 cursor-col-resize touch-none bg-border hover:bg-ring lg:col-start-2 lg:block" />
+            <div hidden={isNarrow || !libraryOpen} role="separator" aria-label="Resize Node Library" aria-orientation="vertical" aria-valuemin={libraryBounds.min} aria-valuemax={libraryBounds.max} aria-valuenow={libraryWidth} tabIndex={!isNarrow && libraryOpen ? 0 : -1} onKeyDown={(event) => resizeKeyboard('library', event)} onPointerDown={(event) => resizePointer('library', event)} className="hidden w-1 cursor-col-resize touch-none bg-border hover:bg-ring lg:col-start-2 lg:block" />
             <main className="relative col-start-1 min-h-0 overflow-hidden lg:col-start-3">{canvas}</main>
-            <div role="separator" aria-label="Resize Inspector" aria-orientation="vertical" aria-valuemin={inspectorBounds.min} aria-valuemax={inspectorBounds.max} aria-valuenow={inspectorWidth} tabIndex={0} onKeyDown={(event) => resizeKeyboard('inspector', event)} onPointerDown={(event) => resizePointer('inspector', event)} className="hidden w-1 cursor-col-resize touch-none bg-border hover:bg-ring lg:col-start-4 lg:block" />
-            <aside ref={inspectorPanel} role={inspectorDrawerOpen ? 'dialog' : undefined} aria-label="Inspector" aria-hidden={isNarrow && !inspectorDrawerOpen ? true : undefined} inert={isNarrow && !inspectorDrawerOpen} className={inspectorClass}>
+            <div hidden={isNarrow || !inspectorOpen} role="separator" aria-label="Resize Inspector" aria-orientation="vertical" aria-valuemin={inspectorBounds.min} aria-valuemax={inspectorBounds.max} aria-valuenow={inspectorWidth} tabIndex={!isNarrow && inspectorOpen ? 0 : -1} onKeyDown={(event) => resizeKeyboard('inspector', event)} onPointerDown={(event) => resizePointer('inspector', event)} className="hidden w-1 cursor-col-resize touch-none bg-border hover:bg-ring lg:col-start-4 lg:block" />
+            <aside ref={inspectorPanel} hidden={inspectorDesktopClosed} role={inspectorDrawerOpen ? 'dialog' : undefined} aria-label="Inspector" aria-hidden={!inspectorPanelOpen ? true : undefined} inert={!inspectorPanelOpen} className={inspectorClass}>
                 {isNarrow && <div className="flex items-center justify-between border-b border-border p-3"><h2 ref={inspectorHeading} tabIndex={-1} className="font-semibold">Inspector</h2><button type="button" aria-label="Close Inspector" title="Close Inspector" onClick={() => onInspectorOpenChange(false)} className="rounded p-1">Close</button></div>}
                 <div className="min-h-0 grow overflow-auto">{inspector}</div>
             </aside>

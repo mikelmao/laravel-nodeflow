@@ -6,6 +6,7 @@ const INVALID_NODE_ERRORS_MESSAGE = 'The validation response contained invalid n
 const INVALID_SEMANTIC_ERRORS_MESSAGE = 'The validation response contained invalid semantic errors.'
 const INVALID_SEMANTIC_WARNINGS_MESSAGE = 'The validation response contained invalid semantic warnings.'
 const INVALID_STRUCTURAL_ERRORS_MESSAGE = 'The validation response contained invalid structural errors.'
+const INVALID_SEMANTIC_MESSAGE = 'The validation response contained an invalid message.'
 
 export type ValidationOutcome =
     | { kind: 'valid'; warnings: string[] }
@@ -36,6 +37,9 @@ function semanticOutcome(
     body: Record<string, unknown>,
     knownNodeIds: Set<string>,
 ): ValidationOutcome {
+    if (!Object.hasOwn(body, 'message') || typeof body.message !== 'string') {
+        return { kind: 'failed', message: INVALID_SEMANTIC_MESSAGE }
+    }
     if (body.valid !== false || !isStringArray(body.errors)) {
         return { kind: 'failed', message: INVALID_SEMANTIC_ERRORS_MESSAGE }
     }
