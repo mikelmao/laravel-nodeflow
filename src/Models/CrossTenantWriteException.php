@@ -19,6 +19,8 @@ use RuntimeException;
  * - forParentMismatch(): an insert whose tenant_id contradicts the tenant of
  *   the parent row it hangs off, which is the real authority (a FlowVersion
  *   against its Flow).
+ * - forReferenceMismatch(): a model whose FlowVersion reference belongs to a
+ *   different tenant than the model itself.
  *
  * Named constructors rather than one constructor with a mode flag: each shape
  * needs different values in the message, and a message that says "creation"
@@ -69,6 +71,24 @@ class CrossTenantWriteException extends RuntimeException
             "Cross-tenant write attempted: {$modelClass} for tenant ".self::describe($attemptedTenant)
             ." while its {$parentDescription} belongs to tenant ".self::describe($parentTenant)
             .'. The parent is the authority on which tenant the child belongs to.'
+        );
+    }
+
+    /**
+     * A FlowVersion reference whose tenant contradicts the model's tenant.
+     */
+    public static function forReferenceMismatch(
+        string $modelClass,
+        string $attribute,
+        mixed $referenceId,
+        mixed $modelTenant,
+        mixed $referenceTenant,
+    ): self {
+        return new self(
+            "Cross-tenant write attempted: {$modelClass}.{$attribute} references FlowVersion "
+            ."[{$referenceId}] for tenant ".self::describe($referenceTenant)
+            .' while the model belongs to '.self::describe($modelTenant)
+            .'. The referenced version must belong to the same tenant.'
         );
     }
 

@@ -40,7 +40,29 @@ Completed.
 
 ## Task 2 — Flow version-reference guard
 
-Pending.
+Completed.
+
+- RED command: `vendor/bin/pest tests/Feature/FlowVersionReferenceGuardTest.php --compact`
+  failed as intended: missing and cross-tenant `current_version_id` writes raised no exception,
+  suspended contradictory writes raised no exception, and no FlowVersion lookup occurred on a
+  current-version change. Result: 4 failed, 2 passed, 8 assertions. RED commit:
+  `fc08c8d0be250b4ee44feaa09e38252c5569d916` (`test: specify flow version-reference guards`).
+- GREEN focused command: `vendor/bin/pest tests/Feature/FlowVersionReferenceGuardTest.php
+  tests/Feature/FlowVersionTenancyTest.php tests/Feature/PublishFlowTest.php --compact` passed:
+  24 tests, 52 assertions. The query-count probe observed zero FlowVersion queries for a
+  name-only update and exactly one for a `current_version_id` update.
+- Counterfactual: temporarily removed Flow's creating and updating listeners, then ran
+  `vendor/bin/pest tests/Feature/FlowVersionReferenceGuardTest.php --filter="missing current|cross-tenant current|guard suspension" --compact`.
+  It failed as required: all three unsafe-write cases threw no exception (3 failed, 3 assertions).
+  Both listeners were restored with `apply_patch`, and the complete focused GREEN command passed
+  again (24 tests, 52 assertions).
+- Formatting: required scoped Pint `--test` passed; `git diff --check` passed.
+- Broader gates: `vendor/bin/pest tests/Unit --compact` passed 331 tests / 5,672 assertions.
+  The complete package command is longer than this runner's approximately 30-second foreground
+  cap, so its truncated progress output was not recorded as a full-suite pass. Completed feature
+  partitions passed: the early feature group 44 tests / 139 assertions, ExtractNodeGates 71 / 162,
+  and ExtractNodeMoves 54 / 220. The unchanged long-running ExtractNodeVerification suite exceeds
+  that cap alone; a full package gate remains for the integrator environment.
 
 ## Task 3 — Run version-reference guard
 

@@ -29,6 +29,22 @@ class Flow extends Model
         'draft_revision' => 'integer',
     ];
 
+    protected static function booted(): void
+    {
+        static::creating(fn (self $flow) => $flow->assertCurrentVersionReference());
+
+        static::updating(function (self $flow) {
+            if ($flow->isDirty(['current_version_id', 'tenant_id'])) {
+                $flow->assertCurrentVersionReference();
+            }
+        });
+    }
+
+    private function assertCurrentVersionReference(): void
+    {
+        FlowVersionReferenceGuard::assert($this, 'current_version_id', nullable: true);
+    }
+
     // Unscoped: reaching this Flow already proved tenant entitlement, so its
     // own versions are not a second authorization decision — and this must
     // resolve with no ambient tenant at all (console, queue, fan-out).
@@ -53,14 +69,15 @@ class Flow extends Model
     // own current version is not a second authorization decision — and this
     // must resolve with no ambient tenant at all (console, queue, fan-out).
     //
-    // INVARIANT this depends on: current_version_id points at a version inside
-    // this flow's own tenant. Nothing in the database enforces that — there is
-    // no composite foreign key — and $guarded is empty here, so the only thing
-    // standing between this relation and another tenant's version is that
-    // current_version_id is written by PublishFlow from a version it just
-    // created for this flow. Never accept it from request input: a host route
-    // doing update($request->all()) with a foreign current_version_id turns
-    // this unscoped read into a cross-tenant one.
+    // INVARIANT this depends on: current_version_id points at a version in this
+    // flow's own tenant. Nothing in the database enforces that — there is no
+    // composite foreign key — but Eloquent instance writes validate both the
+    // referenced version's existence and its tenant before persistence.
+    // FlowVersion creation independently validates that its tenant matches its
+    // Flow parent's tenant. This intentionally does not require the referenced
+    // version to belong to this exact Flow: same-Flow identity is not part of
+    // this invariant. Query-builder and raw SQL writes remain the explicit
+    // bypass of these model events.
     //
     // Do not "fix" this by constraining the relation to $this->tenant_id: an
     // eager load builds the relation from a fresh model instance whose
