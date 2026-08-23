@@ -89,7 +89,7 @@ describe('EditorShell', () => {
         expect(props.onLibraryOpenChange).toHaveBeenCalledWith(true)
         expect(props.onInspectorOpenChange).toHaveBeenCalledWith(true)
 
-        rerender(<EditorShell {...props} libraryOpen inspectorOpen />)
+        rerender(<EditorShell {...props} libraryOpen inspectorOpen={false} />)
         await user.click(screen.getByRole('button', { name: 'Close Node Library' }))
         expect(props.onLibraryOpenChange).toHaveBeenLastCalledWith(false)
     })
@@ -159,7 +159,7 @@ describe('EditorShell', () => {
         expect(libraryResize).toHaveAttribute('aria-valuenow', '336')
         fireEvent.keyDown(inspectorResize, { key: 'ArrowRight' })
         expect(inspectorResize).toHaveAttribute('aria-valuenow', '304')
-        fireEvent.pointerDown(libraryResize, { pointerId: 1, clientX: 100 })
+        fireEvent.pointerDown(libraryResize, { pointerId: 1, clientX: 100, button: 0, isPrimary: true })
         fireEvent.pointerMove(document, { pointerId: 1, clientX: 1000 })
         fireEvent.pointerUp(document, { pointerId: 1 })
         expect(libraryResize).toHaveAttribute('aria-valuenow', '400')
@@ -169,7 +169,7 @@ describe('EditorShell', () => {
     it('derives every library drag move from its immutable pointer-down width and stops on pointerup', () => {
         shell()
         const libraryResize = screen.getByRole('separator', { name: 'Resize Node Library' })
-        fireEvent.pointerDown(libraryResize, { pointerId: 1, clientX: 100 })
+        fireEvent.pointerDown(libraryResize, { pointerId: 1, clientX: 100, button: 0, isPrimary: true })
         fireEvent.pointerMove(document, { pointerId: 1, clientX: 110 })
         expect(libraryResize).toHaveAttribute('aria-valuenow', '330')
         fireEvent.pointerMove(document, { pointerId: 1, clientX: 120 })
@@ -182,7 +182,7 @@ describe('EditorShell', () => {
     it('derives every inspector drag move from its immutable pointer-down width and grows leftward', () => {
         shell()
         const inspectorResize = screen.getByRole('separator', { name: 'Resize Inspector' })
-        fireEvent.pointerDown(inspectorResize, { pointerId: 2, clientX: 100 })
+        fireEvent.pointerDown(inspectorResize, { pointerId: 2, clientX: 100, button: 0, isPrimary: true })
         fireEvent.pointerMove(document, { pointerId: 2, clientX: 90 })
         expect(inspectorResize).toHaveAttribute('aria-valuenow', '330')
         fireEvent.pointerMove(document, { pointerId: 2, clientX: 80 })
@@ -195,7 +195,7 @@ describe('EditorShell', () => {
     it('ignores another pointer ending while an active drag continues until its own pointer ends', () => {
         shell()
         const libraryResize = screen.getByRole('separator', { name: 'Resize Node Library' })
-        fireEvent.pointerDown(libraryResize, { pointerId: 1, clientX: 100 })
+        fireEvent.pointerDown(libraryResize, { pointerId: 1, clientX: 100, button: 0, isPrimary: true })
         fireEvent.pointerMove(document, { pointerId: 1, clientX: 110 })
         expect(libraryResize).toHaveAttribute('aria-valuenow', '330')
         fireEvent.pointerUp(document, { pointerId: 2 })
