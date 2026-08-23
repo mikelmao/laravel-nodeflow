@@ -62,7 +62,31 @@ Completed.
 
 ## Task 3 — Run version-reference guard
 
-Pending.
+Completed.
+
+- RED command: `vendor/bin/pest tests/Feature/FlowVersionReferenceGuardTest.php --filter="run" --compact`
+  failed as intended: a null `flow_version_id` reached SQLite's NOT NULL constraint instead of
+  `InvalidFlowVersionReferenceException`, cross-tenant and suspended contradictory writes raised
+  no exception, and a version-reference update issued no FlowVersion lookup. Result: 4 failed,
+  2 passed, 7 assertions. RED commit: `daded3e67f872262f3b79ce913e060f4491e54da`
+  (`test: specify run version-reference guards`).
+- GREEN focused writer regression command: `vendor/bin/pest
+  tests/Feature/FlowVersionReferenceGuardTest.php tests/Feature/StartRunTest.php
+  tests/Feature/SubFlowStarterTest.php tests/Feature/FlowVersionTenancyTest.php
+  tests/Feature/PublishFlowTest.php --compact` passed: 43 tests, 98 assertions. This includes
+  StartRun's intentionally suspended cross-tenant system write and SubFlowStarter.
+- Query-count probe: the Run guard issued zero FlowVersion queries for a status-only update and
+  exactly one when `flow_version_id` changed.
+- Counterfactual: temporarily removed Run's creating and updating listeners, then ran
+  `vendor/bin/pest tests/Feature/FlowVersionReferenceGuardTest.php --filter="null and missing run|cross-tenant run|guard suspension create a contradictory run" --compact`.
+  It failed as required: the null insert reached SQLite's NOT NULL constraint and the two
+  cross-tenant writes raised no exception (3 failed, 3 assertions). The listeners were restored
+  with `apply_patch`, and the complete focused writer regression command passed again (43 tests,
+  98 assertions).
+- Formatting: required scoped Pint `--test` initially found only test style normalization; scoped
+  Pint was applied, its `--test` rerun passed, and `git diff --check` passed.
+- Full package gate: one controlled `vendor/bin/pest --compact` session was started and polled to
+  completion. It exited 0 with 956 tests passed and 7,605 assertions in 117.67s.
 
 ## Task 4 — D-2 durable execution assertion
 

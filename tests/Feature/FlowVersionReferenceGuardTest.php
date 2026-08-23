@@ -208,7 +208,7 @@ it('queries the version only when a run write can change the invariant', functio
     ]);
     $versionQueries = [];
 
-    DB::listen(function (Illuminate\Database\Events\QueryExecuted $query) use (&$versionQueries) {
+    DB::listen(function (QueryExecuted $query) use (&$versionQueries) {
         if (str_contains($query->sql, 'nodeflow_flow_versions')) {
             $versionQueries[] = $query->sql;
         }
