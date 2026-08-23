@@ -81,6 +81,16 @@
   resources/js/graph/toCanvas.test.ts resources/js/graph/toGraph.test.ts` passed 3 files / 23
   tests; `npx tsc --noEmit`, `git diff -- package.json package-lock.json`, and `git diff --check`
   passed.
+- Review follow-up (scalability): RED added 5,000-node chain and cycle regressions. Both failed
+  with `RangeError: Maximum call stack size exceeded` in recursive Tarjan traversal. GREEN uses
+  explicit DFS frames, preserving the input-order traversal and SCC pop semantics without using
+  the JavaScript call stack. The same regressions now pass.
+- Review follow-up (sweep complexity): the original sweep rebuilt a position map for every
+  component on every layer sort. It now caches positions per row and reads only the already-swept
+  adjacent row, invalidating just the row it reorders. A chain therefore has linear row-map work
+  instead of quadratic global-map rebuilding; barycentric ties still use original input order.
+  Focused GREEN verification passed 3 files / 25 tests, TypeScript and diff checks passed, and a
+  direct 10,000-node chain sanity layout completed with finite output in 45.1 ms locally.
 
 ## Task 4 — document history
 

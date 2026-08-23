@@ -91,6 +91,29 @@ describe('hierarchicalLayout', () => {
     expect(Object.hasOwn(positions, '__proto__')).toBe(true)
     expect(({} as Record<string, unknown>).polluted).toBeUndefined()
   })
+
+  it('lays out a 5,000-node chain without exhausting the call stack', () => {
+    const nodeIds = Array.from({ length: 5_000 }, (_, index) => `node-${index}`)
+    const edges = nodeIds.slice(1).map((to, index) => ({ from: nodeIds[index]!, to }))
+
+    const positions = hierarchicalLayout(nodeIds, edges, nodeIds[0]!)
+
+    expect(Object.keys(positions)).toHaveLength(nodeIds.length)
+    expect(positions['node-0']!.x).toBeLessThan(positions['node-4999']!.x)
+    expect(Object.values(positions).every((point) => Number.isFinite(point.x) && Number.isFinite(point.y))).toBe(true)
+  })
+
+  it('keeps a deep cycle in one finite, deterministic SCC layer', () => {
+    const nodeIds = Array.from({ length: 5_000 }, (_, index) => `cycle-${index}`)
+    const edges = nodeIds.map((from, index) => ({ from, to: nodeIds[(index + 1) % nodeIds.length]! }))
+
+    const first = hierarchicalLayout(nodeIds, edges, nodeIds[0]!)
+    const second = hierarchicalLayout(nodeIds, edges, nodeIds[0]!)
+
+    expect(second).toEqual(first)
+    expect(first['cycle-0']!.x).toBe(first['cycle-4999']!.x)
+    expect(Object.values(first).every((point) => Number.isFinite(point.x) && Number.isFinite(point.y))).toBe(true)
+  })
 })
 
 describe('positionsForGraph', () => {

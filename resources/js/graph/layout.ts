@@ -58,41 +58,55 @@ function stronglyConnectedComponents(nodeIds: string[], graph: Map<string, strin
   const components: string[][] = []
   let index = 0
 
-  const visit = (node: string): void => {
+  const discover = (node: string): void => {
     indexByNode.set(node, index)
     lowlinkByNode.set(node, index)
     index += 1
     stack.push(node)
     onStack.add(node)
-
-    for (const neighbor of graph.get(node) ?? []) {
-      if (!indexByNode.has(neighbor)) {
-        visit(neighbor)
-        lowlinkByNode.set(node, Math.min(lowlinkByNode.get(node)!, lowlinkByNode.get(neighbor)!))
-      } else if (onStack.has(neighbor)) {
-        lowlinkByNode.set(node, Math.min(lowlinkByNode.get(node)!, indexByNode.get(neighbor)!))
-      }
-    }
-
-    if (lowlinkByNode.get(node) !== indexByNode.get(node)) {
-      return
-    }
-
-    const component: string[] = []
-    let member: string | undefined
-    do {
-      member = stack.pop()
-      if (member !== undefined) {
-        onStack.delete(member)
-        component.push(member)
-      }
-    } while (member !== node)
-    components.push(component)
   }
 
-  for (const node of nodeIds) {
-    if (!indexByNode.has(node)) {
-      visit(node)
+  type Frame = { node: string; nextNeighbor: number; parent?: string }
+  for (const root of nodeIds) {
+    if (indexByNode.has(root)) {
+      continue
+    }
+    discover(root)
+    const frames: Frame[] = [{ node: root, nextNeighbor: 0 }]
+
+    while (frames.length > 0) {
+      const frame = frames[frames.length - 1]!
+      const neighbors = graph.get(frame.node) ?? []
+      if (frame.nextNeighbor < neighbors.length) {
+        const neighbor = neighbors[frame.nextNeighbor++]!
+        if (!indexByNode.has(neighbor)) {
+          discover(neighbor)
+          frames.push({ node: neighbor, nextNeighbor: 0, parent: frame.node })
+        } else if (onStack.has(neighbor)) {
+          lowlinkByNode.set(frame.node, Math.min(lowlinkByNode.get(frame.node)!, indexByNode.get(neighbor)!))
+        }
+        continue
+      }
+
+      frames.pop()
+      if (frame.parent !== undefined) {
+        lowlinkByNode.set(
+          frame.parent,
+          Math.min(lowlinkByNode.get(frame.parent)!, lowlinkByNode.get(frame.node)!),
+        )
+      }
+      if (lowlinkByNode.get(frame.node) === indexByNode.get(frame.node)) {
+        const component: string[] = []
+        let member: string | undefined
+        do {
+          member = stack.pop()
+          if (member !== undefined) {
+            onStack.delete(member)
+            component.push(member)
+          }
+        } while (member !== frame.node)
+        components.push(component)
+      }
     }
   }
 
@@ -198,18 +212,28 @@ function orderLayer(
   }
 
   const layerNumbers = [...ordered.keys()].sort((left, right) => left - right)
-  const positionByComponent = (): Map<number, number> => {
-    const positions = new Map<number, number>()
-    for (const layer of layerNumbers) {
-      ordered.get(layer)!.forEach((component, index) => positions.set(component, index))
+  const positionsByLayer = new Map<number, Map<number, number>>()
+  const positionsForLayer = (layer: number): Map<number, number> => {
+    const cached = positionsByLayer.get(layer)
+    if (cached !== undefined) {
+      return cached
     }
+    const positions = new Map<number, number>()
+    ordered.get(layer)?.forEach((component, index) => positions.set(component, index))
+    positionsByLayer.set(layer, positions)
     return positions
   }
-  const sortByNeighbors = (layer: number, neighbors: (component: number) => number[]): void => {
-    const positions = positionByComponent()
+  const sortByNeighbors = (
+    layer: number,
+    neighborLayer: number,
+    neighbors: (component: number) => number[],
+  ): void => {
+    // Only the adjacent, already-swept layer can affect this barycenter. Caching
+    // that row avoids rebuilding a map of every component for every layer.
+    const positions = positionsForLayer(neighborLayer)
     ordered.get(layer)!.sort((left, right) => {
       const barycenter = (component: number): number | undefined => {
-        const related = neighbors(component).filter((neighbor) => layers.get(neighbor) !== layer)
+        const related = neighbors(component).filter((neighbor) => layers.get(neighbor) === neighborLayer)
         if (related.length === 0) {
           return undefined
         }
@@ -224,14 +248,15 @@ function orderLayer(
       if (leftCenter === undefined && rightCenter !== undefined) return 1
       return componentRank(left, graph, inputOrder) - componentRank(right, graph, inputOrder)
     })
+    positionsByLayer.delete(layer)
   }
 
   for (let sweep = 0; sweep < 2; sweep += 1) {
     for (const layer of layerNumbers.slice(1)) {
-      sortByNeighbors(layer, (component) => graph.incoming.get(component) ?? [])
+      sortByNeighbors(layer, layer - 1, (component) => graph.incoming.get(component) ?? [])
     }
     for (const layer of [...layerNumbers].reverse().slice(0, -1)) {
-      sortByNeighbors(layer, (component) => graph.outgoing.get(component) ?? [])
+      sortByNeighbors(layer, layer + 1, (component) => graph.outgoing.get(component) ?? [])
     }
   }
 
