@@ -58,18 +58,17 @@ export function filterNodeDefinitions(definitions: NodeTypePayload[], query: str
 
 const conciseDescriptionLimit = 120
 
-function visibleCharacters(text: string): string[] {
-    if (typeof Intl.Segmenter === 'function') {
-        return Array.from(new Intl.Segmenter('en', { granularity: 'grapheme' }).segment(text), ({ segment }) => segment)
-    }
+function visibleCharacters(text: string): string[] | null {
+    if (typeof Intl.Segmenter !== 'function') return null
 
-    return Array.from(text)
+    return Array.from(new Intl.Segmenter('en', { granularity: 'grapheme' }).segment(text), ({ segment }) => segment)
 }
 
 function conciseDescription(description: string | null): string {
     const text = description?.trim()
     if (!text) return 'No description provided.'
     const characters = visibleCharacters(text)
+    if (characters === null) return text
     return characters.length > conciseDescriptionLimit
         ? `${characters.slice(0, conciseDescriptionLimit - 1).join('')}…`
         : text

@@ -192,6 +192,13 @@
   environments use deterministic `Array.from()` code-point segmentation, which still avoids broken
   astral characters. Focused verification passed 1 file / 13 tests; TypeScript and diff checks
   passed silently.
+- Fallback correction RED: simulating an unavailable `Intl.Segmenter` showed the code-point fallback
+  truncated a boundary-crossing `👩‍💻` ZWJ cluster to `👩…`, and would likewise be unsafe for a
+  combining cluster.
+- Fallback correction GREEN: the unavailable-Segmenter path now returns the full normalized
+  description without an ellipsis. The regression restores the global descriptor in `finally` and
+  proves both the ZWJ and `é` combining cluster stay intact. Focused verification passed 1 file /
+  14 tests; TypeScript and diff checks passed silently.
 
 ## Task 8 — inspector
 

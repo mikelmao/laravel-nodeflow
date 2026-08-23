@@ -132,6 +132,27 @@ describe('NodeLibrary', () => {
         expect(description.textContent).not.toContain('\uFFFD')
     })
 
+    it('leaves a ZWJ and combining-cluster description intact without Intl.Segmenter', () => {
+        const segmenter = Object.getOwnPropertyDescriptor(Intl, 'Segmenter')
+        const descriptionText = `${'a'.repeat(118)}👩‍💻e\u0301 after the limit`
+        Object.defineProperty(Intl, 'Segmenter', { configurable: true, value: undefined })
+
+        try {
+            render(<NodeLibrary palette={[entry({ description: descriptionText })]} onAdd={vi.fn()} />)
+
+            const description = screen.getByText(descriptionText)
+            expect(description).toHaveTextContent(descriptionText)
+            expect(description.textContent).not.toContain('\uFFFD')
+            expect(description.textContent).not.toContain('…')
+        } finally {
+            if (segmenter === undefined) {
+                Reflect.deleteProperty(Intl, 'Segmenter')
+            } else {
+                Object.defineProperty(Intl, 'Segmenter', segmenter)
+            }
+        }
+    })
+
     it('renders accessible grouped add controls with presentation details and attached search and close controls', () => {
         const inputRef = createRef<HTMLInputElement>()
         const onRequestClose = vi.fn()
