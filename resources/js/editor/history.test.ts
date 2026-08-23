@@ -112,6 +112,37 @@ describe('workflow document history', () => {
         })
     })
 
+    it('restores documents in chronological order across multiple undo and redo steps', () => {
+        const initial = { value: 0 }
+        const one = { value: 1 }
+        const two = { value: 2 }
+        const three = { value: 3 }
+        let history = commitHistory(
+            commitHistory(
+                commitHistory(createHistory(initial), one),
+                two,
+            ),
+            three,
+        )
+
+        history = undoHistory(undoHistory(history))
+
+        expect(history.present).toBe(one)
+        expect(history.future).toEqual([two, three])
+
+        history = redoHistory(history)
+        expect(history.present).toBe(two)
+        expect(history.future).toEqual([three])
+
+        history = redoHistory(history)
+        expect(history).toEqual({
+            past: [initial, one, two],
+            present: three,
+            future: [],
+            transaction: null,
+        })
+    })
+
     it('clears redo history when committing after an undo', () => {
         const initial = { value: 0 }
         const middle = { value: 1 }

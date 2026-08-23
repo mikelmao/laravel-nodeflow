@@ -101,6 +101,10 @@
   no-ops. Undo and redo each move one document and close any active transaction.
 - GREEN verification: `npx vitest run resources/js/editor/history.test.ts` passed 1 file / 12
   tests; `npx tsc --noEmit` and `git diff --check` passed silently.
+- Quality-review coverage addition: a multi-step `initial → 1 → 2 → 3` regression undoes twice
+  and proves redo order is `2` then `3`, including the final chronological past stack. This is a
+  test-only guard for the established history implementation. Its focused Vitest run passed 1 file
+  / 13 tests; TypeScript and diff checks also passed.
 
 ## Task 5 — cards and edges
 
