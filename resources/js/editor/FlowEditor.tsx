@@ -129,7 +129,8 @@ function FlowEditorSession({ mode = 'workspace', toolbarSlots, className, ...opt
             const targetInside = event.target instanceof Node && root.contains(event.target)
             if (registry.active !== shortcutToken.current || (!targetInside && !root.contains(root.ownerDocument.activeElement))) return
             if (editableTarget(event.target)) return
-            const command = event.metaKey || event.ctrlKey
+            const command = !event.altKey && (event.metaKey || event.ctrlKey)
+            const plain = !event.metaKey && !event.ctrlKey && !event.altKey
             if (command && event.key.toLowerCase() === 'z') {
                 event.preventDefault()
                 if (event.shiftKey) controller.actions.redo()
@@ -137,10 +138,10 @@ function FlowEditorSession({ mode = 'workspace', toolbarSlots, className, ...opt
             } else if (command && event.key.toLowerCase() === 'k') {
                 event.preventDefault()
                 openLibraryAndFocus()
-            } else if (event.shiftKey && event.key.toLowerCase() === 'l') {
+            } else if (plain && event.shiftKey && event.key.toLowerCase() === 'l') {
                 event.preventDefault()
                 controller.actions.autoLayout()
-            } else if (event.key.toLowerCase() === 'f') {
+            } else if (plain && !event.shiftKey && event.key.toLowerCase() === 'f') {
                 event.preventDefault()
                 controller.toolbarProps.onFit()
             } else if ((event.key === 'Delete' || event.key === 'Backspace') && (controller.selected !== undefined || controller.view.selectedEdgeId !== null)) {

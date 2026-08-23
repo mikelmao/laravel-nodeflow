@@ -37,7 +37,7 @@ describe('EditorToolbar', () => {
         expect(screen.getByText('Published v7')).toBeInTheDocument()
         expect(screen.getByText('Host back link')).toBeInTheDocument()
         expect(screen.getByText('Host help')).toBeInTheDocument()
-        expect(screen.getByRole('button', { name: 'Save status: Saved' })).toBeInTheDocument()
+        expect(screen.getByRole('status', { name: 'Save status: Saved' })).toBeInTheDocument()
         expect(screen.getByRole('button', { name: 'Validate flow' })).toBeInTheDocument()
         expect(screen.getByRole('button', { name: 'Publish' })).toBeInTheDocument()
     })
@@ -70,8 +70,12 @@ describe('EditorToolbar', () => {
         ['conflict', 'Save status: Save conflict'],
     ] as const)('keeps %s save feedback visible and live', (status, name) => {
         toolbar({ save: { status } })
-        expect(screen.getByRole('status')).toHaveTextContent(name.replace('Save status: ', ''))
-        expect(screen.getByRole('button', { name })).toHaveAttribute('title')
+        const indicator = screen.getByRole('status', { name })
+        expect(indicator).toHaveTextContent(name.replace('Save status: ', ''))
+        expect(indicator).toHaveAttribute('aria-live', 'polite')
+        expect(indicator).toHaveAttribute('title')
+        expect(indicator).not.toHaveAttribute('tabindex')
+        expect(screen.queryByRole('button', { name })).toBeNull()
     })
 
     it('represents validation and publishing actions, results, and disabled work states', async () => {
@@ -96,9 +100,13 @@ describe('EditorToolbar', () => {
         expect(within(overflow).getByRole('button', { name: 'Fit canvas (more actions)' })).toBeInTheDocument()
         expect(within(overflow).getByRole('button', { name: 'Undo (more actions)' })).toBeInTheDocument()
         expect(within(overflow).getByRole('button', { name: 'Redo (more actions)' })).toBeInTheDocument()
-        expect(screen.getAllByRole('button', { name: 'Save status: Saved' })).toHaveLength(1)
+        expect(screen.getAllByRole('status', { name: 'Save status: Saved' })).toHaveLength(1)
         expect(screen.getAllByRole('button', { name: 'Validate flow' })).toHaveLength(1)
         expect(screen.getAllByRole('button', { name: 'Publish' })).toHaveLength(1)
+        const details = overflow.querySelector('details')
+        const menu = details?.querySelector(':scope > div')
+        expect(details).toHaveClass('relative')
+        expect(menu).toHaveClass('absolute', 'right-0', 'top-full', 'mt-1', 'z-20')
     })
 })
 

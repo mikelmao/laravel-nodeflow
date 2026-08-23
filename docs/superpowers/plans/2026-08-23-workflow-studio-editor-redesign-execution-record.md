@@ -484,3 +484,24 @@
   resources/js/editor/useEditorController.test.tsx resources/js/editor/EditorShell.test.tsx
   --reporter=dot` passed **3 files / 51 tests**. Full Vitest passed **26 files / 304 tests**;
   `npx tsc --noEmit` and `git diff --check` passed silently.
+
+### Final package quality follow-up
+
+- Review findings: the editor captured modified `F` and `Shift+L` shortcuts, preventing browser
+  Find and allowing unsupported command/Alt combinations to mutate the graph. The passive save
+  indicator was a focusable button, and the narrow secondary-actions menu had no positioned
+  details anchor or explicit right-edge placement.
+- RED: FlowEditor now dispatches Ctrl/Cmd/Alt/Shift variants of `F` and modified `Shift+L`,
+  asserting no action or `preventDefault`, then pins the exact unmodified `F` and `Shift+L`
+  commands. EditorChrome requires the save state to be a named, polite, nonfocusable status rather
+  than a button and asserts the static overflow-anchor/menu classes. The focused run failed as
+  expected: modified shortcuts were prevented, status queries found only the nested text span, and
+  the anchor/menu classes were absent.
+- GREEN: command shortcuts remain first and explicitly exclude Alt; layout accepts only plain
+  `Shift+L`, and Fit only plain `F`. Save feedback is one labelled `role=status` live span that
+  retains its text, title, icon, and styling without creating a tab stop. The overflow `details`
+  is relative and its menu uses `right-0 top-full z-20 mt-1`.
+- Verification: `npx vitest run resources/js/editor/FlowEditor.test.tsx
+  resources/js/editor/EditorChrome.test.tsx --reporter=dot` passed **2 files / 44 tests**. Full
+  Vitest passed **26 files / 305 tests**; `npx tsc --noEmit` and `git diff --check` passed
+  silently.

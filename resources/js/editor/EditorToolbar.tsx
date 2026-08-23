@@ -95,19 +95,19 @@ export function EditorToolbar(props: EditorToolbarProps) {
                 <SecondaryActions props={props} />
             </div>
             <div className="lg:hidden" aria-label="More workflow actions" role="group">
-                <details>
+                <details className="relative">
                     <summary className="cursor-pointer rounded-md border border-border px-2.5 py-1.5 text-sm font-medium">More workflow actions</summary>
-                    <div className="absolute z-10 mt-1 flex flex-col gap-1 rounded-md border border-border bg-popover p-2 shadow-md">
+                    <div className="absolute right-0 top-full z-20 mt-1 flex flex-col gap-1 rounded-md border border-border bg-popover p-2 shadow-md">
                         <SecondaryActions props={props} compact />
                     </div>
                 </details>
             </div>
         </div>
         <div className="flex items-center gap-2" aria-label="Workflow persistence actions" role="group">
-            <button type="button" aria-label={`Save status: ${saveText}`} title={props.save.message ?? saveText} className="inline-flex items-center gap-1.5 rounded-md border border-border bg-background px-2.5 py-1.5 text-sm font-medium">
+            <span role="status" aria-live="polite" aria-label={`Save status: ${saveText}`} title={props.save.message ?? saveText} className="inline-flex items-center gap-1.5 rounded-md border border-border bg-background px-2.5 py-1.5 text-sm font-medium">
                 <NodeflowIcon name={props.save.status === 'error' || props.save.status === 'conflict' ? 'alert' : 'check'} className="size-4" />
-                <span role="status" aria-live="polite">{saveText}</span>
-            </button>
+                <span>{saveText}</span>
+            </span>
             <button type="button" aria-label="Validate flow" title={validationText} disabled={props.validation.status === 'checking'} onClick={props.onValidate} className="inline-flex items-center gap-1.5 rounded-md border border-border bg-background px-2.5 py-1.5 text-sm font-medium hover:bg-muted disabled:opacity-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring">
                 <NodeflowIcon name={props.validation.status === 'invalid' || props.validation.status === 'failed' ? 'alert' : 'check'} className="size-4" />
                 <span>Validate</span>

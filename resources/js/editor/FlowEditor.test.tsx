@@ -155,6 +155,49 @@ beforeEach(() => {
 afterEach(() => vi.unstubAllGlobals())
 
 describe('FlowEditor', () => {
+    it('reserves modified F and L shortcuts while accepting only the approved Fit and Auto layout keys', () => {
+        const fit = vi.fn()
+        renderEditor({ graph: {
+            ...graph,
+            nodes: [
+                { ...graph.nodes![0]!, position: { x: 999, y: 333 } },
+                { ...graph.nodes![1]!, position: { x: 1_500, y: 333 } },
+            ],
+        } })
+        const callbacks = canvasProbe.current
+        if (callbacks?.onReady === undefined) throw new Error('Canvas did not expose its actions callback.')
+        act(() => callbacks.onReady?.({ fit, centerNode: vi.fn(), screenToFlowPosition: vi.fn(() => ({ x: 0, y: 0 })) }))
+        const pane = document.querySelector('.react-flow__pane')
+        if (!(pane instanceof HTMLElement)) throw new Error('Could not find the React Flow pane.')
+        fireEvent.pointerDown(pane)
+
+        for (const init of [
+            { key: 'f', ctrlKey: true },
+            { key: 'f', metaKey: true },
+            { key: 'f', altKey: true },
+            { key: 'f', shiftKey: true },
+            { key: 'l', ctrlKey: true, shiftKey: true },
+            { key: 'l', metaKey: true, shiftKey: true },
+            { key: 'l', altKey: true, shiftKey: true },
+        ]) {
+            const event = new KeyboardEvent('keydown', { ...init, cancelable: true })
+            act(() => document.dispatchEvent(event))
+            expect(event.defaultPrevented).toBe(false)
+        }
+        expect(fit).not.toHaveBeenCalled()
+        expect(canvasProbe.current?.nodes.map((node) => node.position)).toEqual([{ x: 999, y: 333 }, { x: 1_500, y: 333 }])
+
+        const fitEvent = new KeyboardEvent('keydown', { key: 'f', cancelable: true })
+        act(() => document.dispatchEvent(fitEvent))
+        expect(fitEvent.defaultPrevented).toBe(true)
+        expect(fit).toHaveBeenCalledOnce()
+
+        const layoutEvent = new KeyboardEvent('keydown', { key: 'l', shiftKey: true, cancelable: true })
+        act(() => document.dispatchEvent(layoutEvent))
+        expect(layoutEvent.defaultPrevented).toBe(true)
+        expect(canvasProbe.current?.nodes.map((node) => node.position)).not.toEqual([{ x: 999, y: 333 }, { x: 1_500, y: 333 }])
+    })
+
     it('keeps the desktop inspector open for overview after genuine pane deselection but respects an explicit collapse', () => {
         installMediaQuery(false)
         renderEditor()
