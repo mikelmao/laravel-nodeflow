@@ -229,6 +229,28 @@ describe('FlowEditor', () => {
         })
     })
 
+    it('remounts the publish barrier when the publish endpoint changes', async () => {
+        let resolveOld!: (response: Response) => void
+        const oldPublish = new Promise<Response>((resolve) => { resolveOld = resolve })
+        const nextUrls = { ...urls, publish: '/flows/12/publish-new' }
+        const fetchMock = vi.fn((url: string) => {
+            if (url === urls.publish) return oldPublish
+            if (url === nextUrls.publish) return Promise.resolve(Response.json({ version: 5, draft_revision: 9 }))
+            return Promise.resolve(Response.json({ draft_revision: 8 }))
+        })
+        vi.stubGlobal('fetch', fetchMock)
+        const view = renderEditor()
+        fireEvent.click(screen.getByRole('button', { name: 'Publish' }))
+        await waitFor(() => expect(fetchMock.mock.calls.filter(([url]) => url === urls.publish)).toHaveLength(1))
+
+        view.rerender(<FlowEditor flow={flow} graph={graph} palette={palette} triggers={triggers} urls={nextUrls} autosaveDebounceMs={5} />)
+        fireEvent.click(screen.getByRole('button', { name: 'Publish' }))
+        await waitFor(() => expect(fetchMock.mock.calls.filter(([url]) => url === nextUrls.publish)).toHaveLength(1))
+        await act(async () => resolveOld(Response.json({ version: 99, draft_revision: 99 })))
+        expect(screen.queryByText(/Published v99/i)).toBeNull()
+        expect((await screen.findAllByText(/Published v5/i)).length).toBeGreaterThan(0)
+    })
+
     // Published version is durable state; counterfactual reporting draft revision confuses concurrency with releases.
     it('reports the published version and actionable draft autosave failures', async () => {
         const published = renderEditor()
@@ -476,6 +498,20 @@ describe('FlowEditor', () => {
         fireEvent.pointerDown(firstNode)
         fireEvent.keyDown(document, { key: 'z', ctrlKey: true })
         expect(screen.getAllByLabelText(/Template/)[0]).toHaveValue('first')
+    })
+
+    it('promotes shortcut focus to the fallback editor only when the active editor unmounts focused', () => {
+        const First = ({ second }: { second: boolean }) => <>
+            <FlowEditor flow={{ ...flow, id: 81, name: 'First editor' }} graph={graph} palette={palette} triggers={triggers} urls={urls} autosaveDebounceMs={5} />
+            {second && <FlowEditor flow={{ ...flow, id: 82, name: 'Second editor' }} graph={graph} palette={palette} triggers={triggers} urls={urls} autosaveDebounceMs={5} />}
+        </>
+        const view = render(<First second />)
+        const roots = view.container.querySelectorAll<HTMLElement>('.contents[tabindex="-1"]')
+        roots[1]!.focus()
+        expect(document.activeElement).toBe(roots[1])
+
+        view.rerender(<First second={false} />)
+        expect(document.activeElement).toBe(roots[0])
     })
 
     // Panel deletion owns graph invariants; counterfactual deleting only the node leaves start and dangling edges.

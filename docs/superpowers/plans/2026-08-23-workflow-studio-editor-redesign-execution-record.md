@@ -352,6 +352,17 @@
   compatibility; controller fallback uses the old screen midpoint conversion or pure layout when
   no canvas is registered.
 
+### Task 10 final blocker follow-up — pre-removal focus and publish lease
+
+- RED: passive shortcut-registration cleanup ran after an active root had already been detached, so
+  `contains(document.activeElement)` was false and no fallback root received focus. A pending old
+  publish endpoint also retained its session lease across an endpoint prop replacement.
+- GREEN: registration/removal uses an isomorphic layout effect, preserving active-root focus long
+  enough to promote and focus the fallback before DOM removal; SSR still selects `useEffect`.
+  `sessionKey` now includes the publish URL, so an endpoint replacement remounts the complete
+  controller/autosave session. Regressions cover focused active-editor unmount and old/new publish
+  endpoint isolation.
+
 ## Documentation and demo verification
 
 ## Reviews and final gates

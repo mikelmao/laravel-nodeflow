@@ -1,4 +1,4 @@
-import { useEffect, useRef } from 'react'
+import { useEffect, useLayoutEffect, useRef } from 'react'
 import { Canvas } from '../canvas/Canvas'
 import type { NodeRendererMap } from '../canvas/context'
 import type { ControlMap } from '../controls/types'
@@ -16,6 +16,7 @@ import { useEditorController, type ToolbarSlots } from './useEditorController'
 type ShortcutEntry = { token: symbol; root: HTMLElement }
 type ShortcutRegistry = { active: symbol | null; entries: ShortcutEntry[] }
 const shortcutRegistries = new WeakMap<Document, ShortcutRegistry>()
+const useShortcutLayoutEffect = typeof window === 'undefined' ? useEffect : useLayoutEffect
 
 function shortcutRegistry(document: Document): ShortcutRegistry {
     let registry = shortcutRegistries.get(document)
@@ -63,7 +64,7 @@ export type FlowEditorProps = {
 }
 
 function sessionKey({ flow, urls }: FlowEditorProps): string {
-    return JSON.stringify([flow.id, urls.draft, flow.draft_revision, flow.version])
+    return JSON.stringify([flow.id, urls.draft, urls.publish, flow.draft_revision, flow.version])
 }
 
 /** The public session boundary remounts all request and history refs when server identity changes. */
@@ -97,7 +98,7 @@ function FlowEditorSession({ mode = 'workspace', toolbarSlots, className, ...opt
         }
     }
 
-    useEffect(() => {
+    useShortcutLayoutEffect(() => {
         const root = rootRef.current
         if (root === null) return
         const registry = shortcutRegistry(root.ownerDocument)
