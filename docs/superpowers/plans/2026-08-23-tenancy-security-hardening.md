@@ -262,9 +262,14 @@ use Nodeflow\Tenancy\TenancyDecision;
 use Nodeflow\Tenancy\TenancyDecisionResolver;
 
 beforeEach(function () {
-    // Keep the first RED run as an assertion failure, not an autoload error.
-    expect(class_exists(TenancyDecisionResolver::class))
-        ->toBeTrue('TenancyDecisionResolver has not been implemented yet.');
+    $this->decisionResolver = function (): TenancyDecisionResolver {
+        $resolve = fn () => app(TenancyDecisionResolver::class);
+
+        // The public boundary is container resolution, not source/class existence.
+        expect($resolve)->not->toThrow();
+
+        return $resolve();
+    };
 
     $this->bindResolver = function (?string $tenantId): void {
         app()->bind(TenantResolver::class, fn () => new class($tenantId) implements TenantResolver
@@ -285,7 +290,7 @@ beforeEach(function () {
 });
 
 it('describes the auto fallback as an inferred unscoped null outcome', function () {
-    $decision = app(TenancyDecisionResolver::class)->decision();
+    $decision = ($this->decisionResolver)()->decision();
 
     expect(app(TenantResolver::class))->toBeInstanceOf(NoTenancyResolver::class)
         ->and($decision->configuredMode)->toBe('auto')
@@ -300,7 +305,7 @@ it('describes the auto fallback as an inferred unscoped null outcome', function 
 it('records that a host binding made auto fail closed', function () {
     ($this->bindResolver)(null);
 
-    $decision = app(TenancyDecisionResolver::class)->decision();
+    $decision = ($this->decisionResolver)()->decision();
 
     expect($decision->effectiveMode)->toBe(TenancyDecision::EFFECTIVE_RESOLVER)
         ->and($decision->nullTenantOutcome)->toBe(TenancyDecision::NULL_TENANT_THROWS_UNRESOLVED)
@@ -315,7 +320,7 @@ it('reports explicit modes without claiming inference', function (string $mode, 
     config()->set('nodeflow.tenancy', $mode);
     ($this->bindResolver)(null);
 
-    $decision = app(TenancyDecisionResolver::class)->decision();
+    $decision = ($this->decisionResolver)()->decision();
 
     expect($decision->effectiveMode)->toBe($effective)
         ->and($decision->nullTenantOutcome)->toBe($outcome)
@@ -330,7 +335,7 @@ it('represents invalid configuration while an actual scope still refuses it', fu
     config()->set('nodeflow.tenancy', 'Resolver');
     ($this->bindResolver)('org-1');
 
-    $decision = app(TenancyDecisionResolver::class)->decision();
+    $decision = ($this->decisionResolver)()->decision();
 
     expect($decision->effectiveMode)->toBeNull()
         ->and($decision->nullTenantOutcome)->toBe(TenancyDecision::NULL_TENANT_THROWS_INVALID)
@@ -341,7 +346,7 @@ it('represents invalid configuration while an actual scope still refuses it', fu
 });
 
 it('recomputes config and the resolver binding after an earlier inspection', function () {
-    $service = app(TenancyDecisionResolver::class);
+    $service = ($this->decisionResolver)();
     $first = $service->decision();
 
     config()->set('nodeflow.tenancy', 'resolver');
