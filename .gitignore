@@ -8,4 +8,5 @@ node_modules/
 # subdirectory is ignored, so a project-level .claude/settings.json or a shared
 # agent definition can still be committed.
 .claude/worktrees/
+.worktrees/
 .superpowers/
