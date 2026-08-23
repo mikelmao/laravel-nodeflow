@@ -94,6 +94,14 @@
 
 ## Task 4 — document history
 
+- RED: `npx vitest run resources/js/editor/history.test.ts` failed as expected because
+  `resources/js/editor/history.ts` did not yet exist and Vite could not resolve `./history`.
+- GREEN: added generic, immutable document history transitions with bounded chronological past,
+  front-ordered redo entries, authoritative reset, transaction coalescing, and identity-preserving
+  no-ops. Undo and redo each move one document and close any active transaction.
+- GREEN verification: `npx vitest run resources/js/editor/history.test.ts` passed 1 file / 12
+  tests; `npx tsc --noEmit` and `git diff --check` passed silently.
+
 ## Task 5 — cards and edges
 
 ## Task 6 — canvas controls
