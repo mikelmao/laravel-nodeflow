@@ -8,7 +8,7 @@ use RuntimeException;
  * A write whose tenant_id contradicts the tenant the write's own context says
  * it must be.
  *
- * Three shapes, one exception, because a caller catching this always wants the
+ * Four shapes, one exception, because a caller catching this always wants the
  * same thing — refuse the write — and only the message differs:
  *
  * - forCreate(): an insert carrying an explicit tenant_id that contradicts the
