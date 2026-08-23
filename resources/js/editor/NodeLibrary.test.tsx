@@ -1,6 +1,6 @@
 import { fireEvent, render, screen } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
-import { createRef } from 'react'
+import { createRef, StrictMode } from 'react'
 import { describe, expect, it, vi } from 'vitest'
 import type { NodeTypePayload } from '../graph/types'
 import { filterNodeDefinitions, NodeLibrary } from './NodeLibrary'
@@ -181,6 +181,89 @@ describe('NodeLibrary', () => {
 
         fireEvent.click(screen.getByRole('button', { name: 'Close node library' }))
         expect(onRequestClose).toHaveBeenCalledTimes(1)
+    })
+
+    it('keeps a cleanup callback ref attached while the search query changes', async () => {
+        const user = userEvent.setup()
+        const cleanup = vi.fn()
+        const searchInputRef = vi.fn((node: HTMLInputElement | null) => node === null ? undefined : cleanup)
+        const { unmount } = render(<NodeLibrary palette={[entry()]} onAdd={vi.fn()} searchInputRef={searchInputRef} />)
+
+        const search = screen.getByRole('searchbox', { name: 'Search nodes' })
+        expect(searchInputRef).toHaveBeenCalledWith(search)
+
+        await user.type(search, 'send')
+
+        expect(cleanup).not.toHaveBeenCalled()
+        expect(searchInputRef).toHaveBeenCalledTimes(1)
+
+        unmount()
+
+        expect(cleanup).toHaveBeenCalledTimes(1)
+        expect(searchInputRef).not.toHaveBeenCalledWith(null)
+    })
+
+    it('replaces cleanup callback refs without a null callback and cleans each lifecycle once', () => {
+        const firstCleanup = vi.fn()
+        const secondCleanup = vi.fn()
+        const first = vi.fn((node: HTMLInputElement | null) => node === null ? undefined : firstCleanup)
+        const second = vi.fn((node: HTMLInputElement | null) => node === null ? undefined : secondCleanup)
+        const { rerender, unmount } = render(<NodeLibrary palette={[entry()]} onAdd={vi.fn()} searchInputRef={first} />)
+        const search = screen.getByRole('searchbox', { name: 'Search nodes' })
+
+        rerender(<NodeLibrary palette={[entry()]} onAdd={vi.fn()} searchInputRef={second} />)
+
+        expect(first).toHaveBeenCalledWith(search)
+        expect(firstCleanup).toHaveBeenCalledTimes(1)
+        expect(first).not.toHaveBeenCalledWith(null)
+        expect(second).toHaveBeenCalledWith(search)
+
+        unmount()
+
+        expect(secondCleanup).toHaveBeenCalledTimes(1)
+        expect(second).not.toHaveBeenCalledWith(null)
+    })
+
+    it('clears a void callback ref when it unmounts', () => {
+        const searchInputRef = vi.fn()
+        const { unmount } = render(<NodeLibrary palette={[entry()]} onAdd={vi.fn()} searchInputRef={searchInputRef} />)
+        const search = screen.getByRole('searchbox', { name: 'Search nodes' })
+
+        unmount()
+
+        expect(searchInputRef).toHaveBeenNthCalledWith(1, search)
+        expect(searchInputRef).toHaveBeenLastCalledWith(null)
+    })
+
+    it('balances every StrictMode callback attachment with one cleanup', () => {
+        let attachments = 0
+        let cleanups = 0
+        let liveAttachments = 0
+        const searchInputRef = vi.fn((node: HTMLInputElement | null) => {
+            if (node === null) return
+
+            attachments += 1
+            liveAttachments += 1
+
+            return () => {
+                cleanups += 1
+                liveAttachments -= 1
+            }
+        })
+        const { unmount } = render(
+            <StrictMode>
+                <NodeLibrary palette={[entry()]} onAdd={vi.fn()} searchInputRef={searchInputRef} />
+            </StrictMode>,
+        )
+
+        expect(attachments).toBeGreaterThan(0)
+        expect(liveAttachments).toBe(1)
+
+        unmount()
+
+        expect(liveAttachments).toBe(0)
+        expect(cleanups).toBe(attachments)
+        expect(searchInputRef).not.toHaveBeenCalledWith(null)
     })
 
     it('gives each mounted library search label its own input id', () => {

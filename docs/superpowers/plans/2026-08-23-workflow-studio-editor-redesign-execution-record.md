@@ -406,6 +406,19 @@
   and the focused PHP pair passed **27 tests / 137 assertions**. With the feature symlink active,
   demo Prettier, ESLint, TypeScript, production build, and full Pest all passed (**111 tests / 690
   assertions**); Vite retained only its existing native-config and optional Fontaine advisories.
+- Quality follow-up RED: a new documentation assertion rejected the unsupported `Cmd/Ctrl+Y` redo
+  claim, and failed on the editor page. The React-ref type fixture now mirrors React 19's private
+  cleanup marker (`void | (() => ForeignVoidOrUndefinedOnly)`), proves that the structural bridge
+  accepts a foreign ref, and pins local `React.Ref` rejection with `@ts-expect-error`. Runtime
+  lifecycle regressions then showed the inline bridge callback detached a cleanup ref on every
+  search-query render: typing `send` called cleanup four times before unmount.
+- Quality follow-up GREEN: the guide now documents only `Cmd/Ctrl+Z` and
+  `Cmd/Ctrl+Shift+Z`; an exact search found no `Cmd/Ctrl+Y` claim under `docs/`. `NodeLibrary` uses
+  `useCallback` keyed only by `searchInputRef`, so query renders retain the DOM ref. The expanded
+  suite proves object refs, cleanup refs across replacement/unmount, void refs receiving `null`,
+  and balanced StrictMode attachment/cleanup lifecycles. Focused Node Library tests passed **19
+  tests**, the docs/routes pair passed **27 tests / 138 assertions**, full Vitest passed **26 files
+  / 299 tests**, TypeScript and diff checks passed.
 - Browser setup selected the connected Chrome browser and opened the freshly seeded local demo.
   The documented disposable-demo command `php artisan migrate:fresh --seed --no-interaction` and
   `tests/Feature/DemoSeedTest.php` passed (**1 test / 11 assertions**). Browser acceptance stopped

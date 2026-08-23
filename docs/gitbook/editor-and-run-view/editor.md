@@ -89,7 +89,7 @@ The package toolbar and canvas expose the same actions for pointer and keyboard 
 
 | Action | Control and shortcut |
 | --- | --- |
-| Undo / Redo | Toolbar buttons; `Cmd/Ctrl+Z` and `Cmd/Ctrl+Shift+Z` (or `Cmd/Ctrl+Y`). |
+| Undo / Redo | Toolbar buttons; `Cmd/Ctrl+Z` and `Cmd/Ctrl+Shift+Z`. |
 | Auto layout | **Auto layout** arranges every node; it is an ordinary graph edit and can be undone. |
 | Frame the graph | **Fit** frames all nodes. Use canvas zoom controls or gestures for closer inspection. |
 | Orientation | The minimap shows the current viewport and supports pan/zoom navigation. |

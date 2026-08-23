@@ -1,4 +1,4 @@
-import { useId, useState, type DragEvent } from 'react'
+import { useCallback, useId, useState, type DragEvent } from 'react'
 import type { NodeTypePayload } from '../graph/types'
 import { NodeflowIcon } from '../presentation/icons'
 import { categoryClasses, categoryPresentation } from '../presentation/node'
@@ -103,6 +103,10 @@ function groupLabel(definition: NodeTypePayload): string {
 export function NodeLibrary({ palette, onAdd, onRequestClose, searchInputRef }: NodeLibraryProps) {
     const [query, setQuery] = useState('')
     const searchId = `node-library-search-${useId().replace(/:/g, '')}`
+    const attachSearchInputRef = useCallback(
+        (instance: HTMLInputElement | null) => attachRef(searchInputRef, instance),
+        [searchInputRef],
+    )
     const definitions = filterNodeDefinitions(palette, query)
     const groups = new Map<string, { label: string; definitions: NodeTypePayload[] }>()
 
@@ -146,7 +150,7 @@ export function NodeLibrary({ palette, onAdd, onRequestClose, searchInputRef }: 
                 <div className="relative">
                     <NodeflowIcon name="search" className="pointer-events-none absolute left-2.5 top-1/2 size-4 -translate-y-1/2 text-muted-foreground" />
                     <input
-                        ref={(instance) => attachRef(searchInputRef, instance)}
+                        ref={attachSearchInputRef}
                         id={searchId}
                         type="search"
                         value={query}
