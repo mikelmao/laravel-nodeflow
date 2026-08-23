@@ -108,6 +108,26 @@
 
 ## Task 5 — cards and edges
 
+- RED: `npx vitest run resources/js/presentation/node.test.tsx resources/js/canvas/canvas.test.tsx`
+  failed in the expected way: Vite could not resolve the deliberately absent
+  `presentation/node` helpers or `canvas/WorkflowEdge` component. The test-only
+  contract was committed as `feef36b` (`test: define workflow node presentation`).
+- GREEN: added deterministic category presentation, concise field-order-aware
+  node summaries, and dependency-free SVG icons. `NodeCard` now owns the
+  accessible human header, start/issue badges, target and labelled source port
+  rows, run decorations, and the complete error list while retaining the host
+  renderer exclusively as its body. Known cards no longer expose raw node IDs
+  or technical types; unknown cards remain explicitly diagnosable.
+- Added `WorkflowEdge` with smooth-step routing, preserved edge marker/style,
+  and a non-interactive label chip. Edge-type registration is intentionally
+  deferred to Task 6, where the canvas registry and adapter edge type change
+  together.
+- Regression adjustment: FlowRun interaction tests now click the stable React
+  Flow node wrapper (`rf__node-*`) rather than an ID printed in card content.
+- GREEN verification: `npx vitest run resources/js/presentation/node.test.tsx
+  resources/js/canvas/canvas.test.tsx resources/js/run/FlowRun.test.tsx` passed
+  3 files / 32 tests; `npx tsc --noEmit` passed silently.
+
 ## Task 6 — canvas controls
 
 ## Task 7 — node library

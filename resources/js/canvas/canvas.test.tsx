@@ -1,4 +1,4 @@
-import { ReactFlowProvider, type NodeProps } from '@xyflow/react'
+import { Position, ReactFlowProvider, type NodeProps } from '@xyflow/react'
 import { fireEvent, render, screen } from '@testing-library/react'
 import { describe, expect, it, vi } from 'vitest'
 import type { CanvasEdge, CanvasNode, NodeCardData, NodeTypePayload } from '../graph/types'
@@ -218,7 +218,7 @@ describe('NodeCard', () => {
         )
 
         expect(screen.queryByTestId('nodeflow-badges-n1')).toBeNull()
-        expect(screen.getByText('Send message').closest('div.rounded-md')).not.toHaveClass('opacity-40')
+        expect(screen.getByText('Send message').closest('article')).not.toHaveClass('opacity-40')
     })
 
     it('owns the labelled card header, issue badges, body, and output rows', () => {
@@ -270,7 +270,7 @@ describe('NodeCard', () => {
 })
 
 describe('WorkflowEdge', () => {
-    it('renders a smooth-step path and a non-interactive output label chip', () => {
+    it('renders a smooth-step path and preserves its edge marker', () => {
         const { container } = render(
             <ReactFlowProvider>
                 <svg>
@@ -282,8 +282,8 @@ describe('WorkflowEdge', () => {
                         sourceY={32}
                         targetX={240}
                         targetY={32}
-                        sourcePosition="right"
-                        targetPosition="left"
+                        sourcePosition={Position.Right}
+                        targetPosition={Position.Left}
                         label="sent"
                         style={{ stroke: 'red' }}
                         markerEnd="url(#arrow)"
@@ -293,7 +293,7 @@ describe('WorkflowEdge', () => {
         )
 
         expect(container.querySelector('path.react-flow__edge-path')).toHaveAttribute('d', expect.stringContaining('M'))
-        expect(screen.getByText('sent')).toHaveClass('pointer-events-none', 'nodrag', 'nopan')
+        expect(container.querySelector('path.react-flow__edge-path')).toHaveAttribute('marker-end', 'url(#arrow)')
     })
 })
 

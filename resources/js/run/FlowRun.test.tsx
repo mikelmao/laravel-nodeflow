@@ -128,8 +128,9 @@ describe('FlowRun', () => {
         // 'segment' is the node id text, chosen because all three fixture nodes
         // share the type 'app.send' and therefore render the same 'Send message'
         // label — getByText on that label would match three elements at once.
-        // 'segment' is unique; 'sent' also appears as four output-handle labels.
-        await act(async () => { screen.getByText('segment').click() })
+        // Select the React Flow wrapper: normal card content intentionally does
+        // not expose raw node IDs, and the human label is shared by all nodes.
+        await act(async () => { screen.getByTestId('rf__node-segment').click() })
         await waitFor(() => expect(screen.getByText('user #1')).toBeInTheDocument())
 
         expect(fetchMock.mock.calls.some(([u]) => u === '/nodeflow/runs/9/nodes/segment/subjects')).toBe(true)
@@ -150,7 +151,7 @@ describe('FlowRun', () => {
 
         render(<FlowRun run={run} graph={graph} palette={palette} overlay={overlay()} urls={urls} />)
 
-        await act(async () => { screen.getByText('segment').click() })
+        await act(async () => { screen.getByTestId('rf__node-segment').click() })
         await waitFor(() => expect(screen.getByText(/no subjects are here now/i)).toBeInTheDocument())
     })
 
@@ -173,7 +174,7 @@ describe('FlowRun', () => {
 
         render(<FlowRun run={run} graph={graph} palette={palette} overlay={overlay()} urls={urls} />)
 
-        await act(async () => { screen.getByText('nobody').click() })
+        await act(async () => { screen.getByTestId('rf__node-nobody').click() })
         await waitFor(() => expect(screen.getByText(/no record of any subject having been here/i)).toBeInTheDocument())
         expect(screen.queryByText(/already released everyone/i)).toBeNull()
         expect(screen.queryByText(/never reached/i)).toBeNull()
@@ -200,7 +201,7 @@ describe('FlowRun', () => {
 
         render(<FlowRun run={run} graph={graph} palette={palette} overlay={failedOnly} urls={urls} />)
 
-        await act(async () => { screen.getByText('segment').click() })
+        await act(async () => { screen.getByTestId('rf__node-segment').click() })
         await waitFor(() => expect(screen.getByText(/reached earlier in the run/i)).toBeInTheDocument())
         expect(screen.queryByText(/released/i)).toBeNull()
         expect(screen.queryByText(/passed through it/i)).toBeNull()
@@ -272,7 +273,7 @@ describe('FlowRun', () => {
 
         render(<FlowRun run={run} graph={graph} palette={palette} overlay={overlay()} urls={urls} />)
 
-        await act(async () => { screen.getByText('segment').click() })
+        await act(async () => { screen.getByTestId('rf__node-segment').click() })
 
         await waitFor(() => expect(screen.getByRole('alert')).toHaveTextContent(/could not load the subjects/i))
         expect(screen.queryByText('Loading…')).toBeNull()
@@ -301,7 +302,7 @@ describe('FlowRun', () => {
 
         render(<FlowRun run={run} graph={graph} palette={palette} overlay={overlay()} urls={urls} />)
 
-        await act(async () => { screen.getByText('segment').click() })
+        await act(async () => { screen.getByTestId('rf__node-segment').click() })
         await waitFor(() => expect(screen.getByText('user #1')).toBeInTheDocument())
 
         const button = screen.getByRole('button', { name: /load more/i })
