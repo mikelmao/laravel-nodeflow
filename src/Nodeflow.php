@@ -3,6 +3,9 @@
 namespace Nodeflow;
 
 use Nodeflow\Nodes\NodeRegistry;
+use Nodeflow\Triggers\TriggerDriverRegistry;
+use Nodeflow\Triggers\TriggerNodeRegistry;
+use Nodeflow\Triggers\TriggerSourceRegistry;
 
 class Nodeflow
 {
@@ -14,6 +17,36 @@ class Nodeflow
     public static function register(array $nodeClasses): void
     {
         static::nodes()->register(...$nodeClasses);
+    }
+
+    public static function triggerNodes(): TriggerNodeRegistry
+    {
+        return app(TriggerNodeRegistry::class);
+    }
+
+    public static function triggerDrivers(): TriggerDriverRegistry
+    {
+        return app(TriggerDriverRegistry::class);
+    }
+
+    public static function triggerSources(): TriggerSourceRegistry
+    {
+        return app(TriggerSourceRegistry::class);
+    }
+
+    public static function registerTriggerNodes(array $classes): void
+    {
+        static::triggerNodes()->register(...$classes);
+    }
+
+    public static function registerTriggerDrivers(array $classes): void
+    {
+        static::triggerDrivers()->register(...$classes);
+    }
+
+    public static function registerTriggerSources(array $classes): void
+    {
+        static::triggerSources()->register(...$classes);
     }
 
     /**

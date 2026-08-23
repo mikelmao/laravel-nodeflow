@@ -18,6 +18,7 @@ use Nodeflow\Contracts\SubjectResolver;
 use Nodeflow\Contracts\TenantResolver;
 use Nodeflow\Engine\DurableWorkflowEngine;
 use Nodeflow\Engine\WorkflowEngine;
+use Nodeflow\Graph\GraphTypeCatalog;
 use Nodeflow\Models\Flow;
 use Nodeflow\Models\Run;
 use Nodeflow\Nodes\Core\ConditionNode;
@@ -31,6 +32,9 @@ use Nodeflow\Schema\SubjectAttributeRegistry;
 use Nodeflow\Tenancy\NoTenancyResolver;
 use Nodeflow\Tenancy\TenancyDecisionResolver;
 use Nodeflow\Triggers\TriggerRegistry;
+use Nodeflow\Triggers\TriggerDriverRegistry;
+use Nodeflow\Triggers\TriggerNodeRegistry;
+use Nodeflow\Triggers\TriggerSourceRegistry;
 
 class NodeflowServiceProvider extends ServiceProvider
 {
@@ -40,9 +44,13 @@ class NodeflowServiceProvider extends ServiceProvider
     {
         $this->mergeConfigFrom(__DIR__.'/../config/nodeflow.php', 'nodeflow');
 
+        $this->app->singleton(GraphTypeCatalog::class);
         $this->app->singleton(NodeRegistry::class);
         $this->app->singleton(SubjectAttributeRegistry::class);
         $this->app->singleton(TriggerRegistry::class);
+        $this->app->singleton(TriggerDriverRegistry::class);
+        $this->app->singleton(TriggerNodeRegistry::class);
+        $this->app->singleton(TriggerSourceRegistry::class);
         $this->app->singleton(TenancyDecisionResolver::class);
 
         $this->app->bind(WorkflowEngine::class, DurableWorkflowEngine::class);

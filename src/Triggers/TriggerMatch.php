@@ -2,28 +2,42 @@
 
 namespace Nodeflow\Triggers;
 
-class TriggerMatch
+final readonly class TriggerMatch
 {
-    private array $tenants = [];
+    /** @param  array<string, TriggerTenantMatch>  $matches */
+    private function __construct(private array $matches = []) {}
 
     public static function make(): self
     {
         return new self;
     }
 
-    public function forTenant(string $tenantId, string $subjectType, iterable $subjectIds): self
-    {
-        $this->tenants[$tenantId] = [
-            'subject_type' => $subjectType,
-            'subject_ids' => is_array($subjectIds) ? $subjectIds : iterator_to_array($subjectIds),
-        ];
+    public function forTenant(
+        string $tenantId,
+        string $subjectType,
+        iterable $subjectIds,
+        array $triggerData = [],
+        ?string $occurrenceId = null,
+    ): self {
+        $tenantId = (string) $tenantId;
+        $matches = $this->matches;
+        $matches[$tenantId] = new TriggerTenantMatch(
+            tenantId: $tenantId,
+            subjectType: (string) $subjectType,
+            subjectIds: array_values(array_map(
+                static fn (mixed $subjectId): string => (string) $subjectId,
+                is_array($subjectIds) ? $subjectIds : iterator_to_array($subjectIds),
+            )),
+            triggerData: $triggerData,
+            occurrenceId: $occurrenceId,
+        );
 
-        return $this;
+        return new self($matches);
     }
 
-    /** @return array<string, array{subject_type: string, subject_ids: array}> */
+    /** @return TriggerTenantMatch[] */
     public function tenants(): array
     {
-        return $this->tenants;
+        return array_values($this->matches);
     }
 }

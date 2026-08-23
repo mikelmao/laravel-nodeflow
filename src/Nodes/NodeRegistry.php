@@ -2,6 +2,8 @@
 
 namespace Nodeflow\Nodes;
 
+use Nodeflow\Graph\GraphTypeCatalog;
+
 class NodeRegistry
 {
     /** @var array<string, class-string<Node>> */
@@ -9,6 +11,10 @@ class NodeRegistry
 
     /** @var array<string, string> */
     private array $aliases = [];
+
+    public function __construct(
+        private readonly GraphTypeCatalog $graphTypes = new GraphTypeCatalog,
+    ) {}
 
     /**
      * Registration is the contract's enforcement point. A node implementing
@@ -34,7 +40,9 @@ class NodeRegistry
                 throw InvalidNodeException::noCardinality($class);
             }
 
-            $this->types[$class::type()] = $class;
+            $type = $class::type();
+            $this->graphTypes->claim($type, 'executable', $class);
+            $this->types[$type] = $class;
         }
 
         return $this;

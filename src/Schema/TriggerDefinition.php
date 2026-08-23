@@ -9,6 +9,8 @@ class TriggerDefinition
     /** @var Field[] */
     private array $fields = [];
 
+    private ?string $icon = null;
+
     private function __construct(public readonly string $label) {}
 
     public static function make(string $label): self
@@ -23,6 +25,13 @@ class TriggerDefinition
         return $this;
     }
 
+    public function icon(string $icon): self
+    {
+        $this->icon = $icon;
+
+        return $this;
+    }
+
     /** @param  Field[]  $fields */
     public function fields(array $fields): self
     {
@@ -31,10 +40,17 @@ class TriggerDefinition
         return $this;
     }
 
+    /** @return Field[] */
+    public function fieldObjects(): array
+    {
+        return $this->fields;
+    }
+
     public function toArray(): array
     {
         return [
             'label' => $this->label,
+            'icon' => $this->icon,
             'description' => $this->description,
             // toWireArray(), not toArray(): see NodeDefinition::toArray().
             'fields' => array_map(fn (Field $f) => $f->toWireArray(), $this->fields),
