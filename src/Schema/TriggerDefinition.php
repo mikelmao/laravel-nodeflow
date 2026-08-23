@@ -46,6 +46,12 @@ class TriggerDefinition
         return $this->fields;
     }
 
+    /** @return array{string} */
+    public function outputNames(): array
+    {
+        return ['started'];
+    }
+
     public function toArray(): array
     {
         return [

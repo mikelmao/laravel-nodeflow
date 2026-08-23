@@ -31,10 +31,16 @@ use Nodeflow\Policies\RunPolicy;
 use Nodeflow\Schema\SubjectAttributeRegistry;
 use Nodeflow\Tenancy\NoTenancyResolver;
 use Nodeflow\Tenancy\TenancyDecisionResolver;
-use Nodeflow\Triggers\TriggerRegistry;
+use Nodeflow\Triggers\LaravelEvent\LaravelEventTriggerDriver;
+use Nodeflow\Triggers\LaravelEvent\LaravelEventTriggerNode;
+use Nodeflow\Triggers\ModelObserver\ModelObserverTriggerDriver;
+use Nodeflow\Triggers\ModelObserver\ModelObserverTriggerNode;
 use Nodeflow\Triggers\TriggerDriverRegistry;
 use Nodeflow\Triggers\TriggerNodeRegistry;
+use Nodeflow\Triggers\TriggerRegistry;
 use Nodeflow\Triggers\TriggerSourceRegistry;
+use Nodeflow\Triggers\Webhook\WebhookTriggerDriver;
+use Nodeflow\Triggers\Webhook\WebhookTriggerNode;
 
 class NodeflowServiceProvider extends ServiceProvider
 {
@@ -52,6 +58,20 @@ class NodeflowServiceProvider extends ServiceProvider
         $this->app->singleton(TriggerNodeRegistry::class);
         $this->app->singleton(TriggerSourceRegistry::class);
         $this->app->singleton(TenancyDecisionResolver::class);
+
+        // Drivers must exist before a host provider registers its allowlisted
+        // sources. Register the built-in graph types in the same phase so host
+        // extensions see the complete package catalog without replacing it.
+        $this->app->make(TriggerDriverRegistry::class)->register(
+            WebhookTriggerDriver::class,
+            ModelObserverTriggerDriver::class,
+            LaravelEventTriggerDriver::class,
+        );
+        $this->app->make(TriggerNodeRegistry::class)->register(
+            WebhookTriggerNode::class,
+            ModelObserverTriggerNode::class,
+            LaravelEventTriggerNode::class,
+        );
 
         $this->app->bind(WorkflowEngine::class, DurableWorkflowEngine::class);
 

@@ -60,7 +60,9 @@ class TriggerNodeRegistry
 
             return array_merge($node->definition()->toArray(), [
                 'type' => $type,
+                'kind' => 'trigger',
                 'driver' => $node->driver(),
+                'outputs' => $node->definition()->outputNames(),
                 'default_config' => $node->defaultConfig(),
             ]);
         }, $this->types, array_keys($this->types)));
