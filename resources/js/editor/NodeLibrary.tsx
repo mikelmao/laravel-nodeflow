@@ -1,4 +1,4 @@
-import { useId, useState, type DragEvent, type Ref } from 'react'
+import { useId, useState, type DragEvent } from 'react'
 import type { NodeTypePayload } from '../graph/types'
 import { NodeflowIcon } from '../presentation/icons'
 import { categoryClasses, categoryPresentation } from '../presentation/node'
@@ -7,7 +7,29 @@ export type NodeLibraryProps = {
     palette: NodeTypePayload[]
     onAdd: (definition: NodeTypePayload) => void
     onRequestClose?: () => void
-    searchInputRef?: Ref<HTMLInputElement>
+    searchInputRef?: CompatibleRef<HTMLInputElement>
+}
+
+/** A structurally compatible ref, safe when a host and package resolve React types separately. */
+export type CompatibleRef<T> =
+    | { current: T | null }
+    | ((instance: T | null) => unknown)
+    | null
+
+function attachRef<T>(ref: CompatibleRef<T> | undefined, instance: T | null): void | (() => void) {
+    if (typeof ref === 'function') {
+        const cleanup = ref(instance)
+
+        if (typeof cleanup === 'function') {
+            return () => { void cleanup() }
+        }
+
+        return
+    }
+
+    if (ref !== null && ref !== undefined) {
+        ref.current = instance
+    }
 }
 
 type IndexedDefinition = { definition: NodeTypePayload; index: number }
@@ -124,7 +146,7 @@ export function NodeLibrary({ palette, onAdd, onRequestClose, searchInputRef }: 
                 <div className="relative">
                     <NodeflowIcon name="search" className="pointer-events-none absolute left-2.5 top-1/2 size-4 -translate-y-1/2 text-muted-foreground" />
                     <input
-                        ref={searchInputRef}
+                        ref={(instance) => attachRef(searchInputRef, instance)}
                         id={searchId}
                         type="search"
                         value={query}
