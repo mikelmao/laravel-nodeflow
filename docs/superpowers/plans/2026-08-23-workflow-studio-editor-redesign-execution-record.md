@@ -233,6 +233,16 @@
 - Follow-up GREEN: `FlowOverviewIssue` now carries an explicit `placeable` boolean. Only a
   placeable issue with a non-null node invokes `onIssueSelect`; unresolved IDs remain plain visible
   text. The tab keyboard assertions confirm both directional keys alongside Home/End.
+- Quality RED: mounting two inspectors for the same node/field made the second inspector's issue
+  focus use the first matching document ID. The inactive tabpanel was also unmounted, leaving its
+  tab's `aria-controls` target absent. The regressions use a field key containing `constructor` and
+  a quote, then prove second-instance focus, both panel targets, their labels, and hidden-state
+  swaps through keyboard navigation and selection reset.
+- Quality GREEN: ConfigPanel gives each row an instance-unique ID and a React-escaped field-key
+  data attribute. NodeInspector now searches those rows only within its own root and compares the
+  dataset value rather than interpolating a field key in a selector. Both tabpanels remain mounted;
+  native `hidden` removes the inactive one from the accessibility tree while retaining valid
+  `aria-controls` targets and stable panel identity.
 
 ## Task 9 — toolbar, notices, and shell
 

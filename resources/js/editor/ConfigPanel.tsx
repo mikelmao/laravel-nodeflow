@@ -1,6 +1,7 @@
 import { controlFor } from '../controls'
 import type { ControlMap } from '../controls'
 import { useFieldOptions } from '../controls/useFieldOptions'
+import { useId } from 'react'
 import type { FieldPayload, NodeCardData, NodeErrorEntry, NodeTypePayload } from '../graph/types'
 
 type FieldRowProps = {
@@ -19,7 +20,7 @@ function FieldRow({ id, nodeType, field, value, controls, errors, onChange }: Fi
     const fieldErrors = loaded.error === null ? errors : [...errors, loaded.error]
 
     return (
-        <div id={id}>
+        <div id={id} data-nodeflow-field-key={field.key}>
             <Control
                 field={field}
                 value={value}
@@ -48,8 +49,8 @@ function UnknownNodeNotice({ type }: { type: string }) {
     )
 }
 
-export function nodeConfigFieldId(nodeId: string, field: string): string {
-    return `node-config-${encodeURIComponent(nodeId)}-${encodeURIComponent(field)}`
+function nodeConfigFieldId(instanceId: string, nodeId: string, field: string): string {
+    return `node-config-${instanceId}-${encodeURIComponent(nodeId)}-${encodeURIComponent(field)}`
 }
 
 export type ConfigPanelProps = {
@@ -62,6 +63,7 @@ export type ConfigPanelProps = {
 
 /** Field content only: metadata and node-level actions belong to NodeInspector. */
 export function ConfigPanel({ node, def, controls, errors, onConfigChange }: ConfigPanelProps) {
+    const instanceId = useId().replace(/:/g, '')
     const nodeErrors = errors.filter((entry) => entry.field === null)
     const fieldRowProps = (definitionField: FieldPayload): FieldRowProps => {
         const hasValue = Object.prototype.hasOwnProperty.call(node.config, definitionField.key)
@@ -71,7 +73,7 @@ export function ConfigPanel({ node, def, controls, errors, onConfigChange }: Con
             .map((entry) => entry.message)
 
         return {
-            id: nodeConfigFieldId(node.id, definitionField.key),
+            id: nodeConfigFieldId(instanceId, node.id, definitionField.key),
             nodeType: node.type,
             field: definitionField,
             value,

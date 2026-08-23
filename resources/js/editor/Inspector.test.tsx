@@ -150,31 +150,43 @@ describe('NodeInspector', () => {
         expect(configure).toHaveAttribute('aria-selected', 'true')
         expect(advanced).toHaveAttribute('aria-selected', 'false')
         expect(screen.getByRole('heading', { name: 'Send message' })).toBeInTheDocument()
-        expect(screen.getByText('Messaging')).toBeInTheDocument()
+        const inspectorHeader = screen.getByRole('complementary', { name: 'Node inspector' }).querySelector('header')
+        if (inspectorHeader === null) throw new Error('Expected an inspector header.')
+        expect(within(inspectorHeader).getByText('Messaging')).toBeInTheDocument()
         expect(screen.getByLabelText(/Template/)).toHaveValue('Welcome')
         expect(screen.getByText('The message body.')).toBeInTheDocument()
         expect(screen.getByText('Template is required')).toBeInTheDocument()
-        expect(screen.queryByText('Registered type')).toBeNull()
+        const configurePanel = screen.getByRole('tabpanel', { name: 'Configure' })
+        expect(within(configurePanel).queryByText('Registered type')).toBeNull()
         expect(screen.queryByRole('button', { name: 'Delete node' })).toBeNull()
-        expect(screen.queryByText('send1')).toBeNull()
+        expect(within(configurePanel).queryByText('send1')).toBeNull()
     })
 
     it('implements linked keyboard-operable tabs and resets Configure for a new selection', () => {
         const rendered = inspector()
         const configure = screen.getByRole('tab', { name: 'Configure' })
         const advanced = screen.getByRole('tab', { name: 'Advanced' })
-        expect(configure).toHaveAttribute('aria-controls')
-        expect(advanced).toHaveAttribute('aria-controls')
-        expect(screen.getByRole('tabpanel')).toHaveAttribute('aria-labelledby', configure.id)
+        const configurePanel = document.getElementById(configure.getAttribute('aria-controls') ?? '')
+        const advancedPanel = document.getElementById(advanced.getAttribute('aria-controls') ?? '')
+        expect(configurePanel).not.toBeNull()
+        expect(advancedPanel).not.toBeNull()
+        expect(configurePanel).toHaveAttribute('aria-labelledby', configure.id)
+        expect(advancedPanel).toHaveAttribute('aria-labelledby', advanced.id)
+        expect(configurePanel).not.toHaveAttribute('hidden')
+        expect(advancedPanel).toHaveAttribute('hidden')
 
         fireEvent.keyDown(configure, { key: 'ArrowRight' })
         expect(advanced).toHaveFocus()
         expect(advanced).toHaveAttribute('aria-selected', 'true')
         expect(screen.getByRole('tabpanel', { name: 'Advanced' })).toBeInTheDocument()
+        expect(configurePanel).toHaveAttribute('hidden')
+        expect(advancedPanel).not.toHaveAttribute('hidden')
         fireEvent.keyDown(advanced, { key: 'ArrowLeft' })
         expect(configure).toHaveFocus()
         expect(configure).toHaveAttribute('aria-selected', 'true')
         expect(screen.getByRole('tabpanel', { name: 'Configure' })).toBeInTheDocument()
+        expect(configurePanel).not.toHaveAttribute('hidden')
+        expect(advancedPanel).toHaveAttribute('hidden')
         fireEvent.keyDown(configure, { key: 'End' })
         expect(advanced).toHaveFocus()
         expect(advanced).toHaveAttribute('aria-selected', 'true')
@@ -187,6 +199,8 @@ describe('NodeInspector', () => {
             </FieldOptionsContext.Provider>,
         )
         expect(screen.getByRole('tab', { name: 'Configure' })).toHaveAttribute('aria-selected', 'true')
+        expect(configurePanel).not.toHaveAttribute('hidden')
+        expect(advancedPanel).toHaveAttribute('hidden')
     })
 
     it('opens Configure and focuses a requested field issue', async () => {
@@ -200,6 +214,34 @@ describe('NodeInspector', () => {
 
         await waitFor(() => expect(screen.getByRole('tab', { name: 'Configure' })).toHaveAttribute('aria-selected', 'true'))
         expect(screen.getByLabelText(/Template/)).toHaveFocus()
+    })
+
+    it('focuses a field issue inside its own inspector when identical nodes are mounted together', async () => {
+        const fieldKey = 'constructor"quoted'
+        const selected = { ...node, config: { [fieldKey]: 'Welcome' } }
+        const def = { ...definition, fields: [{ ...definition.fields[0]!, key: fieldKey }] }
+        const firstProps = { node: selected, def, controls: mergeControls(), errors: [], isStart: false, onConfigChange: vi.fn(), onMakeStart: vi.fn(), onDelete: vi.fn() }
+        const secondProps = { ...firstProps, onConfigChange: vi.fn(), onMakeStart: vi.fn(), onDelete: vi.fn() }
+        const rendered = render(
+            <FieldOptionsContext.Provider value={{ template: '/options/__NODEFLOW_TYPE__/__NODEFLOW_FIELD__', cache: new Map() }}>
+                <NodeInspector {...firstProps} />
+                <NodeInspector {...secondProps} />
+            </FieldOptionsContext.Provider>,
+        )
+        const inspectors = screen.getAllByRole('complementary', { name: 'Node inspector' })
+        const firstControl = inspectors[0]!.querySelector('input')
+        const secondControl = inspectors[1]!.querySelector('input')
+        if (firstControl === null || secondControl === null) throw new Error('Expected both inspector controls.')
+
+        rendered.rerender(
+            <FieldOptionsContext.Provider value={{ template: '/options/__NODEFLOW_TYPE__/__NODEFLOW_FIELD__', cache: new Map() }}>
+                <NodeInspector {...firstProps} />
+                <NodeInspector {...secondProps} issueToFocus={{ node: 'send1', field: fieldKey, message: 'Required' }} />
+            </FieldOptionsContext.Provider>,
+        )
+
+        await waitFor(() => expect(secondControl).toHaveFocus())
+        expect(firstControl).not.toHaveFocus()
     })
 
     it('places exact developer metadata and destructive actions only in Advanced', () => {
