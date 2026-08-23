@@ -1,7 +1,7 @@
 # Workflow Studio editor redesign
 
 **Date:** 2026-08-23
-**Status:** Draft for written review; implementation has not started
+**Status:** Approved design; implementation has not started
 
 ## 1. Goal
 
