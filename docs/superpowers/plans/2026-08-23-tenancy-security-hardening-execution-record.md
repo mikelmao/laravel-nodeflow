@@ -90,7 +90,33 @@ Completed.
 
 ## Task 4 — D-2 durable execution assertion
 
-Pending.
+Completed.
+
+- RED command: `vendor/bin/pest tests/Feature/RunNodeActivityTest.php --compact` failed as
+  intended before the production guard existed: persisted tenant corruption threw no
+  `CrossTenantExecutionException`, and a missing pinned version reached a null `graph` property.
+  Result: 2 failed, 1 passed, 5 assertions. RED commit:
+  `5c0c067b7f1883ff192998d576b5f974cac1f4f9` (`test: specify durable tenant assertion`).
+- GREEN focused command: `vendor/bin/pest tests/Feature/RunNodeActivityTest.php --compact`
+  passed 3 tests / 11 assertions. A mismatched persisted run/version pair now throws before
+  incrementing `steps_taken` or invoking `NodeRunner`; a missing version throws
+  `ModelNotFoundException` before either action; a matching pair executes once with a null
+  ambient tenant.
+- Integration regression: `vendor/bin/pest tests/Feature/RunNodeActivityTest.php
+  tests/Feature/FlowVersionTenancyTest.php --compact` passed 13 tests / 29 assertions, including
+  the unscoped durable relation resolution under a different ambient tenant.
+- Counterfactual A: temporarily moved `increment('steps_taken')` above the tenant comparison and
+  ran the mismatch test. It failed as required: `steps_taken` became 8 rather than remaining 7
+  (1 failed, 3 assertions). The exact order was restored with `apply_patch`.
+- Counterfactual B: temporarily removed the tenant comparison and ran the mismatch test. It
+  failed as required because `CrossTenantExecutionException` was not thrown (1 failed, 1
+  assertion); the recording runner is the only executable boundary following the increment. The
+  comparison was restored with `apply_patch`.
+- Formatting: the required scoped Pint `--test` initially found one `concat_space` normalization
+  in the exception. Scoped Pint was applied; its `--test` rerun passed, the focused activity
+  suite passed again (3 tests / 11 assertions), and `git diff --check` passed.
+- Full package gate: one controlled `vendor/bin/pest --compact` session was started and polled to
+  terminal completion. It exited 0 with 959 tests passed and 7,616 assertions in 117.34s.
 
 ## Documentation
 
