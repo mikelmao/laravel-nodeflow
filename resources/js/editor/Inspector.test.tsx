@@ -148,7 +148,7 @@ describe('NodeInspector', () => {
         expect(advanced).toHaveAttribute('aria-selected', 'false')
         expect(screen.getByRole('heading', { name: 'Send message' })).toBeInTheDocument()
         expect(screen.getByText('Messaging')).toBeInTheDocument()
-        expect(screen.getByLabelText('Template')).toHaveValue('Welcome')
+        expect(screen.getByLabelText(/Template/)).toHaveValue('Welcome')
         expect(screen.getByText('The message body.')).toBeInTheDocument()
         expect(screen.getByText('Template is required')).toBeInTheDocument()
         expect(screen.queryByText('Registered type')).toBeNull()
@@ -188,7 +188,7 @@ describe('NodeInspector', () => {
         )
 
         await waitFor(() => expect(screen.getByRole('tab', { name: 'Configure' })).toHaveAttribute('aria-selected', 'true'))
-        expect(screen.getByLabelText('Template')).toHaveFocus()
+        expect(screen.getByLabelText(/Template/)).toHaveFocus()
     })
 
     it('places exact developer metadata and destructive actions only in Advanced', () => {
@@ -218,7 +218,7 @@ describe('NodeInspector', () => {
         expect(screen.queryByLabelText('Template')).toBeNull()
         fireEvent.click(screen.getByRole('tab', { name: 'Advanced' }))
         expect(screen.getByText('app.send')).toBeInTheDocument()
-        expect(screen.getByText('None')).toBeInTheDocument()
+        expect(screen.getAllByText('None')).toHaveLength(3)
         expect(screen.getByRole('button', { name: 'Start node' })).toBeDisabled()
         fireEvent.click(screen.getByRole('button', { name: 'Delete node' }))
         expect(onDelete).toHaveBeenCalledOnce()

@@ -23,7 +23,7 @@ import type {
 } from '../graph/types'
 import { send } from '../http'
 import { canConnect, nextNodeId } from './ids'
-import { ConfigPanel } from './ConfigPanel'
+import { NodeInspector } from './NodeInspector'
 import { NodeLibrary } from './NodeLibrary'
 import { interpretPublish, type PublishOutcome } from './publish'
 import { useAutosave } from './useAutosave'
@@ -391,7 +391,7 @@ function FlowEditorSession({
                     {selected === undefined ? (
                         <p>Select a node to configure it.</p>
                     ) : (
-                        <ConfigPanel
+                        <NodeInspector
                             node={selected.data}
                             def={defs[selected.data.type]}
                             controls={mergedControls}

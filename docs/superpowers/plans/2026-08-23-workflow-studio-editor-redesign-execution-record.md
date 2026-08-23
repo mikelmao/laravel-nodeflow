@@ -202,6 +202,31 @@
 
 ## Task 8 — inspector
 
+- RED: `npx vitest run resources/js/editor/Inspector.test.tsx resources/js/editor/ConfigPanel.test.tsx`
+  failed as intended: the new Flow Overview and Node Inspector modules were absent, while the old
+  ConfigPanel still owned the surrounding aside and node actions. The committed specification is
+  `3fc1427` (`test: define workflow inspector`).
+- GREEN: added explicit-view-prop `FlowOverview` and `NodeInspector` components. The no-selection
+  overview reports the human trigger plus type, publication/start/count facts, all six validation
+  states, graph messages, ordered navigable issues, and local unknown-type/unresolved-output
+  diagnostics independently of validation. The inspector keeps human label/category and editable
+  fields in Configure; WAI-ARIA tabs, directional/Home/End keys, selection reset, and optional
+  field-issue focusing are built in. Advanced alone contains exact node metadata, start action,
+  and deletion. Unregistered nodes remain loud, non-configurable, and deletable.
+- ConfigPanel is now field-content only. It retains prototype-safe config lookup, defaults,
+  per-field errors, dynamic options, and the unchanged six-key host control contract; node-wide
+  errors and unknown-type notices have local helpers without duplicating field errors.
+- Compatibility: the legacy selected-node callsite in FlowEditor now renders NodeInspector with the
+  already available view values. The two directly affected tests select Advanced before using
+  Make start/Delete. This intentionally adds no FlowOverview, shell, or controller state; Task 10
+  remains the owner of controller composition.
+- GREEN verification: `npx vitest run resources/js/editor/Inspector.test.tsx
+  resources/js/editor/ConfigPanel.test.tsx resources/js/controls` passed 4 files / 50 tests;
+  `npx tsc --noEmit` and `git diff --check` passed silently. The broader focused FlowEditor suite
+  has exactly two known pre-existing stale expectations: server-graph fallback positions and old
+  straight-quote matching for an unknown-card notice. Its 17 remaining tests, including all new
+  inspector compatibility behavior, pass.
+
 ## Task 9 — toolbar, notices, and shell
 
 ## Task 10 — controller integration

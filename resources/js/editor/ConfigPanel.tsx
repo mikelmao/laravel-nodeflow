@@ -4,6 +4,7 @@ import { useFieldOptions } from '../controls/useFieldOptions'
 import type { FieldPayload, NodeCardData, NodeErrorEntry, NodeTypePayload } from '../graph/types'
 
 type FieldRowProps = {
+    id: string
     nodeType: string
     field: FieldPayload
     value: unknown
@@ -12,21 +13,43 @@ type FieldRowProps = {
     onChange: (value: unknown) => void
 }
 
-function FieldRow({ nodeType, field, value, controls, errors, onChange }: FieldRowProps) {
+function FieldRow({ id, nodeType, field, value, controls, errors, onChange }: FieldRowProps) {
     const loaded = useFieldOptions(nodeType, field)
     const Control = controlFor(field.type, controls)
     const fieldErrors = loaded.error === null ? errors : [...errors, loaded.error]
 
     return (
-        <Control
-            field={field}
-            value={value}
-            onChange={onChange}
-            errors={fieldErrors}
-            options={loaded.options}
-            optionsLoading={loaded.loading}
-        />
+        <div id={id}>
+            <Control
+                field={field}
+                value={value}
+                onChange={onChange}
+                errors={fieldErrors}
+                options={loaded.options}
+                optionsLoading={loaded.loading}
+            />
+        </div>
     )
+}
+
+function NodeIssueList({ entries }: { entries: NodeErrorEntry[] }) {
+    return (
+        <ul role="alert" className="space-y-1 rounded-md border border-destructive/40 bg-destructive/5 p-3 text-sm text-destructive">
+            {entries.map((entry, index) => <li key={`${entry.message}-${index}`}>{entry.message}</li>)}
+        </ul>
+    )
+}
+
+function UnknownNodeNotice({ type }: { type: string }) {
+    return (
+        <p role="alert" className="rounded-md border border-destructive/50 p-3 text-sm text-destructive">
+            Node type “{type}” is not registered. Its configuration cannot be edited.
+        </p>
+    )
+}
+
+export function nodeConfigFieldId(nodeId: string, field: string): string {
+    return `node-config-${encodeURIComponent(nodeId)}-${encodeURIComponent(field)}`
 }
 
 export type ConfigPanelProps = {
@@ -34,83 +57,38 @@ export type ConfigPanelProps = {
     def?: NodeTypePayload
     controls: ControlMap
     errors: NodeErrorEntry[]
-    isStart: boolean
     onConfigChange: (key: string, value: unknown) => void
-    onMakeStart: () => void
-    onDelete: () => void
 }
 
-export function ConfigPanel({
-    node,
-    def,
-    controls,
-    errors,
-    isStart,
-    onConfigChange,
-    onMakeStart,
-    onDelete,
-}: ConfigPanelProps) {
+/** Field content only: metadata and node-level actions belong to NodeInspector. */
+export function ConfigPanel({ node, def, controls, errors, onConfigChange }: ConfigPanelProps) {
     const nodeErrors = errors.filter((entry) => entry.field === null)
+    const fieldRowProps = (definitionField: FieldPayload): FieldRowProps => {
+        const hasValue = Object.prototype.hasOwnProperty.call(node.config, definitionField.key)
+        const value = hasValue ? node.config[definitionField.key] : definitionField.default
+        const fieldErrors = errors
+            .filter((entry) => entry.field === definitionField.key)
+            .map((entry) => entry.message)
+
+        return {
+            id: nodeConfigFieldId(node.id, definitionField.key),
+            nodeType: node.type,
+            field: definitionField,
+            value,
+            controls,
+            errors: fieldErrors,
+            onChange: (next) => onConfigChange(definitionField.key, next),
+        }
+    }
 
     return (
-        <aside className="space-y-4 rounded-md border bg-card p-4">
-            <header className="space-y-1">
-                <h2 className="font-semibold">{def?.label ?? node.type}</h2>
-                <p className="font-mono text-xs text-muted-foreground">{node.id}</p>
-                {def?.description && <p className="text-sm text-muted-foreground">{def.description}</p>}
-                {def && (
-                    <dl className="text-xs text-muted-foreground">
-                        <div>
-                            <dt className="inline font-medium">Cardinality: </dt>
-                            <dd className="inline">{def.cardinality.length > 0 ? def.cardinality.join(', ') : 'none'}</dd>
-                        </div>
-                        <div>
-                            <dt className="inline font-medium">Outputs: </dt>
-                            <dd className="inline">{def.outputs.length > 0 ? def.outputs.join(', ') : 'none'}</dd>
-                        </div>
-                    </dl>
-                )}
-            </header>
-
-            {def === undefined && (
-                <p role="alert" className="rounded border border-destructive/50 p-2 text-sm text-destructive">
-                    Node type "{node.type}" is not registered. Its configuration cannot be edited, but the node may
-                    still be deleted.
-                </p>
-            )}
-
-            {nodeErrors.length > 0 && (
-                <ul role="alert" className="space-y-1 text-sm text-destructive">
-                    {nodeErrors.map((entry, index) => <li key={`${entry.message}-${index}`}>{entry.message}</li>)}
-                </ul>
-            )}
-
-            {def?.fields.map((definitionField) => {
-                const hasValue = Object.prototype.hasOwnProperty.call(node.config, definitionField.key)
-                const value = hasValue ? node.config[definitionField.key] : definitionField.default
-                const fieldErrors = errors
-                    .filter((entry) => entry.field === definitionField.key)
-                    .map((entry) => entry.message)
-
-                return (
-                    <FieldRow
-                        key={JSON.stringify([node.id, definitionField.key])}
-                        nodeType={node.type}
-                        field={definitionField}
-                        value={value}
-                        controls={controls}
-                        errors={fieldErrors}
-                        onChange={(next) => onConfigChange(definitionField.key, next)}
-                    />
-                )
-            })}
-
-            <div className="flex gap-2">
-                <button type="button" disabled={isStart} onClick={onMakeStart}>
-                    {isStart ? 'Start node' : 'Make start node'}
-                </button>
-                <button type="button" onClick={onDelete}>Delete node</button>
-            </div>
-        </aside>
+        <div className="space-y-5" aria-label="Node configuration">
+            {nodeErrors.length > 0 && <NodeIssueList entries={nodeErrors} />}
+            {def === undefined
+                ? <UnknownNodeNotice type={node.type} />
+                : def.fields.map((definitionField) => (
+                    <FieldRow key={JSON.stringify([node.id, definitionField.key])} {...fieldRowProps(definitionField)} />
+                ))}
+        </div>
     )
 }
