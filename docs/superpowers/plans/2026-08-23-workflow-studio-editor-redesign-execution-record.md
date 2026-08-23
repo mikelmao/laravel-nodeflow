@@ -57,6 +57,9 @@
 - GREEN verification: `npx vitest run resources/js/editor/validation.test.ts
   resources/js/editor/publish.test.ts resources/js/index.test.ts` passed 3 files / 16 tests;
   `npx tsc --noEmit` and `git diff --check` passed silently.
+- Review fix: a focused RED expectation proved grouped semantic entries had incorrectly stripped
+  their node id. The GREEN parser now reuses the shared `NodeErrorEntry` graph contract and
+  preserves the complete entry, matching publish-result handling.
 
 ## Task 3 — topology layout
 

@@ -35,7 +35,7 @@ describe('interpretValidation', () => {
             errors: ['invalid graph'],
             warnings: ['sequential waits'],
             byNode: {
-                send1: [{ field: 'template', message: 'Required.' }],
+                send1: [{ node: 'send1', field: 'template', message: 'Required.' }],
             },
             unplaceable: ['Cycle.', 'The removed node is invalid.'],
         })

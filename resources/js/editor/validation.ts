@@ -1,4 +1,5 @@
 import type { HttpResult } from '../http'
+import type { NodeErrorEntry } from '../graph/types'
 
 const INVALID_SUCCESS_MESSAGE = 'The validation response had an invalid success shape.'
 const INVALID_NODE_ERRORS_MESSAGE = 'The validation response contained invalid node_errors.'
@@ -6,15 +7,11 @@ const INVALID_SEMANTIC_ERRORS_MESSAGE = 'The validation response contained inval
 const INVALID_SEMANTIC_WARNINGS_MESSAGE = 'The validation response contained invalid semantic warnings.'
 const INVALID_STRUCTURAL_ERRORS_MESSAGE = 'The validation response contained invalid structural errors.'
 
-export type NodeErrorEntry = { field: string | null; message: string }
-
 export type ValidationOutcome =
     | { kind: 'valid'; warnings: string[] }
     | { kind: 'invalid'; errors: string[]; warnings: string[]; byNode: Record<string, NodeErrorEntry[]>; unplaceable: string[] }
     | { kind: 'structural'; developer: string[] }
     | { kind: 'failed'; message: string }
-
-type WireNodeErrorEntry = NodeErrorEntry & { node: string | null }
 
 export function interpretValidation(
     result: HttpResult,
@@ -57,7 +54,7 @@ function semanticOutcome(
             if (!Object.prototype.hasOwnProperty.call(byNode, entry.node)) {
                 byNode[entry.node] = []
             }
-            byNode[entry.node]!.push({ field: entry.field, message: entry.message })
+            byNode[entry.node]!.push(entry)
         } else {
             unplaceable.push(entry.message)
         }
@@ -85,7 +82,7 @@ function structuralOutcome(errors: unknown): ValidationOutcome {
     }
 }
 
-function isNodeErrorEntry(value: unknown): value is WireNodeErrorEntry {
+function isNodeErrorEntry(value: unknown): value is NodeErrorEntry {
     if (typeof value !== 'object' || value === null || Array.isArray(value)) {
         return false
     }
