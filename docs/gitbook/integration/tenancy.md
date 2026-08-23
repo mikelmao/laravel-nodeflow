@@ -76,7 +76,7 @@ $flows = \Nodeflow\Models\Flow::withoutTenancy()
 
 ## Keep tenant IDs immutable
 
-On creation, a tenant-scoped model receives the current tenant ID when one is available. An explicit `tenant_id` that contradicts a non-null ambient tenant raises `CrossTenantWriteException`. After creation, changing `tenant_id` through an Eloquent model instance always raises that exception, even if the new value matches the current ambient tenant. Re-send the existing value or omit it for ordinary updates.
+On creation, an event-firing tenant-scoped model receives the current tenant ID when one is available. An explicit `tenant_id` that contradicts a non-null ambient tenant raises `CrossTenantWriteException`. After creation, changing `tenant_id` through an event-firing Eloquent model instance always raises that exception, even if the new value matches the current ambient tenant. Re-send the existing value or omit it for ordinary updates.
 
 ```php
 // Partial snippet: create a flow in the resolved organization.
@@ -91,7 +91,7 @@ $flow = \Nodeflow\Models\Flow::create([
 $flow->update(['name' => 'Updated renewal reminder']);
 ```
 
-> **Warning:** A query-builder update bypasses Eloquent model events and therefore bypasses the immutable-tenant guard. For example, `Flow::withoutTenancy()->where(...)->update(['tenant_id' => ...])` can move rows. Never update `tenant_id` through the query builder; create a new row in the target tenant instead.
+> **Warning:** Query-builder updates, raw SQL, and event-suppressed model writes bypass Eloquent model events and therefore bypass the immutable-tenant guard. For example, `Flow::withoutTenancy()->where(...)->update(['tenant_id' => ...])` can move rows, and `saveQuietly()`, `updateQuietly()`, or `Model::withoutEvents()` suppresses the guard. Do not use those paths for tenant changes unless an equivalently validated trusted service performs the tenant checks; otherwise create a new row in the target tenant instead.
 
 The package’s internal `TenancyGuardSuspension` is not a host-application escape hatch. It is an internal mechanism for package-authored writes whose tenant is already taken from a trusted parent row.
 
@@ -99,13 +99,13 @@ The package’s internal `TenancyGuardSuspension` is not a host-application esca
 
 Some relations intentionally remove their own tenant scope after their parent was already reached through a scoped query. For example, a `Flow` reads its versions and current version unscoped, and a `Run` reads its flow version unscoped. This is safe only while their foreign keys and tenant IDs describe the same tenant.
 
-On Eloquent model-instance writes, `Flow` validates `current_version_id` in its `creating` hook and whenever `current_version_id` or `tenant_id` changes in its `updating` hook. `Run` applies the corresponding `creating` and invariant-changing `updating` hooks to `flow_version_id`. `Flow.current_version_id` may be null; `Run.flow_version_id` may not. Each guard resolves the referenced `FlowVersion` without the tenant scope, rejects a missing reference with `InvalidFlowVersionReferenceException`, and rejects a tenant mismatch with `CrossTenantWriteException`.
+On event-firing Eloquent model-instance writes, `Flow` validates `current_version_id` in its `creating` hook and whenever `current_version_id` or `tenant_id` changes in its `updating` hook. `Run` applies the corresponding `creating` and invariant-changing `updating` hooks to `flow_version_id`. `Flow.current_version_id` may be null; `Run.flow_version_id` may not. Each guard resolves the referenced `FlowVersion` without the tenant scope, rejects a missing reference with `InvalidFlowVersionReferenceException`, and rejects a tenant mismatch with `CrossTenantWriteException`.
 
-The `Flow` guard proves that a referenced version exists and has the Flow's tenant; it does not prove that the version belongs to that same Flow. These guards apply to new or updated model instances and do not audit existing rows.
+The `Flow` guard proves that a referenced version exists and has the Flow's tenant; it does not prove that the version belongs to that same Flow. These guards apply to new or updated event-firing model instances and do not audit existing rows.
 
 `TenancyGuardSuspension` does not bypass these structural version-reference guards. Durable `RunNodeActivity` independently compares the persisted run and version tenants and throws `CrossTenantExecutionException` before it increments `steps_taken` or invokes a node.
 
-Do not accept `flow_id`, `current_version_id`, or `flow_version_id` from untrusted request input. A flow version must inherit its flow’s tenant, and a run must point to a version from the same tenant. Query-builder updates and raw SQL bypass Eloquent model events, including these guards: keep version and tenant foreign-key writes on model instances, or perform equivalent explicit existence and tenant checks in a trusted service. Do not treat `withoutTenancy()` as write authorization.
+Do not accept `flow_id`, `current_version_id`, or `flow_version_id` from untrusted request input. A flow version must inherit its flow’s tenant, and a run must point to a version from the same tenant. Query-builder updates, raw SQL, and event-suppressed writes—including `saveQuietly()`, `updateQuietly()`, and `Model::withoutEvents()`—bypass Eloquent model events, including these guards. Keep version and tenant foreign-key writes on event-firing model instances; when a trusted service suppresses events, it must perform equivalent explicit existence and tenant checks. Do not treat `withoutTenancy()` as write authorization.
 
 `RunSubject` and `NodeExecution` have no `tenant_id`. Reach them through `Run::subjects()` and `Run::nodeExecutions()` after the `Run` itself was tenant-scoped, rather than starting from an unscoped child query. Their isolation depends on the scoped parent run remaining correct.
 

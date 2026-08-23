@@ -346,7 +346,7 @@ pinned by a covering test asserting `Flow::withoutTenancy()->where(...)->update(
 changes the row with no exception thrown — the guard's blind spot, proven rather than only described.
 
 ### G-3 · The FK invariant behind the unscoped relations is documented, not enforced
-**Status:** ✅ **RESOLVED, Plan 8 (`b345e2e`, `24c9c44`).** · **Raised by:** Plan 2 whole-branch
+**Status:** ✅ **RESOLVED, Plan 8 (`b345e2e`, `24c9b44`).** · **Raised by:** Plan 2 whole-branch
 review, proven by probe
 
 `Run::flowVersion()`, `Flow::currentVersion()` and `Flow::versions()` are unscoped on the reasoning

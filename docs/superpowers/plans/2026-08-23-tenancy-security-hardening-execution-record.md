@@ -118,8 +118,6 @@ Completed.
 - Full package gate: one controlled `vendor/bin/pest --compact` session was started and polled to
   terminal completion. It exited 0 with 959 tests passed and 7,616 assertions in 117.34s.
 
-## Documentation
-
 ## Task 5 — Public documentation and issue reconciliation
 
 Completed.

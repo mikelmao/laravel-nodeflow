@@ -44,9 +44,9 @@ Nodeflow is experimental. Use these current boundaries to decide what must be ha
 
 ### Model-event tenant guards can be bypassed
 
-**Impact:** Flow and Run Eloquent writes validate referenced version existence and tenant equality for `current_version_id` and `flow_version_id`. Query-builder and raw SQL writes bypass those model-event hooks. Other application-owned foreign-key writes still require trusted input and validation.
+**Impact:** Event-firing Flow and Run Eloquent model-instance writes validate referenced version existence and tenant equality for `current_version_id` and `flow_version_id`. Query-builder, raw-SQL, and event-suppressed writes—including `saveQuietly()`, `updateQuietly()`, and `Model::withoutEvents()`—bypass those model-event hooks. Other application-owned foreign-key writes still require trusted input and validation.
 
-**Mitigation:** Keep version and tenant foreign-key writes on Eloquent model instances, or use equivalent explicit existence and tenant checks in trusted services. Never accept those identifiers from request input. See [Tenancy](../integration/tenancy.md) and [Flows and versions](../building-automations/flows-and-versions.md).
+**Mitigation:** Keep version and tenant foreign-key writes on event-firing Eloquent model instances. A trusted service that suppresses events must instead perform equivalent explicit existence and tenant checks. Never accept those identifiers from request input. See [Tenancy](../integration/tenancy.md) and [Flows and versions](../building-automations/flows-and-versions.md).
 
 ### Tenant context must exist outside HTTP requests
 

@@ -31,11 +31,12 @@ reads when the host has no tenancy, while a host resolver returning null fails c
 effective decision with `app(\Nodeflow\Tenancy\TenancyDecisionResolver::class)->decision()` or run
 `php artisan nodeflow:install --check`.
 
-Eloquent writes reject missing or cross-tenant `Flow.current_version_id` and
-`Run.flow_version_id` references. Durable node execution independently refuses a persisted
-run/version tenant mismatch before incrementing or invoking a node. Query-builder and raw-SQL writes
-bypass Eloquent model guards, so keep version and tenant foreign-key writes on model instances or in
-equivalently validated trusted services.
+Event-firing Eloquent model-instance writes reject missing or cross-tenant
+`Flow.current_version_id` and `Run.flow_version_id` references. Durable node execution
+independently refuses a persisted run/version tenant mismatch before incrementing or invoking a node.
+Query-builder, raw-SQL, and event-suppressed writes—including `saveQuietly()`, `updateQuietly()`,
+and `Model::withoutEvents()`—bypass Eloquent model guards, so keep version and tenant foreign-key
+writes on event-firing model instances or in equivalently validated trusted services.
 
 For mode details and integration guidance, see [Tenancy](docs/gitbook/integration/tenancy.md).
 
