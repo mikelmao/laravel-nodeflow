@@ -120,7 +120,13 @@ Completed.
 
 ## Documentation
 
-Pending.
+## Task 5 — Public documentation and issue reconciliation
+
+Completed.
+
+- Contradiction search: `rg -n "application code must preserve|unimplemented|security-hardening plan|saving guard|parent-child tenant invariants|D-1|D-2|G-3|current_version_id|flow_version_id" README.md docs/gitbook docs/documentation-changes.md docs/superpowers/open-issues.md` found the resolved D-1/D-2/G-3 ledger entries, the Plan 8 applied handoff, current pointer guidance, and clearly time-scoped historical Plan 6/Plan 5 records. It found no current public claim that these three gaps remain unimplemented or wholly host-enforced. `git diff --check` passed.
+- Focused documentation behavior gate: `vendor/bin/pest tests/Feature/TenancyDecisionTest.php tests/Feature/InstallCommandTest.php tests/Feature/FlowVersionReferenceGuardTest.php tests/Feature/RunNodeActivityTest.php --compact` passed 36 tests / 127 assertions.
+- Scope check: the documentation diff is limited to `README.md`, the merged GitBook tenancy and known-limitations pages, `docs/documentation-changes.md`, `docs/superpowers/open-issues.md`, and this execution record. The updated guidance preserves historical Plan 3–7 counts and does not claim same-Flow identity enforcement or an audit of existing rows.
 
 ## Whole-branch reviews and remediation
 

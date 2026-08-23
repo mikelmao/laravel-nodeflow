@@ -29,7 +29,9 @@ The prior baseline, for comparison: Plan 4 merged as `f5b2e31` with acceptance r
 ## Decisions and scheduled follow-ups
 
 ### D-1 · `nodeflow.tenancy` default should probably be inferred, not asked
-**Status:** ✅ **DECIDED 2026-08-20 — adopt inference.** Spec amended as **E2a**; implemented as Plan 3a's first task. Kept here for the reasoning. · **Raised by:** Plan 2 whole-branch review
+**Status:** ✅ **RESOLVED, Plan 8 (`f75dbcb`).** The historical `auto` inference decision remains
+implemented; Plan 8 added the decided observability follow-up. · **Raised by:** Plan 2 whole-branch
+review
 
 > **Outcome:** `auto` becomes the default and infers from whether the container holds the package's
 > own `NoTenancyResolver` or a host-bound one. `disabled` and `resolver` remain as explicit overrides.
@@ -38,45 +40,24 @@ The prior baseline, for comparison: Plan 4 merged as `f5b2e31` with acceptance r
 > bogus mode, which correctly fails 9 tests, confirming the probe was real rather than a config that
 > never took effect.
 
-**Follow-up decision, 2026-08-20:** preserve the shipped `auto` inference and strengthen its
-observability: record or diagnose when the host's tenancy binding caused `auto` to choose resolver
-mode. The strengthening is decided in favour, unimplemented, and belongs with D-2 in a dedicated
-security-hardening plan after Plan 3b. E2a's `auto` inference itself already shipped in Plan 3a.
-
-**Untouched by Plan 4.** The run view added nothing to the durable execution path — E13 chose a
-reader-side derivation over any change there — so this diagnostic follow-up still belongs entirely
-to the post-3b security-hardening plan.
-
-Spec decision **E2** defaults the mode to `disabled`, so a multi-tenant host that binds a
-`TenantResolver` and never sets `resolver` keeps today's silent unscoped read whenever their resolver
-returns `null` — every queue job, every console command, every pre-auth request. The docs now tell
-them to set it, so the hole is closed by documentation only.
-
-The reviewer's argument, which I agree with: the package can infer the answer instead of asking. It
-binds its own fallback resolver with `bindIf` (`src/NodeflowServiceProvider.php`), so extracting that
-anonymous class to a named `Nodeflow\Tenancy\NoTenancyResolver` and defaulting the mode to `auto`
-would let a null mean "no tenancy" when our fallback is in the container and "unresolved" when the
-host bound their own. That preserves E2's intent exactly — the engine-only host still works
-untouched — while removing the docs dependency for everyone else.
-
-Not taken unilaterally because E2 is an approved spec decision and this introduces a new mechanism
-and a new default. **Free now; a breaking change once hosts exist.**
+**Follow-up decision, 2026-08-20, now applied:** preserve the shipped `auto` inference and make its
+effective choice inspectable. `TenancyDecisionResolver::decision()` reports the configured and
+effective modes, resolver class, null-tenant outcome, whether it was inferred, and the reason; the
+installer reports that same decision without changing its wiring exit code. A host-bound resolver
+returning null in `auto` therefore fails closed, while Nodeflow's fallback remains the explicit
+no-tenancy, unscoped-read case. The historical decision to infer rather than ask remains unchanged.
 
 ### D-2 · Foundation spec §9 layer 2 does not exist in code
-**Status:** ✅ **DECIDED 2026-08-20 — implement the assertion; unimplemented and assigned to the
-dedicated security-hardening plan after Plan 3b.** · **Raised by:** Plan 2 whole-branch review
+**Status:** ✅ **RESOLVED, Plan 8 (`44f4829`).** · **Raised by:** Plan 2 whole-branch review
 
-Foundation spec §9 claims runs denormalise `tenant_id` and that `RunNodeActivity` asserts it matches
-before executing. `src/Workflows/Activities/RunNodeActivity.php` contains no such assertion.
+The former gap was that the foundation spec claimed `RunNodeActivity` asserted the denormalised run
+tenant before execution, while the implementation did not. The Plan 8 assertion now compares the
+persisted `Run` and `FlowVersion` tenants and throws `CrossTenantExecutionException` on a mismatch.
+It runs before incrementing `steps_taken` or invoking `NodeRunner`; a missing pinned version raises
+`ModelNotFoundException` before either action. Focused pre-mutation tests prove both orderings.
 
-That layer is what would catch a mis-tenanted run at execution time, and Plan 2's relation-unscoping
-ruling leans on the same edge (see G-3). Either implement it or correct the spec — a documented
-defence-in-depth layer that isn't there is worse than two honest layers. Implementing an assertion on
-the durable execution path deserves its own plan rather than a drive-by commit.
-
-**Untouched by Plan 4.** The run view reads through `$run->nodeExecutions()` and `$run->subjects()`
-and writes nothing; it adds no code to `RunNodeActivity` or any other point on the durable execution
-path. This gap remains exactly as described, assigned to the same post-Plan-3b plan as D-1.
+This is a defence-in-depth assertion for persisted corruption; it does not depend on an ambient
+tenant and does not audit rows ahead of execution.
 
 ---
 
@@ -365,14 +346,16 @@ pinned by a covering test asserting `Flow::withoutTenancy()->where(...)->update(
 changes the row with no exception thrown — the guard's blind spot, proven rather than only described.
 
 ### G-3 · The FK invariant behind the unscoped relations is documented, not enforced
-**Status:** DECISION — **cut and reassigned, Plan 5 (E26).** · **Raised by:** Plan 2 whole-branch
+**Status:** ✅ **RESOLVED, Plan 8 (`b345e2e`, `24c9c44`).** · **Raised by:** Plan 2 whole-branch
 review, proven by probe
 
 `Run::flowVersion()`, `Flow::currentVersion()` and `Flow::versions()` are unscoped on the reasoning
 that reaching a `Run` or `Flow` already proves entitlement. That holds only while `flow_version_id`
-and `current_version_id` point inside the parent's tenant. Plan 2 added an `updating` guard for
-`tenant_id` and wrote the invariant into all three relation comments, but there is still no composite
-FK constraint and both models have `$guarded = []`.
+and `current_version_id` point inside the parent's tenant. Plan 8 added `creating` hooks and
+invariant-changing `updating` hooks: `Flow.current_version_id` may be null, while
+`Run.flow_version_id` may not. Each affected model-instance write performs one unscoped
+`FlowVersion` lookup, rejects a missing reference with `InvalidFlowVersionReferenceException`, and
+rejects a tenant mismatch with `CrossTenantWriteException`.
 
 **Two enforcement mechanisms were considered for Plan 5 and both die on measurement.** A composite
 foreign key is unverifiable in this suite: `tests/TestCase.php` sets no `foreign_key_constraints` key
@@ -387,15 +370,11 @@ sites would start writing null foreign keys without any test noticing, and since
 enforced the rows insert cleanly anyway. A change whose failure mode is 27 silently-broken fixtures is
 not a safety improvement.
 
-**What survives belongs with D-2, not this plan.** A `saving` guard on `Flow.current_version_id` and
-`Run.flow_version_id` that resolves the target `FlowVersion` unscoped and throws
-`CrossTenantWriteException` on a tenant mismatch is testable and cheap — one query per publish and
-per run creation — but it is a tenant assertion on a write path, the same family as D-2's assertion in
-`RunNodeActivity`. Plan 5's handoff explicitly forbids absorbing that work; splitting one coherent
-piece of security hardening across a tooling plan and a security plan would produce two half-defences.
-
-So G-3 stays open, its documented invariant and three relation comments stand unchanged, and it is
-reassigned to the security-hardening plan alongside **D-1** and **D-2**.
+The formerly proposed `saving` guard is now the shipped `creating` and invariant-changing `updating`
+ordering. `TenancyGuardSuspension` does not bypass these structural guards. Query-builder and raw
+SQL writes still bypass model events, so version and tenant foreign-key writes must stay on model
+instances or receive equivalent explicit checks in trusted services. The guards prove reference
+existence and tenant equality, not same-Flow identity, and they do not audit existing rows.
 
 ### G-4 · Host wiring omits Vite dependency deduplication
 **Status:** ✅ **RESOLVED, Plan 5, by `ViteDedupeStep`.** · **Raised by:** Plan 3 real-app acceptance,

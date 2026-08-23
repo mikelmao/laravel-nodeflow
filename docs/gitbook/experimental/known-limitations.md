@@ -42,11 +42,11 @@ Nodeflow is experimental. Use these current boundaries to decide what must be ha
 
 ## Tenancy and security
 
-### Parent-child tenant invariants depend partly on host discipline
+### Model-event tenant guards can be bypassed
 
-**Impact:** Some relationships are intentionally read without a second tenant scope after the parent row is reached. Their safety depends on child rows and current-version pointers remaining in the parent tenant. The database does not provide composite foreign-key enforcement for every relationship, and model mass assignment is open.
+**Impact:** Flow and Run Eloquent writes validate referenced version existence and tenant equality for `current_version_id` and `flow_version_id`. Query-builder and raw SQL writes bypass those model-event hooks. Other application-owned foreign-key writes still require trusted input and validation.
 
-**Mitigation:** Never accept `tenant_id`, flow/version foreign keys, or `current_version_id` from request input. Reach child records through an authorized, tenant-scoped parent and keep cross-tenant maintenance operations in trusted services. See [Tenancy](../integration/tenancy.md) and [Flows and versions](../building-automations/flows-and-versions.md).
+**Mitigation:** Keep version and tenant foreign-key writes on Eloquent model instances, or use equivalent explicit existence and tenant checks in trusted services. Never accept those identifiers from request input. See [Tenancy](../integration/tenancy.md) and [Flows and versions](../building-automations/flows-and-versions.md).
 
 ### Tenant context must exist outside HTTP requests
 

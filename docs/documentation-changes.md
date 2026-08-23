@@ -89,7 +89,9 @@ time-scoped evidence, not current product claims, and must not be rewritten as r
 
 ## Deferred facts that must remain visible
 
-- D-1, D-2 and G-3 security hardening
+- Plan 8 applied D-1 observability (`f75dbcb`), G-3 Flow/Run reference guards (`b345e2e`,
+  `24c9c44`), and D-2 durable execution assertion (`44f4829`); public guidance is updated in
+  `README.md`, [Tenancy](gitbook/integration/tenancy.md), and [Known limitations](gitbook/experimental/known-limitations.md).
 - C-1 through C-6 durable-runtime/scaling/database/real-queue-CI work
 - G-13 dynamic/database reference residual
 - Release publication/versioning and unrelated formatting

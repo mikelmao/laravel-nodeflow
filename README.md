@@ -24,6 +24,21 @@ php artisan migrate
 - Opt-in Inertia editor and run-inspection clients.
 - Health checks, pruning, package scaffolding, and node extraction tooling.
 
+## Tenancy safety
+
+`nodeflow.tenancy=auto` inspects the bound `TenantResolver`: Nodeflow's fallback permits unscoped
+reads when the host has no tenancy, while a host resolver returning null fails closed. Inspect the
+effective decision with `app(\Nodeflow\Tenancy\TenancyDecisionResolver::class)->decision()` or run
+`php artisan nodeflow:install --check`.
+
+Eloquent writes reject missing or cross-tenant `Flow.current_version_id` and
+`Run.flow_version_id` references. Durable node execution independently refuses a persisted
+run/version tenant mismatch before incrementing or invoking a node. Query-builder and raw-SQL writes
+bypass Eloquent model guards, so keep version and tenant foreign-key writes on model instances or in
+equivalently validated trusted services.
+
+For mode details and integration guidance, see [Tenancy](docs/gitbook/integration/tenancy.md).
+
 ## Documentation
 
 The [GitBook documentation](docs/gitbook/README.md) is the canonical guide. Start with the [quick start](docs/gitbook/getting-started/quick-start.md), follow the [flood-alert example application](docs/gitbook/example-application/overview.md), review the [experimental status](docs/gitbook/experimental/project-status.md), or see [contributing](docs/gitbook/contributing/architecture.md).

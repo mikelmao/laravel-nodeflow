@@ -16,6 +16,25 @@ Set `NODEFLOW_TENANCY` in your application configuration. A non-null result from
 
 Values are exact and case-sensitive. An absent, mistyped, or non-string mode raises `InvalidArgumentException` rather than falling back to an unscoped read.
 
+## Inspect the effective decision
+
+`auto` is a configured mode, not by itself the effective null-tenant behavior. Inspect the structured diagnostic when validating host wiring:
+
+```php
+$decision = app(\Nodeflow\Tenancy\TenancyDecisionResolver::class)->decision();
+
+$diagnostic = [
+    'configuredMode' => $decision->configuredMode,
+    'effectiveMode' => $decision->effectiveMode,
+    'resolverClass' => $decision->resolverClass,
+    'nullTenantOutcome' => $decision->nullTenantOutcome,
+    'inferred' => $decision->inferred,
+    'reason' => $decision->reason,
+];
+```
+
+`php artisan nodeflow:install --check` uses the same resolver and reports this effective decision. Its tenancy report is diagnostic only; it does not change the command's wiring exit code.
+
 ## Bind a custom resolver unconditionally
 
 For a multi-tenant application, bind `TenantResolver` in the application provider’s `register()` method:
@@ -80,7 +99,13 @@ The package’s internal `TenancyGuardSuspension` is not a host-application esca
 
 Some relations intentionally remove their own tenant scope after their parent was already reached through a scoped query. For example, a `Flow` reads its versions and current version unscoped, and a `Run` reads its flow version unscoped. This is safe only while their foreign keys and tenant IDs describe the same tenant.
 
-Do not accept `flow_id`, `current_version_id`, or `flow_version_id` from untrusted request input. A flow version must inherit its flow’s tenant, and a run must point to a version from the same tenant. The package enforces the flow-version parent match on creation; application code must preserve the rest of these parent-row invariants.
+On Eloquent model-instance writes, `Flow` validates `current_version_id` in its `creating` hook and whenever `current_version_id` or `tenant_id` changes in its `updating` hook. `Run` applies the corresponding `creating` and invariant-changing `updating` hooks to `flow_version_id`. `Flow.current_version_id` may be null; `Run.flow_version_id` may not. Each guard resolves the referenced `FlowVersion` without the tenant scope, rejects a missing reference with `InvalidFlowVersionReferenceException`, and rejects a tenant mismatch with `CrossTenantWriteException`.
+
+The `Flow` guard proves that a referenced version exists and has the Flow's tenant; it does not prove that the version belongs to that same Flow. These guards apply to new or updated model instances and do not audit existing rows.
+
+`TenancyGuardSuspension` does not bypass these structural version-reference guards. Durable `RunNodeActivity` independently compares the persisted run and version tenants and throws `CrossTenantExecutionException` before it increments `steps_taken` or invokes a node.
+
+Do not accept `flow_id`, `current_version_id`, or `flow_version_id` from untrusted request input. A flow version must inherit its flow’s tenant, and a run must point to a version from the same tenant. Query-builder updates and raw SQL bypass Eloquent model events, including these guards: keep version and tenant foreign-key writes on model instances, or perform equivalent explicit existence and tenant checks in a trusted service. Do not treat `withoutTenancy()` as write authorization.
 
 `RunSubject` and `NodeExecution` have no `tenant_id`. Reach them through `Run::subjects()` and `Run::nodeExecutions()` after the `Run` itself was tenant-scoped, rather than starting from an unscoped child query. Their isolation depends on the scoped parent run remaining correct.
 
