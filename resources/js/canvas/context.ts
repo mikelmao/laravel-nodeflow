@@ -18,7 +18,7 @@ export type NodeRenderer = (props: NodeRendererProps) => ReactElement | null
 export type NodeRendererMap = Record<string, NodeRenderer>
 
 /**
- * Palette definitions, host renderers, and publish errors are contextual rather
+ * Node definitions, host renderers, and publish errors are contextual rather
  * than graph data. This keeps errors and presentation changes from looking like
  * graph edits to the autosave layer.
  */

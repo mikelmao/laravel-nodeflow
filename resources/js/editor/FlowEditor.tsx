@@ -24,7 +24,7 @@ import type {
 import { send } from '../http'
 import { canConnect, nextNodeId } from './ids'
 import { ConfigPanel } from './ConfigPanel'
-import { Palette } from './Palette'
+import { NodeLibrary } from './NodeLibrary'
 import { interpretPublish, type PublishOutcome } from './publish'
 import { useAutosave } from './useAutosave'
 
@@ -376,7 +376,7 @@ function FlowEditorSession({
                 {editor.outcome?.kind === 'published' && <p role="status">Published v{editor.outcome.version}.</p>}
 
                 <div className="grid grid-cols-[16rem_minmax(0,1fr)_20rem] gap-4">
-                    <Palette palette={palette} onAdd={addNode} />
+                    <NodeLibrary palette={palette} onAdd={addNode} />
                     <Canvas
                         nodes={canvasNodes}
                         edges={editor.edges}

@@ -63,7 +63,8 @@ describe('NodeLibrary', () => {
 
         await user.type(screen.getByRole('searchbox', { name: 'Search nodes' }), 'send')
 
-        expect(screen.getByRole('status')).toHaveTextContent('1 node type found')
+        const status = screen.getByText('1 node type found')
+        expect(status).toHaveAttribute('aria-live', 'polite')
     })
 
     it('distinguishes a missing registry from a query with no matches', async () => {

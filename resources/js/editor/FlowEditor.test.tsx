@@ -236,19 +236,19 @@ describe('FlowEditor', () => {
 
         vi.stubGlobal('fetch', vi.fn().mockRejectedValue(new TypeError('draft offline')))
         const offline = renderEditor()
-        fireEvent.click(screen.getByRole('button', { name: /Exitcore\.exit/ }))
+        fireEvent.click(screen.getByRole('button', { name: 'Add Exit' }))
         expect(await screen.findByText(/Could not reach the server to save this draft.*draft offline/i)).toBeInTheDocument()
         offline.unmount()
 
         vi.stubGlobal('fetch', vi.fn().mockResolvedValue(new Response('<html>Page Expired</html>', { status: 419 })))
         const expired = renderEditor()
-        fireEvent.click(screen.getByRole('button', { name: /Exitcore\.exit/ }))
+        fireEvent.click(screen.getByRole('button', { name: 'Add Exit' }))
         expect(await screen.findByText(/session expired before this draft could be saved/i)).toBeInTheDocument()
         expired.unmount()
 
         vi.stubGlobal('fetch', vi.fn().mockResolvedValue(Response.json({ draft_revision: 'bad' })))
         renderEditor()
-        fireEvent.click(screen.getByRole('button', { name: /Exitcore\.exit/ }))
+        fireEvent.click(screen.getByRole('button', { name: 'Add Exit' }))
         expect(await screen.findByText(/invalid draft response.*non-negative safe integer/i)).toBeInTheDocument()
     })
 
@@ -308,7 +308,7 @@ describe('FlowEditor', () => {
             .mockResolvedValueOnce(Response.json({ draft_revision: 21 }))
         vi.stubGlobal('fetch', fetchMock)
         renderEditor()
-        fireEvent.click(screen.getByRole('button', { name: /Exitcore\.exit/ }))
+        fireEvent.click(screen.getByRole('button', { name: 'Add Exit' }))
         await screen.findByRole('button', { name: 'Keep mine' })
         const first = requestBody(fetchMock, urls.draft)
         fireEvent.click(screen.getByRole('button', { name: 'Keep mine' }))
@@ -331,7 +331,7 @@ describe('FlowEditor', () => {
         vi.stubGlobal('fetch', fetchMock)
         renderEditor()
         fireEvent.click(canvasNode('exit1'))
-        fireEvent.click(screen.getByRole('button', { name: /Exitcore\.exit/ }))
+        fireEvent.click(screen.getByRole('button', { name: 'Add Exit' }))
         await screen.findByRole('button', { name: 'Use theirs' })
         fireEvent.click(screen.getByRole('button', { name: 'Use theirs' }))
         expect(await screen.findByText(/Start: none/i)).toBeInTheDocument()
@@ -363,7 +363,7 @@ describe('FlowEditor', () => {
             .mockResolvedValueOnce(Response.json({ draft_revision: 31 }))
         vi.stubGlobal('fetch', fetchMock)
         renderEditor()
-        fireEvent.click(screen.getByRole('button', { name: /Exitcore\.exit/ }))
+        fireEvent.click(screen.getByRole('button', { name: 'Add Exit' }))
         await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(1))
         fireEvent.click(screen.getByRole('button', { name: 'Publish' }))
         expect(fetchMock.mock.calls.filter(([url]) => url === urls.publish)).toHaveLength(0)
@@ -372,7 +372,7 @@ describe('FlowEditor', () => {
         expect(requestBody(fetchMock, urls.publish).graph).toMatchObject({
             nodes: expect.arrayContaining([{ id: 'exit2', type: 'core.exit', config: {}, position: { x: 180, y: 160 } }]),
         })
-        fireEvent.click(screen.getByRole('button', { name: /Exitcore\.exit/ }))
+        fireEvent.click(screen.getByRole('button', { name: 'Add Exit' }))
         await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(3))
         expect(requestBody(fetchMock, urls.draft, 1).draft_revision).toBe(30)
     })
@@ -396,7 +396,7 @@ describe('FlowEditor', () => {
         expect(screen.getByRole('button', { name: 'Publishing' })).toBeDisabled()
         expect(screen.queryByText(/draft could not be saved before publishing/i)).toBeNull()
 
-        fireEvent.click(screen.getByRole('button', { name: /Exitcore\.exit/ }))
+        fireEvent.click(screen.getByRole('button', { name: 'Add Exit' }))
         await act(async () => resolvePublish(Response.json({
             errors: ['Node [send1] field [template]: stale validation'],
             node_errors: [{ node: 'send1', field: 'template', message: 'stale validation' }],
@@ -415,7 +415,7 @@ describe('FlowEditor', () => {
     // IDs extend the existing type sequence; counterfactual counting nodes alone can collide with send1.
     it('mints collision-safe ids across two synchronous additions', () => {
         renderEditor()
-        const add = screen.getByRole('button', { name: /Send messageapp\.send/ })
+        const add = screen.getByRole('button', { name: 'Add Send message' })
         act(() => {
             add.dispatchEvent(new MouseEvent('click', { bubbles: true }))
             add.dispatchEvent(new MouseEvent('click', { bubbles: true }))
@@ -514,7 +514,7 @@ describe('FlowEditor', () => {
         const fetchMock = successfulFetch()
         vi.stubGlobal('fetch', fetchMock)
         renderEditor({ graph: { start: null, nodes: [], edges: [] } })
-        fireEvent.click(screen.getByRole('button', { name: /Exitcore\.exit/ }))
+        fireEvent.click(screen.getByRole('button', { name: 'Add Exit' }))
         expect(within(canvasNode('exit1')).getByText('START')).toBeInTheDocument()
         expect(screen.getByText(/Start: exit1/i)).toBeInTheDocument()
         fireEvent.click(screen.getByRole('button', { name: 'Publish' }))

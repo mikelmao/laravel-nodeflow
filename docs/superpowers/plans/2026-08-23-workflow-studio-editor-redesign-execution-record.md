@@ -172,6 +172,20 @@
 
 ## Task 7 — node library
 
+- RED: `npx vitest run resources/js/editor/NodeLibrary.test.tsx` failed as expected because
+  `resources/js/editor/NodeLibrary.tsx` did not exist. The test-only contract was committed as
+  `2e8e042` (`test: define searchable node library`).
+- GREEN: replaced `Palette` with an accessible, responsive `NodeLibrary`: deterministic stable
+  group/label sorting without mutating registrations; trimmed locale-aware search across human and
+  technical metadata; no-registry and no-match states; polite result count; native click/keyboard
+  add actions; exact node-type drag payload; safe icon fallback; and optional close/search-ref
+  controls. Definitions are grouped with a `Map` to keep prototype-like group keys safe.
+- Compatibility: `FlowEditor` now imports `NodeLibrary` and its affected interaction assertions use
+  the new accessible add-button names. No controller behavior was integrated; that remains Task 10.
+- GREEN verification: `npx vitest run resources/js/editor/NodeLibrary.test.tsx` passed 1 file / 12
+  tests. `rg "Palette" resources/js` has no results, `npx tsc --noEmit` passed silently, and
+  `git diff --check` passed.
+
 ## Task 8 — inspector
 
 ## Task 9 — toolbar, notices, and shell
