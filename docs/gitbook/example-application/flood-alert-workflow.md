@@ -186,7 +186,7 @@ class FloodAlertFires extends Trigger
                 continue;
             }
 
-            $match->forTenant(
+            $match = $match->forTenant(
                 tenantId: (string) $organizationId,
                 subjectType: 'user',
                 subjectIds: $userIds,
@@ -213,7 +213,7 @@ class FloodAlertFires extends Trigger
 }
 ```
 
-`TriggerMatch` holds one audience per tenant, so calling `forTenant()` twice with the same organization replaces the earlier audience. Merge IDs first if the application has more than one source. For every matched tenant, the listener starts each active flow with trigger type `app.flood_alert` whose `severities` configuration matches. The idempotency scope is a flow version: one event can still create separate runs for different organizations, matching flows, or later published versions.
+`TriggerMatch` is immutable: `forTenant()` returns a new match, so assign the result each time. Calling it twice with the same organization replaces that organization's earlier audience in the returned value. Merge IDs first if the application has more than one source. For every matched tenant, the listener starts each active flow with trigger type `app.flood_alert` whose `severities` configuration matches. The idempotency scope is a flow version: one event can still create separate runs for different organizations, matching flows, or later published versions.
 
 When a run already exists for the same flow version and idempotency key, `StartRun` returns that existing run and ignores newly supplied subject IDs and options. A redelivered `FloodAlertDispatched` must therefore replay the same immutable audience snapshot. If the business audience legitimately changes, define an explicit new event identity and versioned idempotency-key semantics; do not silently change the audience behind an existing key or generate a new key merely to bypass deduplication.
 

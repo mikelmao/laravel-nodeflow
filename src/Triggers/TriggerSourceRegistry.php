@@ -48,9 +48,16 @@ class TriggerSourceRegistry
             }
 
             $source = app($class);
-            $this->drivers->resolve($driverKey)->sourceRegistered($source);
             $this->sources[$key] = $class;
             $this->instances[$key] = $source;
+
+            try {
+                $this->drivers->resolve($driverKey)->sourceRegistered($source);
+            } catch (\Throwable $e) {
+                unset($this->sources[$key], $this->instances[$key]);
+
+                throw $e;
+            }
         }
 
         return $this;

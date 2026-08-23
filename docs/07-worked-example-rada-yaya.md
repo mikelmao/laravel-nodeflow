@@ -115,7 +115,7 @@ class FloodAlertFires extends Trigger
             ->groupBy('organization_id');
 
         foreach ($byTenant as $organizationId => $users) {
-            $match->forTenant(
+            $match = $match->forTenant(
                 (string) $organizationId,
                 'user',
                 $users->pluck('id')->map(fn ($id) => (string) $id)->all(),

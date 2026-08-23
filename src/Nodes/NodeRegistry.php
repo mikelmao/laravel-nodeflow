@@ -50,6 +50,7 @@ class NodeRegistry
 
     public function alias(string $oldType, string $newType): self
     {
+        $this->graphTypes->claim($oldType, 'executable', self::class);
         $this->aliases[$oldType] = $newType;
 
         return $this;

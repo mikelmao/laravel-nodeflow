@@ -107,7 +107,7 @@ public function resolve(object $event): TriggerMatch
         ->groupBy('organization_id');
 
     foreach ($affected as $tenantId => $users) {
-        $match->forTenant(
+        $match = $match->forTenant(
             (string) $tenantId,
             'user',
             $users->pluck('id')->map(fn ($id) => (string) $id)->all(),
@@ -117,6 +117,8 @@ public function resolve(object $event): TriggerMatch
     return $match;
 }
 ```
+
+`forTenant()` returns a new immutable match, so reassign `$match` each time you add a tenant.
 
 This is the shape that matters. One event resolving to three tenants produces **three independent
 runs** — separately versioned, separately cancellable, each isolated. If one tenant's run fails to

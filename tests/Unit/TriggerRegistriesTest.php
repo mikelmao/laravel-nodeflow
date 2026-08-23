@@ -10,9 +10,16 @@ use Nodeflow\Triggers\TriggerNodeRegistry;
 use Nodeflow\Triggers\TriggerOccurrence;
 use Nodeflow\Triggers\TriggerSourceRegistry;
 use Tests\Support\FakeCollidingExecutableNode;
+use Tests\Support\FakeDuplicateTriggerDriver;
+use Tests\Support\FakeDuplicateTriggerSource;
+use Tests\Support\FakeSendNode;
 use Tests\Support\FakeTriggerDriver;
 use Tests\Support\FakeTriggerNode;
 use Tests\Support\FakeTriggerSource;
+
+beforeEach(function () {
+    FakeTriggerDriver::$onSourceRegistered = null;
+});
 
 it('registers extensions under stable graph driver and source keys', function () {
     Nodeflow::registerTriggerDrivers([FakeTriggerDriver::class]);
@@ -47,9 +54,88 @@ it('notifies a driver exactly once when its source is registered idempotently', 
     expect(app(TriggerDriverRegistry::class)->resolve('test.fake')->registeredSources)->toBe(1);
 });
 
+it('makes a source visible while notifying its driver', function () {
+    $sources = app(TriggerSourceRegistry::class);
+    $visibleDuringCallback = false;
+
+    FakeTriggerDriver::$onSourceRegistered = function ($source) use ($sources, &$visibleDuringCallback) {
+        $visibleDuringCallback = $sources->has('test.fake', 'test.source')
+            && $sources->resolve('test.fake', 'test.source') === $source;
+    };
+
+    Nodeflow::registerTriggerDrivers([FakeTriggerDriver::class]);
+    Nodeflow::registerTriggerSources([FakeTriggerSource::class]);
+
+    expect($visibleDuringCallback)->toBeTrue();
+});
+
+it('does not notify a driver twice when source registration re-enters', function () {
+    $sources = app(TriggerSourceRegistry::class);
+    $reentered = false;
+
+    FakeTriggerDriver::$onSourceRegistered = function ($source) use ($sources, &$reentered) {
+        if (! $reentered) {
+            $reentered = true;
+            $sources->register($source::class);
+        }
+    };
+
+    Nodeflow::registerTriggerDrivers([FakeTriggerDriver::class]);
+    Nodeflow::registerTriggerSources([FakeTriggerSource::class]);
+
+    expect(app(TriggerDriverRegistry::class)->resolve('test.fake')->registeredSources)->toBe(1);
+});
+
+it('rolls back a source whose driver callback fails and permits retry', function () {
+    $sources = app(TriggerSourceRegistry::class);
+    $attempts = 0;
+
+    FakeTriggerDriver::$onSourceRegistered = function () use (&$attempts) {
+        $attempts++;
+
+        if ($attempts === 1) {
+            throw new RuntimeException('listener boot failed');
+        }
+    };
+
+    Nodeflow::registerTriggerDrivers([FakeTriggerDriver::class]);
+
+    expect(fn () => Nodeflow::registerTriggerSources([FakeTriggerSource::class]))
+        ->toThrow(RuntimeException::class, 'listener boot failed')
+        ->and($sources->has('test.fake', 'test.source'))->toBeFalse()
+        ->and(fn () => $sources->resolve('test.fake', 'test.source'))
+        ->toThrow(RuntimeException::class, 'test.fake:test.source');
+
+    Nodeflow::registerTriggerSources([FakeTriggerSource::class]);
+
+    expect($sources->has('test.fake', 'test.source'))->toBeTrue()
+        ->and(app(TriggerDriverRegistry::class)->resolve('test.fake')->registeredSources)->toBe(2);
+});
+
 it('refuses to register a source before its driver', function () {
     expect(fn () => Nodeflow::registerTriggerSources([FakeTriggerSource::class]))
         ->toThrow(InvalidArgumentException::class, 'test.fake');
+});
+
+it('rejects duplicate driver and source keys claimed by different classes', function () {
+    Nodeflow::registerTriggerDrivers([FakeTriggerDriver::class]);
+
+    expect(fn () => Nodeflow::registerTriggerDrivers([FakeDuplicateTriggerDriver::class]))
+        ->toThrow(InvalidArgumentException::class, 'test.fake');
+
+    Nodeflow::registerTriggerSources([FakeTriggerSource::class]);
+
+    expect(fn () => Nodeflow::registerTriggerSources([FakeDuplicateTriggerSource::class]))
+        ->toThrow(InvalidArgumentException::class, 'test.fake:test.source')
+        ->and(app(TriggerSourceRegistry::class)->resolve('test.fake', 'test.source'))
+        ->toBeInstanceOf(FakeTriggerSource::class);
+});
+
+it('throws descriptive errors when resolving unknown drivers and sources', function () {
+    expect(fn () => app(TriggerDriverRegistry::class)->resolve('test.missing'))
+        ->toThrow(RuntimeException::class, 'test.missing')
+        ->and(fn () => app(TriggerSourceRegistry::class)->resolve('test.fake', 'test.missing'))
+        ->toThrow(RuntimeException::class, 'test.fake:test.missing');
 });
 
 it('prevents executable and trigger nodes claiming the same stable graph type', function () {
@@ -70,6 +156,26 @@ it('prevents the same collision when the trigger node registers first', function
     $triggers->register(FakeTriggerNode::class);
 
     expect(fn () => $nodes->register(FakeCollidingExecutableNode::class))
+        ->toThrow(InvalidGraphTypeRegistration::class, 'test.trigger');
+});
+
+it('prevents an executable alias from claiming a registered trigger type', function () {
+    $nodes = app(NodeRegistry::class);
+    app(TriggerNodeRegistry::class)->register(FakeTriggerNode::class);
+    $nodes->register(FakeSendNode::class);
+
+    expect(fn () => $nodes->alias('test.trigger', 'test.send'))
+        ->toThrow(InvalidGraphTypeRegistration::class, 'test.trigger')
+        ->and($nodes->has('test.trigger'))->toBeFalse();
+});
+
+it('prevents a trigger from claiming a registered executable alias', function () {
+    $nodes = app(NodeRegistry::class);
+    $nodes->register(FakeSendNode::class);
+    $nodes->alias('test.trigger', 'test.send');
+
+    expect($nodes->resolve('test.trigger'))->toBeInstanceOf(FakeSendNode::class)
+        ->and(fn () => app(TriggerNodeRegistry::class)->register(FakeTriggerNode::class))
         ->toThrow(InvalidGraphTypeRegistration::class, 'test.trigger');
 });
 
