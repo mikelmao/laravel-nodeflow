@@ -14,6 +14,7 @@ export { FieldOptionsContext } from './controls/useFieldOptions'
 
 export { FlowEditor } from './editor/FlowEditor'
 export type { FlowEditorProps } from './editor/FlowEditor'
+export type { ValidationOutcome } from './editor/validation'
 
 export type {
     CanvasEdge,

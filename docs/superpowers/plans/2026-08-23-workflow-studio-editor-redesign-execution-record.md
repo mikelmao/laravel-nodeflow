@@ -48,6 +48,16 @@
 
 ## Task 2 — client validation contract
 
+- RED: `npx vitest run resources/js/editor/validation.test.ts` failed as expected because
+  `resources/js/editor/validation.ts` did not yet exist (Vite could not resolve `./validation`).
+- GREEN: added the strict validation-result interpreter, including valid warnings, semantic
+  node-error grouping, structural developer errors, session-expiry recovery, and stable malformed
+  response failures. `EditorUrls.validate` is optional for backwards-compatible server props, and
+  `ValidationOutcome` is exported from the package root.
+- GREEN verification: `npx vitest run resources/js/editor/validation.test.ts
+  resources/js/editor/publish.test.ts resources/js/index.test.ts` passed 3 files / 16 tests;
+  `npx tsc --noEmit` and `git diff --check` passed silently.
+
 ## Task 3 — topology layout
 
 ## Task 4 — document history

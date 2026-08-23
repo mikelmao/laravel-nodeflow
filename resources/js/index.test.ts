@@ -49,6 +49,7 @@ import type {
     RunSummary,
     RunUrls,
     TriggerPayload,
+    ValidationOutcome,
 } from '.'
 
 type EveryPublicType =
@@ -85,6 +86,7 @@ type EveryPublicType =
     | RunSummary
     | RunUrls
     | TriggerPayload
+    | ValidationOutcome
 
 type IsNever<T> = [T] extends [never] ? true : false
 const everyPublicTypeIsNotNever: IsNever<EveryPublicType> = false

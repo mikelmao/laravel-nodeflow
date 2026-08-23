@@ -26,7 +26,7 @@ export type Graph = { start?: string | null; nodes?: GraphNode[] | null; edges?:
 // Source: FlowEditorController::edit(). draft_revision is the concurrency token;
 // draft_updated_at is display metadata only.
 export type FlowSummary = { id:number; name:string; trigger_type:string; status:string; version:number|null; draft_revision:number; draft_updated_at:string|null }
-export type EditorUrls = { draft:string; publish:string; options:string }
+export type EditorUrls = { draft:string; publish:string; options:string; validate?:string }
 
 // A graph-level error may omit its node id, so node is nullable on the wire.
 export type NodeErrorEntry = { node:string|null; field:string|null; message:string }
