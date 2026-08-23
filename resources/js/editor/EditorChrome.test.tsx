@@ -2,7 +2,7 @@ import { render, screen, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { describe, expect, it, vi } from 'vitest'
 import { CanvasHud } from './CanvasHud'
-import { EditorNotices } from './EditorNotices'
+import { EditorNotices, type EditorNoticesProps } from './EditorNotices'
 import { EditorToolbar, type EditorToolbarProps } from './EditorToolbar'
 
 function toolbar(overrides: Partial<EditorToolbarProps> = {}) {
@@ -103,6 +103,11 @@ describe('EditorToolbar', () => {
 })
 
 describe('EditorNotices and CanvasHud', () => {
+    // The conflict actions are part of the view contract, not optional wiring a caller may forget.
+    // @ts-expect-error EditorNotices requires both conflict-resolution callbacks.
+    const incompleteNoticeProps: EditorNoticesProps = { save: { status: 'idle' } }
+    void incompleteNoticeProps
+
     it('renders persistent resolution, save, structural, graph, publish and validation feedback using their alert semantics', async () => {
         const user = userEvent.setup()
         const keepMine = vi.fn()
@@ -127,9 +132,10 @@ describe('EditorNotices and CanvasHud', () => {
     })
 
     it('does not duplicate routine saved feedback as a notice and reports published success as status', () => {
-        const { rerender } = render(<EditorNotices save={{ status: 'saved' }} />)
+        const callbacks = { onKeepMine: vi.fn(), onUseTheirs: vi.fn() }
+        const { rerender } = render(<EditorNotices save={{ status: 'saved' }} {...callbacks} />)
         expect(screen.queryByRole('alert')).toBeNull()
-        rerender(<EditorNotices save={{ status: 'idle' }} publish={{ status: 'published', version: 4 }} />)
+        rerender(<EditorNotices save={{ status: 'idle' }} publish={{ status: 'published', version: 4 }} {...callbacks} />)
         expect(screen.getByRole('status')).toHaveTextContent('Published v4')
     })
 
@@ -144,5 +150,16 @@ describe('EditorNotices and CanvasHud', () => {
         expect(hud).toHaveTextContent('Ready with 3 warnings')
         rerender(<CanvasHud nodeCount={0} connectionCount={0} validation={{ status: 'invalid', count: 1 }} />)
         expect(hud).toHaveTextContent('1 issue')
+    })
+
+    it.each([
+        [{ status: 'checking' }, 'Checking'],
+        [{ status: 'valid' }, 'Ready to publish'],
+        [{ status: 'failed' }, 'Validation failed'],
+        [{ status: 'warning', count: 1 }, 'Ready with 1 warning'],
+        [{ status: 'invalid', count: 2 }, '2 issues'],
+    ] as const)('directly labels %o readiness in the HUD', (validation, label) => {
+        render(<CanvasHud nodeCount={2} connectionCount={1} validation={validation} />)
+        expect(screen.getByRole('status')).toHaveTextContent(label)
     })
 })
