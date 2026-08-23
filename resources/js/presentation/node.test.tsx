@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it, vi } from 'vitest'
 import type { NodeCardData, NodeTypePayload } from '../graph/types'
 import { categoryPresentation, categoryClasses, nodeSummary } from './node'
 
@@ -35,6 +35,18 @@ describe('categoryPresentation', () => {
     it('handles empty and unknown categories without exposing implementation details', () => {
         expect(categoryPresentation('')).toEqual(categoryPresentation(''))
         expect(categoryPresentation('Unusually Specific Host Category').accent).toMatch(/sky|emerald|amber|violet|rose|slate/)
+    })
+
+    it('normalizes I-containing category names without consulting the active locale', () => {
+        const localeLower = vi.spyOn(String.prototype, 'toLocaleLowerCase').mockImplementation(function (this: string) {
+            return this === 'INTEGRATION' ? 'locale-sensitive-form-x' : this.toLowerCase()
+        })
+
+        try {
+            expect(categoryPresentation('INTEGRATION')).toEqual(categoryPresentation('integration'))
+        } finally {
+            localeLower.mockRestore()
+        }
     })
 })
 

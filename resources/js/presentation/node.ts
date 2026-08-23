@@ -20,7 +20,7 @@ const icons: NodeIconName[] = ['message', 'filter', 'calendar', 'branch', 'datab
 
 export function categoryPresentation(group: string): CategoryPresentation {
     let hash = 0
-    for (const character of group.trim().toLocaleLowerCase()) {
+    for (const character of group.trim().toLowerCase()) {
         hash = ((hash * 31) + character.charCodeAt(0)) >>> 0
     }
     const index = hash % accents.length

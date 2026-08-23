@@ -1,5 +1,6 @@
-import { Position, ReactFlowProvider, type NodeProps } from '@xyflow/react'
-import { fireEvent, render, screen } from '@testing-library/react'
+import { Position, ReactFlowProvider, useStoreApi, type NodeProps } from '@xyflow/react'
+import { fireEvent, render, screen, waitFor } from '@testing-library/react'
+import { useLayoutEffect, useRef } from 'react'
 import { describe, expect, it, vi } from 'vitest'
 import type { CanvasEdge, CanvasNode, NodeCardData, NodeTypePayload } from '../graph/types'
 import { Canvas, canvasBehavior, interactionProps, type NodeflowNode } from './Canvas'
@@ -53,6 +54,37 @@ const nodeProps: NodeProps<NodeflowNode> = {
     selectable: true,
     deletable: true,
     draggable: true,
+}
+
+function WorkflowEdgePortalHarness() {
+    const store = useStoreApi()
+    const flowRoot = useRef<HTMLDivElement>(null)
+
+    useLayoutEffect(() => {
+        store.setState({ domNode: flowRoot.current })
+    }, [store])
+
+    return (
+        <div ref={flowRoot} className="react-flow">
+            <svg>
+                <WorkflowEdge
+                    id="edge-1"
+                    source="n1"
+                    target="n2"
+                    sourceX={0}
+                    sourceY={32}
+                    targetX={240}
+                    targetY={32}
+                    sourcePosition={Position.Right}
+                    targetPosition={Position.Left}
+                    label="sent"
+                    style={{ stroke: 'red' }}
+                    markerEnd="url(#arrow)"
+                />
+            </svg>
+            <div className="react-flow__edgelabel-renderer" />
+        </div>
+    )
 }
 
 describe('rendererFor', () => {
@@ -290,30 +322,18 @@ describe('NodeCard', () => {
 })
 
 describe('WorkflowEdge', () => {
-    it('renders a smooth-step path and preserves its edge marker', () => {
+    it('renders a smooth-step path and non-interactive output chip through the React Flow edge portal', async () => {
         const { container } = render(
-            <ReactFlowProvider>
-                <svg>
-                    <WorkflowEdge
-                        id="edge-1"
-                        source="n1"
-                        target="n2"
-                        sourceX={0}
-                        sourceY={32}
-                        targetX={240}
-                        targetY={32}
-                        sourcePosition={Position.Right}
-                        targetPosition={Position.Left}
-                        label="sent"
-                        style={{ stroke: 'red' }}
-                        markerEnd="url(#arrow)"
-                    />
-                </svg>
-            </ReactFlowProvider>,
+            <ReactFlowProvider><WorkflowEdgePortalHarness /></ReactFlowProvider>,
         )
 
+        await waitFor(() => expect(container.querySelector('path.react-flow__edge-path')).not.toBeNull())
         expect(container.querySelector('path.react-flow__edge-path')).toHaveAttribute('d', expect.stringContaining('M'))
         expect(container.querySelector('path.react-flow__edge-path')).toHaveAttribute('marker-end', 'url(#arrow)')
+        const chip = screen.getByLabelText('Connection output: sent')
+        expect(chip).toHaveTextContent('sent')
+        expect(chip).toHaveClass('rounded', 'pointer-events-none', 'nodrag', 'nopan')
+        expect(chip.getAttribute('style')).toContain('translate(-50%, -100%) translate(')
     })
 })
 

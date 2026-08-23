@@ -145,6 +145,16 @@
   `top: 50%`, and now use the exact right-edge centered transform
   `translate(50%, -50%)`. Focused verification again passed 3 files / 33 tests;
   TypeScript and diff checks passed silently.
+- Quality-review RED: a locale simulation made `toLocaleLowerCase()` return a
+  Turkish-like distinct form for `INTEGRATION`; category presentation then
+  disagreed with `integration`. The edge test was also upgraded to initialise a
+  real React Flow store `domNode` with its label-renderer portal, proving the
+  chip itself renders rather than merely testing the path component in isolation.
+- Quality-review GREEN: category hashing now uses locale-independent
+  `toLowerCase()`. The portal-backed edge regression asserts label text,
+  transform placement, rounded styling, and `pointer-events-none`, `nodrag`,
+  and `nopan` classes. Focused verification passed 3 files / 34 tests;
+  TypeScript and diff checks passed silently.
 
 ## Task 6 — canvas controls
 
