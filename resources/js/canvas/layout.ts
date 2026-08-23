@@ -1,18 +1,12 @@
-// Pure shared geometry keeps initial placement and node rendering deterministic.
-export const NODE_WIDTH = 208
-export const HANDLE_ROW_HEIGHT = 20
-const COLUMNS = 4
-const COLUMN_GAP = 240
-const ROW_GAP = 160
-const ORIGIN = { x: 60, y: 60 }
+// Shared geometry keeps topology placement and node rendering in lockstep.
+export const NODE_WIDTH = 256
+export const NODE_MIN_HEIGHT = 112
+export const LAYER_GAP = 152
+export const ROW_GAP = 48
+export const COMPONENT_GAP = 96
+export const CANVAS_ORIGIN = { x: 72, y: 88 }
+export const HANDLE_ROW_HEIGHT = 28
 
-export function gridPosition(index: number): { x: number; y: number } {
-  return {
-    x: ORIGIN.x + (index % COLUMNS) * COLUMN_GAP,
-    y: ORIGIN.y + Math.floor(index / COLUMNS) * ROW_GAP,
-  }
-}
-
-export function outputHandleTop(index: number): number {
-  return 56 + index * HANDLE_ROW_HEIGHT
+export function outputHandleTop(index: number, count: number): number {
+  return count === 1 ? NODE_MIN_HEIGHT / 2 : 64 + index * HANDLE_ROW_HEIGHT
 }

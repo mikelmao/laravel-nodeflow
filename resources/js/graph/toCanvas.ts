@@ -1,4 +1,5 @@
-import { gridPosition } from '../canvas/layout'
+import { CANVAS_ORIGIN } from '../canvas/layout'
+import { positionsForGraph } from './layout'
 import type { CanvasEdge, CanvasNode, Graph, GraphNode } from './types'
 
 function toConfig(config: GraphNode['config']): Record<string, unknown> {
@@ -7,10 +8,11 @@ function toConfig(config: GraphNode['config']): Record<string, unknown> {
 
 /** A pure graph adapter: the same stored draft always produces the same canvas. */
 export function toCanvas(graph: Graph): { nodes: CanvasNode[]; edges: CanvasEdge[] } {
-  const nodes = (graph.nodes ?? []).map((node, index): CanvasNode => ({
+  const positions = positionsForGraph(graph)
+  const nodes = (graph.nodes ?? []).map((node): CanvasNode => ({
     id: node.id,
     type: 'nodeflowNode',
-    position: node.position ?? gridPosition(index),
+    position: positions[node.id] ?? CANVAS_ORIGIN,
     data: {
       id: node.id,
       type: node.type,

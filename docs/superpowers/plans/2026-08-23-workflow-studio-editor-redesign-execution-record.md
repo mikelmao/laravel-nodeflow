@@ -63,6 +63,25 @@
 
 ## Task 3 — topology layout
 
+- RED: `npx vitest run resources/js/graph/layout.test.ts resources/js/graph/toCanvas.test.ts` failed as
+  expected because the new `./layout` module did not yet exist; the pre-existing canvas adapter
+  tests continued to pass. The RED suite specifies strict sequence layers, readable branch rows,
+  deterministic finite cyclic layouts, disconnected placement below the start component, null-
+  prototype output for `constructor`, `toString`, and `__proto__`, stored-coordinate preservation,
+  and collision-free placement for partial drafts.
+- GREEN: added SCC-aware, deterministic topology placement. Tarjan condensation removes cycles
+  before longest-predecessor layers and stable barycentric sweeps order each layer. Reachable
+  start components are placed first; weakly disconnected component groups begin below them.
+  Stored finite positions remain exact, while only missing positions are nudged below occupied
+  node rectangles. Layout records have a null prototype so persisted prototype-like IDs are safe.
+- The canvas adapter now gets all positions from `positionsForGraph`, retaining its data and edge
+  transformations. Shared node dimensions, gaps, origin, and handle geometry live in
+  `canvas/layout.ts`; the node card passes its output count to the count-aware handle placement.
+- GREEN verification: `npx vitest run resources/js/graph/layout.test.ts
+  resources/js/graph/toCanvas.test.ts resources/js/graph/toGraph.test.ts` passed 3 files / 23
+  tests; `npx tsc --noEmit`, `git diff -- package.json package-lock.json`, and `git diff --check`
+  passed.
+
 ## Task 4 — document history
 
 ## Task 5 — cards and edges

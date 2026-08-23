@@ -103,7 +103,7 @@ export function NodeCard({ id, data, selected, isConnectable }: NodeProps<Nodefl
                     type="source"
                     position={Position.Right}
                     isConnectable={isConnectable}
-                    style={{ top: outputHandleTop(index) }}
+                    style={{ top: outputHandleTop(index, outputs.length) }}
                     className="!size-2 !bg-primary"
                 >
                     <span className="pointer-events-none absolute right-3 -top-1.5 text-[9px] text-muted-foreground">
