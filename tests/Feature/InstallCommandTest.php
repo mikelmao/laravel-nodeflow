@@ -6,6 +6,7 @@ use Nodeflow\Console\Install\InstallOutcome;
 use Nodeflow\Console\Install\ProviderRegistrationStep;
 use Nodeflow\Console\Install\ProviderStep;
 use Nodeflow\Console\InstallCommand;
+use Nodeflow\Contracts\TenantResolver;
 
 beforeEach(function () {
     $this->root = sys_get_temp_dir().'/nodeflow-install-cmd-'.bin2hex(random_bytes(6));
@@ -200,14 +201,35 @@ it('reports all four gates as defined when they are', function () {
         ->assertExitCode(0);
 });
 
-it('reports the resolved tenancy mode and which resolver auto is reading', function () {
-    // Counterfactual: print config('nodeflow.tenancy') alone and this fails — the
-    // string 'auto' does not tell a host what a null tenant will do, and which
-    // resolver is bound is exactly what decides it.
+it('reports that auto inferred unscoped reads from the package fallback', function () {
     writeClientWiring($this->root);
 
     $this->artisan('nodeflow:install')
-        ->expectsOutputToContain('no TenantResolver bound')
+        ->expectsOutputToContain('package fallback')
+        ->expectsOutputToContain('auto inferred disabled mode')
+        ->assertExitCode(0);
+});
+
+it('reports when a host resolver binding made auto fail closed without failing install', function () {
+    writeClientWiring($this->root);
+
+    app()->bind(TenantResolver::class, fn () => new class implements TenantResolver
+    {
+        public function currentTenantId(): ?string
+        {
+            return null;
+        }
+
+        public function ownsSubject(string $tenantId, string $subjectType, string $subjectId): bool
+        {
+            return true;
+        }
+    });
+
+    $this->artisan('nodeflow:install')
+        ->expectsOutputToContain('host TenantResolver binding')
+        ->expectsOutputToContain('caused auto to infer resolver mode')
+        ->expectsOutputToContain('TenancyUnresolvedException')
         ->assertExitCode(0);
 });
 
