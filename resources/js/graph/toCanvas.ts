@@ -24,6 +24,7 @@ export function toCanvas(graph: Graph): { nodes: CanvasNode[]; edges: CanvasEdge
   const edges = (graph.edges ?? []).map((edge, index): CanvasEdge => ({
     // The index makes even parallel, otherwise-identical draft edges collision-safe.
     id: `nf${index}-${edge.from}-${edge.output ?? ''}-${edge.to}`,
+    type: 'nodeflowEdge',
     source: edge.from,
     sourceHandle: edge.output ?? null,
     target: edge.to,

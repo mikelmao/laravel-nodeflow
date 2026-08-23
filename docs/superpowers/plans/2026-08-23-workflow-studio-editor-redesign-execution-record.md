@@ -158,6 +158,11 @@
 
 ## Task 6 — canvas controls
 
+- RED: `npx vitest run resources/js/canvas/canvas.test.tsx resources/js/run/FlowRun.test.tsx resources/js/graph/toCanvas.test.ts` produced six expected failures: the custom edge type was absent from the adapter/renderer, drag payloads were not accepted, no instance actions were reported, and the minimap was absent. The unaffected read-only run coverage passed. The contract was committed as `ec3c66c` (`test: define workflow canvas controls`).
+- GREEN: Canvas now exposes stable instance-backed `fit`, `centerNode`, and screen-coordinate actions after initialization; both animations respect the SSR-safe reduced-motion preference. It bridges pane and edge selection callbacks, accepts only the exact node-type MIME payload while editable, and suppresses drag/drop semantics in read-only mode.
+- The canvas registers `WorkflowEdge` at module scope under `nodeflowEdge`, `toCanvas` assigns that edge type, and an opt-in semantic-token minimap is pannable and zoomable. `FlowRun` remains intentionally callback-free and `interactive={false}`.
+- GREEN verification: `npx vitest run resources/js/canvas/canvas.test.tsx resources/js/run/FlowRun.test.tsx resources/js/graph/toCanvas.test.ts` passed 3 files / 42 tests. `npx tsc --noEmit` and `git diff --check` passed silently.
+
 ## Task 7 — node library
 
 ## Task 8 — inspector

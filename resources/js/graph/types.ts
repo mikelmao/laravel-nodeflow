@@ -38,7 +38,7 @@ export type NodeErrorEntry = { node:string|null; field:string|null; message:stri
 export type PublishErrorBody = { message?:string; errors?:string[]|Record<string,string[]>; node_errors?:NodeErrorEntry[] }
 export type NodeCardData = { id:string; type:string; config:Record<string,unknown>; isStart:boolean }
 export type CanvasNode = { id:string; type:'nodeflowNode'; position:{x:number;y:number}; data:NodeCardData }
-export type CanvasEdge = { id:string; source:string; sourceHandle:string|null; target:string; label?:string }
+export type CanvasEdge = { id:string; type?:'nodeflowEdge'; source:string; sourceHandle:string|null; target:string; label?:string }
 
 // These graph contracts deliberately do not import xyflow; adapters own that boundary.
 
