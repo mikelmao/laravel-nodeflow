@@ -80,6 +80,17 @@ describe('useEditorController', () => {
         expect(view.result.current.canvasProps.deleteKeyCode).toBeNull()
     })
 
+    it('keeps legacy canvas actions usable when viewportCenter is absent', () => {
+        const view = controller()
+        const screenToFlowPosition = vi.fn(() => ({ x: 777, y: 333 }))
+        const legacyCanvas: CanvasActions = { fit: vi.fn(), centerNode: vi.fn(), screenToFlowPosition }
+        act(() => view.result.current.actions.registerCanvas(legacyCanvas))
+        act(() => view.result.current.actions.addAtViewportCenter(exit))
+
+        expect(screenToFlowPosition).toHaveBeenCalledOnce()
+        expect(view.result.current.document.nodes.at(-1)?.position).toEqual({ x: 777, y: 333 })
+    })
+
     // Validate has its own endpoint and sequence; it is not a disguised save or publish operation.
     it('posts only the canonical graph to validate and ignores a late response after an edit', async () => {
         let resolveValidation!: (response: Response) => void
@@ -206,5 +217,25 @@ describe('useEditorController', () => {
         await act(async () => resolveValidation(Response.json({ valid: true, warnings: [] })))
         expect(view.result.current.toolbarProps.validation.status).toBe('failed')
         expect(view.result.current.noticeProps.validationMessage).toMatch(/unavailable/i)
+    })
+
+    it('invalidates pending validation and publish responses when their URL props change', async () => {
+        let resolveValidation!: (response: Response) => void
+        let resolvePublish!: (response: Response) => void
+        let currentUrls: EditorUrls = urls
+        vi.stubGlobal('fetch', vi.fn((url: string) => {
+            if (url === urls.validate) return new Promise<Response>((resolve) => { resolveValidation = resolve })
+            if (url === urls.publish) return new Promise<Response>((resolve) => { resolvePublish = resolve })
+            return Promise.resolve(Response.json({ draft_revision: 8 }))
+        }))
+        const view = renderHook(() => useEditorController({ flow, graph, palette: [send, exit], triggers: [{ type: 'app.started', label: 'Started', description: null, fields: [] }], urls: currentUrls, autosaveDebounceMs: 1 }))
+        act(() => { void view.result.current.actions.validate(); void view.result.current.actions.publish() })
+        await waitFor(() => expect(resolvePublish).toBeTypeOf('function'))
+        currentUrls = { ...urls, validate: '/new-validate', publish: '/new-publish' }
+        view.rerender()
+        await act(async () => { resolveValidation(Response.json({ valid: true, warnings: [] })); resolvePublish(Response.json({ version: 4, draft_revision: 8 })) })
+
+        expect(view.result.current.toolbarProps.validation.status).toBe('unchecked')
+        expect(view.result.current.toolbarProps.publishedVersion).toBe(3)
     })
 })

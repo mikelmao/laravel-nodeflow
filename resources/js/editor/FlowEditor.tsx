@@ -13,7 +13,38 @@ import { NodeInspector } from './NodeInspector'
 import { NodeLibrary } from './NodeLibrary'
 import { useEditorController, type ToolbarSlots } from './useEditorController'
 
-let shortcutOwner: symbol | null = null
+type ShortcutEntry = { token: symbol; root: HTMLElement }
+type ShortcutRegistry = { active: symbol | null; entries: ShortcutEntry[] }
+const shortcutRegistries = new WeakMap<Document, ShortcutRegistry>()
+
+function shortcutRegistry(document: Document): ShortcutRegistry {
+    let registry = shortcutRegistries.get(document)
+    if (registry === undefined) {
+        registry = { active: null, entries: [] }
+        shortcutRegistries.set(document, registry)
+    }
+    return registry
+}
+
+function claimShortcut(document: Document, token: symbol): void {
+    const registry = shortcutRegistry(document)
+    registry.active = token
+    const entry = registry.entries.find((candidate) => candidate.token === token)
+    if (entry !== undefined) registry.entries = [...registry.entries.filter((candidate) => candidate !== entry), entry]
+}
+
+function removeShortcut(document: Document, token: symbol, root: HTMLElement): void {
+    const registry = shortcutRegistry(document)
+    const wasActive = registry.active === token
+    const hadFocus = root.contains(document.activeElement)
+    registry.entries = registry.entries.filter((entry) => entry.token !== token)
+    if (wasActive) {
+        const fallback = registry.entries.at(-1)
+        registry.active = fallback?.token ?? null
+        if (hadFocus) fallback?.root.focus({ preventScroll: true })
+    }
+    if (registry.entries.length === 0) shortcutRegistries.delete(document)
+}
 
 export type { EditorMode, ToolbarSlots }
 
@@ -46,16 +77,34 @@ function editableTarget(target: EventTarget | null): boolean {
         || target.closest('[contenteditable]:not([contenteditable="false"]), [data-nodeflow-shortcuts="off"]') !== null
 }
 
+function interactiveTarget(target: EventTarget | null): boolean {
+    if (!(target instanceof HTMLElement)) return false
+    if (target.closest('.react-flow__node, .react-flow__pane') !== null) return false
+    return target.closest('button, a, input, textarea, select, [contenteditable]:not([contenteditable="false"]), [role="button"], [tabindex]:not([tabindex="-1"])') !== null
+}
+
 function FlowEditorSession({ mode = 'workspace', toolbarSlots, className, ...options }: FlowEditorProps) {
     const controller = useEditorController(options)
     const librarySearchRef = useRef<HTMLInputElement>(null)
     const shortcutToken = useRef(Symbol('nodeflow-shortcuts'))
-    const claimShortcuts = () => { shortcutOwner = shortcutToken.current }
+    const rootRef = useRef<HTMLDivElement>(null)
+    const claimShortcuts = (event?: { type: string; target: EventTarget | null }) => {
+        const root = rootRef.current
+        if (root === null) return
+        claimShortcut(root.ownerDocument, shortcutToken.current)
+        if ((event?.type === 'pointerdown' || event?.type === 'click') && !interactiveTarget(event.target) && !editableTarget(event.target)) {
+            root.focus({ preventScroll: true })
+        }
+    }
 
     useEffect(() => {
-        if (shortcutOwner === null) shortcutOwner = shortcutToken.current
+        const root = rootRef.current
+        if (root === null) return
+        const registry = shortcutRegistry(root.ownerDocument)
+        registry.entries.push({ token: shortcutToken.current, root })
+        if (registry.active === null) registry.active = shortcutToken.current
         return () => {
-            if (shortcutOwner === shortcutToken.current) shortcutOwner = null
+            removeShortcut(root.ownerDocument, shortcutToken.current, root)
         }
     }, [])
 
@@ -73,7 +122,11 @@ function FlowEditorSession({ mode = 'workspace', toolbarSlots, className, ...opt
 
     useEffect(() => {
         const onKeyDown = (event: KeyboardEvent) => {
-            if (shortcutOwner !== shortcutToken.current) return
+            const root = rootRef.current
+            if (root === null) return
+            const registry = shortcutRegistry(root.ownerDocument)
+            const targetInside = event.target instanceof Node && root.contains(event.target)
+            if (registry.active !== shortcutToken.current || (!targetInside && !root.contains(root.ownerDocument.activeElement))) return
             if (editableTarget(event.target)) return
             const command = event.metaKey || event.ctrlKey
             if (command && event.key.toLowerCase() === 'z') {
@@ -94,6 +147,7 @@ function FlowEditorSession({ mode = 'workspace', toolbarSlots, className, ...opt
                 controller.actions.deleteSelection()
             }
         }
+        const document = rootRef.current?.ownerDocument ?? globalThis.document
         document.addEventListener('keydown', onKeyDown)
         return () => document.removeEventListener('keydown', onKeyDown)
     }, [controller.actions, controller.selected, controller.toolbarProps, controller.view.selectedEdgeId])
@@ -109,7 +163,7 @@ function FlowEditorSession({ mode = 'workspace', toolbarSlots, className, ...opt
         : <NodeInspector {...controller.nodeInspectorProps} />
 
     return <FieldOptionsContext.Provider value={controller.optionsSource}>
-        <div className="contents" onPointerDownCapture={claimShortcuts} onFocusCapture={claimShortcuts}>
+        <div ref={rootRef} tabIndex={-1} className="contents" onPointerDownCapture={claimShortcuts} onClickCapture={claimShortcuts} onFocusCapture={claimShortcuts}>
             <p className="sr-only">Start: {controller.document.startId || 'none'}</p>
             {options.triggers.find((trigger) => trigger.type === options.flow.trigger_type)?.description && <p className="sr-only">{options.triggers.find((trigger) => trigger.type === options.flow.trigger_type)?.description}</p>}
             <EditorShell

@@ -704,7 +704,7 @@ describe('Canvas', () => {
             false,
             wrapper,
         )
-        viewportActions.viewportCenter()
+        viewportActions.viewportCenter!()
         expect(screenToFlowPosition).toHaveBeenLastCalledWith({ x: 240, y: 160 })
     })
 

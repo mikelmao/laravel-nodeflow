@@ -154,6 +154,8 @@ export function useEditorController(options: UseEditorControllerOptions): UseEdi
     const publishSequence = useRef(0)
     const activePublish = useRef<number | null>(null)
     const mounted = useRef(true)
+    const validateUrl = useRef(options.urls.validate)
+    const publishUrl = useRef(options.urls.publish)
     const canvas = useRef<CanvasActions | null>(null)
     const optionsCache = useRef(new Map<string, Record<string, string>>())
     const defs = useMemo(() => defsByType(options.palette), [options.palette])
@@ -173,6 +175,24 @@ export function useEditorController(options: UseEditorControllerOptions): UseEdi
             activePublish.current = null
         }
     }, [])
+
+    useEffect(() => {
+        if (validateUrl.current === options.urls.validate) return
+        validateUrl.current = options.urls.validate
+        validationSequence.current += 1
+        setValidation(null)
+        setValidationState({ status: 'unchecked' })
+        setIssueToFocus(null)
+    }, [options.urls.validate])
+
+    useEffect(() => {
+        if (publishUrl.current === options.urls.publish) return
+        publishUrl.current = options.urls.publish
+        publishSequence.current += 1
+        activePublish.current = null
+        setPublishing(false)
+        setPublishOutcome(null)
+    }, [options.urls.publish])
 
     const clearValidation = useCallback(() => {
         validationSequence.current += 1
@@ -213,7 +233,19 @@ export function useEditorController(options: UseEditorControllerOptions): UseEdi
     }, [commit])
 
     const addAtViewportCenter = useCallback((definition: NodeTypePayload) => {
-        addNode(definition, canvas.current?.viewportCenter())
+        const actions = canvas.current
+        if (actions?.viewportCenter !== undefined) {
+            addNode(definition, actions.viewportCenter())
+            return
+        }
+        if (actions !== null) {
+            const center = typeof window === 'undefined'
+                ? CANVAS_ORIGIN
+                : { x: Math.max(0, window.innerWidth || globalThis.document.documentElement.clientWidth || 0) / 2, y: Math.max(0, window.innerHeight || globalThis.document.documentElement.clientHeight || 0) / 2 }
+            addNode(definition, actions.screenToFlowPosition(center))
+            return
+        }
+        addNode(definition)
     }, [addNode])
 
     const selectNode = useCallback((id: string | null) => {

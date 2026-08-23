@@ -32,7 +32,7 @@ export type CanvasActions = {
     fit: () => void
     centerNode: (id: string) => void
     screenToFlowPosition: (point: { x: number; y: number }) => { x: number; y: number }
-    viewportCenter: () => CanvasPoint
+    viewportCenter?: () => CanvasPoint
 }
 
 export type CanvasProps = {

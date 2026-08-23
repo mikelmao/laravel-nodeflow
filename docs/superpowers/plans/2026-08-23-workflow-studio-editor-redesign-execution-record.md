@@ -334,8 +334,23 @@
   the actual wrapper rect before flow conversion, with SSR/JSDOM fallback; lifecycle disposal clears
   the controller ref only when it still identifies that same action object. NodeLibrary search IDs
   use `useId` rather than a document-global literal.
-- Quality verification: `npx vitest run` passed **26 files / 290 tests**; the requested editor,
-  canvas, graph, and run suite passed **21 files / 235 tests**. TypeScript and diff checks passed.
+- Quality verification: `npx vitest run` passed **26 files / 292 tests**; the requested editor,
+  canvas, graph, and run suite passed **21 files / 237 tests**. TypeScript and diff checks passed.
+
+### Task 10 final quality follow-up — root scope and compatibility
+
+- RED: the original singleton shortcut token permitted a claimed editor to react to document-level
+  events without an editor-root focus boundary, and URL props did not invalidate in-flight requests
+  until a new request started. A legacy CanvasActions object also no longer type-checked after
+  viewport centering became mandatory.
+- GREEN: shortcut activity is now a `WeakMap<Document, registry>` of root/token entries. Pointer
+  and focus claim an editor, non-interactive canvas input focuses its programmatically focusable
+  root, and document key handling requires both current ownership and a target/active-element
+  containment check. Active-root unmount promotes the most recently active remaining editor only
+  when focus had been inside the removed root. URL effects invalidate validate/publish tokens on
+  any prop change before old responses can apply. `viewportCenter` is optional again for host
+  compatibility; controller fallback uses the old screen midpoint conversion or pure layout when
+  no canvas is registered.
 
 ## Documentation and demo verification
 
