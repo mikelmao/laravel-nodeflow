@@ -138,6 +138,15 @@ Completed.
 - Documentation GREEN commit: `c24e1f6d5c7bbf1d7b7ab1b4f0b312c86b4ddec5`
   (`docs: publish tenancy hardening guarantees`). Subsequent wording clarification:
   `5dfaa62dc19559834ef16718d146a92255984831` (`docs: clarify tenancy event guard boundary`).
+- Initial Task 5 review was **CHANGES REQUESTED**: 0 Critical, 2 Important, 1 Minor. Its findings
+  were (1) public guidance incorrectly omitted event-suppressed model writes from the guard-bypass
+  boundary, (2) two audit references used non-resolving `24c9c44` instead of `24c9b44`, and
+  (3) this execution record had an orphan `Documentation` heading. Remediation was
+  `5dfaa62dc19559834ef16718d146a92255984831`
+  (`docs: clarify tenancy event guard boundary`), which narrowed the public guarantee to
+  event-firing writes, named the quiet/event-suppressed bypasses and trusted-validation alternative,
+  repaired both hashes, and removed the orphan heading. The scoped Task 5 re-review approved the
+  remediation at 0 Critical, 0 Important, 0 Minor.
 
 - Contradiction search: `rg -n "application code must preserve|unimplemented|security-hardening plan|saving guard|parent-child tenant invariants|D-1|D-2|G-3|current_version_id|flow_version_id" README.md docs/gitbook docs/documentation-changes.md docs/superpowers/open-issues.md` found the resolved D-1/D-2/G-3 ledger entries, the Plan 8 applied handoff, current pointer guidance, and clearly time-scoped historical Plan 6/Plan 5 records. It found no current public claim that these three gaps remain unimplemented or wholly host-enforced. `git diff --check` passed.
 - Focused documentation behavior gate: `vendor/bin/pest tests/Feature/TenancyDecisionTest.php tests/Feature/InstallCommandTest.php tests/Feature/FlowVersionReferenceGuardTest.php tests/Feature/RunNodeActivityTest.php --compact` passed 36 tests / 127 assertions.
@@ -163,6 +172,12 @@ Completed.
   `5c0c067` → `44f4829` (D-2). Counterfactual mutations and their required failures are recorded
   in the individual task sections above; all temporary mutations were restored before their
   corresponding GREEN verification.
+- Completion evidence review of `5dfaa62..0180f78` was **CHANGES REQUESTED**: 0 Critical,
+  3 Important, 1 Minor. The three Important findings were the overbroad remote-operation claim,
+  omission of the Task 5 review/remediation trail, and omission of the deferred-scope list; the
+  Minor was the scratch report's incorrect broad-review chronology. This follow-up is limited to
+  correcting that evidence. Its eventual commit hash is intentionally not embedded here, to avoid
+  self-referential commit-hash recursion.
 
 ## Final gates and integration
 
@@ -200,5 +215,9 @@ Completed.
     `atram/nodeflow-demo-nodes` (`*`);
   - demo `git status --short` was empty both during and after the gates.
 - No demo tracked files, package main, locked Plan 6 worktree, manifests, or remote were mutated.
-  No remote operation was performed. Deferred items remain the integration choice in Task 7;
-  no merge, push, or worktree deletion has been performed.
+  No push, tag, PR, or other remote mutation was performed by the Plan 8 workflow. Background
+  read-only fetches are visible in the local `origin/HEAD` reflog; remote-tracking values did not
+  change during Plan 8.
+- Remaining deferred scope is exactly C-1 through C-6, G-13, the Plan 7 high-octal decoder-fidelity
+  Minor, release publication, and unrelated refactors. Separately, the Task 7 integration choice
+  remains pending; no merge, push, or worktree deletion has been performed.
