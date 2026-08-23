@@ -284,7 +284,7 @@ describe('NodeCard', () => {
             const handle = row.querySelector<HTMLElement>('.react-flow__handle-right')
             expect(row).toHaveClass('relative', 'h-7')
             expect(handle?.parentElement).toBe(row)
-            expect(handle).toHaveStyle({ top: '50%', transform: 'translateY(-50%)' })
+            expect(handle).toHaveStyle({ top: '50%', transform: 'translate(50%, -50%)' })
         }
     })
 })

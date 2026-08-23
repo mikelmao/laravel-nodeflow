@@ -138,6 +138,13 @@
 - Follow-up verification: `npx vitest run resources/js/presentation/node.test.tsx
   resources/js/canvas/canvas.test.tsx resources/js/run/FlowRun.test.tsx` passed
   3 files / 33 tests; `npx tsc --noEmit` and `git diff --check` passed silently.
+- Alignment precision follow-up RED: the row-ownership regression was tightened
+  to require `translate(50%, -50%)`, and failed because the handle still used
+  only `translateY(-50%)`.
+- Alignment precision GREEN: source handles retain their relative row and
+  `top: 50%`, and now use the exact right-edge centered transform
+  `translate(50%, -50%)`. Focused verification again passed 3 files / 33 tests;
+  TypeScript and diff checks passed silently.
 
 ## Task 6 — canvas controls
 

@@ -82,7 +82,7 @@ export function NodeCard({ id, data, selected, isConnectable }: NodeProps<Nodefl
                                 type="source"
                                 position={Position.Right}
                                 isConnectable={isConnectable}
-                                style={{ top: '50%', transform: 'translateY(-50%)' }}
+                                style={{ top: '50%', transform: 'translate(50%, -50%)' }}
                                 className="!size-2 !bg-primary"
                             />
                         </div>
