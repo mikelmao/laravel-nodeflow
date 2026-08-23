@@ -13,7 +13,9 @@ export type { ControlMap, FieldControl, FieldControlProps } from './controls/typ
 export { FieldOptionsContext } from './controls/useFieldOptions'
 
 export { FlowEditor } from './editor/FlowEditor'
-export type { FlowEditorProps } from './editor/FlowEditor'
+export type { EditorMode, FlowEditorProps, ToolbarSlots } from './editor/FlowEditor'
+export { useEditorController } from './editor/useEditorController'
+export type { EditorActions, EditorDocument, EditorSelection, EditorView, UseEditorControllerOptions, UseEditorControllerResult } from './editor/useEditorController'
 export type { ValidationOutcome } from './editor/validation'
 
 export type {

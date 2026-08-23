@@ -1,5 +1,6 @@
 import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import { StrictMode } from 'react'
+import userEvent from '@testing-library/user-event'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import type { CanvasProps } from '../canvas/Canvas'
 import type { FieldControlProps } from '../controls/types'
@@ -153,7 +154,7 @@ describe('FlowEditor', () => {
         })
         vi.stubGlobal('fetch', fetchMock)
         const view = renderEditor()
-        expect(screen.getByText('Welcome journey')).toBeInTheDocument()
+        expect(screen.getByRole('heading', { name: 'Welcome journey', level: 1 })).toBeInTheDocument()
         expect(screen.getByText('Order placed')).toBeInTheDocument()
         expect(screen.getByText('When a customer places an order.')).toBeInTheDocument()
 
@@ -194,17 +195,17 @@ describe('FlowEditor', () => {
             />,
         )
 
-        expect(screen.getByText('Flow Two')).toBeInTheDocument()
+        expect(screen.getByRole('heading', { name: 'Flow Two', level: 1 })).toBeInTheDocument()
         expect(screen.getByText(/published v5/i)).toBeInTheDocument()
         expect(screen.getByText(/Start: new1/i)).toBeInTheDocument()
         expect(canvasNode('new1')).toBeInTheDocument()
-        expect(screen.getByText('Select a node to configure it.')).toBeInTheDocument()
+        expect(screen.getByRole('complementary', { name: 'Flow overview' })).toBeInTheDocument()
         await new Promise((resolve) => setTimeout(resolve, 15))
         expect(fetchMock.mock.calls.filter(([url]) => url === nextUrls.draft)).toHaveLength(0)
 
         await act(async () => resolveOldPublish(Response.json({ version: 77, draft_revision: 77 })))
         expect(screen.queryByText(/v77/i)).toBeNull()
-        expect(screen.queryByRole('status')).toBeNull()
+        expect(screen.queryByText(/Published v77/i)).toBeNull()
 
         fireEvent.click(canvasNode('new1'))
         fireEvent.change(screen.getByLabelText(/Template/), { target: { value: 'kept through churn' } })
@@ -262,7 +263,7 @@ describe('FlowEditor', () => {
         renderEditor()
 
         fireEvent.click(screen.getByRole('button', { name: 'Publish' }))
-        expect(await screen.findByText('Node [send1] field [template]: required')).toBeInTheDocument()
+        expect((await screen.findAllByText('Node [send1] field [template]: required')).length).toBeGreaterThan(0)
         expect(within(canvasNode('send1')).getByText('template: required')).toBeInTheDocument()
         fireEvent.click(canvasNode('send1'))
         expect(screen.getByText('required')).toBeInTheDocument()
@@ -276,7 +277,7 @@ describe('FlowEditor', () => {
         }, { status: 422 })))
         renderEditor()
         fireEvent.click(screen.getByRole('button', { name: 'Publish' }))
-        expect(await screen.findByText('Node [ghost] is invalid.')).toBeInTheDocument()
+        expect((await screen.findAllByText('Node [ghost] is invalid.')).length).toBeGreaterThan(0)
     })
 
     // Structural 422 means the client broke the wire shape; counterfactual presenting it as author validation misdiagnoses it.
@@ -287,7 +288,7 @@ describe('FlowEditor', () => {
         renderEditor()
         fireEvent.click(screen.getByRole('button', { name: 'Publish' }))
         expect(await screen.findByText(/editor sent a graph the server could not read/i)).toBeInTheDocument()
-        expect(screen.getByText('graph.nodes.0.id: The graph.nodes.0.id field is required.')).toBeInTheDocument()
+        expect(screen.getAllByText('graph.nodes.0.id: The graph.nodes.0.id field is required.').length).toBeGreaterThan(0)
     })
 
     // Ambiguous outputs must block locally; counterfactual guessing an output sends a graph the author never made.
@@ -296,7 +297,7 @@ describe('FlowEditor', () => {
         vi.stubGlobal('fetch', fetchMock)
         renderEditor({ graph: { ...graph, edges: [{ from: 'send1', to: 'exit1', output: null }] } })
         fireEvent.click(screen.getByRole('button', { name: 'Publish' }))
-        expect(await screen.findByText(/which output/i)).toBeInTheDocument()
+        expect((await screen.findAllByText(/which output/i)).length).toBeGreaterThan(0)
         expect(fetchMock.mock.calls.filter(([url]) => url === urls.publish)).toHaveLength(0)
     })
 
@@ -337,9 +338,9 @@ describe('FlowEditor', () => {
         expect(await screen.findByText(/Start: none/i)).toBeInTheDocument()
         expect(canvasNode('exit2')).toBeInTheDocument()
         expect(canvasNode('theirs2')).toBeInTheDocument()
-        expect(screen.getByText('Select a node to configure it.')).toBeInTheDocument()
+        expect(screen.getByRole('complementary', { name: 'Flow overview' })).toBeInTheDocument()
         fireEvent.click(screen.getByRole('button', { name: 'Publish' }))
-        expect(await screen.findByRole('status')).toHaveTextContent('Published v4')
+        expect((await screen.findAllByText(/Published v4/)).length).toBeGreaterThan(0)
         expect(requestBody(fetchMock, urls.publish)).toEqual({
             graph: {
                 start: '',
@@ -370,7 +371,7 @@ describe('FlowEditor', () => {
         await resolveDraft(Response.json({ draft_revision: 8 }))
         await waitFor(() => expect(fetchMock.mock.calls.filter(([url]) => url === urls.publish)).toHaveLength(1))
         expect(requestBody(fetchMock, urls.publish).graph).toMatchObject({
-            nodes: expect.arrayContaining([{ id: 'exit2', type: 'core.exit', config: {}, position: { x: 180, y: 160 } }]),
+            nodes: expect.arrayContaining([{ id: 'exit2', type: 'core.exit', config: {}, position: { x: 72, y: 296 } }]),
         })
         fireEvent.click(screen.getByRole('button', { name: 'Add Exit' }))
         await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(3))
@@ -393,7 +394,7 @@ describe('FlowEditor', () => {
             publish.dispatchEvent(new MouseEvent('click', { bubbles: true }))
         })
         await waitFor(() => expect(fetchMock.mock.calls.filter(([url]) => url === urls.publish)).toHaveLength(1))
-        expect(screen.getByRole('button', { name: 'Publishing' })).toBeDisabled()
+        expect(screen.getByRole('button', { name: 'Publish' })).toBeDisabled()
         expect(screen.queryByText(/draft could not be saved before publishing/i)).toBeNull()
 
         fireEvent.click(screen.getByRole('button', { name: 'Add Exit' }))
@@ -408,7 +409,7 @@ describe('FlowEditor', () => {
         vi.stubGlobal('fetch', vi.fn().mockRejectedValue(new TypeError('offline')))
         renderEditor()
         fireEvent.click(screen.getByRole('button', { name: 'Publish' }))
-        expect(await screen.findByText(/Could not reach server.*offline/i)).toBeInTheDocument()
+        expect((await screen.findAllByText(/Could not reach server.*offline/i)).length).toBeGreaterThan(0)
         expect(screen.getByRole('button', { name: 'Publish' })).toBeEnabled()
     })
 
@@ -444,7 +445,7 @@ describe('FlowEditor', () => {
         fireEvent.change(screen.getByLabelText(/Template/), { target: { value: 'changed' } })
         fireEvent.click(screen.getByRole('button', { name: 'Publish' }))
         await waitFor(() => expect(fetchMock.mock.calls.filter(([url]) => url === urls.publish)).toHaveLength(1))
-        expect(await screen.findByRole('status')).toHaveTextContent('Published v4')
+        expect((await screen.findAllByText(/Published v4/)).length).toBeGreaterThan(0)
         expect(screen.getByRole('button', { name: 'Publish' })).toBeEnabled()
         expect(requestBody(fetchMock, urls.publish).graph).toMatchObject({
             nodes: expect.arrayContaining([
@@ -666,5 +667,25 @@ describe('FlowEditor', () => {
         renderEditor({ palette: [dynamicSend, exitDefinition] })
         fireEvent.click(canvasNode('send1'))
         expect(await screen.findByText(/Could not load.*HTTP 500/i)).toBeInTheDocument()
+    })
+
+    // The composed surface keeps validation separate from saving/publishing while preserving the author journey.
+    it('adds, configures, validates, and publishes a workflow through accessible Studio controls', async () => {
+        const user = userEvent.setup()
+        const validateUrl = '/flows/12/validate'
+        vi.stubGlobal('fetch', vi.fn(async (url: string) => {
+            if (url === validateUrl) return Response.json({ valid: true, warnings: [] })
+            if (url === urls.publish) return Response.json({ version: 4, draft_revision: 8 })
+            return Response.json({ draft_revision: 8 })
+        }))
+        renderEditor({ graph: { start: null, nodes: [], edges: [] }, urls: { ...urls, validate: validateUrl } })
+
+        await user.click(screen.getByRole('button', { name: 'Add Send message' }))
+        await user.click(screen.getByRole('tab', { name: 'Configure' }))
+        await user.type(await screen.findByLabelText(/Template/), 'welcome')
+        await user.click(screen.getByRole('button', { name: 'Validate flow' }))
+        expect((await screen.findAllByText('Ready to publish')).length).toBeGreaterThan(0)
+        await user.click(screen.getByRole('button', { name: 'Publish' }))
+        expect((await screen.findAllByText(/Published v4/)).length).toBeGreaterThan(0)
     })
 })

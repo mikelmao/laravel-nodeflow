@@ -49,6 +49,8 @@ export type CanvasProps = {
     onEdgeClick?: (id: string) => void
     onDropNodeType?: (type: string, position: { x: number; y: number }) => void
     onReady?: (actions: CanvasActions) => void
+    /** The editor scopes deletion itself so React Flow cannot race its cleanup. */
+    deleteKeyCode?: ReactFlowProps<NodeflowNode, NodeflowEdge>['deleteKeyCode']
     showMinimap?: boolean
     /** False freezes every mutation, selection, focus, and keyboard path for run views. */
     interactive?: boolean
@@ -186,6 +188,7 @@ export function Canvas({
     onEdgeClick,
     onDropNodeType,
     onReady,
+    deleteKeyCode,
     showMinimap = false,
     interactive = true,
     className = 'h-full min-h-[32rem] w-full',
@@ -196,7 +199,8 @@ export function Canvas({
         () => ({ defs, renderers, nodeErrors, decorations: nodeDecorations }),
         [defs, renderers, nodeErrors, nodeDecorations],
     )
-    const interactions = interactionProps(interactive)
+    const defaultInteractions = interactionProps(interactive)
+    const interactions = { ...defaultInteractions, deleteKeyCode: deleteKeyCode ?? defaultInteractions.deleteKeyCode }
     const behavior = useMemo(
         () => canvasBehavior(interactive, nodes, edges, { onNodesChange, onEdgesChange, onConnect }),
         [interactive, nodes, edges, onNodesChange, onEdgesChange, onConnect],

@@ -39,7 +39,7 @@ describe('EditorToolbar', () => {
         expect(screen.getByText('Host help')).toBeInTheDocument()
         expect(screen.getByRole('button', { name: 'Save status: Saved' })).toBeInTheDocument()
         expect(screen.getByRole('button', { name: 'Validate flow' })).toBeInTheDocument()
-        expect(screen.getByRole('button', { name: 'Publish flow' })).toBeInTheDocument()
+        expect(screen.getByRole('button', { name: 'Publish' })).toBeInTheDocument()
     })
 
     it('exposes disabled history and invokes visible canvas actions including contextual deletion', async () => {
@@ -80,13 +80,13 @@ describe('EditorToolbar', () => {
         expect(screen.getByText('Ready with 2 warnings')).toBeInTheDocument()
         expect(screen.getByText('Published v8')).toBeInTheDocument()
         await user.click(screen.getByRole('button', { name: 'Validate flow' }))
-        await user.click(screen.getByRole('button', { name: 'Publish flow' }))
+        await user.click(screen.getByRole('button', { name: 'Publish' }))
         expect(props.onValidate).toHaveBeenCalledOnce()
         expect(props.onPublish).toHaveBeenCalledOnce()
 
         rerender(<EditorToolbar {...props} validation={{ status: 'checking' }} publish={{ status: 'publishing' }} />)
         expect(screen.getByRole('button', { name: 'Validate flow' })).toBeDisabled()
-        expect(screen.getByRole('button', { name: 'Publish flow' })).toBeDisabled()
+        expect(screen.getByRole('button', { name: 'Publish' })).toBeDisabled()
     })
 
     it('keeps secondary actions in a named narrow overflow without duplicating primary actions', () => {
@@ -98,7 +98,7 @@ describe('EditorToolbar', () => {
         expect(within(overflow).getByRole('button', { name: 'Redo (more actions)' })).toBeInTheDocument()
         expect(screen.getAllByRole('button', { name: 'Save status: Saved' })).toHaveLength(1)
         expect(screen.getAllByRole('button', { name: 'Validate flow' })).toHaveLength(1)
-        expect(screen.getAllByRole('button', { name: 'Publish flow' })).toHaveLength(1)
+        expect(screen.getAllByRole('button', { name: 'Publish' })).toHaveLength(1)
     })
 })
 

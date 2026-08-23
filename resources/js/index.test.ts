@@ -23,6 +23,11 @@ import type {
     CanvasProps,
     ControlMap,
     EditorUrls,
+    EditorMode,
+    EditorActions,
+    EditorDocument,
+    EditorSelection,
+    EditorView,
     FieldControl,
     FieldControlProps,
     FieldPayload,
@@ -50,6 +55,9 @@ import type {
     RunSummary,
     RunUrls,
     TriggerPayload,
+    ToolbarSlots,
+    UseEditorControllerOptions,
+    UseEditorControllerResult,
     ValidationOutcome,
 } from '.'
 
@@ -61,6 +69,11 @@ type EveryPublicType =
     | CanvasProps
     | ControlMap
     | EditorUrls
+    | EditorMode
+    | EditorActions
+    | EditorDocument
+    | EditorSelection
+    | EditorView
     | FieldControl
     | FieldControlProps
     | FieldPayload
@@ -88,6 +101,9 @@ type EveryPublicType =
     | RunSummary
     | RunUrls
     | TriggerPayload
+    | ToolbarSlots
+    | UseEditorControllerOptions
+    | UseEditorControllerResult
     | ValidationOutcome
 
 type IsNever<T> = [T] extends [never] ? true : false

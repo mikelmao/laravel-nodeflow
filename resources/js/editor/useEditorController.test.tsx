@@ -43,9 +43,9 @@ describe('useEditorController', () => {
         expect(empty.result.current.document.nodes[1]!.position).not.toEqual({ x: 20, y: 30 })
 
         const populated = controller()
-        act(() => populated.result.current.actions.addNode(exit, { x: 50, y: 75 }))
+        act(() => populated.result.current.actions.addNode(exit, { x: 500, y: 75 }))
         expect(populated.result.current.document.startId).toBe('send1')
-        expect(populated.result.current.document.nodes.at(-1)).toMatchObject({ position: { x: 50, y: 75 } })
+        expect(populated.result.current.document.nodes.at(-1)).toMatchObject({ position: { x: 500, y: 75 } })
     })
 
     // Connection gestures without a declared source output must never manufacture a publishable edge.
@@ -58,9 +58,9 @@ describe('useEditorController', () => {
         act(() => view.result.current.actions.connect({ source: 'send1', target: 'exit1', sourceHandle: 'sent', targetHandle: null }))
         expect(view.result.current.document.edges).toHaveLength(1)
         act(() => view.result.current.actions.selectNode('send1'))
-        expect(view.result.current.selected.nodeId).toBe('send1')
+        expect(view.result.current.selected?.id).toBe('send1')
         act(() => view.result.current.actions.undo())
-        expect(view.result.current.selected.nodeId).toBe('send1')
+        expect(view.result.current.selected?.id).toBe('send1')
     })
 
     // A completed drag is one author action even though xyflow emits several position fragments.
@@ -75,7 +75,7 @@ describe('useEditorController', () => {
         expect(view.result.current.document.nodes[0]!.position).toEqual({ x: 200, y: 30 })
         act(() => view.result.current.actions.undo())
         expect(view.result.current.document.nodes[0]!.position).toEqual({ x: 0, y: 0 })
-        act(() => view.result.current.actions.addAtViewportCenter())
+        act(() => view.result.current.actions.addAtViewportCenter(exit))
         expect(view.result.current.document.nodes.at(-1)?.position).toEqual({ x: 321, y: 123 })
         expect(view.result.current.canvasProps.deleteKeyCode).toBeNull()
     })

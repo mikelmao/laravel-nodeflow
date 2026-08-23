@@ -264,6 +264,34 @@
 
 ## Task 10 — controller integration
 
+- RED: committed `1c04973` (`test: define Workflow Studio controller`).
+  `npx vitest run resources/js/editor/useEditorController.test.tsx` failed at import time as
+  intended because `./useEditorController` did not yet exist. The discriminator covers exact-point
+  collision-safe insertion and first-start selection, valid connection handling and non-history
+  selection, one-history-step node drag plus viewport conversion, and Validate's own request and
+  stale-generation suppression.
+- GREEN: `useEditorController` owns canonical `History<EditorDocument>` while selection, panels,
+  validation, publishing, and autosave concurrency remain outside history. Every accepted graph
+  edit (including undo/redo) advances a generation and invalidates validation; drag/configuration
+  transactions coalesce through their closing event. It uses null-prototype definition lookup,
+  cleans node-edge/start invariants, safely resets server-winner conflicts, preserves Keep-mine's
+  accepted revision, lays out all nodes in one commit, and keeps Validate and Publish request IDs
+  independent.
+- FlowEditor is now the public session-remount wrapper around the controller and Workflow Studio
+  shell. It supplies the field-options context; composes toolbar/notices/library/canvas+HUD/empty
+  prompt/inspector-or-overview; scopes all keyboard actions away from editable targets; disables
+  React Flow deletion so contextual and keyboard deletion share one controller action; and focuses
+  the library search after opening. Canvas adds a narrow `deleteKeyCode` override solely for that
+  controller boundary; NodeInspector closes configuration transactions on blur.
+- Public surface: `FlowEditorProps` adds optional `mode` and `toolbarSlots`; `EditorMode`,
+  `ToolbarSlots`, controller types, and `useEditorController` are exported from the package root
+  with root compile assertions. The two known stale FlowEditor assertions now use topology's
+  intentional `{72,88}`/`{480,88}` fallback placement and the intentional curly-quote unknown-type
+  message; the retained counterfactual coverage uses the new composed controls and overview.
+- GREEN verification: `npx vitest run resources/js/editor resources/js/canvas resources/js/graph
+  resources/js/run --reporter=dot` passed **20 files / 223 tests**. `npx tsc --noEmit` and
+  `git diff --check` passed silently.
+
 ## Documentation and demo verification
 
 ## Reviews and final gates
