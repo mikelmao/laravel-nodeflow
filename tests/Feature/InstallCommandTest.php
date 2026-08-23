@@ -205,8 +205,7 @@ it('reports that auto inferred unscoped reads from the package fallback', functi
     writeClientWiring($this->root);
 
     $this->artisan('nodeflow:install')
-        ->expectsOutputToContain('package fallback')
-        ->expectsOutputToContain('auto inferred disabled mode')
+        ->expectsOutputToContain('auto inferred disabled mode from the package fallback')
         ->assertExitCode(0);
 });
 
@@ -227,9 +226,9 @@ it('reports when a host resolver binding made auto fail closed without failing i
     });
 
     $this->artisan('nodeflow:install')
-        ->expectsOutputToContain('host TenantResolver binding')
-        ->expectsOutputToContain('caused auto to infer resolver mode')
-        ->expectsOutputToContain('TenancyUnresolvedException')
+        ->expectsOutputToContain(
+            'caused auto to infer resolver mode, so a null tenant throws TenancyUnresolvedException'
+        )
         ->assertExitCode(0);
 });
 

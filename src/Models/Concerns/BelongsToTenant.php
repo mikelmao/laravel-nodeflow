@@ -3,11 +3,9 @@
 namespace Nodeflow\Models\Concerns;
 
 use Illuminate\Database\Eloquent\Builder;
-use InvalidArgumentException;
 use Nodeflow\Contracts\TenantResolver;
 use Nodeflow\Models\CrossTenantWriteException;
-use Nodeflow\Models\TenancyUnresolvedException;
-use Nodeflow\Tenancy\NoTenancyResolver;
+use Nodeflow\Tenancy\TenancyDecisionResolver;
 
 trait BelongsToTenant
 {
@@ -33,7 +31,7 @@ trait BelongsToTenant
             if (! TenancyGuardSuspension::isActive()
                 && $currentTenantId !== null
                 && $model->tenant_id !== null
-                && (string)$model->tenant_id !== $currentTenantId) {
+                && (string) $model->tenant_id !== $currentTenantId) {
                 throw CrossTenantWriteException::forCreate(
                     $model::class,
                     $currentTenantId,
@@ -99,18 +97,12 @@ trait BelongsToTenant
      * and nothing in the null itself distinguishes them — so nodeflow.tenancy
      * decides. It defaults to 'auto', which infers.
      *
-     * KNOWN LIMIT of that inference, and the reason the docs now tell hosts to
-     * bind in a provider's register(): the question 'auto' actually asks is "is
-     * NoTenancyResolver the binding in the container at this instant", which is
-     * only the same question as "does this application have tenancy" while the
-     * host's binding is unconditionally in place. A host that binds its resolver
-     * in middleware — a normal enough Laravel pattern — gets the fallback in
-     * queue and console contexts, where 'auto' then concludes "no tenancy" and
-     * reads across every tenant. NODEFLOW_TENANCY=resolver is the escape hatch
-     * for such a host, and 'auto' is deliberately left as it is: a stronger fix
-     * (having the service provider record whether the host's binding won) changes
-     * an approved spec decision and is being decided separately. Do not "improve"
-     * the inference here without that decision.
+     * KNOWN LIMIT of that inference: a host that binds its resolver only in
+     * middleware still gets the package fallback in queue and console contexts,
+     * where auto infers no tenancy and reads across every tenant. The decision API
+     * and installer report make that inference visible, but do not make a
+     * middleware-only binding safe. Bind in a provider's register(), or use
+     * NODEFLOW_TENANCY=resolver instead.
      *
      * The mode is matched against a known set on every scoped read, in both
      * branches, rather than compared to 'resolver' alone. An unrecognised value
@@ -121,40 +113,11 @@ trait BelongsToTenant
      *
      * Package-internal reads that legitimately cross tenants never reach this:
      * every one of them opts out with withoutTenancy() before the scope applies.
-     *
-     * @throws \Nodeflow\Models\TenancyUnresolvedException
-     * @throws \InvalidArgumentException
      */
     protected static function resolveTenantIdForScope(): ?string
     {
-        $tenantId = app(TenantResolver::class)->currentTenantId();
-        $mode = config('nodeflow.tenancy');
-
-        return match ($mode) {
-            // The host never expressed an opinion, so a null means "no tenancy".
-            'auto' => app(TenantResolver::class) instanceof NoTenancyResolver
-                ? $tenantId
-                : $tenantId ?? throw new TenancyUnresolvedException(static::class),
-            'disabled' => $tenantId,
-            'resolver' => $tenantId ?? throw new TenancyUnresolvedException(static::class),
-            default => throw new InvalidArgumentException(
-                'Unrecognised nodeflow.tenancy mode '.static::describeTenancyMode($mode)
-                ."; the only valid values are 'auto', 'resolver' and 'disabled'. All are matched "
-                ."exactly, so 'Auto', 'AUTO' and true are all invalid. Reading is refused rather "
-                .'than falling back to unscoped, which on a null tenant would return every '
-                .'tenant\'s rows. Check NODEFLOW_TENANCY in the environment, and run '
-                .'`php artisan config:clear` if a cached config predates the key existing.'
-            ),
-        };
-    }
-
-    private static function describeTenancyMode(mixed $mode): string
-    {
-        if ($mode === null) {
-            return 'null (the key is absent)';
-        }
-
-        return is_scalar($mode) ? var_export($mode, true) : get_debug_type($mode);
+        return app(TenancyDecisionResolver::class)
+            ->tenantIdForScope(static::class);
     }
 
     public static function withoutTenancy(): Builder

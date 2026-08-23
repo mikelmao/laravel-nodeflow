@@ -12,7 +12,7 @@ beforeEach(function () {
         $resolve = fn () => app(TenancyDecisionResolver::class);
 
         // The public boundary is container resolution, not source/class existence.
-        expect($resolve)->not->toThrow(\Throwable::class);
+        expect($resolve)->not->toThrow(Throwable::class);
 
         return $resolve();
     };
@@ -73,8 +73,8 @@ it('reports explicit modes without claiming inference', function (string $mode, 
         ->and($decision->reason)->toBe($reason)
         ->and($decision->inferred)->toBeFalse();
 })->with([
-    'disabled' => ['disabled', 'disabled', 'unscoped', 'explicit_disabled'],
-    'resolver' => ['resolver', 'resolver', 'throws_tenancy_unresolved', 'explicit_resolver'],
+    'disabled' => ['disabled', TenancyDecision::EFFECTIVE_DISABLED, TenancyDecision::NULL_TENANT_UNSCOPED, TenancyDecision::REASON_EXPLICIT_DISABLED],
+    'resolver' => ['resolver', TenancyDecision::EFFECTIVE_RESOLVER, TenancyDecision::NULL_TENANT_THROWS_UNRESOLVED, TenancyDecision::REASON_EXPLICIT_RESOLVER],
 ]);
 
 it('represents invalid configuration while an actual scope still refuses it', function () {

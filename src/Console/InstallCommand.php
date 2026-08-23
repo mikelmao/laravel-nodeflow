@@ -16,8 +16,8 @@ use Nodeflow\Console\Install\TsconfigPathsStep;
 use Nodeflow\Console\Install\ViteAliasStep;
 use Nodeflow\Console\Install\ViteDedupeStep;
 use Nodeflow\Console\Install\XyflowDependencyStep;
-use Nodeflow\Contracts\TenantResolver;
-use Nodeflow\Tenancy\NoTenancyResolver;
+use Nodeflow\Tenancy\TenancyDecision;
+use Nodeflow\Tenancy\TenancyDecisionResolver;
 
 /**
  * Installs Nodeflow into a host application, and then verifies it did.
@@ -199,22 +199,26 @@ class InstallCommand extends Command
      */
     private function reportTenancy(): void
     {
-        $mode = config('nodeflow.tenancy');
-        $resolver = $this->laravel->make(TenantResolver::class);
+        $decision = $this->laravel->make(TenancyDecisionResolver::class)->decision();
+        $configured = $decision->configuredMode === null
+            ? 'null (the key is absent)'
+            : (is_scalar($decision->configuredMode)
+                ? var_export($decision->configuredMode, true)
+                : get_debug_type($decision->configuredMode));
 
-        $this->components->info('nodeflow.tenancy: '.match ($mode) {
-            'auto' => $resolver instanceof NoTenancyResolver
-                ? 'auto — no TenantResolver bound, so a null tenant means "this application has '
-                    .'no tenancy" and scoped reads are unscoped'
-                : 'auto — '.$resolver::class.' is bound, so a null tenant throws '
-                    .'TenancyUnresolvedException rather than reading every tenant\'s rows. Bind it '
-                    .'unconditionally in register(), never in middleware.',
-            'disabled' => 'disabled — a null tenant always reads unscoped. Only correct if this '
-                .'application genuinely has no tenancy.',
-            'resolver' => 'resolver — a null tenant always throws.',
-            default => 'UNRECOGNISED value '.var_export($mode, true).' — every scoped read will '
-                .'throw InvalidArgumentException. Valid values are auto, disabled and resolver, '
-                .'matched exactly. Run `php artisan config:clear` if a cached config predates the key.',
-        });
+        $message = match ($decision->reason) {
+            TenancyDecision::REASON_AUTO_PACKAGE_FALLBACK => 'auto inferred disabled mode from the package fallback, so a null tenant means '
+                .'this application has no tenancy and scoped reads are unscoped',
+            TenancyDecision::REASON_AUTO_HOST_RESOLVER => "host TenantResolver binding [{$decision->resolverClass}] caused auto to infer resolver mode, "
+                .'so a null tenant throws TenancyUnresolvedException rather than reading every tenant\'s rows. '
+                .'Bind it unconditionally in register(), never in middleware.',
+            TenancyDecision::REASON_EXPLICIT_DISABLED => 'disabled — a null tenant reads unscoped; a non-null tenant still scopes normally',
+            TenancyDecision::REASON_EXPLICIT_RESOLVER => 'resolver — a null tenant throws TenancyUnresolvedException',
+            TenancyDecision::REASON_INVALID_CONFIGURATION => "UNRECOGNISED value {$configured} — every scoped read throws InvalidArgumentException. "
+                .'Valid values are auto, disabled and resolver, matched exactly. Run '
+                .'`php artisan config:clear` if a cached config predates the key.',
+        };
+
+        $this->components->info('nodeflow.tenancy: '.$message);
     }
 }

@@ -14,7 +14,29 @@
 
 ## Task 1 — D-1 tenancy decisions
 
-Pending.
+Completed.
+
+- RED command: `vendor/bin/pest tests/Feature/TenancyDecisionTest.php tests/Feature/InstallCommandTest.php --compact`
+  failed as intended: six decision tests raised `BindingResolutionException` for missing
+  `Nodeflow\\Tenancy\\TenancyDecisionResolver`; both updated installer reports failed their
+  stale output expectations. Result: 8 failed, 13 passed, 68 assertions. RED commit:
+  `caa530314ab460c47ecaf8cc9dff959661cf3c44` (`test: specify inspectable tenancy decisions`).
+- GREEN focused tenancy command: `vendor/bin/pest tests/Feature/TenancyDecisionTest.php
+  tests/Feature/TenancyModeTest.php tests/Feature/TenancyAutoModeTest.php
+  tests/Feature/TenancyTest.php tests/Feature/InstallCommandTest.php --compact` passed:
+  54 tests, 141 assertions. This includes the existing disabled-plus-non-null-resolver scope
+  case and the invalid-mode-with-non-null-resolver refusal case.
+- Counterfactual: temporarily made the `auto` branch always choose the package-fallback
+  decision, then ran `vendor/bin/pest tests/Feature/TenancyDecisionTest.php
+  tests/Feature/TenancyAutoModeTest.php --filter="host" --compact`. It failed as required:
+  the host decision reported `disabled` instead of `resolver`, and the host-null scope no
+  longer threw `TenancyUnresolvedException` (2 failed, 2 passed, 5 assertions). The exact
+  branch was restored with `apply_patch`; the focused tenancy command then passed again
+  (54 tests, 141 assertions).
+- Formatting: the required Pint `--test` initially identified style changes. After running
+  the identical file list through Pint, inspecting the diff, and rerunning the focused suite,
+  `pint --test` passed and `git diff --check` was clean.
+- Full package gate: `vendor/bin/pest --compact` completed successfully with exit code 0.
 
 ## Task 2 — Flow version-reference guard
 
