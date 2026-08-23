@@ -505,3 +505,19 @@
   resources/js/editor/EditorChrome.test.tsx --reporter=dot` passed **2 files / 44 tests**. Full
   Vitest passed **26 files / 305 tests**; `npx tsc --noEmit` and `git diff --check` passed
   silently.
+
+### Final release verification
+
+- Environment: Node **v22.22.3**, npm **10.9.8**, PHP **8.4.23**, and Composer **2.10.1**.
+- Package commit `85f8ac0` passed the complete PHP suite: **966 tests / 7,682 assertions**.
+  The complete frontend suite passed **26 files / 305 tests**; `npx tsc --noEmit`,
+  `composer validate --no-check-publish`, and `git diff --check` also passed.
+- The demo's package symlink was temporarily pointed at the exact feature worktree for the final
+  integration gate. Prettier, ESLint, TypeScript, and the production Vite build all passed; the
+  complete demo Pest suite passed **111 tests / 690 assertions**.
+- The demo package symlink was restored to its original
+  `/Users/mikelmao/Projects/laravel-nodeflow/` target, the temporary backup was removed, and the
+  demo worktree retained only its pre-existing untracked `config/nodeflow.php`.
+- Authenticated visual browser acceptance remains externally blocked by Chrome reporting that
+  another extension UI is open. No visual acceptance or console-cleanliness claim is made until
+  that Chrome UI is closed and the documented browser checklist can run.
