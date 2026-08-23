@@ -5,6 +5,7 @@ import type { CanvasEdge, CanvasNode, NodeCardData, NodeTypePayload } from '../g
 import { Canvas, canvasBehavior, interactionProps, type NodeflowNode } from './Canvas'
 import { CanvasContext } from './context'
 import { defaultNodeRenderer, NodeCard, rendererFor } from './NodeCard'
+import { WorkflowEdge } from './WorkflowEdge'
 
 function def(overrides: Partial<NodeTypePayload> = {}): NodeTypePayload {
     return {
@@ -70,20 +71,19 @@ describe('rendererFor', () => {
 })
 
 describe('defaultNodeRenderer', () => {
-    // 5.8 all four; counterfactual read label only loses icon/group/description.
-    it('reads icon, label, group and description from the definition', () => {
+    it('renders exactly one concise summary without repeating the card header', () => {
         render(
             defaultNodeRenderer({
                 data,
-                def: def({ icon: '✉' }),
+                def: def({ fields: [{ key: 'template', type: 'text', label: 'Template', help: null, default: null, required: true, options: {}, dynamic_options: false }] }),
                 selected: false,
                 errors: [],
             }),
         )
-        expect(screen.getByText('✉')).toBeInTheDocument()
-        expect(screen.getByText('Send message')).toBeInTheDocument()
-        expect(screen.getByText('Messaging')).toBeInTheDocument()
-        expect(screen.getByText('Sends one message')).toBeInTheDocument()
+        expect(screen.getByText('Template: welcome')).toBeInTheDocument()
+        expect(screen.queryByText('Send message')).toBeNull()
+        expect(screen.queryByText('n1')).toBeNull()
+        expect(screen.queryByText('app.send')).toBeNull()
     })
 
     // Draft unknown legal; counterfactual undefined def renders empty undiagnosable card.
@@ -99,18 +99,6 @@ describe('defaultNodeRenderer', () => {
         expect(screen.getByRole('alert').textContent).toContain('not.registered')
     })
 
-    // Counterfactual drop isStart and author cannot see graph entry.
-    it('marks the start node', () => {
-        render(
-            defaultNodeRenderer({
-                data,
-                def: def(),
-                selected: false,
-                errors: [],
-            }),
-        )
-        expect(screen.getByText('START')).toBeInTheDocument()
-    })
 })
 
 describe('NodeCard', () => {
@@ -137,6 +125,8 @@ describe('NodeCard', () => {
         expect(container.querySelectorAll('[data-handleid="sent"]')).toHaveLength(1)
         expect(container.querySelectorAll('[data-handleid="failed"]')).toHaveLength(1)
         expect(container.querySelectorAll('.react-flow__handle-left')).toHaveLength(1)
+        expect(screen.getByLabelText('Outputs')).toHaveTextContent('sent')
+        expect(screen.getByLabelText('Outputs')).toHaveTextContent('failed')
     })
 
     // Per-node errors mandatory and NodeCard owns list even if host renderer ignores errors.
@@ -229,6 +219,81 @@ describe('NodeCard', () => {
 
         expect(screen.queryByTestId('nodeflow-badges-n1')).toBeNull()
         expect(screen.getByText('Send message').closest('div.rounded-md')).not.toHaveClass('opacity-40')
+    })
+
+    it('owns the labelled card header, issue badges, body, and output rows', () => {
+        const { container } = render(
+            <ReactFlowProvider>
+                <CanvasContext.Provider
+                    value={{
+                        defs: { 'app.send': def({ icon: '📨', fields: [{ key: 'template', type: 'text', label: 'Template', help: null, default: null, required: true, options: {}, dynamic_options: false }] }) },
+                        renderers: {},
+                        nodeErrors: { n1: ['Template is required'] },
+                        decorations: {},
+                    }}
+                >
+                    <NodeCard {...nodeProps} />
+                </CanvasContext.Provider>
+            </ReactFlowProvider>,
+        )
+
+        const card = screen.getByRole('article', { name: 'Send message' })
+        expect(card).toHaveStyle({ width: '256px' })
+        expect(screen.getByText('📨')).toBeInTheDocument()
+        expect(screen.getByText('START')).toBeInTheDocument()
+        expect(screen.getByText('ISSUE')).toBeInTheDocument()
+        expect(screen.getByText('Template: welcome')).toBeInTheDocument()
+        expect(card).not.toHaveTextContent('n1')
+        expect(card).not.toHaveTextContent('app.send')
+
+        const outputRows = screen.getByLabelText('Outputs').querySelectorAll('[data-output-row]')
+        expect(outputRows).toHaveLength(2)
+        expect(outputRows[0]?.querySelector('[data-handleid="sent"]')).not.toBeNull()
+        expect(outputRows[1]?.querySelector('[data-handleid="failed"]')).not.toBeNull()
+        expect(container.querySelectorAll('[data-handleid="sent"]')).toHaveLength(1)
+    })
+
+    it('keeps a host body without duplicating package summary or header text', () => {
+        const Mine = () => <p>host-specific content</p>
+        render(
+            <ReactFlowProvider>
+                <CanvasContext.Provider value={{ defs: { 'app.send': def() }, renderers: { 'app.send': Mine }, nodeErrors: {}, decorations: {} }}>
+                    <NodeCard {...nodeProps} />
+                </CanvasContext.Provider>
+            </ReactFlowProvider>,
+        )
+
+        expect(screen.getByText('host-specific content')).toBeInTheDocument()
+        expect(screen.getAllByText('Send message')).toHaveLength(1)
+        expect(screen.queryByText('Sends one message')).toBeNull()
+    })
+})
+
+describe('WorkflowEdge', () => {
+    it('renders a smooth-step path and a non-interactive output label chip', () => {
+        const { container } = render(
+            <ReactFlowProvider>
+                <svg>
+                    <WorkflowEdge
+                        id="edge-1"
+                        source="n1"
+                        target="n2"
+                        sourceX={0}
+                        sourceY={32}
+                        targetX={240}
+                        targetY={32}
+                        sourcePosition="right"
+                        targetPosition="left"
+                        label="sent"
+                        style={{ stroke: 'red' }}
+                        markerEnd="url(#arrow)"
+                    />
+                </svg>
+            </ReactFlowProvider>,
+        )
+
+        expect(container.querySelector('path.react-flow__edge-path')).toHaveAttribute('d', expect.stringContaining('M'))
+        expect(screen.getByText('sent')).toHaveClass('pointer-events-none', 'nodrag', 'nopan')
     })
 })
 
