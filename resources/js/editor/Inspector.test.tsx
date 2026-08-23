@@ -1,7 +1,7 @@
 import { fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { describe, expect, it, vi } from 'vitest'
-import { mergeControls } from '../controls'
+import { mergeControls, type FieldControlProps } from '../controls'
 import { FieldOptionsContext } from '../controls/useFieldOptions'
 import type { NodeCardData, NodeTypePayload } from '../graph/types'
 import { FlowOverview, type FlowOverviewProps } from './FlowOverview'
@@ -143,6 +143,30 @@ describe('FlowOverview', () => {
 })
 
 describe('NodeInspector', () => {
+    // Moving within a compound control is still editing one field, so it must not split its undo transaction.
+    it('only closes configuration when focus leaves a field row', () => {
+        const Compound = ({ onChange }: FieldControlProps) => <>
+            <input aria-label="Compound first" onChange={(event) => onChange(event.target.value)} />
+            <input aria-label="Compound second" onChange={(event) => onChange(event.target.value)} />
+        </>
+        const onConfigBlur = vi.fn()
+        inspector({
+            def: { ...definition, fields: [{ ...definition.fields[0]!, key: 'compound', type: 'compound', label: 'Compound' }] },
+            controls: mergeControls({ compound: Compound }),
+            onConfigBlur,
+        })
+        const first = screen.getByRole('textbox', { name: 'Compound first' })
+        const second = screen.getByRole('textbox', { name: 'Compound second' })
+
+        fireEvent.change(first, { target: { value: 'one' } })
+        fireEvent.blur(first, { relatedTarget: second })
+        expect(onConfigBlur).not.toHaveBeenCalled()
+
+        fireEvent.change(second, { target: { value: 'two' } })
+        fireEvent.blur(second, { relatedTarget: document.body })
+        expect(onConfigBlur).toHaveBeenCalledOnce()
+    })
+
     it('starts in Configure and keeps human-facing information ahead of advanced metadata', () => {
         inspector({ errors: [{ node: 'send1', field: 'template', message: 'Template is required' }] })
 

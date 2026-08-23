@@ -292,6 +292,30 @@
   resources/js/run --reporter=dot` passed **20 files / 223 tests**. `npx tsc --noEmit` and
   `git diff --check` passed silently.
 
+### Task 10 review follow-up — controller boundaries
+
+- RED: the new focused controller/inspector suite produced the three intended failures: a valid
+  Validate response masked a later semantic Publish 422 in notices, overview, canvas badges, and
+  inspector fields; a deferred successful Publish response incorrectly advanced version 3 to 4
+  after a graph edit; and panel-level Configure blur closed a compound field transaction while
+  focus moved to its sibling control. A mocked React Flow component also proved the old nullish
+  Canvas merge forwarded `['Backspace', 'Delete']` rather than an explicit `null`; the compound
+  FlowEditor regression left the first edit (`one`) after one undo under the old panel-blur path.
+- GREEN: Canvas now defaults only when `deleteKeyCode === undefined`, preserving controller-owned
+  `null` while still retaining the editable/default and run/read-only defaults. Publish outcomes
+  use the latest non-success publish result for error surfaces; semantic banner and unplaceable
+  errors reach notices/overview, known-node diagnostics reach canvas/inspector, and prior valid
+  validation warnings remain visible. Issue focus uses that same selected source, so a server field
+  message survives from overview selection into the inspector. Every publish outcome, including
+  success/version state, is gated by its active request and captured generation; autosave still
+  finishes its barrier even for a stale response. A graph commit clears stale publish outcomes.
+- Configuration transaction closure now lives on each ConfigPanel field row. Its bubbling blur
+  handler keeps the transaction open when `currentTarget.contains(relatedTarget)`, then closes it
+  only when focus leaves the row. The six-prop host field-control contract is unchanged.
+- Follow-up verification: `npx vitest run resources/js/editor resources/js/canvas
+  resources/js/graph resources/js/run` passed **21 files / 230 tests**; `npx tsc --noEmit` and
+  `git diff --check` passed silently.
+
 ## Documentation and demo verification
 
 ## Reviews and final gates

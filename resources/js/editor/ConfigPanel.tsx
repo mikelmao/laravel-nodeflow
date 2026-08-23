@@ -2,7 +2,7 @@ import { controlFor } from '../controls'
 import type { ControlMap } from '../controls'
 import { FieldControlIdProvider } from '../controls/FieldControlId'
 import { useFieldOptions } from '../controls/useFieldOptions'
-import { useId } from 'react'
+import { useId, type FocusEvent } from 'react'
 import type { FieldPayload, NodeCardData, NodeErrorEntry, NodeTypePayload } from '../graph/types'
 
 type FieldRowProps = {
@@ -13,16 +13,25 @@ type FieldRowProps = {
     controls: ControlMap
     errors: string[]
     onChange: (value: unknown) => void
+    onFieldBlur?: () => void
 }
 
-function FieldRow({ id, nodeType, field, value, controls, errors, onChange }: FieldRowProps) {
+function FieldRow({ id, nodeType, field, value, controls, errors, onChange, onFieldBlur }: FieldRowProps) {
     const controlId = `nf-${useId().replace(/:/g, '')}`
     const loaded = useFieldOptions(nodeType, field)
     const Control = controlFor(field.type, controls)
     const fieldErrors = loaded.error === null ? errors : [...errors, loaded.error]
 
     return (
-        <div id={id} data-nodeflow-field-key={field.key}>
+        <div
+            id={id}
+            data-nodeflow-field-key={field.key}
+            onBlur={(event: FocusEvent<HTMLDivElement>) => {
+                const next = event.relatedTarget
+                if (next instanceof Node && event.currentTarget.contains(next)) return
+                onFieldBlur?.()
+            }}
+        >
             <FieldControlIdProvider id={controlId}>
                 <Control
                     field={field}
@@ -63,10 +72,11 @@ export type ConfigPanelProps = {
     controls: ControlMap
     errors: NodeErrorEntry[]
     onConfigChange: (key: string, value: unknown) => void
+    onFieldBlur?: () => void
 }
 
 /** Field content only: metadata and node-level actions belong to NodeInspector. */
-export function ConfigPanel({ node, def, controls, errors, onConfigChange }: ConfigPanelProps) {
+export function ConfigPanel({ node, def, controls, errors, onConfigChange, onFieldBlur }: ConfigPanelProps) {
     const instanceId = useId().replace(/:/g, '')
     const nodeErrors = errors.filter((entry) => entry.field === null)
     const fieldRowProps = (definitionField: FieldPayload): FieldRowProps => {
@@ -84,6 +94,7 @@ export function ConfigPanel({ node, def, controls, errors, onConfigChange }: Con
             controls,
             errors: fieldErrors,
             onChange: (next) => onConfigChange(definitionField.key, next),
+            onFieldBlur,
         }
     }
 

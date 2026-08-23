@@ -362,9 +362,9 @@ export function useEditorController(options: UseEditorControllerOptions): UseEdi
             const result = await send('POST', options.urls.publish, { graph: currentBuilt.graph })
             const next = interpretPublish(result, new Set(documentRef.current.nodes.map((node) => node.id)))
             autosave.finishPublish(next.kind === 'published' ? next.revision : undefined)
-            if (!owns()) return
+            if (!owns() || publishedGeneration !== generation.current) return
             if (next.kind === 'published') setPublishedVersion(next.version)
-            if (next.kind === 'published' || publishedGeneration === generation.current) setPublishOutcome(next)
+            setPublishOutcome(next)
         } catch (reason: unknown) {
             autosave.finishPublish()
             if (owns() && publishedGeneration === generation.current) setPublishOutcome({ kind: 'failed', message: `Could not reach server to publish this flow: ${String(reason)}` })
@@ -377,12 +377,14 @@ export function useEditorController(options: UseEditorControllerOptions): UseEdi
         if (nodeId === null || !documentRef.current.nodes.some((node) => node.id === nodeId)) return
         selectNode(nodeId)
         canvas.current?.centerNode(nodeId)
-        const matching = graphIssues(validation ?? publishOutcome).find((issue) => issue.node === nodeId && issue.field === field)
+        const source = publishOutcome !== null && publishOutcome.kind !== 'published' ? publishOutcome : validation
+        const matching = graphIssues(source).find((issue) => issue.node === nodeId && issue.field === field)
         setIssueToFocus({ node: nodeId, field, message: matching?.message ?? 'This field needs attention.' })
     }, [publishOutcome, selectNode, validation])
 
     const selectedNode = selected.nodeId === null ? undefined : document.nodes.find((node) => node.id === selected.nodeId)
-    const activeOutcome = validation ?? publishOutcome
+    // Publish failures are the most recent server verdict. A successful publish deliberately leaves useful validate warnings visible.
+    const activeOutcome = publishOutcome !== null && publishOutcome.kind !== 'published' ? publishOutcome : validation
     const fieldErrors = activeOutcome?.kind === 'invalid' || activeOutcome?.kind === 'semantic'
         ? selectedNode === undefined ? [] : activeOutcome.byNode[selectedNode.id] ?? []
         : []

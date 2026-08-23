@@ -200,7 +200,7 @@ export function Canvas({
         [defs, renderers, nodeErrors, nodeDecorations],
     )
     const defaultInteractions = interactionProps(interactive)
-    const interactions = { ...defaultInteractions, deleteKeyCode: deleteKeyCode ?? defaultInteractions.deleteKeyCode }
+    const interactions = { ...defaultInteractions, deleteKeyCode: deleteKeyCode === undefined ? defaultInteractions.deleteKeyCode : deleteKeyCode }
     const behavior = useMemo(
         () => canvasBehavior(interactive, nodes, edges, { onNodesChange, onEdgesChange, onConnect }),
         [interactive, nodes, edges, onNodesChange, onEdgesChange, onConnect],

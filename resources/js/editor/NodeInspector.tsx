@@ -127,8 +127,8 @@ export function NodeInspector({
                 </button>
             </div>
 
-            <div id={tabPanelId(generatedId, 'configure')} role="tabpanel" aria-labelledby={configureTabId} hidden={activeTab !== 'configure'} onBlur={onConfigBlur} className="min-h-0 overflow-y-auto">
-                <ConfigPanel node={node} def={def} controls={controls} errors={errors} onConfigChange={onConfigChange} />
+            <div id={tabPanelId(generatedId, 'configure')} role="tabpanel" aria-labelledby={configureTabId} hidden={activeTab !== 'configure'} className="min-h-0 overflow-y-auto">
+                <ConfigPanel node={node} def={def} controls={controls} errors={errors} onConfigChange={onConfigChange} onFieldBlur={onConfigBlur} />
             </div>
             <div id={tabPanelId(generatedId, 'advanced')} role="tabpanel" aria-labelledby={advancedTabId} hidden={activeTab !== 'advanced'} className="space-y-5">
                 <dl className="space-y-3 text-sm">

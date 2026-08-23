@@ -639,6 +639,39 @@ describe('FlowEditor', () => {
         expect(screen.getByLabelText(/Template/)).toHaveValue('welcome')
     })
 
+    // Two focusable descendants remain one field transaction until focus leaves their shared field row.
+    it('undoes compound custom-control edits together after focus leaves that field', () => {
+        const Compound = ({ value, onChange }: FieldControlProps) => <>
+            <input aria-label="Compound first" value={String(value ?? '')} onChange={(event) => onChange(event.target.value)} />
+            <input aria-label="Compound second" value={String(value ?? '')} onChange={(event) => onChange(event.target.value)} />
+        </>
+        const compoundDefinition: NodeTypePayload = {
+            ...sendDefinition,
+            fields: [{ ...sendDefinition.fields[0]!, key: 'compound', type: 'compound', label: 'Compound' }],
+            default_config: { compound: '' },
+        }
+        renderEditor({
+            palette: [compoundDefinition, exitDefinition],
+            controls: { compound: Compound },
+            graph: {
+                ...graph,
+                nodes: graph.nodes?.map((item) => item.id === 'send1' ? { ...item, config: { compound: '' } } : item),
+            },
+        })
+
+        fireEvent.click(canvasNode('send1'))
+        const first = screen.getByRole('textbox', { name: 'Compound first' })
+        const second = screen.getByRole('textbox', { name: 'Compound second' })
+        fireEvent.change(first, { target: { value: 'one' } })
+        fireEvent.blur(first, { relatedTarget: second })
+        fireEvent.change(second, { target: { value: 'two' } })
+        fireEvent.blur(second, { relatedTarget: document.body })
+        fireEvent.keyDown(document, { key: 'z', ctrlKey: true })
+
+        expect(screen.getByRole('textbox', { name: 'Compound first' })).toHaveValue('')
+        expect(screen.getByRole('textbox', { name: 'Compound second' })).toHaveValue('')
+    })
+
     // Host node renderers own only the body; counterfactual ignoring nodeRenderers prevents package customization.
     it('uses a host node body renderer', () => {
         renderEditor({

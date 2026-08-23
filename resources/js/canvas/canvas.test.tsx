@@ -506,6 +506,24 @@ describe('Canvas', () => {
         expect(onConnect).not.toHaveBeenCalled()
     })
 
+    // The editor owns deletion so its one scoped shortcut cannot race React Flow's default handler.
+    it('preserves an explicit null delete key on an editable mounted canvas', () => {
+        const onNodesChange = vi.fn()
+        render(
+            <Canvas
+                deleteKeyCode={null}
+                nodes={[{ ...canvasNode, selected: true, deletable: true }]}
+                edges={[]}
+                defs={{ 'app.send': def() }}
+                onNodesChange={onNodesChange}
+            />,
+        )
+
+        fireEvent.keyDown(document, { key: 'Delete' })
+
+        expect(onNodesChange).not.toHaveBeenCalled()
+    })
+
     it('routes pane clicks without treating a node click as a pane click', () => {
         const onPaneClick = vi.fn()
         const { container } = render(
