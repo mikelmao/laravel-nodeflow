@@ -1,5 +1,6 @@
 import { controlFor } from '../controls'
 import type { ControlMap } from '../controls'
+import { FieldControlIdProvider } from '../controls/FieldControlId'
 import { useFieldOptions } from '../controls/useFieldOptions'
 import { useId } from 'react'
 import type { FieldPayload, NodeCardData, NodeErrorEntry, NodeTypePayload } from '../graph/types'
@@ -15,20 +16,23 @@ type FieldRowProps = {
 }
 
 function FieldRow({ id, nodeType, field, value, controls, errors, onChange }: FieldRowProps) {
+    const controlId = `nf-${useId().replace(/:/g, '')}`
     const loaded = useFieldOptions(nodeType, field)
     const Control = controlFor(field.type, controls)
     const fieldErrors = loaded.error === null ? errors : [...errors, loaded.error]
 
     return (
         <div id={id} data-nodeflow-field-key={field.key}>
-            <Control
-                field={field}
-                value={value}
-                onChange={onChange}
-                errors={fieldErrors}
-                options={loaded.options}
-                optionsLoading={loaded.loading}
-            />
+            <FieldControlIdProvider id={controlId}>
+                <Control
+                    field={field}
+                    value={value}
+                    onChange={onChange}
+                    errors={fieldErrors}
+                    options={loaded.options}
+                    optionsLoading={loaded.loading}
+                />
+            </FieldControlIdProvider>
         </div>
     )
 }

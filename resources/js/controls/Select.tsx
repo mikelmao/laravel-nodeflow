@@ -11,9 +11,9 @@ import type { FieldControlProps } from './types'
  */
 export function Select({ field, value, onChange, errors, options, optionsLoading }: FieldControlProps) {
     return (
-        <FieldShell field={field} errors={errors}>
+        <FieldShell field={field} errors={errors}>{(controlId) => (
             <select
-                id={`nf-${field.key}`}
+                id={controlId}
                 className={inputClass}
                 disabled={optionsLoading}
                 value={value === null || value === undefined ? '' : String(value)}
@@ -26,6 +26,6 @@ export function Select({ field, value, onChange, errors, options, optionsLoading
                     </option>
                 ))}
             </select>
-        </FieldShell>
+        )}</FieldShell>
     )
 }

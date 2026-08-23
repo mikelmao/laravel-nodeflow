@@ -243,6 +243,14 @@
   dataset value rather than interpolating a field key in a selector. Both tabpanels remain mounted;
   native `hidden` removes the inactive one from the accessibility tree while retaining valid
   `aria-controls` targets and stable panel identity.
+- Control-ID RED: although inspector row IDs were unique, two built-in Text controls still rendered
+  the same `nf-<field key>` input ID. The second label therefore resolved to the first input. A
+  shared standalone regression demonstrated the same collision across text, number, boolean,
+  select, multiselect, and duration controls.
+- Control-ID GREEN: a private `FieldControlId` context lets ConfigPanel provide one React
+  `useId`-based ID per field row without changing the six-key `FieldControlProps` contract. FieldShell
+  and every built-in consume that shared value; direct control rendering falls back to its own stable
+  React ID. Custom host controls remain context-optional and receive their unchanged six props.
 
 ## Task 9 — toolbar, notices, and shell
 

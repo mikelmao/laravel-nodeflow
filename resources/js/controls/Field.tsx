@@ -1,5 +1,6 @@
 import type { ReactNode } from 'react'
 import type { FieldPayload } from '../graph/types'
+import { useFieldControlId } from './FieldControlId'
 
 /**
  * Label, help and errors, once.
@@ -18,9 +19,11 @@ export function FieldShell({
 }: {
     field: FieldPayload
     errors: string[]
-    children: ReactNode
+    children: ReactNode | ((controlId: string) => ReactNode)
     grouped?: boolean
 }) {
+    const controlId = useFieldControlId()
+    const fieldControl = typeof children === 'function' ? children(controlId) : children
     const label = (
         <>
             {field.label}
@@ -46,7 +49,7 @@ export function FieldShell({
             <fieldset className="space-y-1">
                 <legend className="block text-xs font-medium text-foreground">{label}</legend>
 
-                {children}
+                {fieldControl}
                 {supportingContent}
             </fieldset>
         )
@@ -54,11 +57,11 @@ export function FieldShell({
 
     return (
         <div className="space-y-1">
-            <label className="block text-xs font-medium text-foreground" htmlFor={`nf-${field.key}`}>
+            <label className="block text-xs font-medium text-foreground" htmlFor={controlId}>
                 {label}
             </label>
 
-            {children}
+            {fieldControl}
             {supportingContent}
         </div>
     )

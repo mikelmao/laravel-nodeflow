@@ -1,4 +1,5 @@
 import { fireEvent, render, screen, waitFor, within } from '@testing-library/react'
+import userEvent from '@testing-library/user-event'
 import { describe, expect, it, vi } from 'vitest'
 import { mergeControls } from '../controls'
 import { FieldOptionsContext } from '../controls/useFieldOptions'
@@ -231,7 +232,18 @@ describe('NodeInspector', () => {
         const inspectors = screen.getAllByRole('complementary', { name: 'Node inspector' })
         const firstControl = inspectors[0]!.querySelector('input')
         const secondControl = inspectors[1]!.querySelector('input')
-        if (firstControl === null || secondControl === null) throw new Error('Expected both inspector controls.')
+        const firstLabel = inspectors[0]!.querySelector('label')
+        const secondLabel = inspectors[1]!.querySelector('label')
+        if (firstControl === null || secondControl === null || firstLabel === null || secondLabel === null) {
+            throw new Error('Expected both inspector controls and labels.')
+        }
+        expect(firstControl.id).not.toBe(secondControl.id)
+        expect(firstLabel.htmlFor).toBe(firstControl.id)
+        expect(secondLabel.htmlFor).toBe(secondControl.id)
+        expect(firstLabel.control).toBe(firstControl)
+        expect(secondLabel.control).toBe(secondControl)
+        await userEvent.click(secondLabel)
+        expect(secondControl).toHaveFocus()
 
         rendered.rerender(
             <FieldOptionsContext.Provider value={{ template: '/options/__NODEFLOW_TYPE__/__NODEFLOW_FIELD__', cache: new Map() }}>

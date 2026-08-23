@@ -32,12 +32,13 @@ export function Multiselect({ field, value, onChange, errors, options, optionsLo
     }
 
     return (
-        <FieldShell field={field} errors={errors} grouped>
+        <FieldShell field={field} errors={errors} grouped>{(controlId) => (
             <div className="space-y-1 rounded-md border border-input bg-background p-2">
                 {Object.keys(options).length === 0 && <p className="text-[11px] text-muted-foreground">No choices available.</p>}
-                {Object.entries(options).map(([key, label]) => (
+                {Object.entries(options).map(([key, label], index) => (
                     <label key={key} className="flex items-center gap-2 text-xs text-foreground">
                         <input
+                            id={`${controlId}-${index}`}
                             type="checkbox"
                             className="size-3.5 rounded border-input"
                             checked={selected.includes(key)}
@@ -47,6 +48,6 @@ export function Multiselect({ field, value, onChange, errors, options, optionsLo
                     </label>
                 ))}
             </div>
-        </FieldShell>
+        )}</FieldShell>
     )
 }

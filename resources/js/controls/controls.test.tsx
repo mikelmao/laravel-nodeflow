@@ -82,6 +82,31 @@ describe('control selection', () => {
         expect(controls).not.toBe(defaultControls)
         expect(mergeControls()).not.toBe(mergeControls())
     })
+
+    it.each([
+        ['text', 'input'],
+        ['number', 'input'],
+        ['boolean', 'input'],
+        ['select', 'select'],
+        ['multiselect', 'input'],
+        ['duration', 'input, select'],
+    ] as const)('gives standalone %s controls collision-free IDs', (type, selector) => {
+        const Control = controlFor(type, mergeControls())
+        const definition = field({ type, key: 'same', options: { a: 'Ada' } })
+        const props = { field: definition, value: null, onChange: vi.fn(), errors: [], options: definition.options, optionsLoading: false }
+        const { container } = render(<><Control {...props} /><Control {...props} /></>)
+        const controls = [...container.querySelectorAll<HTMLInputElement | HTMLSelectElement>(selector)]
+
+        expect(controls).not.toHaveLength(0)
+        expect(new Set(controls.map((control) => control.id)).size).toBe(controls.length)
+        expect(controls.every((control) => control.id.length > 0)).toBe(true)
+        if (type === 'text' || type === 'number' || type === 'boolean' || type === 'select') {
+            const labels = [...container.querySelectorAll<HTMLLabelElement>('label[for]')]
+            expect(labels).toHaveLength(2)
+            expect(labels[0]!.control).toBe(controls[0])
+            expect(labels[1]!.control).toBe(controls[1])
+        }
+    })
 })
 
 describe('Unregistered', () => {

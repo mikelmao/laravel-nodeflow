@@ -8,9 +8,9 @@ import type { FieldControlProps } from './types'
  */
 export function NumberControl({ field, value, onChange, errors }: FieldControlProps) {
     return (
-        <FieldShell field={field} errors={errors}>
+        <FieldShell field={field} errors={errors}>{(controlId) => (
             <input
-                id={`nf-${field.key}`}
+                id={controlId}
                 type="number"
                 className={inputClass}
                 value={value === null || value === undefined ? '' : String(value)}
@@ -20,6 +20,6 @@ export function NumberControl({ field, value, onChange, errors }: FieldControlPr
                     onChange(raw === '' ? null : Number(raw))
                 }}
             />
-        </FieldShell>
+        )}</FieldShell>
     )
 }

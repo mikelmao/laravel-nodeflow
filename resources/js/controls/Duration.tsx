@@ -83,10 +83,10 @@ export function Duration({ field, value, onChange, errors }: FieldControlProps) 
         onChange(nextAmount === null ? null : formatDuration(nextAmount, nextUnit))
 
     return (
-        <FieldShell field={field} errors={errors} grouped>
+        <FieldShell field={field} errors={errors} grouped>{(controlId) => (
             <div className="flex gap-1">
                 <input
-                    id={`nf-${field.key}-amount`}
+                    id={`${controlId}-amount`}
                     aria-label={`${field.label} amount`}
                     type="number"
                     min="1"
@@ -97,7 +97,7 @@ export function Duration({ field, value, onChange, errors }: FieldControlProps) 
                     onChange={(event) => emit(parseAmount(event.target.value), unit)}
                 />
                 <select
-                    id={`nf-${field.key}-unit`}
+                    id={`${controlId}-unit`}
                     aria-label={`${field.label} unit`}
                     className={inputClass}
                     value={unit}
@@ -115,6 +115,6 @@ export function Duration({ field, value, onChange, errors }: FieldControlProps) 
                     ))}
                 </select>
             </div>
-        </FieldShell>
+        )}</FieldShell>
     )
 }
