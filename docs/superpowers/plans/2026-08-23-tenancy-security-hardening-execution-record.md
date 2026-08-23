@@ -57,12 +57,8 @@ Completed.
   Both listeners were restored with `apply_patch`, and the complete focused GREEN command passed
   again (24 tests, 52 assertions).
 - Formatting: required scoped Pint `--test` passed; `git diff --check` passed.
-- Broader gates: `vendor/bin/pest tests/Unit --compact` passed 331 tests / 5,672 assertions.
-  The complete package command is longer than this runner's approximately 30-second foreground
-  cap, so its truncated progress output was not recorded as a full-suite pass. Completed feature
-  partitions passed: the early feature group 44 tests / 139 assertions, ExtractNodeGates 71 / 162,
-  and ExtractNodeMoves 54 / 220. The unchanged long-running ExtractNodeVerification suite exceeds
-  that cap alone; a full package gate remains for the integrator environment.
+- Full package gate: the controller ran `vendor/bin/pest --compact` at this GREEN HEAD. It exited
+  0 with 950 tests passed and 7,592 assertions in 114.21s.
 
 ## Task 3 — Run version-reference guard
 
