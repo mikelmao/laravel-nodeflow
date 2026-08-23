@@ -518,6 +518,14 @@
 - The demo package symlink was restored to its original
   `/Users/mikelmao/Projects/laravel-nodeflow/` target, the temporary backup was removed, and the
   demo worktree retained only its pre-existing untracked `config/nodeflow.php`.
-- Authenticated visual browser acceptance remains externally blocked by Chrome reporting that
-  another extension UI is open. No visual acceptance or console-cleanliness claim is made until
-  that Chrome UI is closed and the documented browser checklist can run.
+- Authenticated visual browser acceptance completed after the Chrome extension UI was dismissed.
+  The seeded administrator opened the control room and Workflow Studio successfully. Desktop and
+  768px responsive layouts, exclusive mobile drawers, Node Library search, node selection and
+  Inspector tabs, focused-canvas mode, validation, and the minimap/zoom controls were exercised.
+- A real Node Library add operation autosaved an eighth node; Undo autosaved the restored graph,
+  and a full reload confirmed the original **7 nodes / 7 connections** persisted. Validation then
+  reported **Ready to publish**. Browser logs contained no application errors; the only warnings
+  were the existing local Inertia devtools interceptor advisory.
+- The acceptance tab and local server were closed afterward. The demo package symlink was again
+  restored to `/Users/mikelmao/Projects/laravel-nodeflow/`, its temporary backup was removed, and
+  the pre-existing untracked `config/nodeflow.php` remained untouched.
