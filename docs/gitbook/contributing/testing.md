@@ -8,8 +8,8 @@ From the repository root, run:
 
 ```bash
 vendor/bin/pest
-npm test
-npm run types:check
+npx vitest run
+npx tsc --noEmit
 composer validate --strict
 ```
 
@@ -38,16 +38,18 @@ Vitest runs TypeScript and React tests under jsdom, using the shared JavaScript 
 Run a focused client test file with:
 
 ```bash
-npm test -- resources/js/run/FlowRun.test.tsx
+npx vitest run resources/js/run/FlowRun.test.tsx
 ```
 
-`npm run types:check` runs TypeScript with no emitted output. Keep it in the normal edit loop: strict compiler options catch contract drift that a runtime test may not reach.
+`npx tsc --noEmit` runs TypeScript with no emitted output. Keep it in the normal edit loop: strict compiler options catch contract drift that a runtime test may not reach.
 
 ## Add acceptance evidence when the boundary changes
 
 Green package tests do not prove that a consuming application compiles and serves the editor assets. They also do not replace acceptance checks against a real host, browser, queue worker, and database when your change depends on any of those systems.
 
 Perform that additional verification when changing host-facing Vite wiring, Inertia pages, authorization or tenancy bindings, durable-worker behavior, database-specific queries, or real node side effects. Keep those checks scoped to the host and environment that own them; the package suite remains the fast regression layer.
+
+For Workflow Studio changes, record real browser acceptance in a representative host after its assets are built. Check both light and dark host themes; Node Library search, click-add and drag-add placement; Configure and Advanced; Flow Overview; Undo/Redo; Auto layout then Undo; Fit, zoom, and minimap; invalid Validate issue focus followed by a valid Validate and Publish; narrow drawer Escape/focus return; and the read-only run view with no edit controls. Capture screenshots and inspect the browser console for new errors. No new CSS installation or frontend dependency is required: the editor must remain readable with the host theme's semantic tokens.
 
 ## Next step
 

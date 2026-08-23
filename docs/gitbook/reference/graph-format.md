@@ -41,7 +41,7 @@ This is a publishable graph using the built-in wait and exit nodes.
 }
 ```
 
-`position` is not interpreted by the runtime. The draft and publish endpoints use the original request array rather than the stripped validation result, so unlisted root, node, and edge data is normally retained through decode and re-encode. This is semantic round-tripping, not byte-for-byte or JSON-container preservation: for example, an empty JSON object can later serialize as `[]`. Only the keys below have package graph semantics.
+`position` is not interpreted by the runtime. It is editor layout data: Stored finite positions win on hydration, and a topology placement fills only missing positions. Auto layout is the only action that repositions every node. The draft and publish endpoints use the original request array rather than the stripped validation result, so unlisted root, node, and edge data is normally retained through decode and re-encode. This is semantic round-tripping, not byte-for-byte or JSON-container preservation: for example, an empty JSON object can later serialize as `[]`. Only the keys below have package graph semantics.
 
 ## Shape
 
@@ -70,7 +70,7 @@ The HTTP validation accepts strings and Laravel array values at these structural
 { "start": "", "nodes": [], "edges": [] }
 ```
 
-## Publish validation
+## Validate and publish validation
 
 Publishing checks all of the following:
 
@@ -85,7 +85,7 @@ Publishing checks all of the following:
 
 The current validator does **not** require every node to be reachable from `start`, and it does **not** reject an edge whose `from` ID is absent. An absent source consequently has no source-output check; its edge can still participate in the duplicate-output and cycle scans. Do not rely on either omission as a supported modelling feature.
 
-The sole current warning is emitted when one source has at least two distinct outputs whose immediate target nodes are `core.wait`: those waits run sequentially in the interpreter, so elapsed time is the sum rather than the maximum. Warnings do not block publication and are not included in the current publish response.
+The sole current warning is emitted when one source has at least two distinct outputs whose immediate target nodes are `core.wait`: those waits run sequentially in the interpreter, so elapsed time is the sum rather than the maximum. Warnings do not block publication. The non-mutating Validate endpoint returns them both on valid results and alongside semantic errors; Publish performs the same validation again before creating a version.
 
 ## Drafts, publishing, and errors
 
@@ -93,7 +93,9 @@ The sole current warning is emitted when one source has at least two distinct ou
 
 `PUT` to the draft route checks the structural request rules above, with `edges.*.output` nullable, then saves the supplied graph and increments `draft_revision`. It does not run graph semantic validation. This permits a graph mid-edit, but not a malformed node without a string `id` or `type`, nor an edge without string `from` and `to`.
 
-`POST` to the publish route requires a non-null string `edges.*.output`, then runs the semantic rules. On success it creates the next version, makes it current, sets the flow status to `active`, and clears the draft. It returns integer `version` and `draft_revision` fields, for example `{ "version": 2, "draft_revision": 1 }`; use that returned revision on the next autosave. The revision remains monotonic rather than resetting.
+`POST` to the validate route requires the same structural graph shape as Publish and then runs the semantic rules without changing the flow. Success is `{"valid":true,"warnings":[]}` (where `warnings` can contain non-blocking warnings). A semantic failure returns HTTP 422 with `valid: false`, `message: "The flow is not ready to publish."`, `errors`, `node_errors`, and `warnings`. It requires publish authorization and does not save a draft or create a version.
+
+`POST` to the publish route requires a non-null string `edges.*.output`, then runs the semantic rules again. On success it creates the next version, makes it current, sets the flow status to `active`, and clears the draft. It returns integer `version` and `draft_revision` fields, for example `{ "version": 2, "draft_revision": 1 }`; use that returned revision on the next autosave. The revision remains monotonic rather than resetting.
 
 A semantic publish failure is a `422` response in this shape:
 

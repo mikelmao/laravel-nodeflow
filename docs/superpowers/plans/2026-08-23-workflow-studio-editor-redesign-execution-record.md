@@ -378,4 +378,35 @@
 
 ## Documentation and demo verification
 
+- RED: `vendor/bin/pest tests/Feature/WorkflowStudioDocumentationTest.php --compact` first failed
+  on the outdated claim that `Nodeflow::routes()` registered seven routes. The committed test-only
+  contract is `547fe17` (`test: define Workflow Studio documentation`).
+- GREEN: the GitBook editor, custom-renderer, route/Inertia, route reference, graph-format, and
+  testing guides now document all eight routes (including `POST validate`), the exact validation
+  success and semantic-422 shapes, non-mutating publish authorization, default workspace and
+  embedded integration, package toolbar slots, Studio controls and responsive behavior, renderer
+  wrapper ownership, stored/automatic positions, theme inheritance, and visual acceptance.
+  The focused document test passed **1 test / 31 assertions**; `EditorRoutesTest` and that test
+  passed **27 tests / 137 assertions**. Full Vitest passed **26 files / 295 tests**, and package
+  `npx tsc --noEmit` was silent.
+- Demo adapter: `resources/js/pages/nodeflow/editor.tsx` sets the Workflow Studio title, adds the
+  generated `dashboard()` Control room link through `toolbarSlots.leading`, and removes host sizing
+  classes that conflicted with the package workspace. The demo adapter's Prettier and ESLint checks
+  passed; Vite production build passed (with its existing Vite native-config and optional Fontaine
+  advisory warnings); full demo Pest passed **111 tests / 690 assertions**.
+- The demo TypeScript gate exposed an integration-only type-identity conflict: its own React 19.2.18
+  declarations and the symlinked package's separately resolved React 19.2.18 declarations make the
+  `searchInputRef` in `NodeLibrary.tsx` incompatible. Package TypeScript is green; no package or
+  demo configuration was changed because this task is limited to documentation and the one adapter.
+- Browser setup selected the connected Chrome browser and opened the freshly seeded local demo.
+  The documented disposable-demo command `php artisan migrate:fresh --seed --no-interaction` and
+  `tests/Feature/DemoSeedTest.php` passed (**1 test / 11 assertions**). Browser acceptance stopped
+  at the visible seeded login credentials: browser safety policy requires immediate confirmation
+  before submitting `demo@nodeflow.test` / `password`. No editor-side browser action was skipped
+  silently; consequently no Studio screenshots or console evidence were recorded in this pass.
+- Symlink safety: the original demo vendor link target
+  `/Users/mikelmao/Projects/laravel-nodeflow/` was recorded before redirecting it to this feature
+  worktree for build verification. It is restored before the final commits; the temporary backup
+  link is removed and the original target is rechecked.
+
 ## Reviews and final gates

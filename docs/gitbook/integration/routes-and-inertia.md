@@ -21,12 +21,13 @@ Route::middleware(['web', 'auth'])
 
 The `auth` middleware is intentionally host-owned: package controllers authorize an already authenticated actor, but do not choose how your application authenticates one. Define the Nodeflow gates described in [Authorization](authorization.md) before exposing this group.
 
-The call registers these seven routes. Their canonical names are shown below; the controller authorizes the model before it sends any page or JSON payload.
+The call registers these eight routes. Their canonical names are shown below; the controller authorizes the model before it sends any page or JSON payload.
 
 | Method | URI relative to the group | Canonical name | Controller purpose | Required policy gate |
 | --- | --- | --- | --- | --- |
 | `GET` | `flows/{flow}/edit` | `nodeflow.flows.edit` | Renders the editor's Inertia props. | `update` (`nodeflow.update`) |
 | `PUT` | `flows/{flow}/draft` | `nodeflow.flows.draft` | Saves a structurally valid draft. | `update` (`nodeflow.update`) |
+| `POST` | `flows/{flow}/validate` | `nodeflow.flows.validate` | Validates a graph without saving or publishing it. | `publish` (`nodeflow.publish`) |
 | `POST` | `flows/{flow}/publish` | `nodeflow.flows.publish` | Publishes a graph and returns validation errors when needed. | `publish` (`nodeflow.publish`) |
 | `GET` | `flows/{flow}/nodes/{type}/fields/{field}/options` | `nodeflow.fields.options` | Resolves a declared dynamic field's options. | `update` (`nodeflow.update`) |
 | `GET` | `runs/{run}` | `nodeflow.runs.show` | Renders the read-only run view's Inertia props. | `view` (`nodeflow.viewAny`) |
@@ -50,10 +51,11 @@ The `{node}` segment in the subjects endpoint is not a database ID. It must name
 The package owns the controllers, prop shapes, and endpoint URLs. The host owns the layout, Inertia resolver, and the pages named by `Inertia::render('nodeflow/editor')` and `Inertia::render('nodeflow/run')`. Place lower-case `nodeflow/editor.tsx` and `nodeflow/run.tsx` beneath the page root and casing your resolver already uses. For a resolver rooted at lower-case `resources/js/pages`, the files are `resources/js/pages/nodeflow/editor.tsx` and `resources/js/pages/nodeflow/run.tsx`; a `resources/js/Pages` or custom-root resolver must retain that configured root and casing.
 
 ```tsx
+import { Link } from '@inertiajs/react'
 import { FlowEditor, type FlowEditorProps } from '@nodeflow/editor'
 
 export default function Editor(props: FlowEditorProps) {
-    return <FlowEditor {...props} />
+    return <FlowEditor {...props} toolbarSlots={{ leading:<Link href="/admin/flows">All flows</Link> }} />
 }
 ```
 
@@ -65,7 +67,7 @@ export default function Run(props: FlowRunProps) {
 }
 ```
 
-These intentionally thin adapters let the host wrap either page in its application layout or error boundary without giving the package an Inertia dependency. Configure the alias and dependencies first in [Frontend setup](frontend-setup.md).
+These intentionally thin adapters let the host wrap either page in its application layout or error boundary without giving the package an Inertia dependency. `FlowEditor` defaults to its full-height workspace; use `<FlowEditor {...props} mode="embedded" />` only when the host intentionally supplies a constrained frame. Do not add host sizing classes that fight the package workspace. Configure the alias and dependencies first in [Frontend setup](frontend-setup.md).
 
 ## Next step
 

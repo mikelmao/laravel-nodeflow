@@ -67,7 +67,7 @@ export default function Run(props: FlowRunProps) {
 }
 ```
 
-The package retains the card wrapper. It owns target and source handles so renderer changes cannot make a node unwirable, and the source-handle ID remains the declared output name. It also owns the mandatory per-node error list. A host renderer may repeat errors in its body for context, but cannot hide a publish error or a run failure by omitting them.
+The package owns the wrapper, ports, full errors, and run decorations; the host renderer supplies only the body. Target and source handles remain package-owned so renderer changes cannot make a node unwirable, and the source-handle ID remains the declared output name. The package also owns the mandatory per-node error list. A host renderer may repeat errors in its body for context, but cannot hide a publish error or a run failure by omitting them.
 
 For run views, the wrapper additionally applies overlay decorations: never-reached nodes are dimmed; reached nodes have output, waiting, error, or explicit-zero badges. The renderer supplies only the card body, so it does not need to recreate those run-state indicators.
 

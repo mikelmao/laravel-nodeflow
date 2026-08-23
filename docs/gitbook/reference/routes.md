@@ -1,6 +1,6 @@
 # Route reference
 
-Nodeflow registers seven routes when the host calls `Nodeflow::routes()`. The package declares neither a URL prefix, middleware, domain, nor authentication; the containing host route group owns all of those choices.
+Nodeflow registers eight routes when the host calls `Nodeflow::routes()`. The package declares neither a URL prefix, middleware, domain, nor authentication; the containing host route group owns all of those choices.
 
 ## Register the routes
 
@@ -25,6 +25,7 @@ The names below are the canonical, unprefixed names registered by the package. `
 | --- | --- | --- | --- | --- | --- |
 | `GET` | `flows/{flow}/edit` | `nodeflow.flows.edit` | Inertia `nodeflow/editor` page | Supplies the flow, draft-or-current graph, palette, triggers, and server-authored URLs. | `update` / `nodeflow.update` |
 | `PUT` | `flows/{flow}/draft` | `nodeflow.flows.draft` | JSON | Structurally validates and saves a draft with its revision token. | `update` / `nodeflow.update` |
+| `POST` | `flows/{flow}/validate` | `nodeflow.flows.validate` | JSON | Runs semantic graph validation without mutating the flow. | `publish` / `nodeflow.publish` |
 | `POST` | `flows/{flow}/publish` | `nodeflow.flows.publish` | JSON | Validates and creates the next published flow version. | `publish` / `nodeflow.publish` |
 | `GET` | `flows/{flow}/nodes/{type}/fields/{field}/options` | `nodeflow.fields.options` | JSON | Resolves a registered node field's dynamic options. | `update` / `nodeflow.update` |
 | `GET` | `runs/{run}` | `nodeflow.runs.show` | Inertia `nodeflow/run` page | Supplies a run's pinned graph, overlay, palette, and server-authored URLs. | `view` / `nodeflow.viewAny` |
@@ -33,7 +34,7 @@ The names below are the canonical, unprefixed names registered by the package. `
 
 The options route accepts a node *type* and field *key*, never a class name. Unknown types, undeclared fields, and fields without a dynamic option source return `404`; an options response is `{"options": {}}` when the source has no options.
 
-## Draft and publish success responses
+## Draft, validation, and publish responses
 
 `PUT` draft returns the revision that must be sent with the next draft save:
 
@@ -48,6 +49,26 @@ The options route accepts a node *type* and field *key*, never a class name. Unk
 ```
 
 Treat either returned `draft_revision` as authoritative. In particular, adopt the publish response's value before the next autosave; publishing does not reset the revision.
+
+`POST` validate is authorized with `publish` / `nodeflow.publish`, but it does not save a draft or create a version, change `draft_revision`, or publish. A valid graph responds exactly:
+
+```json
+{"valid":true,"warnings":[]}
+```
+
+Warnings can be non-empty without invalidating the graph. A semantic failure is HTTP 422 and includes the boolean result, human message, graph messages, node/field messages, and warnings:
+
+```json
+{
+  "valid": false,
+  "message": "The flow is not ready to publish.",
+  "errors": ["A start node is required."],
+  "node_errors": [{ "node": null, "field": null, "message": "A start node is required." }],
+  "warnings": []
+}
+```
+
+Malformed request shapes still receive Laravel's normal validation 422 response. Validate is a feedback action, not a publish approval: Publish revalidates the submitted graph before it can create a version.
 
 ## Host URL and name prefixes
 
@@ -73,7 +94,7 @@ The meaning of a null tenant depends on `nodeflow.tenancy`: the default `auto` m
 
 ## Error responses
 
-Malformed draft and publish payloads use Laravel validation responses. A stale draft returns `409` with `message`, `graph`, and `draft_revision`. `graph` is the current persisted draft when one exists, so it can be a raw partial graph; only an absent or empty persisted draft is replaced with the `{ "start": "", "nodes": [], "edges": [] }` skeleton. A semantically invalid publish returns `422` with `message`, `errors`, and `node_errors`; see [Graph format](graph-format.md#drafts-publishing-and-errors) for the payload rules and error shape.
+Malformed draft, validate, and publish payloads use Laravel validation responses. A stale draft returns `409` with `message`, `graph`, and `draft_revision`. `graph` is the current persisted draft when one exists, so it can be a raw partial graph; only an absent or empty persisted draft is replaced with the `{ "start": "", "nodes": [], "edges": [] }` skeleton. A semantic validate failure returns `422` with `valid`, `message`, `errors`, `node_errors`, and `warnings`; a semantic publish failure returns `422` with `message`, `errors`, and `node_errors`. See [Graph format](graph-format.md#drafts-publishing-and-errors) for the payload rules and error shape.
 
 ## Next step
 
