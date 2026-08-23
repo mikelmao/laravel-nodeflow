@@ -9,7 +9,7 @@ function shell(overrides: Partial<React.ComponentProps<typeof EditorShell>> = {}
         toolbar: <div>Toolbar region</div>,
         library: <div>Library region<button type="button">Library action</button></div>,
         canvas: <div>Canvas region</div>,
-        inspector: <div>Inspector region</div>,
+        inspector: <div>Inspector region<button type="button">Inspector action</button></div>,
         notices: <div>Notices region</div>,
         libraryOpen: false,
         inspectorOpen: false,
@@ -53,7 +53,7 @@ describe('EditorShell', () => {
     })
 
     it('keeps one DOM instance of every supplied region', () => {
-        shell()
+        shell({ libraryOpen: true, inspectorOpen: true })
         expect(screen.getAllByText('Toolbar region')).toHaveLength(1)
         expect(screen.getAllByText('Library region')).toHaveLength(1)
         expect(screen.getAllByText('Canvas region')).toHaveLength(1)
@@ -71,7 +71,7 @@ describe('EditorShell', () => {
         const library = screen.getByText('Library region').closest('aside')
         const inspector = screen.getByText('Inspector region').closest('aside')
         expect(root).toHaveClass('flex', 'flex-col')
-        expect(body).toHaveClass('flex-1', 'min-h-0', 'lg:grid-cols-[var(--nodeflow-library-width)_4px_minmax(0,1fr)_4px_var(--nodeflow-inspector-width)]')
+        expect(body).toHaveClass('flex-1', 'min-h-0', 'lg:grid-cols-[var(--nodeflow-library-track)_var(--nodeflow-library-handle)_minmax(0,1fr)_var(--nodeflow-inspector-handle)_var(--nodeflow-inspector-track)]')
         expect(body).not.toHaveClass('h-full')
         expect(library).toHaveClass('lg:col-start-1')
         expect(libraryResize).toHaveClass('lg:col-start-2')
@@ -146,8 +146,61 @@ describe('EditorShell', () => {
         expect(props.onInspectorOpenChange).not.toHaveBeenCalled()
     })
 
+    it('uses controlled desktop toggles without closing the other panel', async () => {
+        installMediaQuery(false)
+        const user = userEvent.setup()
+        const { props } = shell({ libraryOpen: true, inspectorOpen: true })
+
+        expect(screen.getByRole('button', { name: 'Collapse Node Library' })).toBeInTheDocument()
+        expect(screen.getByRole('button', { name: 'Collapse Inspector' })).toBeInTheDocument()
+        await user.click(screen.getByRole('button', { name: 'Collapse Node Library' }))
+        expect(props.onLibraryOpenChange).toHaveBeenLastCalledWith(false)
+        expect(props.onInspectorOpenChange).not.toHaveBeenCalled()
+        await user.click(screen.getByRole('button', { name: 'Collapse Inspector' }))
+        expect(props.onInspectorOpenChange).toHaveBeenLastCalledWith(false)
+    })
+
+    it('collapses each controlled desktop panel into a zero-width inert track and restores its saved width', async () => {
+        installMediaQuery(false)
+        const user = userEvent.setup()
+        const { props, rerender } = shell({ libraryOpen: true, inspectorOpen: true })
+        const root = screen.getByTestId('editor-shell')
+        const libraryResize = screen.getByRole('separator', { name: 'Resize Node Library' })
+        fireEvent.keyDown(libraryResize, { key: 'ArrowRight' })
+        expect(libraryResize).toHaveAttribute('aria-valuenow', '336')
+
+        const libraryAction = screen.getByRole('button', { name: 'Library action' })
+        libraryAction.focus()
+        rerender(<EditorShell {...props} libraryOpen={false} inspectorOpen />)
+        expect(screen.queryByRole('button', { name: 'Library action' })).toBeNull()
+        expect(screen.getByText('Library region').closest('aside')).toHaveAttributes({ hidden: '', inert: '', 'aria-hidden': 'true' })
+        expect(screen.queryByRole('separator', { name: 'Resize Node Library' })).toBeNull()
+        expect(root).toHaveStyle({ '--nodeflow-library-track': '0px', '--nodeflow-library-handle': '0px', '--nodeflow-inspector-track': '320px', '--nodeflow-inspector-handle': '4px' })
+        expect(screen.getByRole('button', { name: 'Open Node Library' })).toHaveFocus()
+
+        await user.click(screen.getByRole('button', { name: 'Open Node Library' }))
+        expect(props.onLibraryOpenChange).toHaveBeenLastCalledWith(true)
+        rerender(<EditorShell {...props} libraryOpen inspectorOpen />)
+        expect(screen.getByRole('separator', { name: 'Resize Node Library' })).toHaveAttribute('aria-valuenow', '336')
+        expect(root).toHaveStyle({ '--nodeflow-library-track': '336px', '--nodeflow-library-handle': '4px' })
+
+        const inspectorResize = screen.getByRole('separator', { name: 'Resize Inspector' })
+        fireEvent.keyDown(inspectorResize, { key: 'ArrowLeft' })
+        expect(inspectorResize).toHaveAttribute('aria-valuenow', '336')
+        screen.getByRole('button', { name: 'Inspector action' }).focus()
+        rerender(<EditorShell {...props} libraryOpen inspectorOpen={false} />)
+        expect(screen.getByText('Inspector region').closest('aside')).toHaveAttributes({ hidden: '', inert: '', 'aria-hidden': 'true' })
+        expect(screen.queryByRole('separator', { name: 'Resize Inspector' })).toBeNull()
+        expect(root).toHaveStyle({ '--nodeflow-inspector-track': '0px', '--nodeflow-inspector-handle': '0px' })
+        expect(screen.getByRole('button', { name: 'Open Inspector' })).toHaveFocus()
+        await user.click(screen.getByRole('button', { name: 'Open Inspector' }))
+        expect(props.onInspectorOpenChange).toHaveBeenLastCalledWith(true)
+        rerender(<EditorShell {...props} libraryOpen inspectorOpen />)
+        expect(screen.getByRole('separator', { name: 'Resize Inspector' })).toHaveAttribute('aria-valuenow', '336')
+    })
+
     it('clamps keyboard and pointer resizing and exposes exact CSS custom properties', () => {
-        shell()
+        shell({ libraryOpen: true, inspectorOpen: true })
         const root = screen.getByTestId('editor-shell')
         const libraryResize = screen.getByRole('separator', { name: 'Resize Node Library' })
         const inspectorResize = screen.getByRole('separator', { name: 'Resize Inspector' })
@@ -167,7 +220,7 @@ describe('EditorShell', () => {
     })
 
     it('derives every library drag move from its immutable pointer-down width and stops on pointerup', () => {
-        shell()
+        shell({ libraryOpen: true, inspectorOpen: true })
         const libraryResize = screen.getByRole('separator', { name: 'Resize Node Library' })
         fireEvent.pointerDown(libraryResize, { pointerId: 1, clientX: 100, button: 0, isPrimary: true })
         fireEvent.pointerMove(document, { pointerId: 1, clientX: 110 })
@@ -180,7 +233,7 @@ describe('EditorShell', () => {
     })
 
     it('derives every inspector drag move from its immutable pointer-down width and grows leftward', () => {
-        shell()
+        shell({ libraryOpen: true, inspectorOpen: true })
         const inspectorResize = screen.getByRole('separator', { name: 'Resize Inspector' })
         fireEvent.pointerDown(inspectorResize, { pointerId: 2, clientX: 100, button: 0, isPrimary: true })
         fireEvent.pointerMove(document, { pointerId: 2, clientX: 90 })
@@ -193,7 +246,7 @@ describe('EditorShell', () => {
     })
 
     it('ignores another pointer ending while an active drag continues until its own pointer ends', () => {
-        shell()
+        shell({ libraryOpen: true, inspectorOpen: true })
         const libraryResize = screen.getByRole('separator', { name: 'Resize Node Library' })
         fireEvent.pointerDown(libraryResize, { pointerId: 1, clientX: 100, button: 0, isPrimary: true })
         fireEvent.pointerMove(document, { pointerId: 1, clientX: 110 })
@@ -208,7 +261,7 @@ describe('EditorShell', () => {
     })
 
     it('keeps the first primary drag when a second pointerdown attempts to take ownership', () => {
-        shell()
+        shell({ libraryOpen: true, inspectorOpen: true })
         const libraryResize = screen.getByRole('separator', { name: 'Resize Node Library' })
         fireEvent.pointerDown(libraryResize, { pointerId: 1, clientX: 100, button: 0, isPrimary: true })
         fireEvent.pointerDown(libraryResize, { pointerId: 2, clientX: 500, button: 0, isPrimary: true })

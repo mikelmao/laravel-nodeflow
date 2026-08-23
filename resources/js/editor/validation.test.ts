@@ -23,6 +23,7 @@ describe('interpretValidation', () => {
     it('groups semantic errors for known nodes and keeps graph-wide errors unplaceable', () => {
         expect(interpretValidation(result(422, {
             valid: false,
+            message: 'The flow is not ready to publish.',
             errors: ['invalid graph'],
             warnings: ['sequential waits'],
             node_errors: [
@@ -55,6 +56,7 @@ describe('interpretValidation', () => {
     it('rejects malformed semantic node errors', () => {
         expect(interpretValidation(result(422, {
             valid: false,
+            message: 'The flow is not ready to publish.',
             errors: [],
             warnings: [],
             node_errors: [{ node: 'send1', field: null }],
@@ -87,5 +89,20 @@ describe('interpretValidation', () => {
             kind: 'failed',
             message: 'The validation response had an invalid success shape.',
         })
+    })
+
+    it('requires the server message on semantic validation failures', () => {
+        for (const message of [undefined, 123]) {
+            expect(interpretValidation(result(422, {
+                valid: false,
+                ...(message === undefined ? {} : { message }),
+                errors: [],
+                warnings: [],
+                node_errors: [],
+            }), known)).toEqual({
+                kind: 'failed',
+                message: 'The validation response contained an invalid message.',
+            })
+        }
     })
 })
