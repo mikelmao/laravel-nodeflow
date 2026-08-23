@@ -3,7 +3,7 @@ import { fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { useLayoutEffect, useRef } from 'react'
 import { describe, expect, it, vi } from 'vitest'
 import type { CanvasEdge, CanvasNode, NodeCardData, NodeTypePayload } from '../graph/types'
-import { Canvas, canvasActions, canvasBehavior, edgeTypes, interactionProps, notifyEdgeClick, prefersReducedMotion, type NodeflowEdge, type NodeflowNode } from './Canvas'
+import { Canvas, canvasActions, canvasBehavior, edgeTypes, interactionProps, prefersReducedMotion, type NodeflowEdge, type NodeflowNode } from './Canvas'
 import { CanvasContext } from './context'
 import { defaultNodeRenderer, NodeCard, rendererFor } from './NodeCard'
 import { WorkflowEdge } from './WorkflowEdge'
@@ -35,6 +35,12 @@ const canvasNode: CanvasNode = {
     position: { x: 0, y: 0 },
     data,
 }
+const canvasNodeTwo: CanvasNode = {
+    id: 'n2',
+    type: 'nodeflowNode',
+    position: { x: 300, y: 0 },
+    data: { ...data, id: 'n2', isStart: false },
+}
 const canvasEdge: CanvasEdge = {
     id: 'n1-sent-n2',
     type: 'nodeflowEdge',
@@ -45,6 +51,7 @@ const canvasEdge: CanvasEdge = {
 
 function nodeTypeTransfer(type: string | null): DataTransfer {
     return {
+        types: type === null ? [] : ['application/x-nodeflow-node-type'],
         getData: vi.fn((mime: string) => mime === 'application/x-nodeflow-node-type' ? type ?? '' : ''),
     } as unknown as DataTransfer
 }
@@ -517,14 +524,46 @@ describe('Canvas', () => {
         expect(onPaneClick).toHaveBeenCalledOnce()
     })
 
-    it('forwards the exact clicked edge id without a pane callback', () => {
+    it('routes a measured React Flow edge click only to the edge callback', async () => {
         const onPaneClick = vi.fn()
         const onEdgeClick = vi.fn()
+        class ImmediateResizeObserver {
+            constructor(private readonly callback: ResizeObserverCallback) {}
 
-        notifyEdgeClick(onEdgeClick, canvasEdge as NodeflowEdge)
+            observe(target: Element) {
+                queueMicrotask(() => this.callback([{
+                    target,
+                    contentRect: { width: 208, height: 40 },
+                } as ResizeObserverEntry], this as unknown as ResizeObserver))
+            }
 
-        expect(onEdgeClick).toHaveBeenCalledWith('n1-sent-n2')
-        expect(onPaneClick).not.toHaveBeenCalled()
+            unobserve() {}
+            disconnect() {}
+        }
+        vi.stubGlobal('ResizeObserver', ImmediateResizeObserver)
+        try {
+            const { container } = render(
+                <Canvas
+                    nodes={[canvasNode, canvasNodeTwo]}
+                    edges={[canvasEdge]}
+                    defs={{ 'app.send': def() }}
+                    onPaneClick={onPaneClick}
+                    onEdgeClick={onEdgeClick}
+                />,
+            )
+
+            await waitFor(() => expect(screen.getByTestId('rf__edge-n1-sent-n2')).toBeInTheDocument())
+            fireEvent.click(screen.getByTestId('rf__edge-n1-sent-n2'))
+
+            expect(onEdgeClick).toHaveBeenCalledOnce()
+            expect(onEdgeClick).toHaveBeenCalledWith('n1-sent-n2')
+            expect(onPaneClick).not.toHaveBeenCalled()
+
+            fireEvent.click(container.querySelector('.react-flow__pane')!)
+            expect(onPaneClick).toHaveBeenCalledOnce()
+        } finally {
+            vi.unstubAllGlobals()
+        }
     })
 
     it('converts only an exact node-type drag payload to a flow position', async () => {
@@ -556,6 +595,20 @@ describe('Canvas', () => {
         expect(onDropNodeType).toHaveBeenCalledWith('app.send', expected)
     })
 
+    it('accepts the exact MIME during protected dragover before its payload can be read', () => {
+        const onDropNodeType = vi.fn()
+        const { container } = render(
+            <Canvas nodes={[canvasNode]} edges={[]} defs={{ 'app.send': def() }} onDropNodeType={onDropNodeType} />,
+        )
+        const protectedTransfer = {
+            types: ['application/x-nodeflow-node-type'],
+            getData: vi.fn(() => ''),
+        } as unknown as DataTransfer
+
+        expect(fireEvent.dragOver(container.querySelector('.react-flow__pane')!, { dataTransfer: protectedTransfer })).toBe(false)
+        expect(protectedTransfer.getData).not.toHaveBeenCalled()
+    })
+
     it('rejects unsupported or empty drops and every drop in read-only mode', () => {
         const onDropNodeType = vi.fn()
         const { container } = render(
@@ -563,8 +616,9 @@ describe('Canvas', () => {
         )
         const pane = container.querySelector('.react-flow__pane')!
         const unsupported = {
+            types: ['text/plain'],
             getData: (mime: string) => mime === 'text/plain' ? 'app.send' : '',
-        } as DataTransfer
+        } as unknown as DataTransfer
 
         expect(fireEvent.drop(pane, { dataTransfer: unsupported, clientX: 1, clientY: 2 })).toBe(true)
         expect(fireEvent.dragOver(pane, { dataTransfer: nodeTypeTransfer(null) })).toBe(true)
@@ -590,22 +644,33 @@ describe('Canvas', () => {
         )
         await waitFor(() => expect(replacementReady).toHaveBeenCalledOnce())
         const fitView = vi.fn()
-        const getNode = vi.fn((id: string) => id === 'n1' ? { position: { x: 40, y: 80 } } : undefined)
+        const getNode = vi.fn((id: string) => {
+            if (id === 'n1') return { id, position: { x: 40, y: 80 } }
+            if (id === 'nested') return { id, position: { x: 20, y: 30 }, parentId: 'parent' }
+            return undefined
+        })
+        const getNodesBounds = vi.fn((nodes: Array<{ id: string }>) => nodes[0]?.id === 'nested'
+            ? { x: 500, y: 600, width: 420, height: 180 }
+            : { x: 0, y: 0, width: 0, height: 0 })
         const getZoom = vi.fn(() => 0.5)
         const setCenter = vi.fn()
         const screenToFlowPosition = vi.fn(() => ({ x: 8, y: 9 }))
         const actions = canvasActions(
-            { fitView, getNode, getZoom, setCenter, screenToFlowPosition } as unknown as ReactFlowInstance<NodeflowNode, NodeflowEdge>,
+            { fitView, getNode, getNodesBounds, getZoom, setCenter, screenToFlowPosition } as unknown as ReactFlowInstance<NodeflowNode, NodeflowEdge>,
             false,
         )
 
         actions.fit()
         actions.centerNode('n1')
+        actions.centerNode('nested')
         actions.centerNode('missing')
 
         expect(fitView).toHaveBeenCalledWith({ padding: 0.22, duration: 220 })
         expect(getNode).toHaveBeenNthCalledWith(1, 'n1')
+        expect(getNodesBounds).toHaveBeenCalledWith([{ id: 'n1', position: { x: 40, y: 80 } }])
         expect(setCenter).toHaveBeenCalledWith(168, 136, { zoom: 0.85, duration: 220 })
+        expect(getNodesBounds).toHaveBeenCalledWith([{ id: 'nested', position: { x: 20, y: 30 }, parentId: 'parent' }])
+        expect(setCenter).toHaveBeenCalledWith(710, 690, { zoom: 0.85, duration: 220 })
         expect(getNode).toHaveBeenLastCalledWith('missing')
         expect(actions.screenToFlowPosition({ x: 1, y: 2 })).toEqual({ x: 8, y: 9 })
         expect(screenToFlowPosition).toHaveBeenCalledWith({ x: 1, y: 2 })
@@ -635,6 +700,8 @@ describe('Canvas', () => {
 
         const visible = render(<Canvas nodes={[canvasNode]} edges={[]} defs={{ 'app.send': def() }} showMinimap />)
         expect(visible.container.querySelector('.react-flow__minimap')).not.toBeNull()
+        expect(visible.container.querySelector('.react-flow__minimap')).toHaveClass('border', 'border-border', 'bg-background')
+        expect(visible.container.querySelector('.react-flow__minimap')).toHaveStyle({ background: 'var(--background)' })
     })
 
     it('registers the workflow edge renderer at module scope', () => {

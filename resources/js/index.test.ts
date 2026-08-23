@@ -17,6 +17,7 @@ import {
 } from '.'
 import type {
     CanvasContextValue,
+    CanvasActions,
     CanvasEdge,
     CanvasNode,
     CanvasProps,
@@ -54,6 +55,7 @@ import type {
 
 type EveryPublicType =
     | CanvasContextValue
+    | CanvasActions
     | CanvasEdge
     | CanvasNode
     | CanvasProps

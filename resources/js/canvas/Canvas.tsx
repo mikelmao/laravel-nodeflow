@@ -81,19 +81,17 @@ export function canvasActions(
             const node = instance.getNode(id)
 
             if (node !== undefined) {
+                const bounds = instance.getNodesBounds([node])
+                const hasMeasuredBounds = bounds.width > 0 && bounds.height > 0
                 void instance.setCenter(
-                    node.position.x + NODE_WIDTH / 2,
-                    node.position.y + NODE_MIN_HEIGHT / 2,
+                    hasMeasuredBounds ? bounds.x + bounds.width / 2 : node.position.x + NODE_WIDTH / 2,
+                    hasMeasuredBounds ? bounds.y + bounds.height / 2 : node.position.y + NODE_MIN_HEIGHT / 2,
                     { zoom: Math.max(instance.getZoom(), 0.85), duration },
                 )
             }
         },
         screenToFlowPosition: (point) => instance.screenToFlowPosition(point),
     }
-}
-
-export function notifyEdgeClick(onEdgeClick: CanvasProps['onEdgeClick'], edge: NodeflowEdge): void {
-    onEdgeClick?.(edge.id)
 }
 
 type InteractionProps = Pick<
@@ -208,7 +206,7 @@ export function Canvas({
     )
     const handlePaneClick = useCallback(() => onPaneClick?.(), [onPaneClick])
     const handleEdgeClick = useCallback(
-        (_: MouseEvent, edge: NodeflowEdge) => notifyEdgeClick(onEdgeClick, edge),
+        (_: MouseEvent, edge: NodeflowEdge) => onEdgeClick?.(edge.id),
         [onEdgeClick],
     )
     const actions = useMemo(
@@ -220,25 +218,33 @@ export function Canvas({
             onReady?.(actions)
         }
     }, [actions, onReady])
-    const acceptsNodeTypeDrop = useCallback((event: DragEvent<HTMLDivElement>) => {
-        return interactive && onDropNodeType !== undefined && event.dataTransfer.getData(NODE_TYPE_MIME) !== ''
-    }, [interactive, onDropNodeType])
+    const canDropNodeType = interactive && onDropNodeType !== undefined
+    const hasNodeTypeMime = useCallback(
+        (event: DragEvent<HTMLDivElement>) => Array.from(event.dataTransfer.types).includes(NODE_TYPE_MIME),
+        [],
+    )
     const handleDragOver = useCallback((event: DragEvent<HTMLDivElement>) => {
-        if (acceptsNodeTypeDrop(event)) {
+        if (canDropNodeType && hasNodeTypeMime(event)) {
             event.preventDefault()
         }
-    }, [acceptsNodeTypeDrop])
+    }, [canDropNodeType, hasNodeTypeMime])
     const handleDrop = useCallback((event: DragEvent<HTMLDivElement>) => {
-        if (!acceptsNodeTypeDrop(event) || instance === null) {
+        if (!canDropNodeType || !hasNodeTypeMime(event) || instance === null) {
+            return
+        }
+
+        const type = event.dataTransfer.getData(NODE_TYPE_MIME)
+
+        if (type === '') {
             return
         }
 
         event.preventDefault()
-        onDropNodeType!(event.dataTransfer.getData(NODE_TYPE_MIME), instance.screenToFlowPosition({
+        onDropNodeType!(type, instance.screenToFlowPosition({
             x: event.clientX,
             y: event.clientY,
         }))
-    }, [acceptsNodeTypeDrop, instance, onDropNodeType])
+    }, [canDropNodeType, hasNodeTypeMime, instance, onDropNodeType])
 
     return (
         <CanvasContext.Provider value={context}>
@@ -263,7 +269,14 @@ export function Canvas({
                 >
                     <Background color="hsl(var(--border))" />
                     <Controls showInteractive={false} className="border border-border bg-background text-foreground shadow-sm" />
-                    {showMinimap && <MiniMap pannable zoomable />}
+                    {showMinimap && (
+                        <MiniMap
+                            pannable
+                            zoomable
+                            className="border border-border bg-background"
+                            style={{ background: 'var(--background)', borderColor: 'var(--border)' }}
+                        />
+                    )}
                 </ReactFlow>
             </div>
         </CanvasContext.Provider>

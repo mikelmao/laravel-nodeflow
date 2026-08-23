@@ -1,5 +1,5 @@
 export { Canvas } from './canvas/Canvas'
-export type { CanvasProps, NodeflowEdge, NodeflowNode } from './canvas/Canvas'
+export type { CanvasActions, CanvasProps, NodeflowEdge, NodeflowNode } from './canvas/Canvas'
 export { defaultNodeRenderer, rendererFor } from './canvas/NodeCard'
 export type {
     CanvasContextValue,
