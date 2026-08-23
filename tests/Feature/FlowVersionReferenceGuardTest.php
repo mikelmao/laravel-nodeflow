@@ -8,6 +8,7 @@ use Nodeflow\Models\CrossTenantWriteException;
 use Nodeflow\Models\Flow;
 use Nodeflow\Models\FlowVersion;
 use Nodeflow\Models\InvalidFlowVersionReferenceException;
+use Nodeflow\Models\Run;
 
 beforeEach(function () {
     $this->tenant = 'org-1';
@@ -130,4 +131,109 @@ it('documents that a query-builder flow update bypasses model events', function 
     Flow::withoutTenancy()->whereKey($flow->id)->update(['current_version_id' => $foreign->id]);
 
     expect(Flow::withoutTenancy()->findOrFail($flow->id)->current_version_id)->toBe($foreign->id);
+});
+
+it('allows a run to reference a same-tenant version', function () {
+    $version = ($this->makeVersion)('org-1');
+
+    $run = Run::create([
+        'flow_version_id' => $version->id,
+        'tenant_id' => 'org-1',
+        'strategy' => 'cohort',
+        'status' => 'pending',
+    ]);
+
+    expect($run->flow_version_id)->toBe($version->id);
+});
+
+it('refuses null and missing run version references', function () {
+    expect(fn () => Run::create([
+        'flow_version_id' => null,
+        'tenant_id' => 'org-1',
+        'strategy' => 'cohort',
+        'status' => 'pending',
+    ]))->toThrow(InvalidFlowVersionReferenceException::class, 'null');
+
+    expect(fn () => Run::create([
+        'flow_version_id' => 999999,
+        'tenant_id' => 'org-1',
+        'strategy' => 'cohort',
+        'status' => 'pending',
+    ]))->toThrow(InvalidFlowVersionReferenceException::class, '999999');
+});
+
+it('refuses cross-tenant run references on create and update', function () {
+    $own = ($this->makeVersion)('org-1');
+    $foreign = ($this->makeVersion)('org-2');
+
+    expect(fn () => Run::create([
+        'flow_version_id' => $foreign->id,
+        'tenant_id' => 'org-1',
+        'strategy' => 'cohort',
+        'status' => 'pending',
+    ]))->toThrow(CrossTenantWriteException::class, 'flow_version_id');
+
+    $run = Run::create([
+        'flow_version_id' => $own->id,
+        'tenant_id' => 'org-1',
+        'strategy' => 'cohort',
+        'status' => 'pending',
+    ]);
+
+    expect(fn () => $run->update(['flow_version_id' => $foreign->id]))
+        ->toThrow(CrossTenantWriteException::class, "'org-2'");
+});
+
+it('does not let guard suspension create a contradictory run reference', function () {
+    $version = ($this->makeVersion)('org-1');
+    $run = Run::create([
+        'flow_version_id' => $version->id,
+        'tenant_id' => 'org-1',
+        'strategy' => 'cohort',
+        'status' => 'pending',
+    ]);
+
+    expect(fn () => TenancyGuardSuspension::run(
+        fn () => $run->update(['tenant_id' => 'org-2'])
+    ))->toThrow(CrossTenantWriteException::class);
+});
+
+it('queries the version only when a run write can change the invariant', function () {
+    $version = ($this->makeVersion)('org-1');
+    $run = Run::create([
+        'flow_version_id' => $version->id,
+        'tenant_id' => 'org-1',
+        'strategy' => 'cohort',
+        'status' => 'pending',
+    ]);
+    $versionQueries = [];
+
+    DB::listen(function (Illuminate\Database\Events\QueryExecuted $query) use (&$versionQueries) {
+        if (str_contains($query->sql, 'nodeflow_flow_versions')) {
+            $versionQueries[] = $query->sql;
+        }
+    });
+
+    $run->update(['status' => 'running']);
+    expect($versionQueries)->toBe([]);
+
+    $replacement = ($this->makeVersion)('org-1');
+    $versionQueries = [];
+    $run->update(['flow_version_id' => $replacement->id]);
+    expect($versionQueries)->toHaveCount(1);
+});
+
+it('documents that a query-builder run update bypasses model events', function () {
+    $own = ($this->makeVersion)('org-1');
+    $foreign = ($this->makeVersion)('org-2');
+    $run = Run::create([
+        'flow_version_id' => $own->id,
+        'tenant_id' => 'org-1',
+        'strategy' => 'cohort',
+        'status' => 'pending',
+    ]);
+
+    Run::withoutTenancy()->whereKey($run->id)->update(['flow_version_id' => $foreign->id]);
+
+    expect(Run::withoutTenancy()->findOrFail($run->id)->flow_version_id)->toBe($foreign->id);
 });
