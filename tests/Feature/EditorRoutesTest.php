@@ -44,6 +44,29 @@ function exitGraph(): array
     ];
 }
 
+function graphWithConcurrentWaits(): array
+{
+    return [
+        'start' => 'c1',
+        'nodes' => [
+            ['id' => 'c1', 'type' => 'core.condition', 'config' => [
+                'attribute' => 'email',
+                'operator' => 'equals',
+                'value' => 'author@example.test',
+            ]],
+            ['id' => 'w1', 'type' => 'core.wait', 'config' => ['duration' => '1 day']],
+            ['id' => 'w2', 'type' => 'core.wait', 'config' => ['duration' => '2 days']],
+            ['id' => 'e1', 'type' => 'core.exit', 'config' => []],
+        ],
+        'edges' => [
+            ['from' => 'c1', 'output' => 'yes', 'to' => 'w1'],
+            ['from' => 'c1', 'output' => 'no', 'to' => 'w2'],
+            ['from' => 'w1', 'output' => 'default', 'to' => 'e1'],
+            ['from' => 'w2', 'output' => 'default', 'to' => 'e1'],
+        ],
+    ];
+}
+
 function allowEverything(): void
 {
     foreach (['viewAny', 'update', 'publish', 'runManually'] as $ability) {
@@ -92,7 +115,7 @@ function editPage($test, int $flowId)
         ->get("/nodeflow/flows/{$flowId}/edit");
 }
 
-it('renders the editor page with the props the client is written against', function () {
+it('renders the editor props the client is written against', function () {
     // The edit page's prop shape is the contract the React client is built on, so
     // it is pinned here rather than left to the first person who breaks it.
     // Counterfactual: rename or drop any prop — `graph`, `palette`, `triggers`, or
@@ -114,6 +137,7 @@ it('renders the editor page with the props the client is written against', funct
         // drop `urls` from edit() and this fails before the React client has to
         // discover the missing endpoint at runtime.
         ->assertJsonPath('props.urls.draft', "http://localhost/nodeflow/flows/{$this->flow->id}/draft")
+        ->assertJsonPath('props.urls.validate', "http://localhost/nodeflow/flows/{$this->flow->id}/validate")
         // No draft and no published version: the empty skeleton, not null, so the
         // canvas has something of the right shape to mount on.
         ->assertJsonPath('props.graph', ['start' => '', 'nodes' => [], 'edges' => []]);
@@ -256,6 +280,88 @@ it('accepts a draft that could never publish', function () {
             'draft_revision' => null,
         ])
         ->assertOk();
+});
+
+it('validates a graph without saving or publishing it', function () {
+    allowEverything();
+    $before = $this->flow->only(['draft_graph', 'draft_revision', 'current_version_id']);
+
+    $this->actingAs($this->user)
+        ->postJson("/nodeflow/flows/{$this->flow->id}/validate", ['graph' => exitGraph()])
+        ->assertOk()
+        ->assertExactJson(['valid' => true, 'warnings' => []]);
+
+    expect($this->flow->fresh()->only(array_keys($before)))->toBe($before)
+        ->and($this->flow->versions()->count())->toBe(0);
+});
+
+it('returns semantic errors for an empty graph', function () {
+    allowEverything();
+
+    $this->actingAs($this->user)
+        ->postJson("/nodeflow/flows/{$this->flow->id}/validate", ['graph' => [
+            'start' => '',
+            'nodes' => [],
+            'edges' => [],
+        ]])
+        ->assertStatus(422)
+        ->assertJsonPath('valid', false)
+        ->assertJsonPath('message', 'The flow is not ready to publish.')
+        ->assertJsonStructure(['errors', 'node_errors', 'warnings']);
+});
+
+it('requires publish authorization to validate', function () {
+    // Validation is publish semantics without the mutation, so update alone must
+    // not let an editor learn whether a draft is ready to release.
+    Gate::define('nodeflow.update', fn ($user, $flow = null) => true);
+    Gate::define('nodeflow.publish', fn ($user, $flow = null) => false);
+
+    $this->actingAs($this->user)
+        ->postJson("/nodeflow/flows/{$this->flow->id}/validate", ['graph' => exitGraph()])
+        ->assertForbidden();
+});
+
+it('four-oh-fours another tenants flow before validating authorization', function () {
+    Gate::define('nodeflow.publish', fn ($user, $flow = null) => false);
+
+    $theirs = TenancyGuardSuspension::run(fn () => Flow::withoutTenancy()->create([
+        'tenant_id' => 'org-2',
+        'name' => 'Theirs',
+        'trigger_type' => 'manual',
+        'status' => 'draft',
+    ]));
+
+    $this->actingAs($this->user)
+        ->postJson("/nodeflow/flows/{$theirs->id}/validate", ['graph' => exitGraph()])
+        ->assertNotFound();
+});
+
+it('returns warnings from a valid graph without mutation', function () {
+    allowEverything();
+    $before = $this->flow->only(['draft_graph', 'draft_revision', 'current_version_id']);
+
+    $response = $this->actingAs($this->user)
+        ->postJson("/nodeflow/flows/{$this->flow->id}/validate", ['graph' => graphWithConcurrentWaits()])
+        ->assertOk()
+        ->assertJsonPath('valid', true);
+
+    expect(implode(' ', $response->json('warnings')))->toContain('sequentially')
+        ->and($this->flow->fresh()->only(array_keys($before)))->toBe($before)
+        ->and($this->flow->versions()->count())->toBe(0);
+});
+
+it('preserves warnings when validation errors coexist', function () {
+    allowEverything();
+    $graph = graphWithConcurrentWaits();
+    $graph['nodes'][1]['config'] = [];
+
+    $response = $this->actingAs($this->user)
+        ->postJson("/nodeflow/flows/{$this->flow->id}/validate", ['graph' => $graph])
+        ->assertStatus(422)
+        ->assertJsonPath('valid', false)
+        ->assertJsonStructure(['errors', 'node_errors', 'warnings']);
+
+    expect(implode(' ', $response->json('warnings')))->toContain('sequentially');
 });
 
 it('publishes a valid graph and freezes a version', function () {
@@ -437,6 +543,7 @@ it('hands the client the urls for its own endpoints', function () {
     $response = editPage($this, $this->flow->id);
 
     $response->assertJsonPath('props.urls.draft', "http://localhost/nodeflow/flows/{$this->flow->id}/draft")
+        ->assertJsonPath('props.urls.validate', "http://localhost/nodeflow/flows/{$this->flow->id}/validate")
         ->assertJsonPath('props.urls.publish', "http://localhost/nodeflow/flows/{$this->flow->id}/publish");
 
     // A template, not a URL: the client substitutes the node type and field key
@@ -465,6 +572,7 @@ it('resolves its urls through the hosts own route name prefix', function () {
 
     $response->assertOk()
         ->assertJsonPath('props.urls.draft', "http://localhost/admin/flows/{$this->flow->id}/draft")
+        ->assertJsonPath('props.urls.validate', "http://localhost/admin/flows/{$this->flow->id}/validate")
         ->assertJsonPath('props.urls.publish', "http://localhost/admin/flows/{$this->flow->id}/publish")
         ->assertJsonPath('props.urls.options', "http://localhost/admin/flows/{$this->flow->id}/nodes/__NODEFLOW_TYPE__/fields/__NODEFLOW_FIELD__/options");
 });
