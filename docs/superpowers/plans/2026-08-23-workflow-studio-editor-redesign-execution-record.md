@@ -394,10 +394,18 @@
   classes that conflicted with the package workspace. The demo adapter's Prettier and ESLint checks
   passed; Vite production build passed (with its existing Vite native-config and optional Fontaine
   advisory warnings); full demo Pest passed **111 tests / 690 assertions**.
-- The demo TypeScript gate exposed an integration-only type-identity conflict: its own React 19.2.18
-  declarations and the symlinked package's separately resolved React 19.2.18 declarations make the
-  `searchInputRef` in `NodeLibrary.tsx` incompatible. Package TypeScript is green; no package or
-  demo configuration was changed because this task is limited to documentation and the one adapter.
+- Type-compatibility follow-up RED: the demo TypeScript gate exposed an integration-only identity
+  conflict despite matching React 19.2.8 and `@types/react` 19.2.18 versions. Its declarations
+  resolve from `/Users/mikelmao/Sites/nodeflow-demo/node_modules/@types/react`, while the symlinked
+  package resolves from `/Users/mikelmao/Projects/laravel-nodeflow/node_modules/@types/react`.
+  `NodeLibrary.type-test.ts` reproduced the failure with a foreign React callback-cleanup marker:
+  the old `React.Ref<HTMLInputElement>` annotation rejected the otherwise equivalent ref.
+- Type-compatibility GREEN: `CompatibleRef` is structural and `attachRef` bridges it at the DOM
+  boundary, preserving object refs, callback refs, and React 19 cleanup callbacks without adding or
+  changing any dependency. Package full Vitest passed **26 files / 295 tests**, TypeScript passed,
+  and the focused PHP pair passed **27 tests / 137 assertions**. With the feature symlink active,
+  demo Prettier, ESLint, TypeScript, production build, and full Pest all passed (**111 tests / 690
+  assertions**); Vite retained only its existing native-config and optional Fontaine advisories.
 - Browser setup selected the connected Chrome browser and opened the freshly seeded local demo.
   The documented disposable-demo command `php artisan migrate:fresh --seed --no-interaction` and
   `tests/Feature/DemoSeedTest.php` passed (**1 test / 11 assertions**). Browser acceptance stopped
