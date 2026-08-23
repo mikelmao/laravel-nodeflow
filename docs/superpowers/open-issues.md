@@ -13,7 +13,7 @@ measured for Plan 6: **891 package Pest tests (7438 assertions)**, **160 package
 silent package `tsc`; demo **56 Pest tests (223
 assertions)**, silent demo `tsc`, and a successful demo `npm run build`. Plan 6 delivered E9 and E10
 as amended by E36, closed G-6 and G-10, and added F-4 and G-13 below. Plan 5's real-browser caveat
-remains open as G-5.
+was later closed by the 2026-08-23 G-5 rerun recorded below.
 
 **Read `docs/superpowers/plans/2026-08-21-nodeflow-remaining-tooling-execution-record.md` before
 trusting Plan 5's plan document.** Execution forced 22 recorded rulings, 15 of them corrections to
@@ -138,8 +138,9 @@ disposable.
 
 ## Plan 5 acceptance evidence
 
-Measured on merged `main` (`c080184`) with the demo at `58cd733`. **Real-browser acceptance has NOT
-run** — see the caveat at the end; everything below was verified without a browser.
+Measured on merged `main` (`c080184`) with the demo at `58cd733`. **Real-browser acceptance had NOT
+run at Plan 5 close** — see the historical caveat at the end; everything in this section was
+verified without a browser. G-5 was closed later by the 2026-08-23 rerun recorded below.
 
 **Gates.** Package: **488 Pest tests (6152 assertions)**, **160 Vitest tests**, silent
 `npx tsc --noEmit`. Demo: **56 Pest tests (223 assertions)**, silent `tsc`, a passing Vite build.
@@ -398,16 +399,16 @@ what makes the check mean anything.
 
 ---
 
-### G-5 · Browser acceptance for Plan 5 never ran
-**Status:** GAP · **Raised by:** Plan 5 close · **Cost:** one manual toggle plus ~20 minutes
+### G-5 · Browser acceptance for Plan 5
+**Status:** ✅ **RESOLVED, 2026-08-23 clean-fixture rerun.** · **Raised by:** Plan 5 close
 
-Plan 5 merged without real-browser acceptance. The browser harness needs Chrome's "Allow remote
+Plan 5 merged without real-browser acceptance. At the time, the browser harness needed Chrome's "Allow remote
 debugging" toggle clicked by hand, and Chrome 151 demands it even for a separate instance launched
 with `--remote-debugging-port` and a throwaway profile — which is the workaround Plan 4 relied on and
-recorded as sufficient. It is no longer sufficient.
+recorded as sufficient. That CDP-only workaround was no longer sufficient for the required HTTP
+status evidence.
 
-Four things are therefore unverified by observation, and the first three are what a passing suite
-genuinely cannot substitute for:
+The four observations missing at Plan 5 close were:
 
 1. Console cleanliness across every interaction.
 2. The editor and the run view actually rendering — Plan 5 changed `demo.tsx`, and the Tailwind
@@ -416,11 +417,18 @@ genuinely cannot substitute for:
    `runs/{run}/subjects/{subject}/…` URLs. No test exercises those URLs from the browser.
 4. Logout closing the demo, now that the group carries `auth`.
 
-**To run it later:** launch `/Applications/Google Chrome.app/Contents/MacOS/Google Chrome
---remote-debugging-port=9222 --user-data-dir=/tmp/nodeflow-chrome`, visit
-`chrome://inspect/#remote-debugging` in *that* window and tick the box, start
-`php artisan queue:work` in the demo, then point the harness at the CDP endpoint. Note it binds to
-IPv6 loopback — use `http://[::1]:9222/json/version`, not `127.0.0.1`.
+**Closure evidence.** On 2026-08-23 the approved Chrome-extension browser exercised the real
+symlinked demo and a controlled queue worker against canonical flow 4 (published version 1, ten
+nodes / thirteen edges). Run 8 completed with nine steps: the real client sent click for subject
+29/user 35 and convert for subject 30/user 36 through the reshaped
+`runs/{run}/subjects/{subject}/…` routes; user 35 upgraded to `plus`, while user 36 exited and
+received no later message. The editor and pinned run view each rendered ten React Flow nodes with
+compiled styling. Across the instrumented browser session, all 238 requests finished as **230 ×
+200** and **8 × 302**, with no 4xx/5xx response, console error, unhandled rejection, or invalid-hook
+call. Logout redirected to login, and a fresh direct `/nodeflow` request redirected without exposing
+protected content. Run 7 is retained as a transparent timing attempt; run 8 is the accepted run.
+Exact database ranges, request routes, cleanup, screenshot hashes, and the earlier blocked attempt
+are preserved in the [Plan 7 execution record](plans/2026-08-22-plan-7-release-readiness-execution-record.md#post-plan-8-g-5-closure-rerun-pass).
 
 ### G-6 · Duplicated path logic across the install steps
 **Status:** ✅ **RESOLVED, Plan 6 (corrected E41).** · **Raised by:** Plan 5 whole-branch review

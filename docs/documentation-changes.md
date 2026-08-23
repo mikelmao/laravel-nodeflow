@@ -14,11 +14,16 @@ not targets for this handoff. Apply each remaining change only when its named ev
   assertions; `npx tsc --noEmit` was silent; the production build passed after transforming 2,497
   modules; Composer validation passed with the two known unbound local-package warnings; and the
   demo remained clean.
-- G-5 remained **BLOCKED**, not passed. The real browser rendered and exercised the editor and run
-  view, but the persistent demo graph did not have the required ten-node shape, the approved Chrome
-  surface could not prove exact action redirect statuses or a complete failed-request count, and a
-  SQLite lock/recovery sequence prevented proof of mid-journey cancellation. Preserve the exact
-  evidence and row IDs in the [Plan 7 execution record](superpowers/plans/2026-08-22-plan-7-release-readiness-execution-record.md#task-6-g-5--real-browser-acceptance-blocked).
+- The original Plan 7 G-5 attempt remained **BLOCKED**, not passed. The real browser rendered and
+  exercised the editor and run view, but the persistent demo graph did not have the required
+  ten-node shape, the approved Chrome surface could not prove exact action redirect statuses or a
+  complete failed-request count, and a SQLite lock/recovery sequence prevented proof of mid-journey
+  cancellation. Preserve the exact evidence and row IDs in the [Plan 7 execution record](superpowers/plans/2026-08-22-plan-7-release-readiness-execution-record.md#task-6-g-5--real-browser-acceptance-blocked).
+- A clean-fixture rerun on 2026-08-23 subsequently **PASSED G-5**. It rendered the canonical
+  ten-node editor and pinned run graph, exercised click and convert/exit from the real client,
+  recorded every browser request as 200 or 302, observed no console errors or unhandled
+  rejections, and proved logout protected `/nodeflow`. The closure evidence is appended to the same
+  execution record under `Post-Plan-8 G-5 closure rerun`.
 
 ## Exact corrective evidence
 
@@ -38,8 +43,8 @@ the corrected behavior.
 - Reconcile Plan 6 to `8b51a3d`, remediation `31e070a`, and 904 / 7,469.
 - G-7, G-8, G-9 and G-12 may close only with their implementation commits, killed
   counterfactuals and final green gates.
-- G-5 may close only when the execution record says PASS from browser observation; keep GAP because
-  the Plan 7 browser gate was blocked.
+- G-5 is closed by the dated browser-observed PASS appended to the Plan 7 execution record. Retain
+  the original blocked attempt as historical evidence rather than rewriting it.
 - G-11 closes only when E20 is actually corrected.
 - Keep G-13 as ACCEPTED RESIDUAL.
 

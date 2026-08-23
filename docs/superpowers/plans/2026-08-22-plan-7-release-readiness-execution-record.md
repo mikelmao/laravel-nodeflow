@@ -25,6 +25,7 @@ This records what happened while executing
 | 6 — G-5 | evidence `5918408`; clarification `56fa8e0` | Browser gate **BLOCKED**; independent review confirmed the record and scope. |
 | 7 — release documentation | measured source `56fa8e0`; release-documentation evidence `556206a` | README, documentation handoff and this record only. |
 | 8 — whole-branch remediation | RED `3f32dff`, `1cc9970`; production `10b982c`, `c2fa80e`; evidence/style `c60e996`, `539fc23`, `cb43942`, `8430d70` | All Critical/Important findings closed; final spec review clean and one non-blocking fidelity Minor deferred. |
+| Post-Plan-8 — G-5 closure | browser/database evidence captured 2026-08-23 | Clean-fixture real-browser rerun **PASS**; the original Task 6 blocker record remains historical evidence. |
 
 ## Counterfactuals
 
@@ -223,3 +224,57 @@ This records what happened while executing
 - Cleanup and hygiene before this record commit: package `main`, feature worktree and demo were
   clean; no Plan 7 queue worker or TCP 9223 listener remained; `/tmp/nodeflow-chrome` was retained;
   and the locked Plan 6 worktree was untouched.
+
+## Post-Plan-8 G-5 closure rerun (PASS)
+
+This 2026-08-23 rerun closes G-5 without rewriting the blocked Task 6 attempt above. Browser work
+started at package `b0dfaca10be1d974801c83ae1a94c0d41cfbb807`; concurrent commits through merged-main
+`bc6d7d0` changed documentation only, so the symlinked demo's runtime code and assets did not change
+during acceptance. The demo stayed on its existing database: no reset, reseed, migration, repair,
+or deletion ran. A disposable unscoped login account was added as user 37; acceptance data remains
+available for inspection.
+
+- **Browser/editor:** the approved Chrome-extension browser authenticated into Globex and opened
+  `/nodeflow/flows/4/edit`. Canonical flow 4's published version 1 rendered exactly **10 React Flow
+  nodes / 13 edges**, its configuration surface was visible, and compiled styling was present.
+  `/nodeflow/runs/8` likewise rendered the pinned ten-node graph and showed
+  `Version 1 · completed`.
+- **Real actions and durable behavior:** a controlled demo queue worker processed the jobs. Run 7
+  (subjects 25–27, executions 49–58, messages 85–92) completed and is retained as a timing attempt:
+  click succeeded for subject 25/user 34, but conversion was not submitted before the short action
+  window. Corrective run 8 is the accepted run. It completed with nine steps from 16:55:45 through
+  16:56:17 using subjects 28–30 and executions 59–66. The browser submitted click for subject
+  29/user 35 at 16:55:47 and convert for subject 30/user 36 at 16:55:51 through the current
+  `/nodeflow/runs/8/subjects/{subject}/...` routes. User 35 finished on `plus`; user 36 remained
+  `basic`, exited at conversion, and received no message after exit. Run 8 messages are 93–96:
+  welcome for users 34–36 and the later offer only for user 35.
+- **Exact HTTP evidence:** a temporary PHP front controller on `127.0.0.1:8123`, reached in Chrome
+  as `http://test-workflow.test:8123`, recorded final application response codes while preserving
+  the same hostname, session, code, symlink, and database. Its 238-entry ledger contains **230 ×
+  200** and **8 × 302**, with **zero 4xx/5xx**. Both run-creation POSTs, run 7's click, run 8's click
+  and convert, and logout returned 302 with successful follows; the run-8 view returned 200. After
+  logout, direct `/nodeflow` returned 302 and `/login` returned 200. No obsolete
+  `/nodeflow/subjects/...` action URL appears.
+- **Console and protection:** all acceptance interactions produced zero console errors, zero
+  unhandled rejections, and no invalid-hook-call. The only browser diagnostic was the known
+  non-failing Inertia-devtools request-lineage warning. After logout the login page contained no
+  Globex, flow, or run content, and direct protected navigation redirected to login.
+- **Database high water:** final read-only values were runs **8/8**, subjects **30/30**, node
+  executions **66/66**, demo messages **80/96**, and jobs **0/null**. The non-contiguous message IDs
+  are expected from earlier deletions; this rerun added the preserved IDs 85–96. Users 34–36 and
+  all run rows remain as acceptance evidence.
+- **Ignored artifacts:** `.superpowers/sdd/2026-08-22-plan-7-release-readiness/browser/` holds
+  `database-final.json` (`78fd4e7f…e962`), `http-status-ledger.log` (`37883399…24c`),
+  `editor-instrumented.png` (`704ba670…640`), `post-actions.png` (`52a48159…97c`),
+  `post-actions-completed.png` (`dcf9eac9…ba0e`), `run-view.png` (`fca207b7…990`), and
+  `login-after-logout.png` (`435b7a57…270`). These files are intentionally ignored, not release
+  artifacts.
+- **Cleanup:** the controlled queue worker and temporary HTTP server were stopped, their temporary
+  router/log/database-export copies were deleted after evidence preservation, no matching
+  controlled process remains, the demo worktree is clean, and its package symlink still resolves
+  exactly to package `main`. The unrelated developer browser and its processes were not changed.
+
+**Gate outcome: G-5 passed.** The rerun directly proves the ten-node editor/run rendering, current
+client action URLs and redirect results, click/convert/exit behavior with no post-exit delivery,
+console/request cleanliness, and authenticated-route logout behavior that the original Task 6 run
+could not prove.

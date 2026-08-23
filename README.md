@@ -4,6 +4,11 @@ Laravel Nodeflow is a visual workflow builder and durable execution engine that 
 
 > **Experimental:** Nodeflow is pre-release software. Review the [experimental project status](docs/gitbook/experimental/project-status.md) and [known limitations](docs/gitbook/experimental/known-limitations.md), then test it carefully before relying on it for production automations.
 
+The current release-readiness record includes a completed
+[real-browser demo acceptance pass](docs/superpowers/plans/2026-08-22-plan-7-release-readiness-execution-record.md#post-plan-8-g-5-closure-rerun-pass),
+including the editor, durable click/convert branches, run inspection, request and console
+cleanliness, and logout protection. This evidence does not change the experimental status above.
+
 ## Requirements
 
 Nodeflow requires PHP `^8.3`, Laravel 12 or 13 (`illuminate/console`, `filesystem`, `support`, and `database` `^12.0|^13.0`), and `durable-workflow/workflow ^2.0@rc`. Editor routes additionally need `inertiajs/inertia-laravel ^2.0`; durable execution needs a queue connection other than `sync`.
