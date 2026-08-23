@@ -9,6 +9,8 @@ use Illuminate\Routing\Controller;
 use Inertia\Inertia;
 use Nodeflow\Editor\SaveDraft;
 use Nodeflow\Editor\StaleDraftException;
+use Nodeflow\Graph\Graph;
+use Nodeflow\Graph\GraphValidator;
 use Nodeflow\Http\ResolvesRouteNames;
 use Nodeflow\Models\Flow;
 use Nodeflow\Nodes\NodeRegistry;
@@ -76,6 +78,10 @@ class FlowEditorController extends Controller
             // the prototype's hardcoded /nodeflow route assumptions.
             'urls' => [
                 'draft' => route($this->routeName($request, 'nodeflow.flows.draft', 'nodeflow.flows.edit'), ['flow' => $flow]),
+                'validate' => route(
+                    $this->routeName($request, 'nodeflow.flows.validate', 'nodeflow.flows.edit'),
+                    ['flow' => $flow],
+                ),
                 'publish' => route($this->routeName($request, 'nodeflow.flows.publish', 'nodeflow.flows.edit'), ['flow' => $flow]),
                 'options' => route($this->routeName($request, 'nodeflow.fields.options', 'nodeflow.flows.edit'), [
                     'flow' => $flow,
@@ -127,6 +133,28 @@ class FlowEditorController extends Controller
         }
 
         return response()->json(['draft_revision' => $revision]);
+    }
+
+    public function validate(Request $request, Flow $flow, GraphValidator $validator): JsonResponse
+    {
+        $this->authorize('publish', $flow);
+        $request->validate($this->graphRules());
+
+        $result = $validator->validate(Graph::fromArray($request->input('graph')));
+        $body = [
+            'valid' => $result->passes(),
+            'warnings' => $result->warnings(),
+        ];
+
+        if ($result->passes()) {
+            return response()->json($body);
+        }
+
+        return response()->json($body + [
+            'message' => 'The flow is not ready to publish.',
+            'errors' => $result->errors(),
+            'node_errors' => $result->nodeErrors(),
+        ], 422);
     }
 
     public function publish(Request $request, Flow $flow): JsonResponse

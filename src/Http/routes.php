@@ -18,6 +18,8 @@ use Nodeflow\Http\Controllers\RunViewController;
 
 Route::get('flows/{flow}/edit', [FlowEditorController::class, 'edit'])->name('nodeflow.flows.edit');
 Route::put('flows/{flow}/draft', [FlowEditorController::class, 'draft'])->name('nodeflow.flows.draft');
+Route::post('flows/{flow}/validate', [FlowEditorController::class, 'validate'])
+    ->name('nodeflow.flows.validate');
 Route::post('flows/{flow}/publish', [FlowEditorController::class, 'publish'])->name('nodeflow.flows.publish');
 
 /*

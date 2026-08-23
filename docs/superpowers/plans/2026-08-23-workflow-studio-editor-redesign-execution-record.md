@@ -27,6 +27,25 @@
 
 ## Task 1 — validation endpoint
 
+- RED: `vendor/bin/pest tests/Feature/EditorRoutesTest.php --filter='validat|editor props' --compact`
+  produced 4 expected failures and 1 passing test (15 assertions): `urls.validate` was absent,
+  and POSTs to `/flows/{flow}/validate` returned 404. This proves both the server-authored URL
+  prop and route were genuinely missing before implementation.
+- GREEN (focused): the same command passed 5 tests with 32 assertions.
+- GREEN (required regression set):
+  `vendor/bin/pest tests/Feature/EditorRoutesTest.php tests/Feature/StructuredPublishErrorsTest.php --compact`
+  passed 31 tests with 113 assertions.
+- Added the tenant-bound `POST flows/{flow}/validate` route between draft and publish. The
+  controller authorizes `publish`, applies the existing structural graph rules, then calls the
+  authoritative `GraphValidator` directly. It returns `{valid, warnings}` on success and adds
+  the semantic `message`, `errors`, and `node_errors` on 422; it does not call `SaveDraft` or
+  `PublishFlow`.
+- Tests demonstrate no draft, revision, current-version, or version-count mutation; tenant route
+  binding returns 404 before authorization; warnings survive both a valid response and a semantic
+  error response; and prefixed host route names resolve `urls.validate` alongside the sibling
+  editor URLs. Counterfactuals: skipping `publish` authorization makes an update-only editor
+  receive 200, and routing validation through draft/publish would change the state assertions.
+
 ## Task 2 — client validation contract
 
 ## Task 3 — topology layout

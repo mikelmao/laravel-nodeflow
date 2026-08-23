@@ -284,7 +284,7 @@ it('accepts a draft that could never publish', function () {
 
 it('validates a graph without saving or publishing it', function () {
     allowEverything();
-    $before = $this->flow->only(['draft_graph', 'draft_revision', 'current_version_id']);
+    $before = $this->flow->fresh()->only(['draft_graph', 'draft_revision', 'current_version_id']);
 
     $this->actingAs($this->user)
         ->postJson("/nodeflow/flows/{$this->flow->id}/validate", ['graph' => exitGraph()])
@@ -338,7 +338,7 @@ it('four-oh-fours another tenants flow before validating authorization', functio
 
 it('returns warnings from a valid graph without mutation', function () {
     allowEverything();
-    $before = $this->flow->only(['draft_graph', 'draft_revision', 'current_version_id']);
+    $before = $this->flow->fresh()->only(['draft_graph', 'draft_revision', 'current_version_id']);
 
     $response = $this->actingAs($this->user)
         ->postJson("/nodeflow/flows/{$this->flow->id}/validate", ['graph' => graphWithConcurrentWaits()])
