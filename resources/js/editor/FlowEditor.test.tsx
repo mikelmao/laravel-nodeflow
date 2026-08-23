@@ -344,8 +344,8 @@ describe('FlowEditor', () => {
             graph: {
                 start: '',
                 nodes: [
-                    { id: 'exit2', type: 'app.send', config: {}, position: { x: 60, y: 60 } },
-                    { id: 'theirs2', type: 'core.exit', config: {}, position: { x: 300, y: 60 } },
+                    { id: 'exit2', type: 'app.send', config: {}, position: { x: 72, y: 88 } },
+                    { id: 'theirs2', type: 'core.exit', config: {}, position: { x: 480, y: 88 } },
                 ],
                 edges: [{ from: 'exit2', to: 'theirs2', output: 'sent' }],
             },
@@ -651,7 +651,7 @@ describe('FlowEditor', () => {
             nodeRenderers: { 'app.send': ({ data }) => <p>host node body: {data.id}</p> },
         })
         expect(screen.getByText('host node body: send1')).toBeInTheDocument()
-        expect(within(canvasNode('constructor')).getByText(/Node type "toString"/)).toBeInTheDocument()
+        expect(within(canvasNode('constructor')).getByText(/Unknown node type “toString”/)).toBeInTheDocument()
     })
 
     // Dynamic option failure stays named beside the field; counterfactual empty select looks like a valid empty registry.
