@@ -226,6 +226,13 @@
   has exactly two known pre-existing stale expectations: server-graph fallback positions and old
   straight-quote matching for an unknown-card notice. Its 17 remaining tests, including all new
   inspector compatibility behavior, pass.
+- Follow-up RED: a non-null `deleted-node` issue was rendered as a button solely because it had a
+  node ID, so it could ask the controller to select a node that no longer exists. The stricter
+  regression also pins the complete Issues-list DOM order and ArrowRight/ArrowLeft tab focus,
+  selection, and labelled-panel behavior.
+- Follow-up GREEN: `FlowOverviewIssue` now carries an explicit `placeable` boolean. Only a
+  placeable issue with a non-null node invokes `onIssueSelect`; unresolved IDs remain plain visible
+  text. The tab keyboard assertions confirm both directional keys alongside Home/End.
 
 ## Task 9 — toolbar, notices, and shell
 

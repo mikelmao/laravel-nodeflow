@@ -1,5 +1,3 @@
-import type { NodeErrorEntry } from '../graph/types'
-
 export type FlowOverviewValidation = {
     status: 'unchecked' | 'checking' | 'valid' | 'warning' | 'invalid' | 'failed'
 }
@@ -14,6 +12,14 @@ export type UnresolvedOutputDiagnostic = {
     to: string
 }
 
+/** A controller decides whether an issue's node can currently be selected. */
+export type FlowOverviewIssue = {
+    message: string
+    node: string | null
+    field: string | null
+    placeable: boolean
+}
+
 export type FlowOverviewProps = {
     flow: { name: string }
     trigger: { label: string; type: string } | null
@@ -22,12 +28,12 @@ export type FlowOverviewProps = {
     connectionCount: number
     startNodeId: string | null
     validation: FlowOverviewValidation
-    issues: NodeErrorEntry[]
+    issues: FlowOverviewIssue[]
     warnings: string[]
     errors: string[]
     unknownTypes: UnknownNodeTypeDiagnostic[]
     unresolvedOutputs: UnresolvedOutputDiagnostic[]
-    onIssueSelect?: (issue: NodeErrorEntry) => void
+    onIssueSelect?: (issue: FlowOverviewIssue) => void
 }
 
 const readinessCopy: Record<FlowOverviewValidation['status'], string> = {
@@ -117,7 +123,7 @@ export function FlowOverview({
                 <DiagnosticList title="Issues">
                     {issues.map((issue, index) => (
                         <li key={`${issue.node ?? 'graph'}:${issue.field ?? 'node'}:${issue.message}-${index}`}>
-                            {issue.node !== null && onIssueSelect !== undefined ? (
+                            {issue.placeable && issue.node !== null && onIssueSelect !== undefined ? (
                                 <button
                                     type="button"
                                     className="text-left underline decoration-muted-foreground underline-offset-2 hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"

@@ -1,8 +1,8 @@
-import { fireEvent, render, screen, waitFor } from '@testing-library/react'
+import { fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import { describe, expect, it, vi } from 'vitest'
 import { mergeControls } from '../controls'
 import { FieldOptionsContext } from '../controls/useFieldOptions'
-import type { NodeCardData, NodeErrorEntry, NodeTypePayload } from '../graph/types'
+import type { NodeCardData, NodeTypePayload } from '../graph/types'
 import { FlowOverview, type FlowOverviewProps } from './FlowOverview'
 import { NodeInspector } from './NodeInspector'
 
@@ -110,11 +110,12 @@ describe('FlowOverview', () => {
 
     it('keeps local diagnostics and ordered graph issues visible regardless of server validation', () => {
         const onIssueSelect = vi.fn()
-        const placeable: NodeErrorEntry = { node: 'send1', field: 'template', message: 'Template is required' }
-        const unplaceable: NodeErrorEntry = { node: null, field: null, message: 'No route reaches a finish' }
+        const placeable = { node: 'send1', field: 'template', message: 'Template is required', placeable: true }
+        const unplaceable = { node: null, field: null, message: 'No route reaches a finish', placeable: false }
+        const unknownNode = { node: 'deleted-node', field: null, message: 'A deleted node has an error', placeable: false }
         overview({
             validation: { status: 'valid' },
-            issues: [placeable, unplaceable],
+            issues: [placeable, unplaceable, unknownNode],
             warnings: ['A branch has no fallback.'],
             errors: ['The graph contains a cycle.'],
             unknownTypes: [{ nodeId: 'legacy1', type: 'legacy.send' }],
@@ -128,10 +129,12 @@ describe('FlowOverview', () => {
         expect(screen.getByText('The graph contains a cycle.')).toBeInTheDocument()
         expect(screen.getByRole('button', { name: 'Template is required' })).toBeInTheDocument()
         expect(screen.getByText('No route reaches a finish')).toBeInTheDocument()
-        expect(screen.getAllByRole('listitem').map((item) => item.textContent)).toEqual(expect.arrayContaining([
+        expect(screen.queryByRole('button', { name: 'A deleted node has an error' })).toBeNull()
+        expect(within(screen.getByRole('region', { name: 'Issues' })).getAllByRole('listitem').map((item) => item.textContent)).toEqual([
             'Template is required',
             'No route reaches a finish',
-        ]))
+            'A deleted node has an error',
+        ])
 
         fireEvent.click(screen.getByRole('button', { name: 'Template is required' }))
         expect(onIssueSelect).toHaveBeenCalledWith(placeable)
@@ -164,6 +167,14 @@ describe('NodeInspector', () => {
         expect(advanced).toHaveAttribute('aria-controls')
         expect(screen.getByRole('tabpanel')).toHaveAttribute('aria-labelledby', configure.id)
 
+        fireEvent.keyDown(configure, { key: 'ArrowRight' })
+        expect(advanced).toHaveFocus()
+        expect(advanced).toHaveAttribute('aria-selected', 'true')
+        expect(screen.getByRole('tabpanel', { name: 'Advanced' })).toBeInTheDocument()
+        fireEvent.keyDown(advanced, { key: 'ArrowLeft' })
+        expect(configure).toHaveFocus()
+        expect(configure).toHaveAttribute('aria-selected', 'true')
+        expect(screen.getByRole('tabpanel', { name: 'Configure' })).toBeInTheDocument()
         fireEvent.keyDown(configure, { key: 'End' })
         expect(advanced).toHaveFocus()
         expect(advanced).toHaveAttribute('aria-selected', 'true')
