@@ -258,6 +258,7 @@
 - GREEN: the same focused suite passed with 17 tests. `npx tsc --noEmit` and `git diff --check` passed after adding the pure toolbar/notices/HUD view components and one-DOM responsive shell. The shell owns only view-state widths (library 240–400 px, inspector 288–480 px); no controller or `FlowEditor` integration changed.
 - Follow-up RED: stable multi-move drawer tests failed at 350 px after moves from x=100 to x=110 then x=120, proving the old drag path added each total delta to already-updated state. The required-callback type assertion also failed while the notice callbacks were optional. Recorded in `4cd4179`.
 - Follow-up GREEN: pointer drags now retain a session with immutable start X/width and derive every move from it; both directions clamp and clean up on pointer completion. The HUD suite covers unchecked, checking, valid, warning, invalid, and failed labels. `onKeepMine` and `onUseTheirs` are required notice props. The focused suite passed 24 tests; TypeScript and diff checks passed.
+- Pointer-identity RED/GREEN: a drag held by pointer 1 used to end when pointer 2 emitted `pointerup` or `pointercancel`; its subsequent movement stayed at 330 px instead of reaching 340 px. `610c79f` records the counterexample. Cleanup now verifies the matching pointer ID before releasing capture or removing listeners. The focused suite passed 25 tests, with TypeScript and diff checks clean.
 
 ## Task 10 — controller integration
 

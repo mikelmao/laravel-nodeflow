@@ -113,14 +113,18 @@ export function EditorShell({ mode, toolbar, library, canvas, inspector, notices
             if (session.which === 'library') setLibraryWidth(clamp(nextWidth, libraryBounds))
             else setInspectorWidth(clamp(nextWidth, inspectorBounds))
         }
-        const finish = () => {
+        const cleanup = () => {
             session.target.releasePointerCapture?.(session.pointerId)
             document.removeEventListener('pointermove', move)
             document.removeEventListener('pointerup', finish)
             document.removeEventListener('pointercancel', finish)
             if (activeResizeSession.current === session) activeResizeSession.current = null
         }
-        session.cleanup = finish
+        const finish = (finishEvent: PointerEvent) => {
+            if (finishEvent.pointerId !== session.pointerId) return
+            cleanup()
+        }
+        session.cleanup = cleanup
         activeResizeSession.current = session
         document.addEventListener('pointermove', move)
         document.addEventListener('pointerup', finish)
