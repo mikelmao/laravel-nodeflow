@@ -88,7 +88,7 @@ Run a read-only check after making the changes:
 php artisan nodeflow:install --check
 ```
 
-The installer may write only steps it can safely re-check, including the package configuration/provider registration and a uniquely identifiable Tailwind `@source` entry. In `--check` mode, the table label **NOT WIRED (would be written)** means it found a safe change it would make but wrote nothing (internally, this is a writable outcome), so the command remains non-zero until it is applied.
+The installer may write only steps it can safely re-check: provider creation and registration, a uniquely identifiable Tailwind `@source` entry, and migrations when publication is explicitly requested. Its configuration row is informational and always healthy because an absent host copy uses merged package defaults; publish one explicitly with `php artisan vendor:publish --tag=nodeflow-config` when customization is needed. In `--check` mode, the table label **NOT WIRED (would be written)** means it found a safe change it would make but wrote nothing (internally, this is a writable outcome), so the command remains non-zero until it is applied.
 
 TypeScript paths, Vite alias, Vite dedupe, and the `@xyflow/react` dependency are **verify-only**. The installer prints the required snippet or npm command instead of rewriting an arbitrary `vite.config.ts`, JSONC file, or package manifest. The table label **NOT WIRED** means it could not verify the setting (internally, a cannot-wire outcome) and is non-zero in either mode.
 

@@ -10,7 +10,7 @@ Run this read-only command after installation and in a deployment check:
 php artisan nodeflow:install --check
 ```
 
-It checks Nodeflow configuration, the drift state of any published Nodeflow migration copies, provider wiring and registration anchors, Tailwind source scanning, Vite alias and React dedupe, TypeScript paths, and the `@xyflow/react` dependency. It does not report whether Laravel migrations have already run. It prints a requirement/status table and returns zero only when every requirement is wired or already present.
+It reports Nodeflow configuration as optional and healthy whether the host copy is absent or customized. It checks the drift state of any published Nodeflow migration copies, provider wiring and registration anchors, Tailwind source scanning, Vite alias and React dedupe, TypeScript paths, and the `@xyflow/react` dependency. It does not report whether Laravel migrations have already run. It prints a requirement/status table and returns zero only when every required integration is wired or already present.
 
 `NOT WIRED (would be written)` means a safe writable change was found but `--check` did not write it. `NOT WIRED` means a verify-only or non-automatable requirement is missing. Both are non-zero outcomes. Authorization gates and tenancy mode are reported for operators but do not determine this command's exit code.
 

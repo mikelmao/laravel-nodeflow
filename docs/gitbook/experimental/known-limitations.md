@@ -96,9 +96,9 @@ Nodeflow is experimental. Use these current boundaries to decide what must be ha
 
 ### Install checks are not a TypeScript parser or a runtime proof
 
-**Impact:** The Vite alias check looks for the editor alias and package source in uncommented configuration text. It cannot prove that they form the active exported alias entry. When multiple Vite config filenames exist, the check can inspect a file Vite does not use. An unpublished optional config file can also appear as outstanding install work even though package defaults are merged at runtime.
+**Impact:** The installer follows Vite's config-file precedence, including `.cjs` and `.cts`, and binds the package path to exactly one semantic `@nodeflow/editor` alias key. It rejects missing, nested, duplicate, escaped-duplicate, and delimiter-malformed alias entries. It still reads source text rather than executing or fully parsing the configuration, so it cannot prove that the accepted alias property or dedupe list belongs to the object Vite ultimately exports; a dead branch or second configuration object can still satisfy a check. The dedupe verifier likewise confirms the three package names only inside an uncommented bracketed list, not through JavaScript semantics.
 
-**Mitigation:** Keep one active Vite config, review the alias in its exported configuration, decide deliberately whether to publish configuration, and build and open the host frontend after wiring. See [Frontend setup](../integration/frontend-setup.md) and [Installation](../getting-started/installation.md).
+**Mitigation:** Review the alias and dedupe values in the actively exported configuration, then build and open the host frontend after wiring. Configuration publication is independent and optional. See [Frontend setup](../integration/frontend-setup.md) and [Installation](../getting-started/installation.md).
 
 ### Published package migrations can shadow package migrations
 
@@ -110,7 +110,7 @@ Nodeflow is experimental. Use these current boundaries to decide what must be ha
 
 ### Application-specific operational validation remains required
 
-**Impact:** The current package test suite runs on SQLite only and CI does not execute the interpreter through a real queue worker. Package-level checks therefore cannot prove your supported database behavior, queue retry policy, durable-workflow storage, cache configuration, browser build, package discovery cache, or domain side effects work together.
+**Impact:** Local demo acceptance has exercised the interpreter through a real queue worker, but that observation did not complete the broader browser acceptance gate. The current package test suite runs on SQLite only, and CI does not repeat real-worker execution. Package-level checks therefore cannot prove your supported database behavior, queue retry policy, durable-workflow storage, cache configuration, browser build, package discovery cache, or domain side effects work together.
 
 **Mitigation:** Run a representative canonical journey against each supported database and with a supervised real queue worker, using the same queue, cache, tenancy, and frontend setup you intend to operate. Include worker restarts, waits, retries, browser interaction, and deployment-like node-type checks in your release process. See [Project status](project-status.md), [Queues and workers](../operations/queues-and-workers.md), and [Health checks](../operations/health-checks.md).
 
