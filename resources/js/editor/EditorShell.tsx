@@ -18,6 +18,14 @@ export type EditorShellProps = {
 
 const libraryBounds = { min: 240, max: 400 }
 const inspectorBounds = { min: 288, max: 480 }
+type ResizeDragSession = {
+    which: 'library' | 'inspector'
+    startX: number
+    startWidth: number
+    pointerId: number
+    target: HTMLDivElement
+    cleanup: () => void
+}
 
 function clamp(value: number, bounds: { min: number; max: number }): number {
     return Math.max(bounds.min, Math.min(bounds.max, value))
@@ -42,9 +50,9 @@ export function EditorShell({ mode, toolbar, library, canvas, inspector, notices
     const inspectorHeading = useRef<HTMLHeadingElement>(null)
     const wasLibraryOpen = useRef(libraryOpen)
     const wasInspectorOpen = useRef(inspectorOpen)
-    const activeResizeCleanup = useRef<(() => void) | null>(null)
+    const activeResizeSession = useRef<ResizeDragSession | null>(null)
 
-    useEffect(() => () => activeResizeCleanup.current?.(), [])
+    useEffect(() => () => activeResizeSession.current?.cleanup(), [])
 
     useEffect(() => {
         if (libraryOpen && !wasLibraryOpen.current) libraryHeading.current?.focus()
@@ -85,20 +93,35 @@ export function EditorShell({ mode, toolbar, library, canvas, inspector, notices
     }
 
     function resizePointer(which: 'library' | 'inspector', event: ReactPointerEvent<HTMLDivElement>) {
-        activeResizeCleanup.current?.()
-        const start = event.clientX
+        activeResizeSession.current?.cleanup()
         const target = event.currentTarget
-        const pointerId = event.pointerId
-        target.setPointerCapture?.(event.pointerId)
-        const move = (moveEvent: PointerEvent) => resize(which, moveEvent.clientX - start)
+        const session: ResizeDragSession = {
+            which,
+            startX: event.clientX,
+            startWidth: which === 'library' ? libraryWidth : inspectorWidth,
+            pointerId: event.pointerId,
+            target,
+            cleanup: () => undefined,
+        }
+        target.setPointerCapture?.(session.pointerId)
+        const move = (moveEvent: PointerEvent) => {
+            if (moveEvent.pointerId !== session.pointerId) return
+            const delta = moveEvent.clientX - session.startX
+            const nextWidth = session.which === 'library'
+                ? session.startWidth + delta
+                : session.startWidth - delta
+            if (session.which === 'library') setLibraryWidth(clamp(nextWidth, libraryBounds))
+            else setInspectorWidth(clamp(nextWidth, inspectorBounds))
+        }
         const finish = () => {
-            target.releasePointerCapture?.(pointerId)
+            session.target.releasePointerCapture?.(session.pointerId)
             document.removeEventListener('pointermove', move)
             document.removeEventListener('pointerup', finish)
             document.removeEventListener('pointercancel', finish)
-            activeResizeCleanup.current = null
+            if (activeResizeSession.current === session) activeResizeSession.current = null
         }
-        activeResizeCleanup.current = finish
+        session.cleanup = finish
+        activeResizeSession.current = session
         document.addEventListener('pointermove', move)
         document.addEventListener('pointerup', finish)
         document.addEventListener('pointercancel', finish)

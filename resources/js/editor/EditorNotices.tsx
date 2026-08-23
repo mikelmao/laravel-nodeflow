@@ -8,8 +8,8 @@ export type EditorNoticesProps = {
     structuralError?: string
     graphMessages?: string[]
     validationMessage?: string
-    onKeepMine?: () => void
-    onUseTheirs?: () => void
+    onKeepMine: () => void
+    onUseTheirs: () => void
 }
 
 function Alert({ children }: { children: ReactNode }) {
