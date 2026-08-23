@@ -6,7 +6,7 @@ import {
     type EdgeChange,
     type NodeChange,
 } from '@xyflow/react'
-import { useCallback, useMemo, useRef, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import type { CanvasActions, CanvasProps, NodeflowEdge, NodeflowNode } from '../canvas/Canvas'
 import { CANVAS_ORIGIN, NODE_MIN_HEIGHT, NODE_WIDTH, ROW_GAP } from '../canvas/layout'
 import type { NodeRendererMap } from '../canvas/context'
@@ -92,7 +92,15 @@ function sameDocument(left: EditorDocument, right: EditorDocument): boolean {
 
 function defaultDocument(graph: Graph): EditorDocument {
     const canvas = toCanvas(graph)
-    return { nodes: canvas.nodes as NodeflowNode[], edges: canvas.edges as NodeflowEdge[], startId: graph.start ?? '' }
+    return { nodes: stripNodeSelection(canvas.nodes as NodeflowNode[]), edges: stripEdgeSelection(canvas.edges as NodeflowEdge[]), startId: graph.start ?? '' }
+}
+
+function stripNodeSelection(nodes: NodeflowNode[]): NodeflowNode[] {
+    return nodes.map(({ selected: _selected, ...node }) => node)
+}
+
+function stripEdgeSelection(edges: NodeflowEdge[]): NodeflowEdge[] {
+    return edges.map(({ selected: _selected, ...edge }) => edge)
 }
 
 function overlap(left: { x: number; y: number }, right: { x: number; y: number }): boolean {
@@ -145,6 +153,7 @@ export function useEditorController(options: UseEditorControllerOptions): UseEdi
     const validationSequence = useRef(0)
     const publishSequence = useRef(0)
     const activePublish = useRef<number | null>(null)
+    const mounted = useRef(true)
     const canvas = useRef<CanvasActions | null>(null)
     const optionsCache = useRef(new Map<string, Record<string, string>>())
     const defs = useMemo(() => defsByType(options.palette), [options.palette])
@@ -154,6 +163,16 @@ export function useEditorController(options: UseEditorControllerOptions): UseEdi
     const builtRef = useRef(built)
     builtRef.current = built
     const autosave = useAutosave({ url: options.urls.draft, initialRevision: options.flow.draft_revision, graph: built.graph, debounceMs: options.autosaveDebounceMs })
+
+    useEffect(() => {
+        mounted.current = true
+        return () => {
+            mounted.current = false
+            validationSequence.current += 1
+            publishSequence.current += 1
+            activePublish.current = null
+        }
+    }, [])
 
     const clearValidation = useCallback(() => {
         validationSequence.current += 1
@@ -194,10 +213,7 @@ export function useEditorController(options: UseEditorControllerOptions): UseEdi
     }, [commit])
 
     const addAtViewportCenter = useCallback((definition: NodeTypePayload) => {
-        const center = typeof window === 'undefined'
-            ? undefined
-            : { x: Math.max(0, window.innerWidth || globalThis.document.documentElement?.clientWidth || 0) / 2, y: Math.max(0, window.innerHeight || globalThis.document.documentElement?.clientHeight || 0) / 2 }
-        addNode(definition, center === undefined || canvas.current === null ? undefined : canvas.current.screenToFlowPosition(center))
+        addNode(definition, canvas.current?.viewportCenter())
     }, [addNode])
 
     const selectNode = useCallback((id: string | null) => {
@@ -221,28 +237,42 @@ export function useEditorController(options: UseEditorControllerOptions): UseEdi
     }, [commit])
 
     const nodesChange = useCallback((changes: NodeChange<NodeflowNode>[]) => {
-        const removed = new Set(changes.filter((change) => change.type === 'remove').map((change) => change.id))
-        const selectedChange = changes.find((change) => change.type === 'select' && change.selected)
-        const selectedNode = selectedChange !== undefined && 'id' in selectedChange ? selectedChange.id : undefined
-        if (selectedNode !== undefined) selectNode(selectedNode)
-        if (changes.every((change) => change.type === 'select' || change.type === 'dimensions')) return
+        const selectionChanges = changes.filter((change) => change.type === 'select')
+        const graphChanges = changes.filter((change) => change.type !== 'select')
+        const selectedNode = selectionChanges.filter((change) => change.selected).at(-1)
+        if (selectedNode !== undefined) selectNode(selectedNode.id)
+        else if (selectionChanges.some((change) => !change.selected)) {
+            setSelected((current) => current.nodeId !== null && selectionChanges.some((change) => change.id === current.nodeId && !change.selected) ? { nodeId: null, edgeId: null } : current)
+            setView((current) => ({ ...current, inspectorOpen: false, selectedEdgeId: null }))
+        }
+        const removed = new Set(graphChanges.filter((change) => change.type === 'remove').map((change) => change.id))
+        if (graphChanges.every((change) => change.type === 'dimensions')) return
         const current = documentRef.current
-        const nodes = applyNodeChanges(changes, current.nodes)
-        const position = changes.find((change) => change.type === 'position')
+        const nodes = stripNodeSelection(applyNodeChanges(graphChanges, current.nodes))
+        const position = graphChanges.find((change) => change.type === 'position')
         const transaction = position?.type === 'position' ? `move:${position.id}` : null
         commit({ nodes, edges: removed.size === 0 ? current.edges : current.edges.filter((edge) => !removed.has(edge.source) && !removed.has(edge.target)), startId: removed.has(current.startId) ? '' : current.startId }, transaction)
         if (position?.type === 'position' && position.dragging === false) closeConfigTransaction()
-        if (removed.size > 0) setSelected((selection) => removed.has(selection.nodeId ?? '') ? { nodeId: null, edgeId: null } : selection)
+        if (removed.size > 0) setSelected((selection) => removed.has(selection.nodeId ?? '') || current.edges.some((edge) => edge.id === selection.edgeId && (removed.has(edge.source) || removed.has(edge.target))) ? { nodeId: null, edgeId: null } : selection)
     }, [closeConfigTransaction, commit, selectNode])
 
     const edgesChange = useCallback((changes: EdgeChange<NodeflowEdge>[]) => {
-        const selectedChange = changes.find((change) => change.type === 'select' && change.selected)
-        const selectedEdge = selectedChange !== undefined && 'id' in selectedChange ? selectedChange.id : undefined
-        if (selectedEdge !== undefined) selectEdge(selectedEdge)
-        if (changes.every((change) => change.type === 'select')) return
+        const selectionChanges = changes.filter((change) => change.type === 'select')
+        const graphChanges = changes.filter((change) => change.type !== 'select')
+        const selectedEdge = selectionChanges.filter((change) => change.selected).at(-1)
+        if (selectedEdge !== undefined) selectEdge(selectedEdge.id)
+        else if (selectionChanges.some((change) => !change.selected)) {
+            setSelected((current) => current.edgeId !== null && selectionChanges.some((change) => change.id === current.edgeId && !change.selected) ? { nodeId: null, edgeId: null } : current)
+            setView((current) => ({ ...current, selectedEdgeId: null }))
+        }
+        if (graphChanges.length === 0) return
         const current = documentRef.current
-        commit({ ...current, edges: applyEdgeChanges(changes, current.edges) })
-        if (changes.some((change) => change.type === 'remove')) setSelected((selection) => ({ ...selection, edgeId: null }))
+        const edges = stripEdgeSelection(applyEdgeChanges(graphChanges, current.edges))
+        commit({ ...current, edges })
+        if (graphChanges.some((change) => change.type === 'remove')) {
+            setSelected((selection) => ({ ...selection, edgeId: null }))
+            setView((current) => ({ ...current, selectedEdgeId: null }))
+        }
     }, [commit, selectEdge])
 
     const connect = useCallback((connection: Connection) => {
@@ -312,27 +342,29 @@ export function useEditorController(options: UseEditorControllerOptions): UseEdi
     }, [autosave, clearValidation, defs])
 
     const validate = useCallback(async () => {
+        const request = ++validationSequence.current
+        const requestGeneration = generation.current
         const url = options.urls.validate
         if (url === undefined || url === '') {
+            if (!mounted.current || request !== validationSequence.current) return
             setValidation({ kind: 'failed', message: 'Validation is unavailable because this editor did not receive a validate URL.' })
             setValidationState({ status: 'failed' })
             return
         }
-        const request = ++validationSequence.current
-        const requestGeneration = generation.current
+        if (!mounted.current) return
         setValidationState({ status: 'checking' })
         setValidation(null)
         try {
             const graph = builtRef.current.graph
             const result = await send('POST', url, { graph })
-            if (request !== validationSequence.current || requestGeneration !== generation.current) return
+            if (!mounted.current || request !== validationSequence.current || requestGeneration !== generation.current) return
             const next = interpretValidation(result, new Set(documentRef.current.nodes.map((node) => node.id)))
             setValidation(next)
             if (next.kind === 'valid') setValidationState({ status: next.warnings.length === 0 ? 'valid' : 'warning', count: next.warnings.length })
             else if (next.kind === 'invalid') setValidationState({ status: 'invalid', count: next.errors.length + next.unplaceable.length + Object.values(next.byNode).flat().length })
             else setValidationState({ status: 'failed' })
         } catch (reason: unknown) {
-            if (request === validationSequence.current && requestGeneration === generation.current) {
+            if (mounted.current && request === validationSequence.current && requestGeneration === generation.current) {
                 setValidation({ kind: 'failed', message: `Could not reach server to validate this flow: ${String(reason)}` })
                 setValidationState({ status: 'failed' })
             }
@@ -340,7 +372,7 @@ export function useEditorController(options: UseEditorControllerOptions): UseEdi
     }, [options.urls.validate])
 
     const publish = useCallback(async () => {
-        if (activePublish.current !== null) return
+        if (!mounted.current || activePublish.current !== null) return
         const currentBuilt = builtRef.current
         if (currentBuilt.unresolved.length > 0) {
             setPublishOutcome({ kind: 'failed', message: 'Choose which output each unresolved connection should use before publishing.' })
@@ -351,7 +383,7 @@ export function useEditorController(options: UseEditorControllerOptions): UseEdi
         activePublish.current = attempt
         setPublishing(true)
         setPublishOutcome(null)
-        const owns = () => activePublish.current === attempt
+        const owns = () => mounted.current && activePublish.current === attempt && publishSequence.current === attempt
         const ready = await autosave.preparePublish()
         if (!ready) {
             if (owns() && publishedGeneration === generation.current) setPublishOutcome({ kind: 'failed', message: autosave.message ?? 'The draft could not be saved before publishing.' })
@@ -392,6 +424,7 @@ export function useEditorController(options: UseEditorControllerOptions): UseEdi
         ? Object.fromEntries(Object.entries(activeOutcome.byNode).map(([id, entries]) => [id, entries.map((entry) => entry.field === null ? entry.message : `${entry.field}: ${entry.message}`)]))
         : {}, [activeOutcome])
     const canvasNodes = useMemo(() => document.nodes.map((node) => ({ ...node, selected: node.id === selected.nodeId, data: { ...node.data, isStart: node.id === document.startId } })), [document.nodes, document.startId, selected.nodeId])
+    const canvasEdges = useMemo(() => document.edges.map((edge) => ({ ...edge, selected: edge.id === selected.edgeId })), [document.edges, selected.edgeId])
     const unknownTypes = document.nodes.filter((node) => !Object.prototype.hasOwnProperty.call(defs, node.data.type)).map((node) => ({ nodeId: node.id, type: node.data.type }))
     const trigger = options.triggers.find((candidate) => candidate.type === options.flow.trigger_type) ?? null
     const message = outcomeMessages(activeOutcome)
@@ -416,7 +449,7 @@ export function useEditorController(options: UseEditorControllerOptions): UseEdi
         view,
         actions,
         optionsSource,
-        canvasProps: { nodes: canvasNodes, edges: document.edges, defs, renderers: options.nodeRenderers, nodeErrors, onNodesChange: nodesChange, onEdgesChange: edgesChange, onConnect: connect, onNodeClick: selectNode, onEdgeClick: selectEdge, onPaneClick: () => { selectNode(null); setView((current) => ({ ...current, inspectorOpen: false })) }, onDropNodeType: (type, point) => { if (Object.prototype.hasOwnProperty.call(defs, type)) addNode(defs[type]!, point) }, onReady: (next) => { canvas.current = next }, interactive: true, deleteKeyCode: null },
+        canvasProps: { nodes: canvasNodes, edges: canvasEdges, defs, renderers: options.nodeRenderers, nodeErrors, onNodesChange: nodesChange, onEdgesChange: edgesChange, onConnect: connect, onNodeClick: selectNode, onEdgeClick: selectEdge, onPaneClick: () => { selectNode(null); setView((current) => ({ ...current, inspectorOpen: false })) }, onDropNodeType: (type, point) => { if (Object.prototype.hasOwnProperty.call(defs, type)) addNode(defs[type]!, point) }, onReady: (next) => { canvas.current = next }, onDispose: (old) => { if (canvas.current === old) canvas.current = null }, interactive: true, deleteKeyCode: null },
         canvasHudProps: { nodeCount: document.nodes.length, connectionCount: document.edges.length, validation: validationState },
         toolbarProps: { flowName: options.flow.name, triggerLabel: trigger?.label ?? options.flow.trigger_type, publishedVersion, save, validation: validationState, publish: publishIndicator, canUndo: history.past.length > 0, canRedo: history.future.length > 0, hasSelection: selected.nodeId !== null || selected.edgeId !== null, onUndo: () => moveHistory('undo'), onRedo: () => moveHistory('redo'), onAutoLayout: autoLayout, onFit: () => canvas.current?.fit(), onDeleteSelected: deleteSelection, onValidate: () => { void validate() }, onPublish: () => { void publish() } },
         noticeProps: { save, publish: publishIndicator, validation: validationState, structuralError: message.structural, graphMessages: [...message.graph, ...(message.failed === undefined ? [] : [message.failed])], validationMessage: validation?.kind === 'failed' ? validation.message : undefined, onKeepMine: () => resolveConflict('mine'), onUseTheirs: () => resolveConflict('theirs') },

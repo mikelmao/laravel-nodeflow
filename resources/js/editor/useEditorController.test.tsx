@@ -1,7 +1,7 @@
 import { act, renderHook, waitFor } from '@testing-library/react'
 import { describe, expect, it, vi } from 'vitest'
 import type { CanvasActions } from '../canvas/Canvas'
-import type { Graph, NodeTypePayload } from '../graph/types'
+import type { EditorUrls, Graph, NodeTypePayload } from '../graph/types'
 import { useEditorController } from './useEditorController'
 
 const flow = { id: 1, name: 'Studio', trigger_type: 'app.started', status: 'draft', version: 3, draft_revision: 7, draft_updated_at: null }
@@ -66,7 +66,7 @@ describe('useEditorController', () => {
     // A completed drag is one author action even though xyflow emits several position fragments.
     it('coalesces a drag into one undo and maps canvas actions into controller props', () => {
         const view = controller()
-        const canvas: CanvasActions = { fit: vi.fn(), centerNode: vi.fn(), screenToFlowPosition: vi.fn(() => ({ x: 321, y: 123 })) }
+        const canvas: CanvasActions = { fit: vi.fn(), centerNode: vi.fn(), screenToFlowPosition: vi.fn(() => ({ x: 321, y: 123 })), viewportCenter: vi.fn(() => ({ x: 321, y: 123 })) }
         act(() => view.result.current.actions.registerCanvas(canvas))
         act(() => view.result.current.actions.nodesChange([
             { id: 'send1', type: 'position', position: { x: 100, y: 20 }, dragging: true },
@@ -165,5 +165,46 @@ describe('useEditorController', () => {
         expect(view.result.current.toolbarProps.publishedVersion).toBe(3)
         expect(view.result.current.toolbarProps.publish.status).not.toBe('published')
         expect(view.result.current.noticeProps.publish?.status).not.toBe('published')
+    })
+
+    it('keeps React Flow select changes out of graph history while projecting node and edge selection', () => {
+        const connected: Graph = { ...graph, edges: [{ from: 'send1', to: 'exit1', output: 'sent' }], nodes: [...(graph.nodes ?? []), { id: 'exit1', type: 'core.exit', config: {}, position: { x: 300, y: 0 } }] }
+        const view = controller({ graph: connected })
+        const edgeId = view.result.current.document.edges[0]!.id
+
+        act(() => view.result.current.actions.nodesChange([{ id: 'send1', type: 'select', selected: true }]))
+        expect(view.result.current.selected?.id).toBe('send1')
+        expect(view.result.current.document.nodes[0]).not.toHaveProperty('selected')
+        act(() => view.result.current.actions.nodesChange([{ id: 'send1', type: 'select', selected: false }]))
+        expect(view.result.current.selected).toBeUndefined()
+        expect(view.result.current.view.inspectorOpen).toBe(false)
+
+        act(() => view.result.current.actions.edgesChange([{ id: edgeId, type: 'select', selected: true }]))
+        expect(view.result.current.view.selectedEdgeId).toBe(edgeId)
+        expect(view.result.current.canvasProps.edges[0]).toMatchObject({ id: edgeId, selected: true })
+        expect(view.result.current.document.edges[0]).not.toHaveProperty('selected')
+        act(() => view.result.current.actions.edgesChange([{ id: edgeId, type: 'remove' }]))
+        expect(view.result.current.view.selectedEdgeId).toBeNull()
+    })
+
+    it('invalidates a pending validation when validation becomes unavailable', async () => {
+        let resolveValidation!: (response: Response) => void
+        vi.stubGlobal('fetch', vi.fn(() => new Promise<Response>((resolve) => { resolveValidation = resolve })))
+        let currentUrls: EditorUrls = urls
+        const view = renderHook(() => useEditorController({
+            flow,
+            graph,
+            palette: [send, exit],
+            triggers: [{ type: 'app.started', label: 'Started', description: null, fields: [] }],
+            urls: currentUrls,
+            autosaveDebounceMs: 1,
+        }))
+        act(() => { void view.result.current.actions.validate() })
+        currentUrls = { ...urls, validate: undefined }
+        view.rerender()
+        await act(async () => view.result.current.actions.validate())
+        await act(async () => resolveValidation(Response.json({ valid: true, warnings: [] })))
+        expect(view.result.current.toolbarProps.validation.status).toBe('failed')
+        expect(view.result.current.noticeProps.validationMessage).toMatch(/unavailable/i)
     })
 })

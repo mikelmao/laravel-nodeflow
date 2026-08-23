@@ -454,6 +454,30 @@ describe('FlowEditor', () => {
         })
     })
 
+    it('routes document undo only to the editor claimed by its latest pointer interaction', () => {
+        const firstGraph: Graph = { start: 'first', nodes: [{ id: 'first', type: 'app.send', config: { template: 'first' }, position: { x: 0, y: 0 } }], edges: [] }
+        const secondGraph: Graph = { start: 'second', nodes: [{ id: 'second', type: 'app.send', config: { template: 'second' }, position: { x: 0, y: 0 } }], edges: [] }
+        render(<>
+            <FlowEditor flow={{ ...flow, id: 71, name: 'First editor' }} graph={firstGraph} palette={palette} triggers={triggers} urls={urls} autosaveDebounceMs={5} />
+            <FlowEditor flow={{ ...flow, id: 72, name: 'Second editor' }} graph={secondGraph} palette={palette} triggers={triggers} urls={urls} autosaveDebounceMs={5} />
+        </>)
+        const firstNode = document.querySelector('.react-flow__node[data-id="first"]') as HTMLElement
+        const secondNode = document.querySelector('.react-flow__node[data-id="second"]') as HTMLElement
+
+        fireEvent.click(firstNode)
+        fireEvent.change(screen.getAllByLabelText(/Template/)[0]!, { target: { value: 'first changed' } })
+        fireEvent.click(secondNode)
+        fireEvent.change(screen.getAllByLabelText(/Template/)[1]!, { target: { value: 'second changed' } })
+        fireEvent.pointerDown(secondNode)
+        fireEvent.keyDown(document, { key: 'z', ctrlKey: true })
+
+        expect(screen.getAllByLabelText(/Template/)[0]).toHaveValue('first changed')
+        expect(screen.getAllByLabelText(/Template/)[1]).toHaveValue('second')
+        fireEvent.pointerDown(firstNode)
+        fireEvent.keyDown(document, { key: 'z', ctrlKey: true })
+        expect(screen.getAllByLabelText(/Template/)[0]).toHaveValue('first')
+    })
+
     // Panel deletion owns graph invariants; counterfactual deleting only the node leaves start and dangling edges.
     it('clears start and incident edges when deleting from the panel', async () => {
         const fetchMock = successfulFetch()

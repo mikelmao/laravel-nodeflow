@@ -182,4 +182,12 @@ describe('NodeLibrary', () => {
         fireEvent.click(screen.getByRole('button', { name: 'Close node library' }))
         expect(onRequestClose).toHaveBeenCalledTimes(1)
     })
+
+    it('gives each mounted library search label its own input id', () => {
+        render(<><NodeLibrary palette={[entry()]} onAdd={vi.fn()} /><NodeLibrary palette={[entry()]} onAdd={vi.fn()} /></>)
+
+        const inputs = screen.getAllByRole('searchbox', { name: 'Search nodes' })
+        expect(inputs[0]?.id).not.toBe(inputs[1]?.id)
+        expect((screen.getAllByText('Search nodes', { selector: 'label' }) as HTMLLabelElement[]).map((label) => label.htmlFor)).toEqual(inputs.map((input) => input.id))
+    })
 })

@@ -316,6 +316,27 @@
   resources/js/graph resources/js/run` passed **21 files / 230 tests**; `npx tsc --noEmit` and
   `git diff --check` passed silently.
 
+### Task 10 quality follow-up — ownership, lifecycle, and viewport
+
+- RED: controller regressions demonstrated that React Flow `select:false` did not clear controller
+  selection and that a pending valid response could overwrite the explicit no-validate-URL failure.
+  The new Canvas regressions pin wrapper-relative viewport centering and disposal identity; the
+  library regression mounts two drawers and requires distinct label/input identities.
+- GREEN: each FlowEditor session now claims a module-local shortcut owner on captured pointer or
+  focus input; only the owner installs behavior for document shortcuts and unmount releases only
+  its own claim. Editable suppression recognizes all enabled `contenteditable` forms and descendants
+  in a disabled-shortcuts subtree. Controller node/edge selection changes are filtered before
+  canonical graph application, including `select:false`, and canvas selection is derived for both
+  node cards and edges.
+- Validate increments its request token before checking the optional URL, while controller unmount
+  invalidates both validate and publish sequences. Async state application requires mounted,
+  request-owner, and generation checks. Canvas actions now include `viewportCenter`, derived from
+  the actual wrapper rect before flow conversion, with SSR/JSDOM fallback; lifecycle disposal clears
+  the controller ref only when it still identifies that same action object. NodeLibrary search IDs
+  use `useId` rather than a document-global literal.
+- Quality verification: `npx vitest run` passed **26 files / 290 tests**; the requested editor,
+  canvas, graph, and run suite passed **21 files / 235 tests**. TypeScript and diff checks passed.
+
 ## Documentation and demo verification
 
 ## Reviews and final gates

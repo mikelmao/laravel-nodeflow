@@ -697,6 +697,25 @@ describe('Canvas', () => {
         expect(getNode).toHaveBeenLastCalledWith('missing')
         expect(actions.screenToFlowPosition({ x: 1, y: 2 })).toEqual({ x: 8, y: 9 })
         expect(screenToFlowPosition).toHaveBeenCalledWith({ x: 1, y: 2 })
+        const wrapper = document.createElement('div')
+        vi.spyOn(wrapper, 'getBoundingClientRect').mockReturnValue({ x: 40, y: 60, left: 40, top: 60, right: 440, bottom: 260, width: 400, height: 200, toJSON: () => ({}) })
+        const viewportActions = canvasActions(
+            { screenToFlowPosition } as unknown as ReactFlowInstance<NodeflowNode, NodeflowEdge>,
+            false,
+            wrapper,
+        )
+        viewportActions.viewportCenter()
+        expect(screenToFlowPosition).toHaveBeenLastCalledWith({ x: 240, y: 160 })
+    })
+
+    it('disposes the same registered canvas actions on unmount', async () => {
+        const onReady = vi.fn()
+        const onDispose = vi.fn()
+        const rendered = render(<Canvas nodes={[canvasNode]} edges={[]} defs={{ 'app.send': def() }} onReady={onReady} onDispose={onDispose} />)
+
+        await waitFor(() => expect(onReady).toHaveBeenCalledOnce())
+        rendered.unmount()
+        expect(onDispose).toHaveBeenCalledWith(onReady.mock.calls[0]?.[0])
     })
 
     it('uses zero-duration controls when the OS asks for reduced motion', async () => {

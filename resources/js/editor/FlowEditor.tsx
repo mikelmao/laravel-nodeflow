@@ -13,6 +13,8 @@ import { NodeInspector } from './NodeInspector'
 import { NodeLibrary } from './NodeLibrary'
 import { useEditorController, type ToolbarSlots } from './useEditorController'
 
+let shortcutOwner: symbol | null = null
+
 export type { EditorMode, ToolbarSlots }
 
 export type FlowEditorProps = {
@@ -40,13 +42,22 @@ export function FlowEditor(props: FlowEditorProps) {
 
 function editableTarget(target: EventTarget | null): boolean {
     if (!(target instanceof HTMLElement)) return false
-    return target.matches('input, textarea, select, [contenteditable="true"], [data-nodeflow-shortcuts="off"]')
-        || target.closest('[contenteditable="true"], [data-nodeflow-shortcuts="off"]') !== null
+    return target.matches('input, textarea, select, [contenteditable]:not([contenteditable="false"]), [data-nodeflow-shortcuts="off"]')
+        || target.closest('[contenteditable]:not([contenteditable="false"]), [data-nodeflow-shortcuts="off"]') !== null
 }
 
 function FlowEditorSession({ mode = 'workspace', toolbarSlots, className, ...options }: FlowEditorProps) {
     const controller = useEditorController(options)
     const librarySearchRef = useRef<HTMLInputElement>(null)
+    const shortcutToken = useRef(Symbol('nodeflow-shortcuts'))
+    const claimShortcuts = () => { shortcutOwner = shortcutToken.current }
+
+    useEffect(() => {
+        if (shortcutOwner === null) shortcutOwner = shortcutToken.current
+        return () => {
+            if (shortcutOwner === shortcutToken.current) shortcutOwner = null
+        }
+    }, [])
 
     const openLibraryAndFocus = () => {
         controller.actions.setInspectorOpen(false)
@@ -62,6 +73,7 @@ function FlowEditorSession({ mode = 'workspace', toolbarSlots, className, ...opt
 
     useEffect(() => {
         const onKeyDown = (event: KeyboardEvent) => {
+            if (shortcutOwner !== shortcutToken.current) return
             if (editableTarget(event.target)) return
             const command = event.metaKey || event.ctrlKey
             if (command && event.key.toLowerCase() === 'z') {
@@ -97,9 +109,10 @@ function FlowEditorSession({ mode = 'workspace', toolbarSlots, className, ...opt
         : <NodeInspector {...controller.nodeInspectorProps} />
 
     return <FieldOptionsContext.Provider value={controller.optionsSource}>
-        <p className="sr-only">Start: {controller.document.startId || 'none'}</p>
-        {options.triggers.find((trigger) => trigger.type === options.flow.trigger_type)?.description && <p className="sr-only">{options.triggers.find((trigger) => trigger.type === options.flow.trigger_type)?.description}</p>}
-        <EditorShell
+        <div className="contents" onPointerDownCapture={claimShortcuts} onFocusCapture={claimShortcuts}>
+            <p className="sr-only">Start: {controller.document.startId || 'none'}</p>
+            {options.triggers.find((trigger) => trigger.type === options.flow.trigger_type)?.description && <p className="sr-only">{options.triggers.find((trigger) => trigger.type === options.flow.trigger_type)?.description}</p>}
+            <EditorShell
             mode={mode}
             className={className}
             toolbar={<EditorToolbar {...controller.toolbarProps} slots={toolbarSlots} />}
@@ -111,6 +124,7 @@ function FlowEditorSession({ mode = 'workspace', toolbarSlots, className, ...opt
             inspectorOpen={controller.view.inspectorOpen}
             onLibraryOpenChange={controller.actions.setLibraryOpen}
             onInspectorOpenChange={controller.actions.setInspectorOpen}
-        />
+            />
+        </div>
     </FieldOptionsContext.Provider>
 }

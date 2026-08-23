@@ -15,10 +15,10 @@ import {
     type ReactFlowProps,
 } from '@xyflow/react'
 import '@xyflow/react/dist/style.css'
-import { useCallback, useEffect, useMemo, useState, type DragEvent, type MouseEvent } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState, type DragEvent, type MouseEvent } from 'react'
 import type { CanvasEdge, CanvasNode, NodeCardData, NodeTypePayload } from '../graph/types'
 import { CanvasContext, type NodeDecorationMap, type NodeRendererMap } from './context'
-import { NODE_MIN_HEIGHT, NODE_WIDTH } from './layout'
+import { CANVAS_ORIGIN, NODE_MIN_HEIGHT, NODE_WIDTH } from './layout'
 import { NodeCard } from './NodeCard'
 import { WorkflowEdge } from './WorkflowEdge'
 
@@ -26,11 +26,13 @@ import { WorkflowEdge } from './WorkflowEdge'
 // fail the compiler without an unknown or as-unknown boundary cast.
 export type NodeflowNode = CanvasNode & Node<NodeCardData, 'nodeflowNode'>
 export type NodeflowEdge = CanvasEdge & Edge
+export type CanvasPoint = { x: number; y: number }
 
 export type CanvasActions = {
     fit: () => void
     centerNode: (id: string) => void
     screenToFlowPosition: (point: { x: number; y: number }) => { x: number; y: number }
+    viewportCenter: () => CanvasPoint
 }
 
 export type CanvasProps = {
@@ -49,6 +51,7 @@ export type CanvasProps = {
     onEdgeClick?: (id: string) => void
     onDropNodeType?: (type: string, position: { x: number; y: number }) => void
     onReady?: (actions: CanvasActions) => void
+    onDispose?: (actions: CanvasActions) => void
     /** The editor scopes deletion itself so React Flow cannot race its cleanup. */
     deleteKeyCode?: ReactFlowProps<NodeflowNode, NodeflowEdge>['deleteKeyCode']
     showMinimap?: boolean
@@ -74,6 +77,7 @@ export function prefersReducedMotion(): boolean {
 export function canvasActions(
     instance: ReactFlowInstance<NodeflowNode, NodeflowEdge>,
     reducedMotion: boolean,
+    wrapper?: HTMLElement | null,
 ): CanvasActions {
     const duration = reducedMotion ? 0 : 220
 
@@ -94,6 +98,15 @@ export function canvasActions(
             }
         },
         screenToFlowPosition: (point) => instance.screenToFlowPosition(point),
+        viewportCenter: () => {
+            const rect = wrapper?.getBoundingClientRect()
+            const screen = rect !== undefined && rect.width > 0 && rect.height > 0
+                ? { x: rect.left + rect.width / 2, y: rect.top + rect.height / 2 }
+                : typeof window === 'undefined'
+                    ? CANVAS_ORIGIN
+                    : { x: Math.max(0, window.innerWidth || document.documentElement.clientWidth || 0) / 2, y: Math.max(0, window.innerHeight || document.documentElement.clientHeight || 0) / 2 }
+            return instance.screenToFlowPosition(screen)
+        },
     }
 }
 
@@ -188,12 +201,16 @@ export function Canvas({
     onEdgeClick,
     onDropNodeType,
     onReady,
+    onDispose,
     deleteKeyCode,
     showMinimap = false,
     interactive = true,
     className = 'h-full min-h-[32rem] w-full',
 }: CanvasProps) {
     const [instance, setInstance] = useState<ReactFlowInstance<NodeflowNode, NodeflowEdge> | null>(null)
+    const wrapperRef = useRef<HTMLDivElement>(null)
+    const disposeRef = useRef(onDispose)
+    disposeRef.current = onDispose
     const reducedMotion = prefersReducedMotion()
     const context = useMemo(
         () => ({ defs, renderers, nodeErrors, decorations: nodeDecorations }),
@@ -215,14 +232,15 @@ export function Canvas({
         [onEdgeClick],
     )
     const actions = useMemo(
-        () => instance === null ? null : canvasActions(instance, reducedMotion),
+        () => instance === null ? null : canvasActions(instance, reducedMotion, wrapperRef.current),
         [instance, reducedMotion],
     )
     useEffect(() => {
-        if (actions !== null) {
-            onReady?.(actions)
-        }
+        if (actions !== null) onReady?.(actions)
     }, [actions, onReady])
+    useEffect(() => {
+        if (actions !== null) return () => disposeRef.current?.(actions)
+    }, [actions])
     const canDropNodeType = interactive && onDropNodeType !== undefined
     const hasNodeTypeMime = useCallback(
         (event: DragEvent<HTMLDivElement>) => Array.from(event.dataTransfer.types).includes(NODE_TYPE_MIME),
@@ -253,7 +271,7 @@ export function Canvas({
 
     return (
         <CanvasContext.Provider value={context}>
-            <div className={className}>
+            <div ref={wrapperRef} className={className}>
                 <ReactFlow<NodeflowNode, NodeflowEdge>
                     nodes={behavior.nodes}
                     edges={behavior.edges}
