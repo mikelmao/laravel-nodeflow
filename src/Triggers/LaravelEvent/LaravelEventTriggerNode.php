@@ -27,7 +27,7 @@ class LaravelEventTriggerNode extends AbstractTriggerNode
 
     public function driver(): string
     {
-        return 'event';
+        return LaravelEventTriggerDriver::key();
     }
 
     public function validate(array $config, TriggerSourceRegistry $sources): array
@@ -38,7 +38,7 @@ class LaravelEventTriggerNode extends AbstractTriggerNode
     public function compile(array $config): TriggerActivationDescriptor
     {
         return new TriggerActivationDescriptor(
-            driver: 'event',
+            driver: $this->driver(),
             source: (string) $config['source'],
             qualifier: null,
             metadata: [],

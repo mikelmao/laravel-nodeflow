@@ -18,6 +18,41 @@ use Nodeflow\Triggers\Webhook\WebhookTriggerDriver;
 use Nodeflow\Triggers\Webhook\WebhookTriggerNode;
 use Nodeflow\Triggers\Webhook\WebhookTriggerSource;
 
+function registerBuiltInDefinitionsModelSource(): string
+{
+    $source = new class implements ModelObserverTriggerSource
+    {
+        public static function key(): string
+        {
+            return 'orders';
+        }
+
+        public static function driver(): string
+        {
+            return 'model';
+        }
+
+        public static function modelClass(): string
+        {
+            return \Illuminate\Database\Eloquent\Model::class;
+        }
+
+        public function definition(): TriggerDefinition
+        {
+            return TriggerDefinition::make('Orders model');
+        }
+
+        public function resolve(TriggerOccurrence $occurrence, array $config): TriggerMatch
+        {
+            return TriggerMatch::make();
+        }
+    };
+
+    Nodeflow::registerTriggerSources([$source::class]);
+
+    return $source::key();
+}
+
 it('registers the built-in trigger nodes and drivers under stable keys', function () {
     $nodes = app(TriggerNodeRegistry::class);
     $drivers = app(TriggerDriverRegistry::class);
@@ -81,16 +116,89 @@ it('compiles built-in trigger configuration into stable descriptors', function (
     ]);
 });
 
-it('validates required fields model events and changed field shape', function () {
+it('validates required model fields', function () {
     $sources = Nodeflow::triggerSources();
     $node = app(ModelObserverTriggerNode::class);
 
-    expect($node->validate([], $sources))->toHaveKeys(['source', 'event'])
-        ->and($node->validate([
-            'source' => 'orders',
-            'event' => 'saved',
-            'changed_fields' => 'status',
-        ], $sources))->toHaveKeys(['source', 'event', 'changed_fields']);
+    expect($node->validate([], $sources))->toHaveKeys(['source', 'event']);
+});
+
+it('accepts every supported model event when changed fields are omitted', function (string $event) {
+    $source = registerBuiltInDefinitionsModelSource();
+
+    expect(app(ModelObserverTriggerNode::class)->validate([
+        'source' => $source,
+        'event' => $event,
+    ], Nodeflow::triggerSources()))->toBe([]);
+})->with(['created', 'updated', 'deleted', 'restored']);
+
+it('accepts absent-equivalent and updated model changed fields', function (string $event, mixed $changedFields) {
+    $source = registerBuiltInDefinitionsModelSource();
+
+    expect(app(ModelObserverTriggerNode::class)->validate([
+        'source' => $source,
+        'event' => $event,
+        'changed_fields' => $changedFields,
+    ], Nodeflow::triggerSources()))->toBe([]);
+})->with([
+    'null on a non-updated event' => ['created', null],
+    'empty on a non-updated event' => ['created', []],
+    'non-empty on updated' => ['updated', ['status']],
+]);
+
+it('rejects unsupported model events with the event validation message', function () {
+    $source = registerBuiltInDefinitionsModelSource();
+    $errors = app(ModelObserverTriggerNode::class)->validate([
+        'source' => $source,
+        'event' => 'saved',
+    ], Nodeflow::triggerSources());
+
+    expect($errors)->toHaveKey('event')
+        ->and($errors['event'])->toContain('The selected event is invalid.')
+        ->and($errors)->not->toHaveKey('source');
+});
+
+it('rejects non-empty changed fields for non-updated model events', function () {
+    $source = registerBuiltInDefinitionsModelSource();
+    $errors = app(ModelObserverTriggerNode::class)->validate([
+        'source' => $source,
+        'event' => 'created',
+        'changed_fields' => ['status'],
+    ], Nodeflow::triggerSources());
+
+    expect($errors)->toHaveKey('changed_fields')
+        ->and($errors['changed_fields'])->toBe([
+            'Changed fields may only be configured for the updated event.',
+        ])
+        ->and($errors)->not->toHaveKey('source');
+});
+
+it('rejects malformed model changed fields without masking the shape error', function () {
+    $source = registerBuiltInDefinitionsModelSource();
+    $errors = app(ModelObserverTriggerNode::class)->validate([
+        'source' => $source,
+        'event' => 'created',
+        'changed_fields' => 'status',
+    ], Nodeflow::triggerSources());
+
+    expect($errors)->toHaveKey('changed_fields')
+        ->and($errors['changed_fields'])->toBe(['The changed fields field must be an array.'])
+        ->and($errors)->not->toHaveKey('source');
+});
+
+it('rejects non-string model changed field members', function () {
+    $source = registerBuiltInDefinitionsModelSource();
+    $errors = app(ModelObserverTriggerNode::class)->validate([
+        'source' => $source,
+        'event' => 'created',
+        'changed_fields' => ['status', 42],
+    ], Nodeflow::triggerSources());
+
+    expect($errors)->toBe([
+        'changed_fields.1' => [
+            'The changed_fields.1 field must be a string.',
+        ],
+    ]);
 });
 
 it('accepts only registered sources implementing the driver-specific source contract', function () {
@@ -163,11 +271,29 @@ it('recognizes typed model and event source extensions', function () {
 });
 
 it('validates model descriptors against model observer sources', function () {
-    $source = new class implements ModelObserverTriggerSource
+    $source = registerBuiltInDefinitionsModelSource();
+
+    $descriptor = new TriggerActivationDescriptor('model', $source, 'updated', [
+        'changed_fields' => ['status'],
+    ]);
+
+    expect(app(ModelObserverTriggerNode::class)->validate([
+        'source' => $source,
+        'event' => 'updated',
+        'changed_fields' => ['status'],
+    ], Nodeflow::triggerSources()))->toBe([])
+        ->and(app(ModelObserverTriggerDriver::class)->validate($descriptor))->toBe([])
+        ->and(app(ModelObserverTriggerDriver::class)->validate(
+            new TriggerActivationDescriptor('webhook', $source, 'updated', []),
+        ))->toHaveKey('driver');
+});
+
+it('rejects a model descriptor resolving to the wrong source interface', function () {
+    $source = new class implements TriggerSource
     {
         public static function key(): string
         {
-            return 'orders';
+            return 'not-a-model';
         }
 
         public static function driver(): string
@@ -175,14 +301,9 @@ it('validates model descriptors against model observer sources', function () {
             return 'model';
         }
 
-        public static function modelClass(): string
-        {
-            return \Illuminate\Database\Eloquent\Model::class;
-        }
-
         public function definition(): TriggerDefinition
         {
-            return TriggerDefinition::make('Orders model');
+            return TriggerDefinition::make('Wrong model source type');
         }
 
         public function resolve(TriggerOccurrence $occurrence, array $config): TriggerMatch
@@ -193,19 +314,11 @@ it('validates model descriptors against model observer sources', function () {
 
     Nodeflow::registerTriggerSources([$source::class]);
 
-    $descriptor = new TriggerActivationDescriptor('model', 'orders', 'updated', [
-        'changed_fields' => ['status'],
+    expect(app(ModelObserverTriggerDriver::class)->validate(
+        new TriggerActivationDescriptor('model', 'not-a-model', 'updated', []),
+    ))->toBe([
+        'source' => ['The registered source is not a model observer trigger source.'],
     ]);
-
-    expect(app(ModelObserverTriggerNode::class)->validate([
-        'source' => 'orders',
-        'event' => 'updated',
-        'changed_fields' => ['status'],
-    ], Nodeflow::triggerSources()))->toBe([])
-        ->and(app(ModelObserverTriggerDriver::class)->validate($descriptor))->toBe([])
-        ->and(app(ModelObserverTriggerDriver::class)->validate(
-            new TriggerActivationDescriptor('webhook', 'orders', 'updated', []),
-        ))->toHaveKey('driver');
 });
 
 it('validates event descriptors against Laravel event sources', function () {
@@ -248,4 +361,37 @@ it('validates event descriptors against Laravel event sources', function () {
         ->and(app(LaravelEventTriggerDriver::class)->validate(
             new TriggerActivationDescriptor('model', 'order.placed', null, []),
         ))->toHaveKey('driver');
+});
+
+it('rejects an event descriptor resolving to the wrong source interface', function () {
+    $source = new class implements TriggerSource
+    {
+        public static function key(): string
+        {
+            return 'not-an-event';
+        }
+
+        public static function driver(): string
+        {
+            return 'event';
+        }
+
+        public function definition(): TriggerDefinition
+        {
+            return TriggerDefinition::make('Wrong event source type');
+        }
+
+        public function resolve(TriggerOccurrence $occurrence, array $config): TriggerMatch
+        {
+            return TriggerMatch::make();
+        }
+    };
+
+    Nodeflow::registerTriggerSources([$source::class]);
+
+    expect(app(LaravelEventTriggerDriver::class)->validate(
+        new TriggerActivationDescriptor('event', 'not-an-event', null, []),
+    ))->toBe([
+        'source' => ['The registered source is not a Laravel event trigger source.'],
+    ]);
 });

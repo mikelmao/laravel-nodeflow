@@ -34,7 +34,7 @@ class ModelObserverTriggerNode extends AbstractTriggerNode
 
     public function driver(): string
     {
-        return 'model';
+        return ModelObserverTriggerDriver::key();
     }
 
     public function validate(array $config, TriggerSourceRegistry $sources): array
@@ -46,8 +46,12 @@ class ModelObserverTriggerNode extends AbstractTriggerNode
             ['changed_fields.*' => ['string']],
         );
 
-        if (array_key_exists('changed_fields', $config)
-            && $config['changed_fields'] !== null
+        if (is_array($config['changed_fields'] ?? null)
+            && $config['changed_fields'] !== []
+            && array_filter(
+                $config['changed_fields'],
+                fn (mixed $field): bool => ! is_string($field),
+            ) === []
             && ($config['event'] ?? null) !== 'updated') {
             $errors['changed_fields'][] = 'Changed fields may only be configured for the updated event.';
         }
@@ -58,7 +62,7 @@ class ModelObserverTriggerNode extends AbstractTriggerNode
     public function compile(array $config): TriggerActivationDescriptor
     {
         return new TriggerActivationDescriptor(
-            driver: 'model',
+            driver: $this->driver(),
             source: (string) $config['source'],
             qualifier: (string) $config['event'],
             metadata: ['changed_fields' => array_values($config['changed_fields'] ?? [])],

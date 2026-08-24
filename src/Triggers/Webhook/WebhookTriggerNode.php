@@ -27,7 +27,7 @@ class WebhookTriggerNode extends AbstractTriggerNode
 
     public function driver(): string
     {
-        return 'webhook';
+        return WebhookTriggerDriver::key();
     }
 
     public function validate(array $config, TriggerSourceRegistry $sources): array
@@ -38,7 +38,7 @@ class WebhookTriggerNode extends AbstractTriggerNode
     public function compile(array $config): TriggerActivationDescriptor
     {
         return new TriggerActivationDescriptor(
-            driver: 'webhook',
+            driver: $this->driver(),
             source: (string) $config['source'],
             qualifier: null,
             metadata: [],
