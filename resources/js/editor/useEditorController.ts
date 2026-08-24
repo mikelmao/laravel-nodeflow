@@ -416,14 +416,22 @@ export function useEditorController(options: UseEditorControllerOptions): UseEdi
         setPublishing(true)
         setPublishOutcome(null)
         const owns = () => mounted.current && activePublish.current === attempt && publishSequence.current === attempt
-        const ready = await autosave.preparePublish()
-        if (!ready) {
+        const readyRevision = await autosave.preparePublish()
+        if (readyRevision === false) {
             if (owns() && publishedGeneration === generation.current) setPublishOutcome({ kind: 'failed', message: autosave.message ?? 'The draft could not be saved before publishing.' })
             if (owns()) { activePublish.current = null; setPublishing(false) }
             return
         }
         try {
-            const result = await send('POST', options.urls.publish, { graph: currentBuilt.graph })
+            const result = await send('POST', options.urls.publish, {
+                graph: currentBuilt.graph,
+                draft_revision: readyRevision,
+            })
+            if (result.status === 409) {
+                autosave.finishPublish(undefined, result.data)
+                if (owns() && publishedGeneration === generation.current) setPublishOutcome(null)
+                return
+            }
             const next = interpretPublish(result, new Set(documentRef.current.nodes.map((node) => node.id)))
             autosave.finishPublish(next.kind === 'published' ? next.revision : undefined)
             if (!owns() || publishedGeneration !== generation.current) return

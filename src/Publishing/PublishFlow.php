@@ -3,6 +3,7 @@
 namespace Nodeflow\Publishing;
 
 use Illuminate\Support\Facades\DB;
+use Nodeflow\Editor\StaleDraftException;
 use Nodeflow\Graph\Graph;
 use Nodeflow\Graph\GraphValidator;
 use Nodeflow\Models\Flow;
@@ -15,8 +16,14 @@ class PublishFlow
         private CompileTriggerActivation $compileActivation,
     ) {}
 
-    public function publish(Flow $flow, array $graph, ?string $publishedBy = null): PublishResult
+    public function publish(
+        Flow $flow,
+        array $graph,
+        ?string $publishedBy = null,
+        ?int $expectedDraftRevision = null,
+    ): PublishResult
     {
+        $expectedDraftRevision ??= (int) ($flow->draft_revision ?? 0);
         $compiledGraph = Graph::fromArray($graph);
         $result = $this->validator->validate($compiledGraph);
 
@@ -27,12 +34,46 @@ class PublishFlow
         try {
             $encodedGraph = json_encode($graph, JSON_THROW_ON_ERROR);
         } catch (\Throwable) {
+            $start = $graph['start'] ?? null;
+
+            if (is_string($start) && preg_match('//u', $start) !== 1) {
+                $message = 'The compiled trigger_node_id must contain valid UTF-8.';
+
+                throw new GraphInvalidException(
+                    [$message],
+                    [['node' => null, 'field' => 'trigger_node_id', 'message' => $message]],
+                );
+            }
+
             throw new GraphInvalidException(['The flow graph contains values that cannot be published safely.']);
         }
 
-        return DB::transaction(function () use ($flow, $graph, $encodedGraph, $publishedBy, $compiledGraph) {
+        [$publishResult, $publishedFlow] = DB::transaction(function () use (
+            $flow,
+            $graph,
+            $encodedGraph,
+            $publishedBy,
+            $compiledGraph,
+            $expectedDraftRevision,
+        ) {
+            // This is an identity reload, not an authorization read: the caller
+            // reached $flow through a scoped route/query already. Locking the
+            // trusted row serializes version numbering and closes the window in
+            // which an autosave could be acknowledged and then silently cleared.
+            $lockedFlow = Flow::withoutTenancy()
+                ->whereKey($flow->getKey())
+                ->lockForUpdate()
+                ->firstOrFail();
+
+            if ((int) ($lockedFlow->draft_revision ?? 0) !== $expectedDraftRevision) {
+                throw new StaleDraftException(
+                    $lockedFlow->draft_graph ?? [],
+                    (int) ($lockedFlow->draft_revision ?? 0),
+                );
+            }
+
             $version = FlowVersion::create([
-                'flow_id' => $flow->id,
+                'flow_id' => $lockedFlow->id,
                 // From the flow, never from the ambient tenant. The flow was
                 // reached through a scoped read, so it is the authority on which
                 // tenant this version belongs to — and a publish can legitimately
@@ -47,15 +88,15 @@ class PublishFlow
                 // reader to infer it from a hook two files away. Removing it
                 // would not open the mismatch hole (the hook closes that); it
                 // would only make the intent implicit.
-                'tenant_id' => $flow->tenant_id,
-                'version' => ((int) $flow->versions()->max('version')) + 1,
+                'tenant_id' => $lockedFlow->tenant_id,
+                'version' => ((int) $lockedFlow->versions()->max('version')) + 1,
                 'graph' => $graph,
                 'content_hash' => hash('sha256', $encodedGraph),
                 'published_at' => now(),
                 'published_by' => $publishedBy,
             ]);
 
-            $this->compileActivation->compile($flow, $version, $compiledGraph);
+            $this->compileActivation->compile($lockedFlow, $version, $compiledGraph);
 
             // The draft became this version, so it is no longer pending work. Left
             // behind, the editor reopens showing an already-published graph as
@@ -75,14 +116,25 @@ class PublishFlow
             // Nothing needs the reset. A freshly loaded client already knows the
             // current revision because edit() ships draft_revision in its props,
             // and publish() echoes it back for a client that stays open.
-            $flow->update([
+            $lockedFlow->update([
                 'current_version_id' => $version->id,
                 'status' => 'active',
                 'draft_graph' => null,
                 'draft_updated_at' => null,
             ]);
 
-            return new PublishResult($version);
+            return [new PublishResult($version), $lockedFlow];
         });
+
+        // Transaction work happens on the locked reload so a rollback can never
+        // leave the caller claiming attributes that the database discarded.
+        // Only after commit do we adopt the authoritative raw row and invalidate
+        // relation snapshots that publication made obsolete.
+        $flow->setRawAttributes($publishedFlow->getAttributes(), true);
+        foreach (['currentVersion', 'versions', 'triggerActivation', 'activation'] as $relation) {
+            $flow->unsetRelation($relation);
+        }
+
+        return $publishResult;
     }
 }

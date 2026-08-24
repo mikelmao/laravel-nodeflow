@@ -161,7 +161,9 @@ class FlowEditorController extends Controller
     {
         $this->authorize('publish', $flow);
 
-        $request->validate($this->graphRules());
+        $request->validate($this->graphRules() + [
+            'draft_revision' => ['required', 'integer', 'min:0'],
+        ]);
 
         try {
             $result = app(PublishFlow::class)->publish(
@@ -170,7 +172,14 @@ class FlowEditorController extends Controller
                 // the frozen version instead of being stripped by validated().
                 $request->input('graph'),
                 (string) ($request->user()?->getAuthIdentifier() ?? ''),
+                $request->integer('draft_revision'),
             );
+        } catch (StaleDraftException $e) {
+            return response()->json([
+                'message' => $e->getMessage(),
+                'graph' => $e->graph() ?: ['start' => '', 'nodes' => [], 'edges' => []],
+                'draft_revision' => $e->revision(),
+            ], 409);
         } catch (GraphInvalidException $e) {
             return response()->json([
                 'message' => 'The flow could not be published.',

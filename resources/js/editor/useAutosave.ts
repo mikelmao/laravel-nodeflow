@@ -13,9 +13,9 @@ export type Autosave = {
     conflict: DraftConflict | null
     lastSavedAt: number | null
     /** Serialize publish after every accepted draft PUT; false means conflict/error halted saving. */
-    preparePublish(): Promise<boolean>
-    /** Release the PUT barrier; a revision means publish succeeded, omission means it failed. */
-    finishPublish(revision?: number): void
+    preparePublish(): Promise<number | false>
+    /** Release the PUT barrier; a revision means success, while a 409 payload enters conflict state. */
+    finishPublish(revision?: number, conflictPayload?: Record<string, unknown> | null): void
     /**
      * 'mine' adopts the server's revision and immediately saves the author's own
      * graph over theirs. 'theirs' adopts the revision and saves nothing - the
@@ -453,23 +453,81 @@ export function useAutosave({
 
     const finishLease = publishLease.active ?? publishLease.next
 
-    const finishPublish = useCallback((nextRevision?: number) => {
+    const finishPublish = useCallback((nextRevision?: number, conflictPayload?: Record<string, unknown> | null) => {
         if (!mounted.current || flowIdentity.current.epoch !== ownerEpoch || publishBarrier.current !== finishLease) {
             return
         }
 
         spentPublishLease.current = Math.max(spentPublishLease.current, finishLease)
 
-        if (nextRevision !== undefined && !isDraftRevision(nextRevision)) {
-            halted.current = true
+        const releaseBarrier = () => {
             publishBarrier.current = null
             publishTarget.current = null
-            afterPublish.current = null
-            pending.current = null
-            pendingDueAt.current = null
             setPublishLease((current) => current.active === finishLease
                 ? { active: null, next: Math.max(current.next, finishLease + 1) }
                 : current)
+
+            const queued = afterPublish.current
+            afterPublish.current = null
+
+            return queued
+        }
+
+        if (conflictPayload !== undefined) {
+            const conflictRevision = conflictPayload?.draft_revision
+            const conflictGraph = conflictPayload?.graph
+            const conflictMessage = conflictPayload?.message
+
+            if (!isDraftRevision(conflictRevision) || !isGraph(conflictGraph)) {
+                halted.current = true
+                conflict.current = null
+                releaseBarrier()
+                pending.current = null
+                pendingDueAt.current = null
+
+                if (timer.current !== null) {
+                    clearTimeout(timer.current)
+                    timer.current = null
+                }
+
+                setState((current) => ({
+                    ...current,
+                    status: 'error',
+                    conflict: null,
+                    message: 'The publish server returned an invalid conflict response: graph and draft_revision must match the editor protocol.',
+                }))
+
+                return
+            }
+
+            halted.current = true
+            conflict.current = { graph: conflictGraph, revision: conflictRevision }
+            releaseBarrier()
+            pending.current = null
+            pendingDueAt.current = null
+
+            if (timer.current !== null) {
+                clearTimeout(timer.current)
+                timer.current = null
+            }
+
+            setState((current) => ({
+                ...current,
+                status: 'conflict',
+                conflict: conflict.current,
+                message: typeof conflictMessage === 'string'
+                    ? conflictMessage
+                    : 'Someone else edited this flow.',
+            }))
+
+            return
+        }
+
+        if (nextRevision !== undefined && !isDraftRevision(nextRevision)) {
+            halted.current = true
+            releaseBarrier()
+            pending.current = null
+            pendingDueAt.current = null
 
             if (timer.current !== null) {
                 clearTimeout(timer.current)
@@ -491,14 +549,7 @@ export function useAutosave({
             setState((current) => ({ ...current, revision: nextRevision }))
         }
 
-        publishBarrier.current = null
-        publishTarget.current = null
-        setPublishLease((current) => current.active === finishLease
-            ? { active: null, next: Math.max(current.next, finishLease + 1) }
-            : current)
-
-        const queued = afterPublish.current
-        afterPublish.current = null
+        const queued = releaseBarrier()
 
         if (queued !== null && queued !== baseline.current && !halted.current && mounted.current) {
             pending.current = queued
@@ -511,7 +562,7 @@ export function useAutosave({
         }
     }, [debounceMs, run, ownerEpoch, finishLease])
 
-    const preparePublish = useCallback(async (): Promise<boolean> => {
+    const preparePublish = useCallback(async (): Promise<number | false> => {
         if (!mounted.current || flowIdentity.current.epoch !== ownerEpoch || publishBarrier.current !== null || finishLease <= spentPublishLease.current) {
             return false
         }
@@ -561,7 +612,7 @@ export function useAutosave({
             return false
         }
 
-        return true
+        return revision.current
     }, [finishPublish, finishLease, run, serialised, ownerEpoch])
 
     return { ...state, preparePublish, finishPublish, resolveConflict }

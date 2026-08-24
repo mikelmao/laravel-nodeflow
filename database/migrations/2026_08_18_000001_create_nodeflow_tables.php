@@ -2,12 +2,19 @@
 
 use Illuminate\Database\Migrations\Migration;
 use Illuminate\Database\Schema\Blueprint;
+use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Schema;
 
 return new class extends Migration
 {
     public function up(): void
     {
+        $activationRoutingCollation = in_array(
+            DB::connection()->getDriverName(),
+            ['mysql', 'mariadb'],
+            true,
+        ) ? 'utf8mb4_bin' : null;
+
         Schema::create('nodeflow_flows', function (Blueprint $t) {
             $t->id();
             $t->string('tenant_id')->index();
@@ -43,16 +50,30 @@ return new class extends Migration
             $t->unique(['flow_id', 'version']);
         });
 
-        Schema::create('nodeflow_trigger_activations', function (Blueprint $t) {
+        Schema::create('nodeflow_trigger_activations', function (Blueprint $t) use ($activationRoutingCollation) {
             $t->id();
             $t->foreignId('flow_id')->unique()->constrained('nodeflow_flows')->cascadeOnDelete();
             $t->foreignId('flow_version_id')->unique()->constrained('nodeflow_flow_versions')->cascadeOnDelete();
             $t->string('tenant_id')->index();
             // Three utf8mb4 columns at 191 characters each total 2,292 bytes,
             // under MySQL's 3,072-byte index limit while leaving stable IDs roomy.
-            $t->string('driver', 191)->index();
-            $t->string('source', 191)->index();
-            $t->string('qualifier', 191)->nullable()->index();
+            $driver = $t->string('driver', 191);
+            $source = $t->string('source', 191);
+            $qualifier = $t->string('qualifier', 191)->nullable();
+
+            // MySQL-family default collations are commonly case-insensitive,
+            // which would alias extension-owned routing keys. PostgreSQL and
+            // SQLite already compare these strings case-exactly and must never
+            // receive a MySQL collation name.
+            if ($activationRoutingCollation !== null) {
+                $driver->collation('utf8mb4_bin');
+                $source->collation('utf8mb4_bin');
+                $qualifier->collation('utf8mb4_bin');
+            }
+
+            $driver->index();
+            $source->index();
+            $qualifier->index();
             $t->string('trigger_node_id');
             $t->json('descriptor');
             $t->timestamps();

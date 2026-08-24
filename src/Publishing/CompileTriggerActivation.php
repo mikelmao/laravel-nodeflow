@@ -24,6 +24,7 @@ class CompileTriggerActivation
     public function compile(Flow $flow, FlowVersion $version, Graph $graph): TriggerActivation
     {
         $nodeId = $graph->startNodeId();
+        $this->assertPersistedString($nodeId, 'trigger_node_id', 255, null);
         $node = $graph->node($nodeId);
 
         if ($node === null) {
@@ -43,7 +44,7 @@ class CompileTriggerActivation
             throw $this->invalid($nodeId, 'driver', "Trigger node [{$nodeId}] could not resolve its driver.");
         }
 
-        $this->assertKey($declaredDriver, 'driver', $nodeId);
+        $this->assertPersistedString($declaredDriver, 'driver', 191, $nodeId);
 
         if (! $this->drivers->has($declaredDriver)) {
             throw $this->invalid(
@@ -67,11 +68,11 @@ class CompileTriggerActivation
             throw $this->invalid($nodeId, null, "Trigger node [{$nodeId}] compiled an invalid activation descriptor.");
         }
 
-        $this->assertKey($descriptor->driver, 'driver', $nodeId);
-        $this->assertKey($descriptor->source, 'source', $nodeId);
+        $this->assertPersistedString($descriptor->driver, 'driver', 191, $nodeId);
+        $this->assertPersistedString($descriptor->source, 'source', 191, $nodeId);
 
         if ($descriptor->qualifier !== null) {
-            $this->assertKey($descriptor->qualifier, 'qualifier', $nodeId);
+            $this->assertPersistedString($descriptor->qualifier, 'qualifier', 191, $nodeId);
         }
 
         if ($descriptor->driver !== $declaredDriver) {
@@ -116,8 +117,9 @@ class CompileTriggerActivation
         }
 
         // Query the relationship instead of deleting a possibly preloaded model.
-        // A Flow instance can survive several publishes in one process, so its
-        // loaded relation may describe an activation that has already been replaced.
+        // This intentionally uses a relationship-builder delete, which bypasses
+        // model delete events. Activation replacement lifecycle hooks are not a
+        // supported extension point; webhook work must not depend on them.
         $flow->triggerActivation()->delete();
 
         $activation = TriggerActivation::withoutTenancy()->create([
@@ -139,21 +141,34 @@ class CompileTriggerActivation
         return $activation;
     }
 
-    private function assertKey(string $value, string $field, string $nodeId): void
+    private function assertPersistedString(
+        string $value,
+        string $field,
+        int $maximum,
+        ?string $nodeId,
+    ): void
     {
+        if (preg_match('//u', $value) !== 1) {
+            throw $this->invalid(
+                $nodeId,
+                $field,
+                "The compiled {$field} must contain valid UTF-8.",
+            );
+        }
+
         if (trim($value) === '') {
             throw $this->invalid(
                 $nodeId,
                 $field,
-                "Trigger node [{$nodeId}] compiled an empty {$field} routing key.",
+                "The trigger activation compiled an empty {$field} routing key.",
             );
         }
 
-        if (Str::length($value) > 191) {
+        if (Str::length($value) > $maximum) {
             throw $this->invalid(
                 $nodeId,
                 $field,
-                "Trigger node [{$nodeId}] compiled a {$field} routing key longer than 191 characters.",
+                "The trigger activation compiled a {$field} value longer than {$maximum} characters.",
             );
         }
     }

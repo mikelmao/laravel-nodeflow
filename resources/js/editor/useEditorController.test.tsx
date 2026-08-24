@@ -113,7 +113,7 @@ describe('useEditorController', () => {
             ...send,
             fields: [{ key: 'template', type: 'text', label: 'Template', help: null, default: null, required: true, options: {}, dynamic_options: false }],
         }
-        const fetchMock = vi.fn((url: string) => {
+        const fetchMock = vi.fn((url: string, _options?: RequestInit) => {
             if (url === urls.validate) return Promise.resolve(Response.json({ valid: true, warnings: ['The exit path is slow.'] }))
             if (url === urls.publish) return Promise.resolve(Response.json({
                 errors: ['The flow cannot be published.'],
@@ -131,6 +131,9 @@ describe('useEditorController', () => {
         await act(async () => view.result.current.actions.validate())
         act(() => view.result.current.actions.selectNode('send1'))
         await act(async () => view.result.current.actions.publish())
+
+        const publishBody = JSON.parse(String(fetchMock.mock.calls.find(([url]) => url === urls.publish)![1]?.body))
+        expect(publishBody.draft_revision).toBe(7)
 
         expect(view.result.current.noticeProps.graphMessages).toEqual(expect.arrayContaining([
             'The flow cannot be published.',

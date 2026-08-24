@@ -447,6 +447,28 @@ describe('FlowEditor', () => {
         expect(second.graph).toEqual(first.graph)
     })
 
+    // The POST can lose a race after its draft barrier succeeds; its 409 must
+    // enter the same visible conflict workflow as a draft PUT.
+    it('adopts a publish-time conflict revision before retrying the local graph', async () => {
+        const theirs: Graph = { start: null, nodes: [{ id: 'theirs', type: 'core.exit' }], edges: [] }
+        const fetchMock = vi.fn()
+            .mockResolvedValueOnce(Response.json({ message: 'Publish lost the draft race.', graph: theirs, draft_revision: 20 }, { status: 409 }))
+            .mockResolvedValueOnce(Response.json({ draft_revision: 21 }))
+        vi.stubGlobal('fetch', fetchMock)
+        renderEditor()
+
+        fireEvent.click(screen.getByRole('button', { name: 'Publish' }))
+        await screen.findByRole('button', { name: 'Keep mine' })
+        expect(requestBody(fetchMock, urls.publish).draft_revision).toBe(7)
+
+        fireEvent.click(screen.getByRole('button', { name: 'Keep mine' }))
+        await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(2))
+        expect(requestBody(fetchMock, urls.draft)).toMatchObject({
+            draft_revision: 20,
+            graph,
+        })
+    })
+
     // Use theirs must canonicalise omitted containers and clear selection; counterfactual retaining local selection edits the wrong node.
     it('adopts and publishes the server graph after a conflict', async () => {
         const theirs: Graph = {
@@ -470,6 +492,7 @@ describe('FlowEditor', () => {
         fireEvent.click(screen.getByRole('button', { name: 'Publish' }))
         expect((await screen.findAllByText(/Published v4/)).length).toBeGreaterThan(0)
         expect(requestBody(fetchMock, urls.publish)).toEqual({
+            draft_revision: 20,
             graph: {
                 start: '',
                 nodes: [
@@ -630,11 +653,14 @@ describe('FlowEditor', () => {
         fireEvent.click(screen.getByRole('button', { name: 'Delete node' }))
         fireEvent.click(screen.getByRole('button', { name: 'Publish' }))
         await waitFor(() => expect(fetchMock.mock.calls.some(([url]) => url === urls.publish)).toBe(true))
-        expect(requestBody(fetchMock, urls.publish)).toEqual({ graph: {
-            start: '',
-            nodes: [{ id: 'exit1', type: 'core.exit', config: {}, position: { x: 300, y: 0 } }],
-            edges: [],
-        } })
+        expect(requestBody(fetchMock, urls.publish)).toEqual({
+            draft_revision: 8,
+            graph: {
+                start: '',
+                nodes: [{ id: 'exit1', type: 'core.exit', config: {}, position: { x: 300, y: 0 } }],
+                edges: [],
+            },
+        })
     })
 
     // React Flow keyboard deletion must share cleanup; counterfactual applyNodeChanges alone leaves a dangling start/edge.
@@ -664,11 +690,14 @@ describe('FlowEditor', () => {
         await waitFor(() => expect(document.querySelector('.react-flow__node[data-id="send1"]')).toBeNull())
         fireEvent.click(screen.getByRole('button', { name: 'Publish' }))
         await waitFor(() => expect(fetchMock.mock.calls.some(([url]) => url === urls.publish)).toBe(true))
-        expect(requestBody(fetchMock, urls.publish)).toEqual({ graph: {
-            start: '',
-            nodes: [{ id: 'exit1', type: 'core.exit', config: {}, position: { x: 300, y: 0 } }],
-            edges: [],
-        } })
+        expect(requestBody(fetchMock, urls.publish)).toEqual({
+            draft_revision: 8,
+            graph: {
+                start: '',
+                nodes: [{ id: 'exit1', type: 'core.exit', config: {}, position: { x: 300, y: 0 } }],
+                edges: [],
+            },
+        })
         for (const requestUrl of [urls.draft, urls.publish]) {
             const calls = fetchMock.mock.calls.filter(([calledUrl]) => calledUrl === requestUrl)
             calls.forEach((_, occurrence) => {

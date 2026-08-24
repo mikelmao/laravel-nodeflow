@@ -6,6 +6,8 @@ use Nodeflow\Contracts\TenantResolver;
 use Nodeflow\Contracts\TriggerDriver;
 use Nodeflow\Contracts\TriggerNode;
 use Nodeflow\Contracts\TriggerSource;
+use Nodeflow\Editor\SaveDraft;
+use Nodeflow\Editor\StaleDraftException;
 use Nodeflow\Models\Concerns\TenancyGuardSuspension;
 use Nodeflow\Models\Flow;
 use Nodeflow\Models\FlowVersion;
@@ -93,6 +95,25 @@ class PublicationBoundaryWhitespaceDriver implements TriggerDriver
     public static function key(): string { return '   '; }
 }
 
+class PublicationInvalidUtf8Driver implements TriggerDriver
+{
+    use PublicationBoundaryDriver;
+
+    public static function key(): string { return "\xFF"; }
+}
+
+class PublicationInvalidUtf8ValidationMessageDriver implements TriggerDriver
+{
+    public static function key(): string { return 'test.invalid-utf8-validation-message'; }
+
+    public function sourceRegistered(TriggerSource $source): void {}
+
+    public function validate(TriggerActivationDescriptor $descriptor): array
+    {
+        return ['routing_key' => ["\xFF"]];
+    }
+}
+
 trait PublicationBoundarySource
 {
     public function definition(): TriggerDefinition
@@ -131,6 +152,33 @@ class PublicationBoundaryWhitespaceDriverSource implements TriggerSource
     public static function key(): string { return 'test.driver-boundary-whitespace'; }
 
     public static function driver(): string { return PublicationBoundaryWhitespaceDriver::key(); }
+}
+
+class PublicationInvalidUtf8DriverSource implements TriggerSource
+{
+    use PublicationBoundarySource;
+
+    public static function key(): string { return 'test.driver-invalid-utf8'; }
+
+    public static function driver(): string { return PublicationInvalidUtf8Driver::key(); }
+}
+
+class PublicationInvalidUtf8Source implements TriggerSource
+{
+    use PublicationBoundarySource;
+
+    public static function key(): string { return "\xFF"; }
+
+    public static function driver(): string { return 'test.fake'; }
+}
+
+class PublicationInvalidUtf8ValidationMessageSource implements TriggerSource
+{
+    use PublicationBoundarySource;
+
+    public static function key(): string { return 'test.invalid-utf8-validation-message'; }
+
+    public static function driver(): string { return PublicationInvalidUtf8ValidationMessageDriver::key(); }
 }
 
 class PublicationBoundarySource191 implements TriggerSource
@@ -217,6 +265,67 @@ class PublicationBoundaryWhitespaceDriverNode implements TriggerNode
     public function compile(array $config): TriggerActivationDescriptor
     {
         return new TriggerActivationDescriptor($this->driver(), PublicationBoundaryWhitespaceDriverSource::key(), null, []);
+    }
+}
+
+class PublicationInvalidUtf8DriverNode implements TriggerNode
+{
+    use PublicationBoundaryNode;
+
+    public static function type(): string { return 'test.driver-invalid-utf8'; }
+
+    public function driver(): string { return PublicationInvalidUtf8Driver::key(); }
+
+    public function compile(array $config): TriggerActivationDescriptor
+    {
+        return new TriggerActivationDescriptor($this->driver(), PublicationInvalidUtf8DriverSource::key(), null, []);
+    }
+}
+
+class PublicationInvalidUtf8SourceNode implements TriggerNode
+{
+    use PublicationBoundaryNode;
+
+    public static function type(): string { return 'test.source-invalid-utf8'; }
+
+    public function driver(): string { return 'test.fake'; }
+
+    public function compile(array $config): TriggerActivationDescriptor
+    {
+        return new TriggerActivationDescriptor($this->driver(), PublicationInvalidUtf8Source::key(), null, []);
+    }
+}
+
+class PublicationInvalidUtf8QualifierNode implements TriggerNode
+{
+    use PublicationBoundaryNode;
+
+    public static function type(): string { return 'test.qualifier-invalid-utf8'; }
+
+    public function driver(): string { return 'test.fake'; }
+
+    public function compile(array $config): TriggerActivationDescriptor
+    {
+        return new TriggerActivationDescriptor($this->driver(), 'test.orders', "\xFF", []);
+    }
+}
+
+class PublicationInvalidUtf8ValidationMessageNode implements TriggerNode
+{
+    use PublicationBoundaryNode;
+
+    public static function type(): string { return 'test.invalid-utf8-validation-message'; }
+
+    public function driver(): string { return PublicationInvalidUtf8ValidationMessageDriver::key(); }
+
+    public function compile(array $config): TriggerActivationDescriptor
+    {
+        return new TriggerActivationDescriptor(
+            $this->driver(),
+            PublicationInvalidUtf8ValidationMessageSource::key(),
+            null,
+            [],
+        );
     }
 }
 
@@ -364,6 +473,78 @@ it('rolls back activation replacement when the final flow update fails', functio
         ->and(TriggerActivation::withoutTenancy()->sole()->is($oldActivation))->toBeTrue();
 });
 
+it('refuses an acknowledged draft revision after an autosave wins between model binding and publication', function () {
+    $routeSnapshot = $this->flow->fresh();
+    $newerGraph = triggeredExitGraph('test.orders', ['account' => 'newer']);
+    app(SaveDraft::class)->save($this->flow, $newerGraph, 0);
+
+    try {
+        app(PublishFlow::class)->publish($routeSnapshot, triggeredExitGraph(), expectedDraftRevision: 0);
+        $exception = null;
+    } catch (StaleDraftException $e) {
+        $exception = $e;
+    }
+
+    expect($exception)->not->toBeNull()
+        ->and($exception->revision())->toBe(1)
+        ->and($exception->graph())->toBe($newerGraph)
+        ->and($this->flow->versions()->count())->toBe(0)
+        ->and(TriggerActivation::withoutTenancy()->count())->toBe(0)
+        ->and($this->flow->fresh()->draft_graph)->toBe($newerGraph);
+});
+
+it('snapshots an omitted expected revision before validation and locks the trusted flow row before numbering', function () {
+    $queries = [];
+    DB::listen(function (QueryExecuted $query) use (&$queries) {
+        $queries[] = $query->sql;
+    });
+
+    app(PublishFlow::class)->publish($this->flow, triggeredExitGraph());
+
+    $flowLock = collect($queries)->search(fn (string $sql) => str_contains($sql, 'from "nodeflow_flows"')
+        && str_contains($sql, 'where "nodeflow_flows"."id" = ?'));
+    $versionNumber = collect($queries)->search(fn (string $sql) => str_contains($sql, 'max("version")'));
+
+    expect($flowLock)->not->toBeFalse()
+        ->and($versionNumber)->not->toBeFalse()
+        ->and($flowLock)->toBeLessThan($versionNumber);
+});
+
+it('keeps the caller model truthful when a locked-model publish rolls back', function () {
+    $old = app(PublishFlow::class)->publish($this->flow, triggeredExitGraph());
+    $caller = $this->flow->fresh()->load(['currentVersion', 'versions', 'activation']);
+    $before = $caller->getRawOriginal();
+
+    Flow::updating(function () {
+        throw new RuntimeException('simulated locked flow update failure');
+    });
+
+    expect(fn () => app(PublishFlow::class)->publish($caller, triggeredExitGraph()))
+        ->toThrow(RuntimeException::class, 'simulated locked flow update failure');
+
+    expect($caller->getRawOriginal())->toBe($before)
+        ->and($caller->current_version_id)->toBe($old->version->id)
+        ->and($caller->relationLoaded('currentVersion'))->toBeTrue()
+        ->and($caller->relationLoaded('versions'))->toBeTrue()
+        ->and($caller->relationLoaded('activation'))->toBeTrue()
+        ->and($this->flow->fresh()->current_version_id)->toBe($old->version->id)
+        ->and($this->flow->versions()->count())->toBe(1);
+});
+
+it('syncs the caller after commit and clears all publication relation caches', function () {
+    $caller = $this->flow->fresh()->load(['currentVersion', 'versions', 'triggerActivation', 'activation']);
+
+    $result = app(PublishFlow::class)->publish($caller, triggeredExitGraph());
+
+    expect($caller->current_version_id)->toBe($result->version->id)
+        ->and($caller->status)->toBe('active')
+        ->and($caller->draft_graph)->toBeNull()
+        ->and($caller->relationLoaded('currentVersion'))->toBeFalse()
+        ->and($caller->relationLoaded('versions'))->toBeFalse()
+        ->and($caller->relationLoaded('triggerActivation'))->toBeFalse()
+        ->and($caller->relationLoaded('activation'))->toBeFalse();
+});
+
 it('turns unsafe extension metadata into a structured graph error without leaking details', function () {
     app(\Nodeflow\Triggers\TriggerNodeRegistry::class)->register(UnsafeMetadataPublicationTriggerNode::class);
     $graph = [
@@ -409,6 +590,116 @@ it('rejects a whitespace-only :dataset routing key and preserves the live public
     assertPublicationBoundaryRejection($this, $dimension, 'whitespace', "empty {$dimension} routing key");
 })->with(['driver', 'source', 'qualifier']);
 
+it('rejects invalid UTF-8 from a registered :dataset extension and preserves the live publication', function (string $dimension) {
+    $old = app(PublishFlow::class)->publish($this->flow, triggeredExitGraph());
+    $oldActivation = TriggerActivation::withoutTenancy()->sole();
+
+    try {
+        app(PublishFlow::class)->publish($this->flow->fresh(), publicationInvalidUtf8Graph($dimension));
+        $exception = null;
+    } catch (GraphInvalidException $e) {
+        $exception = $e;
+    }
+
+    $flow = $this->flow->fresh();
+    expect($exception)->not->toBeNull()
+        ->and($exception->errors()[0])->toContain('valid UTF-8')
+        ->and($exception->nodeErrors()[0]['field'])->toBe($dimension)
+        ->and($flow->versions()->count())->toBe(1)
+        ->and($flow->current_version_id)->toBe($old->version->id)
+        ->and($flow->status)->toBe('active')
+        ->and(TriggerActivation::withoutTenancy()->sole()->is($oldActivation))->toBeTrue();
+})->with(['driver', 'source', 'qualifier']);
+
+it('keeps validation errors JSON-safe when an unregistered :dataset routing key contains invalid UTF-8', function (string $dimension) {
+    $old = app(PublishFlow::class)->publish($this->flow, triggeredExitGraph());
+    $oldActivation = TriggerActivation::withoutTenancy()->sole();
+
+    $node = $dimension === 'driver'
+        ? PublicationInvalidUtf8DriverNode::class
+        : PublicationInvalidUtf8SourceNode::class;
+    app(TriggerNodeRegistry::class)->register($node);
+
+    try {
+        app(PublishFlow::class)->publish($this->flow->fresh(), publicationGraphForNode($node::type(), 'unsafe-key'));
+        $exception = null;
+    } catch (GraphInvalidException $e) {
+        $exception = $e;
+    }
+
+    $encoded = json_encode([
+        'message' => $exception?->getMessage(),
+        'errors' => $exception?->errors(),
+        'node_errors' => $exception?->nodeErrors(),
+    ], JSON_THROW_ON_ERROR);
+    $flow = $this->flow->fresh();
+
+    expect($exception)->not->toBeNull()
+        ->and($encoded)->toContain('UTF-8')
+        ->and($flow->versions()->count())->toBe(1)
+        ->and($flow->current_version_id)->toBe($old->version->id)
+        ->and(TriggerActivation::withoutTenancy()->sole()->is($oldActivation))->toBeTrue();
+})->with(['driver', 'source']);
+
+it('keeps extension-supplied validation messages JSON-safe', function () {
+    app(TriggerDriverRegistry::class)->register(PublicationInvalidUtf8ValidationMessageDriver::class);
+    app(TriggerSourceRegistry::class)->register(PublicationInvalidUtf8ValidationMessageSource::class);
+    app(TriggerNodeRegistry::class)->register(PublicationInvalidUtf8ValidationMessageNode::class);
+
+    try {
+        app(PublishFlow::class)->publish(
+            $this->flow,
+            publicationGraphForNode(PublicationInvalidUtf8ValidationMessageNode::type(), 'unsafe-message'),
+        );
+        $exception = null;
+    } catch (GraphInvalidException $e) {
+        $exception = $e;
+    }
+
+    $encoded = json_encode([
+        'message' => $exception?->getMessage(),
+        'errors' => $exception?->errors(),
+        'node_errors' => $exception?->nodeErrors(),
+    ], JSON_THROW_ON_ERROR);
+
+    expect($exception)->not->toBeNull()
+        ->and($encoded)->toContain('UTF-8')
+        ->and($this->flow->versions()->count())->toBe(0)
+        ->and(TriggerActivation::withoutTenancy()->count())->toBe(0);
+});
+
+it('accepts a nonempty trigger node id at the 255 character database limit', function () {
+    $nodeId = str_repeat('n', 255);
+
+    app(PublishFlow::class)->publish($this->flow, publicationTriggerNodeIdGraph($nodeId));
+
+    expect(TriggerActivation::withoutTenancy()->sole()->trigger_node_id)->toBe($nodeId);
+});
+
+it('rejects an invalid trigger node id and preserves the live publication', function (string $nodeId, string $message) {
+    $old = app(PublishFlow::class)->publish($this->flow, triggeredExitGraph());
+    $oldActivation = TriggerActivation::withoutTenancy()->sole();
+
+    try {
+        app(PublishFlow::class)->publish($this->flow->fresh(), publicationTriggerNodeIdGraph($nodeId));
+        $exception = null;
+    } catch (GraphInvalidException $e) {
+        $exception = $e;
+    }
+
+    $flow = $this->flow->fresh();
+    expect($exception)->not->toBeNull()
+        ->and($exception->getMessage())->toContain($message)
+        ->and($flow->versions()->count())->toBe(1)
+        ->and($flow->current_version_id)->toBe($old->version->id)
+        ->and($flow->status)->toBe('active')
+        ->and(TriggerActivation::withoutTenancy()->sole()->is($oldActivation))->toBeTrue();
+})->with([
+    '256 characters' => [str_repeat('n', 256), 'longer than 255 characters'],
+    'whitespace only' => ['   ', 'empty trigger_node_id'],
+    'invalid UTF-8' => ["\xFF", 'valid UTF-8'],
+]);
+
 it('finds active activations by exact driver source and nullable qualifier without tenant scope', function () {
     $nullQualifier = makeRepositoryActivation('org-1', 'active', 'event', 'orders', null);
     $qualified = makeRepositoryActivation('org-2', 'active', 'event', 'orders', 'premium');
@@ -427,6 +718,20 @@ it('finds active activations by exact driver source and nullable qualifier witho
         ->and($withQualifier)->toHaveCount(1)
         ->and($withQualifier[0]->activationId)->toBe($qualified->id)
         ->and($withQualifier[0]->tenantId)->toBe('org-2');
+});
+
+it('matches source and qualifier routing keys case-exactly', function () {
+    $lowerSource = makeRepositoryActivation('org-1', 'active', 'event', 'orders', null);
+    $upperSource = makeRepositoryActivation('org-2', 'active', 'event', 'ORDERS', null);
+    $lowerQualifier = makeRepositoryActivation('org-3', 'active', 'model', 'users', 'updated');
+    $upperQualifier = makeRepositoryActivation('org-4', 'active', 'model', 'users', 'UPDATED');
+    $repository = app(TriggerActivationRepository::class);
+
+    expect($repository->forDriverSource('event', 'orders'))->toHaveCount(1)
+        ->and($repository->forDriverSource('event', 'orders')[0]->activationId)->toBe($lowerSource->id)
+        ->and($repository->forDriverSource('event', 'ORDERS')[0]->activationId)->toBe($upperSource->id)
+        ->and($repository->forDriverSource('model', 'users', 'updated')[0]->activationId)->toBe($lowerQualifier->id)
+        ->and($repository->forDriverSource('model', 'users', 'UPDATED')[0]->activationId)->toBe($upperQualifier->id);
 });
 
 it('returns pinned immutable snapshots in one query even if current version later changes', function () {
@@ -640,4 +945,43 @@ function registerPublicationBoundaryQualifier(): string
     app(TriggerNodeRegistry::class)->register(PublicationBoundaryQualifierNode::class);
 
     return PublicationBoundaryQualifierNode::type();
+}
+
+function publicationInvalidUtf8Graph(string $dimension): array
+{
+    $node = match ($dimension) {
+        'driver' => PublicationInvalidUtf8DriverNode::class,
+        'source' => PublicationInvalidUtf8SourceNode::class,
+        'qualifier' => PublicationInvalidUtf8QualifierNode::class,
+    };
+
+    if ($dimension === 'driver') {
+        app(TriggerDriverRegistry::class)->register(PublicationInvalidUtf8Driver::class);
+        app(TriggerSourceRegistry::class)->register(PublicationInvalidUtf8DriverSource::class);
+    } elseif ($dimension === 'source') {
+        app(TriggerSourceRegistry::class)->register(PublicationInvalidUtf8Source::class);
+    }
+
+    app(TriggerNodeRegistry::class)->register($node);
+
+    return publicationGraphForNode($node::type(), 'invalid-utf8-trigger');
+}
+
+function publicationTriggerNodeIdGraph(string $nodeId): array
+{
+    app(TriggerNodeRegistry::class)->register(PublicationBoundaryQualifierNode::class);
+
+    return publicationGraphForNode(PublicationBoundaryQualifierNode::type(), $nodeId, ['routing_key' => 'updated']);
+}
+
+function publicationGraphForNode(string $type, string $nodeId, array $config = []): array
+{
+    return [
+        'start' => $nodeId,
+        'nodes' => [
+            ['id' => $nodeId, 'type' => $type, 'config' => $config],
+            ['id' => 'exit', 'type' => 'core.exit', 'config' => []],
+        ],
+        'edges' => [['from' => $nodeId, 'output' => 'started', 'to' => 'exit']],
+    ];
 }

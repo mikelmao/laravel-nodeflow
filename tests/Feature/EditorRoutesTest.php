@@ -5,6 +5,8 @@ use Illuminate\Routing\RouteCollection;
 use Illuminate\Support\Facades\Gate;
 use Illuminate\Support\Facades\Route;
 use Nodeflow\Contracts\TenantResolver;
+use Nodeflow\Editor\SaveDraft;
+use Nodeflow\Editor\StaleDraftException;
 use Nodeflow\Models\Concerns\TenancyGuardSuspension;
 use Nodeflow\Models\Flow;
 use Nodeflow\Nodeflow;
@@ -216,7 +218,7 @@ it('returns a graph-shaped object in the 409 even when there is no draft left', 
         ->assertOk();
 
     $this->actingAs($this->user)
-        ->postJson("/nodeflow/flows/{$this->flow->id}/publish", ['graph' => exitGraph()])
+        ->postJson("/nodeflow/flows/{$this->flow->id}/publish", ['graph' => exitGraph(), 'draft_revision' => 1])
         ->assertOk();
 
     $response = $this->actingAs($this->user)
@@ -361,11 +363,47 @@ it('publishes a valid graph and freezes a version', function () {
     allowEverything();
 
     $this->actingAs($this->user)
-        ->postJson("/nodeflow/flows/{$this->flow->id}/publish", ['graph' => exitGraph()])
+        ->postJson("/nodeflow/flows/{$this->flow->id}/publish", ['graph' => exitGraph(), 'draft_revision' => 0])
         ->assertOk()
         ->assertJsonPath('version', 1);
 
     expect($this->flow->fresh()->current_version_id)->not->toBeNull();
+});
+
+it('requires a nonnegative integer draft revision to publish', function (mixed $revision) {
+    allowEverything();
+
+    $payload = ['graph' => exitGraph()];
+    if ($revision !== 'missing') {
+        $payload['draft_revision'] = $revision;
+    }
+
+    $this->actingAs($this->user)
+        ->postJson("/nodeflow/flows/{$this->flow->id}/publish", $payload)
+        ->assertStatus(422)
+        ->assertJsonValidationErrors('draft_revision');
+})->with(['missing', -1, 1.5, 'one']);
+
+it('returns the winning draft and revision when publish loses an autosave race', function () {
+    allowEverything();
+    $newer = exitGraph();
+    $newer['nodes'][1]['id'] = 'newer';
+    $newer['edges'][0]['to'] = 'newer';
+
+    app(SaveDraft::class)->save($this->flow, $newer, 0);
+
+    $this->actingAs($this->user)
+        ->postJson("/nodeflow/flows/{$this->flow->id}/publish", [
+            'graph' => exitGraph(),
+            'draft_revision' => 0,
+        ])
+        ->assertStatus(409)
+        ->assertJsonPath('graph', $newer)
+        ->assertJsonPath('draft_revision', 1)
+        ->assertJsonPath('message', (new StaleDraftException([], 0))->getMessage());
+
+    expect($this->flow->versions()->count())->toBe(0)
+        ->and($this->flow->fresh()->draft_graph)->toBe($newer);
 });
 
 it('returns the current draft revision alongside the published version', function () {
@@ -381,7 +419,7 @@ it('returns the current draft revision alongside the published version', functio
         ->assertOk();
 
     $response = $this->actingAs($this->user)
-        ->postJson("/nodeflow/flows/{$this->flow->id}/publish", ['graph' => exitGraph()])
+        ->postJson("/nodeflow/flows/{$this->flow->id}/publish", ['graph' => exitGraph(), 'draft_revision' => 1])
         ->assertOk();
 
     expect($response->json('draft_revision'))->toBe(1);
@@ -402,7 +440,7 @@ it('returns per-node errors when publish is rejected', function () {
     allowEverything();
 
     $this->actingAs($this->user)
-        ->postJson("/nodeflow/flows/{$this->flow->id}/publish", ['graph' => [
+        ->postJson("/nodeflow/flows/{$this->flow->id}/publish", ['draft_revision' => 0, 'graph' => [
             'start' => 'w1',
             'nodes' => [['id' => 'w1', 'type' => 'core.wait', 'config' => []]],
             'edges' => [],
@@ -424,7 +462,7 @@ it('four-twenty-twos a published node with no id rather than exploding', functio
     allowEverything();
 
     $this->actingAs($this->user)
-        ->postJson("/nodeflow/flows/{$this->flow->id}/publish", ['graph' => [
+        ->postJson("/nodeflow/flows/{$this->flow->id}/publish", ['draft_revision' => 0, 'graph' => [
             'start' => 'n1',
             'nodes' => [['type' => 'core.exit', 'config' => []]],
             'edges' => [],
@@ -439,7 +477,7 @@ it('four-twenty-twos a published edge with no target rather than exploding', fun
     allowEverything();
 
     $this->actingAs($this->user)
-        ->postJson("/nodeflow/flows/{$this->flow->id}/publish", ['graph' => [
+        ->postJson("/nodeflow/flows/{$this->flow->id}/publish", ['draft_revision' => 0, 'graph' => [
             'start' => 'e1',
             'nodes' => [['id' => 'e1', 'type' => 'core.exit', 'config' => []]],
             'edges' => [['from' => 'e1', 'output' => 'default']],
@@ -456,7 +494,7 @@ it('still reports a missing start node as a renderable publish error, not a fiel
     allowEverything();
 
     $this->actingAs($this->user)
-        ->postJson("/nodeflow/flows/{$this->flow->id}/publish", ['graph' => [
+        ->postJson("/nodeflow/flows/{$this->flow->id}/publish", ['draft_revision' => 0, 'graph' => [
             'nodes' => [['id' => 'e1', 'type' => 'core.exit', 'config' => []]],
             'edges' => [],
         ]])
@@ -507,7 +545,7 @@ it('denies publishing to someone who may edit but not publish', function () {
     Gate::define('nodeflow.publish', fn ($user, $flow = null) => false);
 
     $this->actingAs($this->user)
-        ->postJson("/nodeflow/flows/{$this->flow->id}/publish", ['graph' => exitGraph()])
+        ->postJson("/nodeflow/flows/{$this->flow->id}/publish", ['graph' => exitGraph(), 'draft_revision' => 0])
         ->assertForbidden();
 });
 
@@ -521,6 +559,7 @@ it('ignores a version id smuggled into the publish payload', function () {
     $this->actingAs($this->user)
         ->postJson("/nodeflow/flows/{$this->flow->id}/publish", [
             'graph' => exitGraph(),
+            'draft_revision' => 0,
             'current_version_id' => 99999,
         ])
         ->assertOk();

@@ -111,6 +111,13 @@ it('stores trigger activations, webhook endpoints, and run origins in the base s
         ->toContain(['flow_version_id', 'idempotency_key']);
 });
 
+it('declares MySQL-only binary collations for case-exact activation routing keys', function () {
+    $migration = file_get_contents(__DIR__.'/../../database/migrations/2026_08_18_000001_create_nodeflow_tables.php');
+
+    expect($migration)->toContain("['mysql', 'mariadb']")
+        ->and($migration)->toContain("collation('utf8mb4_bin')");
+});
+
 it('casts activation, endpoint, and run origin values and exposes their relations', function () {
     [$flow, $version] = makeTriggerSchemaFlow();
 
