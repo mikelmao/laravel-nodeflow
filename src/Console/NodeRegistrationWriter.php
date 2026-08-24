@@ -103,6 +103,21 @@ class NodeRegistrationWriter
         ]]);
     }
 
+    public function planAppendTo(
+        string $providerPath,
+        string $anchor,
+        string $presenceNeedle,
+        string $entry,
+        string $indent = '        ',
+    ): NodeRegistrationPlan {
+        return $this->planAppendMany($providerPath, [[
+            'anchor' => $anchor,
+            'presence' => $presenceNeedle,
+            'entry' => $entry,
+            'indent' => $indent,
+        ]]);
+    }
+
     /**
      * Atomically append several registrations. No provider bytes are written
      * unless every requested home is unique, ordered, and the final PHP parses.
@@ -111,14 +126,44 @@ class NodeRegistrationWriter
      */
     public function appendMany(string $providerPath, array $registrations): NodeRegistrationOutcome
     {
+        $plan = $this->planAppendMany($providerPath, $registrations);
+        if ($plan->outcome !== NodeRegistrationOutcome::Appended) {
+            return $plan->outcome;
+        }
+
+        try {
+            (new AtomicFileWriter($this->files))->write(
+                [$plan->path => $plan->contents],
+                $this->rootsFor($providerPath),
+                true,
+                function (string $written, string $path) use ($plan): void {
+                    $plan->validate($written, $path);
+                },
+                [],
+                [$plan->path => $plan->originalContents],
+            );
+        } catch (\Throwable) {
+            return NodeRegistrationOutcome::WriteFailed;
+        }
+
+        return NodeRegistrationOutcome::Appended;
+    }
+
+    /**
+     * Build and validate provider bytes without changing the provider.
+     *
+     * @param array<int, array{anchor: string, presence: string, entry: string, indent?: string}> $registrations
+     */
+    public function planAppendMany(string $providerPath, array $registrations): NodeRegistrationPlan
+    {
         if (! $this->files->exists($providerPath)) {
-            return NodeRegistrationOutcome::ProviderMissing;
+            return new NodeRegistrationPlan(NodeRegistrationOutcome::ProviderMissing);
         }
 
         $contents = $this->files->get($providerPath);
 
         if (! $this->hasSafeTriggerTopology($contents)) {
-            return NodeRegistrationOutcome::AnchorAmbiguous;
+            return new NodeRegistrationPlan(NodeRegistrationOutcome::AnchorAmbiguous);
         }
 
         $updated = $contents;
@@ -132,10 +177,10 @@ class NodeRegistrationWriter
 
             $location = $this->anchorLocation($updated, $anchor);
             if ($location['status'] === 'missing') {
-                return NodeRegistrationOutcome::AnchorMissing;
+                return new NodeRegistrationPlan(NodeRegistrationOutcome::AnchorMissing);
             }
             if ($location['status'] === 'ambiguous') {
-                return NodeRegistrationOutcome::AnchorAmbiguous;
+                return new NodeRegistrationPlan(NodeRegistrationOutcome::AnchorAmbiguous);
             }
 
             // E50: scoped to the anchor's own array span, not the whole file — a
@@ -148,7 +193,7 @@ class NodeRegistrationWriter
             $position = $this->insertionPoint($updated, $anchor);
 
             if ($position === null) {
-                return NodeRegistrationOutcome::AnchorMissing;
+                return new NodeRegistrationPlan(NodeRegistrationOutcome::AnchorMissing);
             }
 
             $newline = str_contains($updated, "\r\n") ? "\r\n" : "\n";
@@ -157,7 +202,13 @@ class NodeRegistrationWriter
         }
 
         if (! $changed) {
-            return NodeRegistrationOutcome::AlreadyPresent;
+            return new NodeRegistrationPlan(
+                NodeRegistrationOutcome::AlreadyPresent,
+                $providerPath,
+                $contents,
+                $this->registrationValidator($registrations),
+                originalContents: $contents,
+            );
         }
 
         // E11: a position that passed every check above can still sit inside a
@@ -169,36 +220,37 @@ class NodeRegistrationWriter
         // original bytes and refuses instead of reporting a success that
         // produced broken PHP.
         if (! $this->parses($updated) || ! $this->hasSafeTriggerTopology($updated)) {
-            return NodeRegistrationOutcome::WriteFailed;
+            return new NodeRegistrationPlan(NodeRegistrationOutcome::WriteFailed);
         }
 
         foreach ($registrations as $registration) {
             if (! str_contains(SourceText::withoutPhpComments($updated), $registration['presence'])) {
-                return NodeRegistrationOutcome::WriteFailed;
+                return new NodeRegistrationPlan(NodeRegistrationOutcome::WriteFailed);
             }
         }
 
-        try {
-            (new AtomicFileWriter($this->files))->write(
-                [$providerPath => $updated],
-                $this->rootsFor($providerPath),
-                true,
-                function (string $written) use ($registrations): void {
-                    if (! $this->parses($written) || ! $this->hasSafeTriggerTopology($written)) {
-                        throw new \InvalidArgumentException('The rendered provider is not structurally safe.');
-                    }
-                    foreach ($registrations as $registration) {
-                        if (! $this->isAlreadyPresent($written, $registration['anchor'], $registration['presence'])) {
-                            throw new \InvalidArgumentException('A rendered registration did not verify in its structural home.');
-                        }
-                    }
-                },
-            );
-        } catch (\Throwable) {
-            return NodeRegistrationOutcome::WriteFailed;
-        }
+        return new NodeRegistrationPlan(
+            NodeRegistrationOutcome::Appended,
+            $providerPath,
+            $updated,
+            $this->registrationValidator($registrations),
+            originalContents: $contents,
+        );
+    }
 
-        return NodeRegistrationOutcome::Appended;
+    /** @param array<int, array{anchor: string, presence: string, entry: string, indent?: string}> $registrations */
+    private function registrationValidator(array $registrations): \Closure
+    {
+        return function (string $written) use ($registrations): void {
+            if (! $this->parses($written) || ! $this->hasSafeTriggerTopology($written)) {
+                throw new \InvalidArgumentException('The rendered provider is not structurally safe.');
+            }
+            foreach ($registrations as $registration) {
+                if (! $this->isAlreadyPresent($written, $registration['anchor'], $registration['presence'])) {
+                    throw new \InvalidArgumentException('A rendered registration did not verify in its structural home.');
+                }
+            }
+        };
     }
 
     private function hasSafeTriggerTopology(string $contents): bool

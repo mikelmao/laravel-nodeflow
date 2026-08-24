@@ -47,6 +47,11 @@ class MakeTriggerDriverCommand extends GeneratorCommand
             ];
 
             $this->assertAvailableClasses([$driverClass, $nodeClass]);
+            $registration = $this->registrationPlan($driverClass, $nodeClass);
+            $registrationOutcome = $registration->outcome;
+            if ($registrationOutcome === NodeRegistrationOutcome::WriteFailed) {
+                throw new InvalidArgumentException('Automatic provider registration could not be planned safely.');
+            }
             $this->laravel->make('files')->ensureDirectoryExists($this->laravel->basePath('tests'));
             (new VerifiedGeneratorWriter($this->laravel->make('files'), [
                 $this->laravel->basePath('app'),
@@ -54,12 +59,7 @@ class MakeTriggerDriverCommand extends GeneratorCommand
             ]))->write(
                 $paths,
                 (bool) $this->option('force'),
-                function () use ($driverClass, $nodeClass, &$registrationOutcome): void {
-                    $registrationOutcome = $this->registrationOutcome($driverClass, $nodeClass);
-                    if ($registrationOutcome === NodeRegistrationOutcome::WriteFailed) {
-                        throw new InvalidArgumentException('Automatic provider registration failed while writing; the complete extension kit was rolled back.');
-                    }
-                },
+                $registration,
             );
         } catch (InvalidArgumentException $e) {
             $this->components->error($e->getMessage());
@@ -180,9 +180,9 @@ class MakeTriggerDriverCommand extends GeneratorCommand
         }
     }
 
-    private function registrationOutcome(string $driverClass, string $nodeClass): NodeRegistrationOutcome
+    private function registrationPlan(string $driverClass, string $nodeClass): NodeRegistrationPlan
     {
-        return (new NodeRegistrationWriter($this->laravel->make('files'), [$this->laravel->basePath('app')]))->appendMany(
+        return (new NodeRegistrationWriter($this->laravel->make('files'), [$this->laravel->basePath('app')]))->planAppendMany(
             $this->laravel->basePath('app/Providers/NodeflowServiceProvider.php'),
             [
                 ['anchor' => NodeRegistrationWriter::TRIGGER_DRIVER_ANCHOR, 'presence' => $driverClass.'::class', 'entry' => '\\'.$driverClass.'::class'],

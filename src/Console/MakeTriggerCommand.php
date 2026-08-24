@@ -42,15 +42,15 @@ class MakeTriggerCommand extends GeneratorCommand
             }
             $path = $this->getPath($class);
             $contents = $this->sortImports($this->buildClass($class));
+            $registration = $this->registrationPlan($class);
+            $registrationOutcome = $registration->outcome;
+            if ($registrationOutcome === NodeRegistrationOutcome::WriteFailed) {
+                throw new InvalidArgumentException('Automatic provider registration could not be planned safely.');
+            }
             (new VerifiedGeneratorWriter($this->laravel->make('files'), [$this->laravel->basePath('app')]))->write(
                 [$path => $contents],
                 (bool) $this->option('force'),
-                function () use ($class, &$registrationOutcome): void {
-                    $registrationOutcome = $this->registrationOutcome($class);
-                    if ($registrationOutcome === NodeRegistrationOutcome::WriteFailed) {
-                        throw new InvalidArgumentException('Automatic provider registration failed while writing; the generated file was rolled back.');
-                    }
-                },
+                $registration,
             );
         } catch (InvalidArgumentException $e) {
             $this->components->error($e->getMessage());
@@ -145,9 +145,9 @@ class MakeTriggerCommand extends GeneratorCommand
         }
     }
 
-    private function registrationOutcome(string $class): NodeRegistrationOutcome
+    private function registrationPlan(string $class): NodeRegistrationPlan
     {
-        return (new NodeRegistrationWriter($this->laravel->make('files'), [$this->laravel->basePath('app')]))->appendTo(
+        return (new NodeRegistrationWriter($this->laravel->make('files'), [$this->laravel->basePath('app')]))->planAppendTo(
             $this->laravel->basePath('app/Providers/NodeflowServiceProvider.php'),
             NodeRegistrationWriter::TRIGGER_NODE_ANCHOR,
             ltrim($class, '\\').'::class',

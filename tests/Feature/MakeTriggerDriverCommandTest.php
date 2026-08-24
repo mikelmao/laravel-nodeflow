@@ -208,6 +208,45 @@ it('fails and removes the complete kit when a real provider write fails', functi
         ->and(file_get_contents($provider))->toBe($before);
 });
 
+it("rolls back provider registration and every kit artifact when one artifact's ancestor swaps during provider commit", function () {
+    $provider = $this->root.'/app/Providers/NodeflowServiceProvider.php';
+    $driver = $this->root.'/app/Nodeflow/TriggerDrivers/VanishingKit.php';
+    $node = $this->root.'/app/Nodeflow/Triggers/VanishingKitTrigger.php';
+    $nodeParent = dirname($node);
+    $parked = $this->root.'/app/Nodeflow/TriggersParked';
+    $test = $this->root.'/tests/Feature/Nodeflow/TriggerDrivers/VanishingKitTest.php';
+    $before = file_get_contents($provider);
+    $files = new class($provider, $nodeParent, $parked) extends Filesystem
+    {
+        private bool $intercept = true;
+        public function __construct(private string $provider, private string $nodeParent, private string $parked) {}
+        public function move($path, $target)
+        {
+            $moved = parent::move($path, $target);
+            if ($this->intercept && $target === $this->provider) {
+                $this->intercept = false;
+                rename($this->nodeParent, $this->parked);
+                mkdir($this->nodeParent);
+            }
+
+            return $moved;
+        }
+    };
+    $this->app->instance(Filesystem::class, $files);
+    $this->app->instance('files', $files);
+
+    $this->artisan('nodeflow:make-trigger-driver', ['name' => 'VanishingKit', '--key' => 'shop.vanishing_kit'])
+        ->assertExitCode(1);
+
+    expect($driver)->not->toBeFile()
+        ->and($node)->not->toBeFile()
+        ->and($test)->not->toBeFile()
+        ->and($parked.'/VanishingKitTrigger.php')->not->toBeFile()
+        ->and(file_get_contents($provider))->toBe($before)
+        ->and(glob($this->root.'/app/Providers/*.nodeflow-tmp-*') ?: [])->toBe([])
+        ->and(glob($parked.'/*.nodeflow-tmp-*') ?: [])->toBe([]);
+});
+
 it('preserves CRLF while registering both kit classes in order', function () {
     $provider = $this->root.'/app/Providers/NodeflowServiceProvider.php';
     file_put_contents($provider, str_replace("\n", "\r\n", file_get_contents($provider)));

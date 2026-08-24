@@ -129,6 +129,40 @@ it('fails and removes the generated source when a real provider write fails', fu
         ->and(file_get_contents($provider))->toBe($before);
 });
 
+it('rolls back provider registration when the generated source is replaced during provider commit', function () {
+    $provider = $this->root.'/app/Providers/NodeflowServiceProvider.php';
+    $source = $this->root.'/app/Nodeflow/TriggerSources/ReplacedSource.php';
+    $providerBefore = file_get_contents($provider);
+    $external = '<?php final class ExternalSourceReplacement {}';
+    $files = new class($provider, $source, $external) extends Filesystem
+    {
+        private bool $intercept = true;
+        public function __construct(private string $provider, private string $source, private string $external) {}
+        public function move($path, $target)
+        {
+            $moved = parent::move($path, $target);
+            if ($this->intercept && $target === $this->provider) {
+                $this->intercept = false;
+                unlink($this->source);
+                file_put_contents($this->source, $this->external);
+            }
+
+            return $moved;
+        }
+    };
+    $this->app->instance(Filesystem::class, $files);
+    $this->app->instance('files', $files);
+
+    $this->artisan('nodeflow:make-trigger-source', [
+        'name' => 'ReplacedSource', '--driver' => 'webhook', '--key' => 'shop.replaced_source',
+    ])->assertExitCode(1);
+
+    expect(file_get_contents($source))->toBe($external)
+        ->and(file_get_contents($provider))->toBe($providerBefore)
+        ->and(glob($this->root.'/app/Providers/*.nodeflow-tmp-*') ?: [])->toBe([])
+        ->and(glob(dirname($source).'/*.nodeflow-tmp-*') ?: [])->toBe([]);
+});
+
 it('rejects a registered source key collision without installing a driver listener', function () {
     $callbacks = 0;
     FakeTriggerDriver::$onSourceRegistered = function () use (&$callbacks): void { $callbacks++; };
@@ -208,7 +242,7 @@ it('fails and restores generator writes without provider or listener mutation', 
 
     $this->artisan('nodeflow:make-trigger-source', [
         'name' => 'VerifiedSource', '--driver' => 'test.fake', '--key' => 'shop.verified_source', '--force' => $existing,
-    ])->expectsOutputToContain('no registrations were changed')->assertExitCode(1);
+    ])->expectsOutputToContain('generation transaction failed')->assertExitCode(1);
 
     expect(file_get_contents($provider))->toBe($providerBefore)
         ->and($callbacks)->toBe(0);

@@ -148,6 +148,130 @@ it('fails and removes the generated node when a real provider write fails', func
         ->and(file_get_contents($provider))->toBe($before);
 });
 
+it('rolls back provider registration when the generated node disappears during provider commit', function () {
+    $provider = $this->root.'/app/Providers/NodeflowServiceProvider.php';
+    $node = $this->root.'/app/Nodeflow/Triggers/VanishingNode.php';
+    $before = file_get_contents($provider);
+    $files = new class($provider, $node) extends Filesystem
+    {
+        private bool $intercept = true;
+        public function __construct(private string $provider, private string $node) {}
+        public function move($path, $target)
+        {
+            $moved = parent::move($path, $target);
+            if ($this->intercept && $target === $this->provider) {
+                $this->intercept = false;
+                unlink($this->node);
+            }
+
+            return $moved;
+        }
+    };
+    $this->app->instance(Filesystem::class, $files);
+    $this->app->instance('files', $files);
+
+    $this->artisan('nodeflow:make-trigger', [
+        'name' => 'VanishingNode', '--driver' => 'webhook', '--type' => 'shop.vanishing_node',
+    ])->assertExitCode(1);
+
+    expect($node)->not->toBeFile()
+        ->and(file_get_contents($provider))->toBe($before)
+        ->and(glob($this->root.'/app/Providers/*.nodeflow-tmp-*') ?: [])->toBe([])
+        ->and(glob(dirname($node).'/*.nodeflow-tmp-*') ?: [])->toBe([]);
+});
+
+it('rolls back the node when the provider changes after the artifact commit', function () {
+    $provider = $this->root.'/app/Providers/NodeflowServiceProvider.php';
+    $node = $this->root.'/app/Nodeflow/Triggers/RacedProviderNode.php';
+    $external = "<?php\n// external provider replacement\n";
+    $files = new class($provider, $node, $external) extends Filesystem
+    {
+        private bool $intercept = true;
+        public function __construct(private string $provider, private string $node, private string $external) {}
+        public function move($path, $target)
+        {
+            $moved = parent::move($path, $target);
+            if ($this->intercept && $target === $this->node) {
+                $this->intercept = false;
+                unlink($this->provider);
+                file_put_contents($this->provider, $this->external);
+            }
+
+            return $moved;
+        }
+    };
+    $this->app->instance(Filesystem::class, $files);
+    $this->app->instance('files', $files);
+
+    $this->artisan('nodeflow:make-trigger', [
+        'name' => 'RacedProviderNode', '--driver' => 'webhook', '--type' => 'shop.raced_provider_node',
+    ])->assertExitCode(1);
+
+    expect($node)->not->toBeFile()
+        ->and(file_get_contents($provider))->toBe($external)
+        ->and(glob($this->root.'/app/Providers/*.nodeflow-tmp-*') ?: [])->toBe([]);
+});
+
+it('does not overwrite provider bytes changed in place after registration planning', function () {
+    $provider = $this->root.'/app/Providers/NodeflowServiceProvider.php';
+    $node = $this->root.'/app/Nodeflow/Triggers/StalePlanNode.php';
+    $external = "<?php\n// changed after planning\n";
+    $files = new class($provider, $external) extends Filesystem
+    {
+        private int $providerReads = 0;
+        public function __construct(private string $provider, private string $external) {}
+        public function get($path, $lock = false)
+        {
+            if ($path === $this->provider && ++$this->providerReads === 2) {
+                file_put_contents($this->provider, $this->external);
+            }
+
+            return parent::get($path, $lock);
+        }
+    };
+    $this->app->instance(Filesystem::class, $files);
+    $this->app->instance('files', $files);
+
+    $this->artisan('nodeflow:make-trigger', [
+        'name' => 'StalePlanNode', '--driver' => 'webhook', '--type' => 'shop.stale_plan_node',
+    ])->assertExitCode(1);
+
+    expect($node)->not->toBeFile()
+        ->and(file_get_contents($provider))->toBe($external);
+});
+
+it('guards an already-present provider registration while committing the generated node', function () {
+    $provider = $this->root.'/app/Providers/NodeflowServiceProvider.php';
+    file_put_contents($provider, "<?php\nclass NodeflowServiceProvider extends \\Illuminate\\Support\\ServiceProvider\n{\n    protected array \$triggerNodes = [\n        \\App\\Nodeflow\\Triggers\\GuardedNode::class,\n    ];\n}\n");
+    $node = $this->root.'/app/Nodeflow/Triggers/GuardedNode.php';
+    $external = "<?php\n// external provider replacement\n";
+    $files = new class($provider, $node, $external) extends Filesystem
+    {
+        private bool $intercept = true;
+        public function __construct(private string $provider, private string $node, private string $external) {}
+        public function move($path, $target)
+        {
+            $moved = parent::move($path, $target);
+            if ($this->intercept && $target === $this->node) {
+                $this->intercept = false;
+                unlink($this->provider);
+                file_put_contents($this->provider, $this->external);
+            }
+
+            return $moved;
+        }
+    };
+    $this->app->instance(Filesystem::class, $files);
+    $this->app->instance('files', $files);
+
+    $this->artisan('nodeflow:make-trigger', [
+        'name' => 'GuardedNode', '--driver' => 'webhook', '--type' => 'shop.guarded_node',
+    ])->assertExitCode(1);
+
+    expect($node)->not->toBeFile()
+        ->and(file_get_contents($provider))->toBe($external);
+});
+
 it('deduplicates and preserves CRLF provider formatting', function () {
     $provider = $this->root.'/app/Providers/NodeflowServiceProvider.php';
     file_put_contents($provider, "<?php\r\nclass NodeflowServiceProvider extends \\Illuminate\\Support\\ServiceProvider\r\n{\r\n    protected array \$triggerNodes = [\r\n    ];\r\n}\r\n");
@@ -195,7 +319,7 @@ it('fails and restores generator writes before touching a CRLF provider', functi
 
     $this->artisan('nodeflow:make-trigger', [
         'name' => 'VerifiedTrigger', '--driver' => 'webhook', '--type' => 'shop.verified_trigger', '--force' => $existing,
-    ])->expectsOutputToContain('no registrations were changed')->assertExitCode(1);
+    ])->expectsOutputToContain('generation transaction failed')->assertExitCode(1);
 
     expect(file_get_contents($provider))->toBe($providerBefore);
     if ($existing) {

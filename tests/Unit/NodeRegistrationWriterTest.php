@@ -75,6 +75,48 @@ it('appends the node class inside the nodes array', function () {
         ->toContain('\App\Nodeflow\Nodes\SendSms::class,');
 });
 
+it('plans a provider registration without mutating the provider', function () {
+    $path = providerWithAnchor();
+    $before = file_get_contents($path);
+
+    $plan = (new NodeRegistrationWriter(new Filesystem, [providerFixtureDirectory()]))
+        ->planAppendTo(
+            $path,
+            NodeRegistrationWriter::ANCHOR,
+            'App\\Nodeflow\\Nodes\\Planned::class',
+            '\\App\\Nodeflow\\Nodes\\Planned::class',
+        );
+
+    expect($plan->outcome)->toBe(NodeRegistrationOutcome::Appended)
+        ->and($plan->path)->toBe($path)
+        ->and($plan->contents)->toContain('\\App\\Nodeflow\\Nodes\\Planned::class,')
+        ->and(file_get_contents($path))->toBe($before);
+
+    $plan->validate($plan->contents, $path);
+
+    expect(fn () => $plan->validate(str_replace('Planned::class', 'Missing::class', $plan->contents), $path))
+        ->toThrow(InvalidArgumentException::class);
+});
+
+it('returns a non-writing manual fallback plan for an unsafe provider', function () {
+    $path = writeProviderFixture("<?php\nclass NodeflowServiceProvider {}\n");
+    $before = file_get_contents($path);
+
+    $plan = (new NodeRegistrationWriter(new Filesystem, [providerFixtureDirectory()]))
+        ->planAppendTo(
+            $path,
+            NodeRegistrationWriter::TRIGGER_NODE_ANCHOR,
+            'App\\Nodeflow\\Triggers\\Manual::class',
+            '\\App\\Nodeflow\\Triggers\\Manual::class',
+        );
+
+    expect($plan->outcome)->toBe(NodeRegistrationOutcome::AnchorMissing)
+        ->and($plan->path)->toBeNull()
+        ->and($plan->contents)->toBeNull()
+        ->and($plan->requiresManualRegistration())->toBeTrue()
+        ->and(file_get_contents($path))->toBe($before);
+});
+
 it('restores the provider and reports failure after a short write', function () {
     $path = providerWithAnchor();
     $before = file_get_contents($path);

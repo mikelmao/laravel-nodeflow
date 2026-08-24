@@ -528,3 +528,280 @@ it('reports rollback failure without overwriting a concurrently changed committe
     unlink($first);
     rmdir($root);
 });
+
+it('cleans a rollback restoration temp when its move throws before installing it', function () {
+    $root = sys_get_temp_dir().'/nodeflow-rollback-temp-'.bin2hex(random_bytes(6));
+    mkdir($root, 0777, true);
+    $first = $root.'/First.php';
+    $second = $root.'/Second.php';
+    file_put_contents($first, '<?php final class Original {}');
+    $files = new class extends Filesystem
+    {
+        private int $moves = 0;
+        public function move($path, $target)
+        {
+            $this->moves++;
+            if ($this->moves === 2) return false;
+            if ($this->moves === 3) throw new RuntimeException('rollback move failed before rename');
+
+            return parent::move($path, $target);
+        }
+    };
+
+    expect(fn () => (new VerifiedGeneratorWriter($files, [$root]))->write([
+        $first => '<?php final class Generated {}',
+        $second => '<?php final class SecondGenerated {}',
+    ], true))->toThrow(InvalidArgumentException::class, 'manual recovery')
+        ->and(glob($root.'/*.nodeflow-tmp-*') ?: [])->toBe([])
+        ->and($second)->not->toBeFile();
+
+    unlink($first);
+    rmdir($root);
+});
+
+it('finds and cleans a rollback temp parked by a replaced or symlinked parent', function (string $mode) {
+    if ($mode === 'symlink' && DIRECTORY_SEPARATOR === '\\') {
+        $this->markTestSkipped('Unix symlink semantics are not portable to Windows.');
+    }
+
+    $root = sys_get_temp_dir().'/nodeflow-rollback-parent-'.bin2hex(random_bytes(6));
+    $outside = sys_get_temp_dir().'/nodeflow-rollback-parent-outside-'.bin2hex(random_bytes(6));
+    $parent = $root.'/nested';
+    $parked = $root.'/nested-parked';
+    mkdir($parent, 0777, true);
+    mkdir($outside, 0777, true);
+    $first = $parent.'/First.php';
+    $second = $root.'/Second.php';
+    $external = '<?php final class External {}';
+    file_put_contents($first, '<?php final class Original {}');
+    $files = new class($parent, $parked, $outside, $external, $mode) extends Filesystem
+    {
+        private int $moves = 0;
+        public function __construct(
+            private string $parent,
+            private string $parked,
+            private string $outside,
+            private string $external,
+            private string $mode,
+        ) {}
+        public function move($path, $target)
+        {
+            $this->moves++;
+            if ($this->moves === 2) return false;
+            if ($this->moves === 3) {
+                rename($this->parent, $this->parked);
+                if ($this->mode === 'symlink') {
+                    file_put_contents($this->outside.'/First.php', $this->external);
+                    symlink($this->outside, $this->parent);
+                } else {
+                    mkdir($this->parent);
+                    file_put_contents($this->parent.'/First.php', $this->external);
+                }
+
+                return false;
+            }
+
+            return parent::move($path, $target);
+        }
+    };
+
+    expect(fn () => (new VerifiedGeneratorWriter($files, [$root]))->write([
+        $first => '<?php final class Generated {}',
+        $second => '<?php final class SecondGenerated {}',
+    ], true))->toThrow(InvalidArgumentException::class, 'manual recovery')
+        ->and(glob($parked.'/*.nodeflow-tmp-*') ?: [])->toBe([])
+        ->and(file_get_contents($mode === 'symlink' ? $outside.'/First.php' : $parent.'/First.php'))->toBe($external);
+
+    if ($mode === 'symlink') {
+        unlink($parent);
+    } else {
+        unlink($parent.'/First.php');
+        rmdir($parent);
+    }
+    if (file_exists($outside.'/First.php')) unlink($outside.'/First.php');
+    foreach (glob($parked.'/*') ?: [] as $path) unlink($path);
+    rmdir($parked);
+    rmdir($outside);
+    rmdir($root);
+})->with(['replaced parent' => ['replace'], 'symlinked parent' => ['symlink']]);
+
+it('never deletes an original restored before the rollback move throws and its parent is replaced', function () {
+    $root = sys_get_temp_dir().'/nodeflow-restored-parent-'.bin2hex(random_bytes(6));
+    $parent = $root.'/nested';
+    $parked = $root.'/nested-parked';
+    mkdir($parent, 0777, true);
+    $first = $parent.'/First.php';
+    $second = $root.'/Second.php';
+    $original = '<?php final class Original {}';
+    $external = '<?php final class External {}';
+    file_put_contents($first, $original);
+    $files = new class($parent, $parked, $external) extends Filesystem
+    {
+        private int $moves = 0;
+        public function __construct(private string $parent, private string $parked, private string $external) {}
+        public function move($path, $target)
+        {
+            $this->moves++;
+            if ($this->moves === 2) return false;
+            if ($this->moves === 3) {
+                parent::move($path, $target);
+                rename($this->parent, $this->parked);
+                mkdir($this->parent);
+                file_put_contents($this->parent.'/First.php', $this->external);
+                throw new RuntimeException('rollback move threw after rename');
+            }
+
+            return parent::move($path, $target);
+        }
+    };
+
+    expect(fn () => (new VerifiedGeneratorWriter($files, [$root]))->write([
+        $first => '<?php final class Generated {}',
+        $second => '<?php final class SecondGenerated {}',
+    ], true))->toThrow(InvalidArgumentException::class, 'manual recovery')
+        ->and(file_get_contents($parked.'/First.php'))->toBe($original)
+        ->and(file_get_contents($first))->toBe($external)
+        ->and(glob($parked.'/*.nodeflow-tmp-*') ?: [])->toBe([]);
+
+    unlink($first);
+    unlink($parked.'/First.php');
+    rmdir($parent);
+    rmdir($parked);
+    rmdir($root);
+});
+
+it('reports manual recovery without traversing outside roots when a rollback temp is parked outside', function () {
+    $root = sys_get_temp_dir().'/nodeflow-rollback-outside-root-'.bin2hex(random_bytes(6));
+    $outside = sys_get_temp_dir().'/nodeflow-rollback-outside-'.bin2hex(random_bytes(6));
+    $parent = $root.'/nested';
+    $parked = $outside.'/nested-parked';
+    mkdir($parent, 0777, true);
+    mkdir($outside, 0777, true);
+    $first = $parent.'/First.php';
+    $second = $root.'/Second.php';
+    $external = '<?php final class External {}';
+    file_put_contents($first, '<?php final class Original {}');
+    $files = new class($parent, $parked, $external) extends Filesystem
+    {
+        private int $moves = 0;
+        public function __construct(private string $parent, private string $parked, private string $external) {}
+        public function move($path, $target)
+        {
+            $this->moves++;
+            if ($this->moves === 2) return false;
+            if ($this->moves === 3) {
+                rename($this->parent, $this->parked);
+                mkdir($this->parent);
+                file_put_contents($this->parent.'/First.php', $this->external);
+
+                return false;
+            }
+
+            return parent::move($path, $target);
+        }
+    };
+
+    expect(fn () => (new VerifiedGeneratorWriter($files, [$root]))->write([
+        $first => '<?php final class Generated {}',
+        $second => '<?php final class SecondGenerated {}',
+    ], true))->toThrow(InvalidArgumentException::class, 'manual recovery')
+        ->and(file_get_contents($first))->toBe($external)
+        ->and(count(glob($parked.'/*.nodeflow-tmp-*') ?: []))->toBe(1);
+
+    unlink($first);
+    foreach (glob($parked.'/*') ?: [] as $path) unlink($path);
+    rmdir($parent);
+    rmdir($parked);
+    rmdir($outside);
+    rmdir($root);
+});
+
+it('handles a rollback temp that disappears after its parent is parked', function () {
+    $root = sys_get_temp_dir().'/nodeflow-rollback-disappear-'.bin2hex(random_bytes(6));
+    $parent = $root.'/nested';
+    $parked = $root.'/nested-parked';
+    mkdir($parent, 0777, true);
+    $first = $parent.'/First.php';
+    $second = $root.'/Second.php';
+    $external = '<?php final class External {}';
+    file_put_contents($first, '<?php final class Original {}');
+    $files = new class($parent, $parked, $external) extends Filesystem
+    {
+        private int $moves = 0;
+        public function __construct(private string $parent, private string $parked, private string $external) {}
+        public function move($path, $target)
+        {
+            $this->moves++;
+            if ($this->moves === 2) return false;
+            if ($this->moves === 3) {
+                rename($this->parent, $this->parked);
+                unlink($this->parked.'/'.basename($path));
+                mkdir($this->parent);
+                file_put_contents($this->parent.'/First.php', $this->external);
+
+                return false;
+            }
+
+            return parent::move($path, $target);
+        }
+    };
+
+    expect(fn () => (new VerifiedGeneratorWriter($files, [$root]))->write([
+        $first => '<?php final class Generated {}',
+        $second => '<?php final class SecondGenerated {}',
+    ], true))->toThrow(InvalidArgumentException::class, 'manual recovery')
+        ->and(file_get_contents($first))->toBe($external)
+        ->and(glob($parked.'/*.nodeflow-tmp-*') ?: [])->toBe([]);
+
+    unlink($first);
+    unlink($parked.'/First.php');
+    rmdir($parent);
+    rmdir($parked);
+    rmdir($root);
+});
+
+it('cleans the rollback reservation when a missing target parent is replaced before restore', function () {
+    $root = sys_get_temp_dir().'/nodeflow-rollback-reservation-'.bin2hex(random_bytes(6));
+    $parent = $root.'/nested';
+    $parked = $root.'/nested-parked';
+    mkdir($parent, 0777, true);
+    $target = $parent.'/Target.php';
+    $external = '<?php final class External {}';
+    file_put_contents($target, '<?php final class Original {}');
+    $files = new class($parent, $parked, $external) extends Filesystem
+    {
+        private int $moves = 0;
+        public function __construct(private string $parent, private string $parked, private string $external) {}
+        public function move($path, $target)
+        {
+            $this->moves++;
+            if ($this->moves === 1) {
+                $moved = parent::move($path, $target);
+                unlink($target);
+
+                return $moved;
+            }
+            if ($this->moves === 2) {
+                rename($this->parent, $this->parked);
+                mkdir($this->parent);
+                file_put_contents($this->parent.'/Target.php', $this->external);
+
+                return false;
+            }
+
+            return parent::move($path, $target);
+        }
+    };
+
+    expect(fn () => (new VerifiedGeneratorWriter($files, [$root]))->write([
+        $target => '<?php final class Generated {}',
+    ], true))->toThrow(InvalidArgumentException::class, 'manual recovery')
+        ->and(file_get_contents($target))->toBe($external)
+        ->and($parked.'/Target.php')->not->toBeFile()
+        ->and(glob($parked.'/*.nodeflow-tmp-*') ?: [])->toBe([]);
+
+    unlink($target);
+    rmdir($parent);
+    rmdir($parked);
+    rmdir($root);
+});
