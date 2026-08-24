@@ -1100,6 +1100,29 @@ describe('FlowEditor', () => {
         ]))
     })
 
+    it('contains replacement Escape inside the narrow library drawer', async () => {
+        const user = userEvent.setup()
+        installMediaQuery(true)
+        renderEditor({ graph: triggeredGraph, trigger_nodes: [webhookTrigger, eventTrigger], trigger_sources: authorableSources })
+        await waitFor(() => expect(screen.getByRole('dialog', { name: 'Inspector' })).toBeInTheDocument())
+        await user.click(screen.getByRole('button', { name: 'Open Node Library' }))
+        const drawer = await screen.findByRole('dialog', { name: 'Node Library' })
+        const opener = within(drawer).getByRole('button', { name: 'Add Laravel event' })
+        await user.click(opener)
+        const confirm = screen.getByRole('button', { name: 'Replace trigger' })
+        const escape = new KeyboardEvent('keydown', { key: 'Escape', bubbles: true, cancelable: true })
+
+        act(() => { confirm.dispatchEvent(escape) })
+
+        expect(escape.defaultPrevented).toBe(true)
+        expect(screen.queryByRole('dialog', { name: 'Replace trigger' })).toBeNull()
+        expect(screen.getByRole('dialog', { name: 'Node Library' })).toBeInTheDocument()
+        expect(opener).toHaveFocus()
+
+        fireEvent.keyDown(document, { key: 'Escape' })
+        expect(screen.queryByRole('dialog', { name: 'Node Library' })).toBeNull()
+    })
+
     it('deletes a trigger through the inspector and clears graph start', async () => {
         renderEditor({ graph: triggeredGraph, trigger_nodes: [webhookTrigger], trigger_sources: authorableSources })
         fireEvent.click(canvasNode('trigger'))
@@ -1197,6 +1220,117 @@ describe('FlowEditor', () => {
         writeText.mockRestore()
     })
 
+    it('consumes same-session webhook credentials while suppressing a generation-stale publish outcome', async () => {
+        const user = userEvent.setup()
+        let resolvePublish!: (response: Response) => void
+        vi.stubGlobal('fetch', vi.fn((url: string) => url === urls.publish
+            ? new Promise<Response>((resolve) => { resolvePublish = resolve })
+            : Promise.resolve(Response.json({ draft_revision: 8 }))))
+        renderEditor({
+            graph: triggeredGraph,
+            trigger_nodes: [webhookTrigger],
+            trigger_sources: authorableSources,
+            webhook: { endpoint_url: 'https://example.test/hooks/previous', active: false, secret_rotated_at: '2026-08-24T12:00:00Z' },
+        })
+
+        await user.click(screen.getByRole('button', { name: 'Publish' }))
+        await waitFor(() => expect(resolvePublish).toBeTypeOf('function'))
+        fireEvent.click(canvasNode('send1'))
+        fireEvent.change(screen.getByLabelText(/Template/), { target: { value: 'edited while publishing' } })
+        await act(async () => resolvePublish(Response.json({
+            version: 4,
+            draft_revision: 8,
+            webhook_url: 'https://example.test/hooks/stale-generation',
+            webhook_secret: 'same-session-secret',
+        })))
+        fireEvent.click(canvasNode('trigger'))
+
+        expect(await screen.findByText('same-session-secret')).toBeInTheDocument()
+        expect(screen.getByRole('link', { name: /webhook endpoint/i })).toHaveAttribute('href', 'https://example.test/hooks/stale-generation')
+        expect(screen.getByRole('region', { name: 'Webhook details' })).toHaveTextContent('Active')
+        expect(screen.getByText('2026-08-24T12:00:00Z')).toBeInTheDocument()
+        expect(screen.queryByText(/Published v4/i)).toBeNull()
+        expect(screen.getByText(/Published v3/i)).toBeInTheDocument()
+    })
+
+    it('clears an older one-time secret on a later same-session success even when its generation is stale', async () => {
+        const user = userEvent.setup()
+        let publications = 0
+        let resolveLater!: (response: Response) => void
+        vi.stubGlobal('fetch', vi.fn((url: string) => {
+            if (url !== urls.publish) return Promise.resolve(Response.json({ draft_revision: 8 }))
+            publications += 1
+            return publications === 1
+                ? Promise.resolve(Response.json({
+                    version: 4,
+                    draft_revision: 8,
+                    webhook_url: 'https://example.test/hooks/token',
+                    webhook_secret: 'older-secret',
+                }))
+                : new Promise<Response>((resolve) => { resolveLater = resolve })
+        }))
+        renderEditor({ graph: triggeredGraph, trigger_nodes: [webhookTrigger], trigger_sources: authorableSources })
+        fireEvent.click(canvasNode('trigger'))
+
+        await user.click(screen.getByRole('button', { name: 'Publish' }))
+        expect(await screen.findByText('older-secret')).toBeInTheDocument()
+        await user.click(screen.getByRole('button', { name: 'Publish' }))
+        await waitFor(() => expect(resolveLater).toBeTypeOf('function'))
+        fireEvent.click(canvasNode('send1'))
+        fireEvent.change(screen.getByLabelText(/Template/), { target: { value: 'new generation' } })
+        await act(async () => resolveLater(Response.json({
+            version: 5,
+            draft_revision: 8,
+            webhook_url: 'https://example.test/hooks/token',
+        })))
+        fireEvent.click(canvasNode('trigger'))
+
+        expect(screen.queryByText('older-secret')).toBeNull()
+        expect(screen.queryByText(/Published v5/i)).toBeNull()
+        expect(screen.getByText(/Published v4/i)).toBeInTheDocument()
+    })
+
+    it.each(['switch', 'unmount'] as const)('does not consume a webhook secret after editor %s', async (exit) => {
+        const user = userEvent.setup()
+        const consoleError = vi.spyOn(console, 'error').mockImplementation(() => {})
+        let resolvePublish!: (response: Response) => void
+        vi.stubGlobal('fetch', vi.fn((url: string) => url === urls.publish
+            ? new Promise<Response>((resolve) => { resolvePublish = resolve })
+            : Promise.resolve(Response.json({ draft_revision: 8 }))))
+        const view = renderEditor({ graph: triggeredGraph, trigger_nodes: [webhookTrigger], trigger_sources: authorableSources })
+
+        await user.click(screen.getByRole('button', { name: 'Publish' }))
+        await waitFor(() => expect(resolvePublish).toBeTypeOf('function'))
+        if (exit === 'unmount') {
+            view.unmount()
+        } else {
+            view.rerender(
+                <FlowEditor
+                    flow={{ ...flow, id: 13 }}
+                    graph={triggeredGraph}
+                    palette={palette}
+                    trigger_nodes={[webhookTrigger]}
+                    trigger_sources={authorableSources}
+                    webhook={null}
+                    urls={{ ...urls, draft: '/flows/13/draft', publish: '/flows/13/publish', rotate_webhook_secret: '/flows/13/webhook-secret/rotate' }}
+                />,
+            )
+        }
+        await act(async () => resolvePublish(Response.json({
+            version: 4,
+            draft_revision: 8,
+            webhook_url: 'https://example.test/hooks/abandoned',
+            webhook_secret: 'abandoned-secret',
+        })))
+
+        if (exit === 'switch') fireEvent.click(canvasNode('trigger'))
+
+        expect(screen.queryByText('abandoned-secret')).toBeNull()
+        expect(screen.queryByRole('link', { name: /webhook endpoint/i })).toBeNull()
+        expect(consoleError.mock.calls.flat().join(' ')).not.toMatch(/unmounted|state update/i)
+        consoleError.mockRestore()
+    })
+
     it('clears a one-time webhook secret after a later successful publish and when flow identity changes', async () => {
         const user = userEvent.setup()
         let publications = 0
@@ -1280,6 +1414,33 @@ describe('FlowEditor', () => {
         expect(await screen.findByRole('alert', { name: 'Webhook rotation error' })).toHaveTextContent(/could not rotate/i)
         expect(screen.queryByText(/internal secret material/i)).toBeNull()
         expect(screen.getByText('rotated-secret')).toBeInTheDocument()
+    })
+
+    it('contains rotation Escape inside the narrow inspector drawer', async () => {
+        const user = userEvent.setup()
+        installMediaQuery(true)
+        renderEditor({
+            graph: triggeredGraph,
+            trigger_nodes: [webhookTrigger],
+            trigger_sources: authorableSources,
+            webhook: { endpoint_url: 'https://example.test/hooks/token', active: true, secret_rotated_at: null },
+        })
+        const drawer = await screen.findByRole('dialog', { name: 'Inspector' })
+        fireEvent.click(canvasNode('trigger'))
+        const opener = await within(drawer).findByRole('button', { name: 'Rotate webhook secret' })
+        await user.click(opener)
+        const confirm = screen.getByRole('button', { name: 'Confirm rotation' })
+        const escape = new KeyboardEvent('keydown', { key: 'Escape', bubbles: true, cancelable: true })
+
+        act(() => { confirm.dispatchEvent(escape) })
+
+        expect(escape.defaultPrevented).toBe(true)
+        expect(screen.queryByRole('dialog', { name: 'Rotate webhook secret' })).toBeNull()
+        expect(screen.getByRole('dialog', { name: 'Inspector' })).toBeInTheDocument()
+        expect(opener).toHaveFocus()
+
+        fireEvent.keyDown(document, { key: 'Escape' })
+        expect(screen.queryByRole('dialog', { name: 'Inspector' })).toBeNull()
     })
 
     // The composed surface keeps validation separate from saving/publishing while preserving the author journey.

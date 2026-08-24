@@ -232,11 +232,14 @@ export function useEditorController(options: UseEditorControllerOptions): UseEdi
     const generation = useRef(0)
     const validationSequence = useRef(0)
     const publishSequence = useRef(0)
+    const credentialSequence = useRef(0)
+    const committedCredentialSequence = useRef(0)
     const activePublish = useRef<number | null>(null)
-    const activeRotation = useRef(false)
+    const activeRotation = useRef<number | null>(null)
     const mounted = useRef(true)
     const validateUrl = useRef(options.urls.validate)
     const publishUrl = useRef(options.urls.publish)
+    const rotationUrl = useRef(options.urls.rotate_webhook_secret)
     const canvas = useRef<CanvasActions | null>(null)
     const optionsCache = useRef(new Map<string, Record<string, string>>())
     const controls = useMemo(() => mergeControls(options.controls), [options.controls])
@@ -253,7 +256,7 @@ export function useEditorController(options: UseEditorControllerOptions): UseEdi
             validationSequence.current += 1
             publishSequence.current += 1
             activePublish.current = null
-            activeRotation.current = false
+            activeRotation.current = null
         }
     }, [])
 
@@ -271,9 +274,22 @@ export function useEditorController(options: UseEditorControllerOptions): UseEdi
         publishUrl.current = options.urls.publish
         publishSequence.current += 1
         activePublish.current = null
+        committedCredentialSequence.current = ++credentialSequence.current
+        activeRotation.current = null
         setPublishing(false)
         setPublishOutcome(null)
+        setWebhookRotating(false)
+        setWebhookRotationError(null)
     }, [options.urls.publish])
+
+    useEffect(() => {
+        if (rotationUrl.current === options.urls.rotate_webhook_secret) return
+        rotationUrl.current = options.urls.rotate_webhook_secret
+        committedCredentialSequence.current = ++credentialSequence.current
+        activeRotation.current = null
+        setWebhookRotating(false)
+        setWebhookRotationError(null)
+    }, [options.urls.rotate_webhook_secret])
 
     const clearValidation = useCallback(() => {
         validationSequence.current += 1
@@ -600,6 +616,7 @@ export function useEditorController(options: UseEditorControllerOptions): UseEdi
             return
         }
         const attempt = ++publishSequence.current
+        const credentialAttempt = ++credentialSequence.current
         const publishedGeneration = generation.current
         activePublish.current = attempt
         setPublishing(true)
@@ -623,14 +640,16 @@ export function useEditorController(options: UseEditorControllerOptions): UseEdi
             }
             const next = interpretPublish(result, new Set(documentRef.current.nodes.map((node) => node.id)))
             autosave.finishPublish(next.kind === 'published' ? next.revision : undefined)
-            if (!owns() || publishedGeneration !== generation.current) return
-            if (next.kind === 'published') {
-                setPublishedVersion(next.version)
+            if (!owns()) return
+            if (next.kind === 'published' && credentialAttempt > committedCredentialSequence.current) {
+                committedCredentialSequence.current = credentialAttempt
                 // Every successful publication supersedes a previous plaintext
                 // disclosure, including a success that returns no new secret.
+                // Credential metadata belongs to the still-owned editor session,
+                // not to the graph generation used for outcome presentation.
                 setWebhookSecret(next.webhookSecret ?? null)
-                const publishedTrigger = documentRef.current.nodes.find((node) => defs[node.data.type]?.kind === 'trigger')
-                const publishedDef = publishedTrigger === undefined ? undefined : defs[publishedTrigger.data.type]
+                const publishedTrigger = currentBuilt.graph.nodes?.find((node) => defs[node.type]?.kind === 'trigger')
+                const publishedDef = publishedTrigger === undefined ? undefined : defs[publishedTrigger.type]
                 setWebhookMetadata((current) => {
                     const endpointUrl = next.webhookUrl ?? current?.endpoint_url ?? null
                     const webhookPublished = publishedDef?.kind === 'trigger' && publishedDef.driver === 'webhook'
@@ -642,6 +661,8 @@ export function useEditorController(options: UseEditorControllerOptions): UseEdi
                     }
                 })
             }
+            if (publishedGeneration !== generation.current) return
+            if (next.kind === 'published') setPublishedVersion(next.version)
             setPublishOutcome(next.kind === 'published'
                 ? { kind: 'published', version: next.version, revision: next.revision }
                 : next)
@@ -654,13 +675,15 @@ export function useEditorController(options: UseEditorControllerOptions): UseEdi
     }, [autosave, defs, options.urls.publish])
 
     const rotateWebhookSecret = useCallback(async () => {
-        if (!mounted.current || activeRotation.current) return
-        activeRotation.current = true
+        if (!mounted.current || activeRotation.current !== null) return
+        const credentialAttempt = ++credentialSequence.current
+        activeRotation.current = credentialAttempt
+        const owns = () => mounted.current && activeRotation.current === credentialAttempt
         setWebhookRotating(true)
         setWebhookRotationError(null)
         try {
             const result = await send('POST', options.urls.rotate_webhook_secret)
-            if (!mounted.current) return
+            if (!owns()) return
             if (!result.ok) {
                 setWebhookRotationError(result.status === 403
                     ? 'You are not authorized to rotate this webhook secret.'
@@ -672,13 +695,17 @@ export function useEditorController(options: UseEditorControllerOptions): UseEdi
                 setWebhookRotationError('Could not rotate the webhook secret because the server response was invalid.')
                 return
             }
+            if (credentialAttempt <= committedCredentialSequence.current) return
+            committedCredentialSequence.current = credentialAttempt
             setWebhookSecret(rotated.secret)
             setWebhookMetadata((current) => current === null ? null : { ...current, secret_rotated_at: rotated.rotatedAt })
         } catch {
-            if (mounted.current) setWebhookRotationError('Could not rotate the webhook secret. Check your connection and try again.')
+            if (owns()) setWebhookRotationError('Could not rotate the webhook secret. Check your connection and try again.')
         } finally {
-            activeRotation.current = false
-            if (mounted.current) setWebhookRotating(false)
+            if (owns()) {
+                activeRotation.current = null
+                setWebhookRotating(false)
+            }
         }
     }, [options.urls.rotate_webhook_secret])
 

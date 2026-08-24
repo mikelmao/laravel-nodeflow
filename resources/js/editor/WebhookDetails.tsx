@@ -1,4 +1,4 @@
-import { useEffect, useId, useRef, useState } from 'react'
+import { useEffect, useId, useRef, useState, type KeyboardEvent as ReactKeyboardEvent } from 'react'
 import type { WebhookMetadata } from '../graph/types'
 import { NodeflowIcon } from '../presentation/icons'
 import { containDialogFocus } from './dialogFocus'
@@ -40,6 +40,14 @@ export function WebhookDetails({
     function closeConfirmation(): void {
         setConfirming(false)
         rotateButton.current?.focus()
+    }
+
+    function handleConfirmationKeyDown(event: ReactKeyboardEvent<HTMLDivElement>): void {
+        containDialogFocus(event)
+        if (event.key !== 'Escape') return
+        event.preventDefault()
+        event.stopPropagation()
+        closeConfirmation()
     }
 
     useEffect(() => {
@@ -92,7 +100,7 @@ export function WebhookDetails({
             )}
             {rotationError !== null && <p role="alert" aria-label="Webhook rotation error" className="text-destructive">{rotationError}</p>}
             {confirming && (
-                <div role="dialog" aria-modal="true" aria-labelledby={titleId} onKeyDown={containDialogFocus} className="fixed inset-0 z-50 grid place-items-center bg-background/70 p-4">
+                <div role="dialog" aria-modal="true" aria-labelledby={titleId} onKeyDown={handleConfirmationKeyDown} className="fixed inset-0 z-50 grid place-items-center bg-background/70 p-4">
                     <div className="w-full max-w-md space-y-4 rounded-lg border border-border bg-card p-5 shadow-lg">
                         <h3 id={titleId} className="text-base font-semibold">Rotate webhook secret</h3>
                         <p className="text-sm text-muted-foreground">The current signing secret stops working immediately. Update the webhook sender before its next request.</p>

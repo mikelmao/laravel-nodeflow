@@ -747,4 +747,130 @@ describe('useEditorController', () => {
         await act(async () => resolveNewPublish(Response.json({ version: 5, draft_revision: 9 })))
         expect(view.result.current.toolbarProps.publishedVersion).toBe(5)
     })
+
+    it('does not let a superseded publish response resurrect its webhook secret', async () => {
+        let resolveOld!: (response: Response) => void
+        let resolveNew!: (response: Response) => void
+        let currentUrls: EditorUrls = urls
+        vi.stubGlobal('fetch', vi.fn((url: string) => {
+            if (url === urls.publish) return new Promise<Response>((resolve) => { resolveOld = resolve })
+            if (url === '/new-publish') return new Promise<Response>((resolve) => { resolveNew = resolve })
+            return Promise.resolve(Response.json({ draft_revision: 8 }))
+        }))
+        const triggered: Graph = {
+            start: 'hook',
+            nodes: [{ id: 'hook', type: webhook.type, config: { source: 'orders' }, position: { x: 0, y: 0 } }],
+            edges: [],
+        }
+        const view = renderHook(() => useEditorController({
+            flow,
+            graph: triggered,
+            palette: [send, exit],
+            trigger_nodes: [webhook],
+            trigger_sources: { webhook: [{ key: 'orders', driver: 'webhook', label: 'Orders', icon: null, description: null, fields: [], default_config: {} }] },
+            webhook: null,
+            urls: currentUrls,
+            autosaveDebounceMs: 1,
+        }))
+        act(() => view.result.current.actions.selectNode('hook'))
+        act(() => { void view.result.current.actions.publish() })
+        await waitFor(() => expect(resolveOld).toBeTypeOf('function'))
+
+        currentUrls = { ...urls, publish: '/new-publish' }
+        view.rerender()
+        act(() => { void view.result.current.actions.publish() })
+        await waitFor(() => expect(resolveNew).toBeTypeOf('function'))
+        await act(async () => resolveNew(Response.json({
+            version: 5,
+            draft_revision: 9,
+            webhook_url: 'https://example.test/hooks/new',
+            webhook_secret: 'new-secret',
+        })))
+        expect(view.result.current.nodeInspectorProps?.webhookSecret).toBe('new-secret')
+
+        await act(async () => resolveOld(Response.json({
+            version: 4,
+            draft_revision: 8,
+            webhook_url: 'https://example.test/hooks/old',
+            webhook_secret: 'old-secret',
+        })))
+        expect(view.result.current.nodeInspectorProps?.webhookSecret).toBe('new-secret')
+        expect(view.result.current.nodeInspectorProps?.webhook?.endpoint_url).toBe('https://example.test/hooks/new')
+    })
+
+    it('does not let an older publish response overwrite a later successful rotation', async () => {
+        let resolvePublish!: (response: Response) => void
+        let resolveRotation!: (response: Response) => void
+        vi.stubGlobal('fetch', vi.fn((url: string) => {
+            if (url === urls.publish) return new Promise<Response>((resolve) => { resolvePublish = resolve })
+            if (url === urls.rotate_webhook_secret) return new Promise<Response>((resolve) => { resolveRotation = resolve })
+            return Promise.resolve(Response.json({ draft_revision: 8 }))
+        }))
+        const triggered: Graph = {
+            start: 'hook',
+            nodes: [{ id: 'hook', type: webhook.type, config: { source: 'orders' }, position: { x: 0, y: 0 } }],
+            edges: [],
+        }
+        const view = controller({
+            graph: triggered,
+            webhook: { endpoint_url: 'https://example.test/hooks/current', active: true, secret_rotated_at: null },
+        })
+        act(() => view.result.current.actions.selectNode('hook'))
+
+        act(() => { void view.result.current.actions.publish() })
+        await waitFor(() => expect(resolvePublish).toBeTypeOf('function'))
+        act(() => view.result.current.nodeInspectorProps?.onRotateWebhookSecret?.())
+        await waitFor(() => expect(resolveRotation).toBeTypeOf('function'))
+        await act(async () => resolveRotation(Response.json({
+            secret: 'rotated-secret',
+            rotated_at: '2026-08-24T15:00:00Z',
+        })))
+        await act(async () => resolvePublish(Response.json({
+            version: 4,
+            draft_revision: 8,
+            webhook_url: 'https://example.test/hooks/current',
+            webhook_secret: 'older-publish-secret',
+        })))
+
+        expect(view.result.current.nodeInspectorProps?.webhookSecret).toBe('rotated-secret')
+        expect(view.result.current.nodeInspectorProps?.webhook?.secret_rotated_at).toBe('2026-08-24T15:00:00Z')
+    })
+
+    it('does not let an older rotation response overwrite a later successful publish', async () => {
+        let resolvePublish!: (response: Response) => void
+        let resolveRotation!: (response: Response) => void
+        vi.stubGlobal('fetch', vi.fn((url: string) => {
+            if (url === urls.publish) return new Promise<Response>((resolve) => { resolvePublish = resolve })
+            if (url === urls.rotate_webhook_secret) return new Promise<Response>((resolve) => { resolveRotation = resolve })
+            return Promise.resolve(Response.json({ draft_revision: 8 }))
+        }))
+        const triggered: Graph = {
+            start: 'hook',
+            nodes: [{ id: 'hook', type: webhook.type, config: { source: 'orders' }, position: { x: 0, y: 0 } }],
+            edges: [],
+        }
+        const view = controller({
+            graph: triggered,
+            webhook: { endpoint_url: 'https://example.test/hooks/current', active: true, secret_rotated_at: null },
+        })
+        act(() => view.result.current.actions.selectNode('hook'))
+
+        act(() => view.result.current.nodeInspectorProps?.onRotateWebhookSecret?.())
+        await waitFor(() => expect(resolveRotation).toBeTypeOf('function'))
+        act(() => { void view.result.current.actions.publish() })
+        await waitFor(() => expect(resolvePublish).toBeTypeOf('function'))
+        await act(async () => resolvePublish(Response.json({
+            version: 4,
+            draft_revision: 8,
+            webhook_url: 'https://example.test/hooks/current',
+            webhook_secret: 'newer-publish-secret',
+        })))
+        await act(async () => resolveRotation(Response.json({
+            secret: 'older-rotation-secret',
+            rotated_at: '2026-08-24T15:00:00Z',
+        })))
+
+        expect(view.result.current.nodeInspectorProps?.webhookSecret).toBe('newer-publish-secret')
+        expect(view.result.current.nodeInspectorProps?.webhook?.secret_rotated_at).toBeNull()
+    })
 })

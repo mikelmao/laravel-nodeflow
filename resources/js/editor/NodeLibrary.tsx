@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useId, useRef, useState, type DragEvent } from 'react'
+import { useCallback, useEffect, useId, useRef, useState, type DragEvent, type KeyboardEvent as ReactKeyboardEvent } from 'react'
 import type { GraphComponentPayload, NodeTypePayload, TriggerNodeTypePayload, TriggerSourcesPayload } from '../graph/types'
 import { NodeflowIcon } from '../presentation/icons'
 import { categoryClasses, categoryPresentation } from '../presentation/node'
@@ -181,6 +181,14 @@ export function NodeLibrary({
         replacementOpener.current?.focus()
     }
 
+    function handleReplacementKeyDown(event: ReactKeyboardEvent<HTMLDivElement>): void {
+        containDialogFocus(event)
+        if (event.key !== 'Escape') return
+        event.preventDefault()
+        event.stopPropagation()
+        closeReplacement()
+    }
+
     function choose(definition: GraphComponentPayload, opener: HTMLButtonElement): void {
         if (definition.kind === 'executable') {
             onAdd(definition)
@@ -277,7 +285,7 @@ export function NodeLibrary({
                 </div>
             )}
             {replacement !== null && (
-                <div role="dialog" aria-modal="true" aria-labelledby={dialogTitleId} onKeyDown={containDialogFocus} className="fixed inset-0 z-50 grid place-items-center bg-background/70 p-4">
+                <div role="dialog" aria-modal="true" aria-labelledby={dialogTitleId} onKeyDown={handleReplacementKeyDown} className="fixed inset-0 z-50 grid place-items-center bg-background/70 p-4">
                     <div className="w-full max-w-md space-y-4 rounded-lg border border-border bg-card p-5 shadow-lg">
                         <h3 id={dialogTitleId} className="text-base font-semibold">Replace trigger</h3>
                         <p className="text-sm text-muted-foreground">
