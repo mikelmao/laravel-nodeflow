@@ -1,6 +1,7 @@
 <?php
 
 use Illuminate\Foundation\Auth\User;
+use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Gate;
 use Illuminate\Support\Facades\Route;
 use Nodeflow\Contracts\TenantResolver;
@@ -170,14 +171,16 @@ it('exposes safe origin fields without leaking execution-only trigger data', fun
     allowRunViewing();
     $this->run->update([
         'started_via' => 'test.fake',
-        'engine_entry_node_id' => 'private-entry-node',
-        'engine_dispatch_status' => 'failed',
-        'engine_dispatch_error' => 'private dispatch infrastructure detail',
         'trigger_data' => [
             'delivery' => 'd-1',
             'nested' => ['authorization' => 'Bearer secret-token'],
             'serialized' => json_encode(['private' => ['account' => 42]], JSON_THROW_ON_ERROR),
         ],
+    ]);
+    DB::table('nodeflow_runs')->where('id', $this->run->id)->update([
+        'engine_entry_node_id' => 'private-entry-node',
+        'engine_dispatch_status' => 'failed',
+        'engine_dispatch_error' => 'private dispatch infrastructure detail',
     ]);
 
     $response = runPage($this, $this->run->id)->assertOk();

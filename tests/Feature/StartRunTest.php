@@ -302,7 +302,7 @@ it('never treats execution errors as dispatch state when an engine handle exists
     expect($preserved->error)->toBe('Node execution failed');
 });
 
-it('does not record a dispatch failure after another actor persisted the stable handle', function () {
+it('returns the reconciled run after another actor persisted the stable handle', function () {
     app()->singleton(WorkflowEngine::class, fn () => new class implements WorkflowEngine
     {
         public function start(string $workflowClass, array $args, ?string $instanceId = null): string
@@ -322,14 +322,13 @@ it('does not record a dispatch failure after another actor persisted the stable 
         public function isRunning(string $workflowId): bool { return true; }
     });
 
-    expect(fn () => app(StartRun::class)->forFlow(
+    $run = app(StartRun::class)->forFlow(
         $this->flow->fresh(),
         'user',
         ['1'],
         ['idempotency_key' => 'concurrent-handle'],
-    ))->toThrow(RuntimeException::class, 'late losing callback');
+    );
 
-    $run = \Nodeflow\Models\Run::withoutTenancy()->firstOrFail();
     expect($run->engine_workflow_id)->toBe("nodeflow-run:{$run->id}")
         ->and($run->engine_dispatch_status)->toBe('dispatched')
         ->and($run->engine_dispatch_error)->toBeNull()

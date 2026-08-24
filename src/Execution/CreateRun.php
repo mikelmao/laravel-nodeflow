@@ -8,6 +8,8 @@ use Illuminate\Support\Facades\Queue;
 use InvalidArgumentException;
 use JsonException;
 use Nodeflow\Engine\WorkflowEngine;
+use Nodeflow\Graph\Graph;
+use Nodeflow\Graph\GraphTypeCatalog;
 use Nodeflow\Jobs\RetryRunDispatch;
 use Nodeflow\Models\Concerns\TenancyGuardSuspension;
 use Nodeflow\Models\FlowVersion;
@@ -26,6 +28,7 @@ class CreateRun
     public function __construct(
         private AudienceMaterialiser $materialiser,
         private WorkflowEngine $engine,
+        private GraphTypeCatalog $types,
     ) {}
 
     public function forVersion(
@@ -35,6 +38,7 @@ class CreateRun
         string $entryNodeId,
         array $options,
     ): Run {
+        $entryNodeId = $this->validatedEntryNodeId($version, $entryNodeId);
         $key = $this->validatedIdempotencyKey($options['idempotency_key'] ?? null);
 
         // Preserve the public idempotency contract before consuming a caller's
@@ -45,7 +49,7 @@ class CreateRun
             $existing = $this->existing($version, (string) $key);
 
             if ($existing !== null) {
-                return $this->ensureEngineStarted($existing);
+                return $this->ensureEngineStarted($existing, expectedEntryNodeId: $entryNodeId);
             }
         }
 
@@ -100,10 +104,10 @@ class CreateRun
                 throw $e;
             }
 
-            return $this->ensureEngineStarted($winner);
+            return $this->ensureEngineStarted($winner, expectedEntryNodeId: $entryNodeId);
         }
 
-        return $this->ensureEngineStarted($run);
+        return $this->ensureEngineStarted($run, expectedEntryNodeId: $entryNodeId);
     }
 
     public function resume(int|string $runId): Run
@@ -115,14 +119,24 @@ class CreateRun
             throw CrossTenantExecutionException::forRunVersion($run, $version);
         }
 
-        $this->persistedEntryNodeId($run);
+        $entryNodeId = $this->expectedEntryNodeId($version);
 
-        return $this->ensureEngineStarted($run, scheduleRetry: false);
+        return $this->ensureEngineStarted($run, scheduleRetry: false, expectedEntryNodeId: $entryNodeId);
     }
 
-    private function ensureEngineStarted(Run $run, bool $scheduleRetry = true): Run
+    private function ensureEngineStarted(
+        Run $run,
+        bool $scheduleRetry = true,
+        ?string $expectedEntryNodeId = null,
+    ): Run
     {
         $entryNodeId = $this->persistedEntryNodeId($run);
+
+        if ($expectedEntryNodeId !== null && $entryNodeId !== $expectedEntryNodeId) {
+            throw new InvalidArgumentException(
+                "Run [{$run->id}] engine entry [{$entryNodeId}] does not match pinned graph entry [{$expectedEntryNodeId}]."
+            );
+        }
 
         if ($run->engine_workflow_id !== null) {
             return $this->markDispatched($run);
@@ -134,7 +148,11 @@ class CreateRun
             try {
                 $this->startEngine($run, $entryNodeId);
             } catch (Throwable $e) {
-                $this->handleDispatchFailure($run, $scheduleRetry);
+                $run = $this->handleDispatchFailure($run, $scheduleRetry);
+
+                if ($run->engine_workflow_id !== null) {
+                    return $run;
+                }
 
                 throw $e;
             }
@@ -228,19 +246,26 @@ class CreateRun
         return "nodeflow-run:{$run->id}";
     }
 
-    private function handleDispatchFailure(Run $run, bool $scheduleRetry): void
+    private function handleDispatchFailure(Run $run, bool $scheduleRetry): Run
     {
         $shouldSchedule = $this->recordDispatchFailure($run);
 
         if (! $scheduleRetry || ! $shouldSchedule) {
-            return;
+            return $run;
         }
 
         try {
             Queue::push(new RetryRunDispatch($run->id));
-            $run->refresh();
         } catch (Throwable $queueFailure) {
             $this->safeReport($queueFailure);
+        }
+
+        try {
+            return $run->refresh();
+        } catch (Throwable $refreshFailure) {
+            $this->safeReport($refreshFailure);
+
+            return $run;
         }
     }
 
@@ -299,6 +324,38 @@ class CreateRun
         }
 
         return $entryNodeId;
+    }
+
+    private function validatedEntryNodeId(FlowVersion $version, string $entryNodeId): string
+    {
+        $expected = $this->expectedEntryNodeId($version);
+
+        if ($entryNodeId !== $expected) {
+            throw new InvalidArgumentException(
+                "Run engine entry [{$entryNodeId}] does not match pinned graph entry [{$expected}] for flow version [{$version->id}]."
+            );
+        }
+
+        return $expected;
+    }
+
+    private function expectedEntryNodeId(FlowVersion $version): string
+    {
+        $graph = Graph::fromArray($version->graph);
+        $start = $graph->startNodeId();
+        $family = $this->types->family($graph->node($start)['type'] ?? '');
+
+        if ($family === 'trigger') {
+            return $graph->entryNodeId($this->types);
+        }
+
+        if ($family === 'executable') {
+            return $start;
+        }
+
+        throw new RuntimeException(
+            "Graph start node [{$start}] must be a registered trigger or executable node."
+        );
     }
 
     private function synchronizePendingRuns(string $dispatchKey, Run $run): void
