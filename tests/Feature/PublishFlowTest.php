@@ -6,9 +6,11 @@ use Nodeflow\Graph\GraphValidator;
 use Nodeflow\Models\Flow;
 use Nodeflow\Models\Run;
 use Nodeflow\Nodeflow;
+use Nodeflow\Nodes\NodeRegistry;
 use Nodeflow\Publishing\GraphInvalidException;
 use Nodeflow\Publishing\PublishFlow;
 use Tests\Support\FakeSendNode;
+use Tests\Support\FakeRetryingAudienceNode;
 
 beforeEach(function () {
     app()->bind(TenantResolver::class, fn () => new class implements TenantResolver {
@@ -16,7 +18,7 @@ beforeEach(function () {
         public function ownsSubject(string $t, string $ty, string $i): bool { return true; }
     });
 
-    Nodeflow::register([FakeSendNode::class]);
+    Nodeflow::register([FakeSendNode::class, FakeRetryingAudienceNode::class]);
 
     $this->flow = Flow::create(['name' => 'F', 'status' => 'draft']);
 
@@ -44,9 +46,96 @@ it('increments the version on each publish and leaves earlier versions untouched
     $second = app(PublishFlow::class)->publish($this->flow, $this->validGraph)->version;
 
     expect($second->version)->toBe(2)
-        ->and($first->fresh()->graph)->toBe($this->validGraph)
+        ->and($first->fresh()->graph['nodes'][1]['runtime']['activity'])->toBe([
+            'max_attempts' => 3,
+            'backoff' => [1, 2, 5, 10, 15, 30, 60, 120],
+            'start_to_close_timeout' => null,
+            'non_retryable_error_types' => [],
+        ])
         ->and($first->content_hash)->toMatch('/^[a-f0-9]{64}$/')
         ->and($first->content_hash)->toBe($second->content_hash);
+});
+
+it('persists activity policy snapshots for executable nodes without changing trigger metadata', function () {
+    $graph = triggeredGraph([
+        'start' => 'retrying',
+        'nodes' => [
+            [
+                'id' => 'retrying',
+                'type' => 'test.retrying-audience',
+                'config' => [],
+                'runtime' => ['trace_id' => 'author-trace', 'activity' => ['max_attempts' => 99]],
+            ],
+            ['id' => 'exit', 'type' => 'core.exit', 'config' => []],
+        ],
+        'edges' => [['from' => 'retrying', 'output' => 'accepted', 'to' => 'exit']],
+    ], triggerConfig: ['keep' => 'trigger-descriptor']);
+
+    $version = app(PublishFlow::class)->publish($this->flow, $graph)->version;
+    $nodes = collect($version->graph['nodes'])->keyBy('id');
+
+    expect($nodes['retrying']['runtime'])->toBe([
+        'trace_id' => 'author-trace',
+        'activity' => [
+            'max_attempts' => 5,
+            'backoff' => [1, 5, 30, 120],
+            'start_to_close_timeout' => 90,
+            'non_retryable_error_types' => [\InvalidArgumentException::class],
+        ],
+    ])
+        ->and($nodes['trigger'])->not->toHaveKey('runtime')
+        ->and($version->fresh()->activation->descriptor)->toBe(['keep' => 'trigger-descriptor'])
+        ->and($version->content_hash)->toBe(hash('sha256', json_encode($version->graph, JSON_THROW_ON_ERROR)));
+});
+
+it('resolves executable aliases before snapshotting their activity policies', function () {
+    app(NodeRegistry::class)->alias('test.legacy-retrying-audience', FakeRetryingAudienceNode::type());
+
+    $graph = triggeredGraph([
+        'start' => 'retrying',
+        'nodes' => [
+            ['id' => 'retrying', 'type' => 'test.legacy-retrying-audience', 'config' => []],
+            ['id' => 'exit', 'type' => 'core.exit', 'config' => []],
+        ],
+        'edges' => [['from' => 'retrying', 'output' => 'accepted', 'to' => 'exit']],
+    ]);
+
+    $version = app(PublishFlow::class)->publish($this->flow, $graph)->version;
+    $retrying = collect($version->graph['nodes'])->firstWhere('id', 'retrying');
+
+    expect($retrying['type'])->toBe('test.legacy-retrying-audience')
+        ->and($retrying['runtime']['activity'])->toBe([
+            'max_attempts' => 5,
+            'backoff' => [1, 5, 30, 120],
+            'start_to_close_timeout' => 90,
+            'non_retryable_error_types' => [\InvalidArgumentException::class],
+        ]);
+});
+
+it('keeps each published policy snapshot when node defaults change', function () {
+    $graph = triggeredGraph([
+        'start' => 'retrying',
+        'nodes' => [
+            ['id' => 'retrying', 'type' => 'test.retrying-audience', 'config' => []],
+            ['id' => 'exit', 'type' => 'core.exit', 'config' => []],
+        ],
+        'edges' => [['from' => 'retrying', 'output' => 'accepted', 'to' => 'exit']],
+    ]);
+
+    $first = app(PublishFlow::class)->publish($this->flow, $graph)->version;
+
+    app()->bind(FakeRetryingAudienceNode::class, fn () => new class extends FakeRetryingAudienceNode
+    {
+        public int $tries = 7;
+    });
+
+    $second = app(PublishFlow::class)->publish($this->flow, $graph)->version;
+    $firstRetrying = collect($first->fresh()->graph['nodes'])->firstWhere('id', 'retrying');
+    $secondRetrying = collect($second->graph['nodes'])->firstWhere('id', 'retrying');
+
+    expect($firstRetrying['runtime']['activity']['max_attempts'])->toBe(5)
+        ->and($secondRetrying['runtime']['activity']['max_attempts'])->toBe(7)
+        ->and($second->content_hash)->not->toBe($first->content_hash);
 });
 
 it('refuses to publish an invalid graph', function () {

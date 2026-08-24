@@ -16,6 +16,7 @@ class PublishFlow
 {
     public function __construct(
         private GraphValidator $validator,
+        private CompileNodeActivityPolicies $compilePolicies,
         private CompileTriggerActivation $compileActivation,
         private WebhookCredentials $webhookCredentials,
     ) {}
@@ -28,18 +29,21 @@ class PublishFlow
     ): PublishResult
     {
         $expectedDraftRevision ??= (int) ($flow->draft_revision ?? 0);
-        $compiledGraph = Graph::fromArray($graph);
+        $originalGraph = Graph::fromArray($graph);
         $definitions = new TriggerDefinitionContext;
-        $result = $this->validator->validate($compiledGraph, $definitions);
+        $result = $this->validator->validate($originalGraph, $definitions);
 
         if (! $result->passes()) {
             throw new GraphInvalidException($result->errors(), $result->nodeErrors());
         }
 
+        $compiledGraphArray = $this->compilePolicies->compile($graph);
+        $compiledGraph = Graph::fromArray($compiledGraphArray);
+
         try {
-            $encodedGraph = json_encode($graph, JSON_THROW_ON_ERROR);
+            $encodedGraph = json_encode($compiledGraphArray, JSON_THROW_ON_ERROR);
         } catch (\Throwable) {
-            $start = $graph['start'] ?? null;
+            $start = $compiledGraphArray['start'] ?? null;
 
             if (is_string($start) && preg_match('//u', $start) !== 1) {
                 $message = 'The compiled trigger_node_id must contain valid UTF-8.';
@@ -55,7 +59,7 @@ class PublishFlow
 
         [$publishResult, $publishedFlow] = DB::transaction(function () use (
             $flow,
-            $graph,
+            $compiledGraphArray,
             $encodedGraph,
             $publishedBy,
             $compiledGraph,
@@ -96,7 +100,7 @@ class PublishFlow
                 // would only make the intent implicit.
                 'tenant_id' => $lockedFlow->tenant_id,
                 'version' => ((int) $lockedFlow->versions()->max('version')) + 1,
-                'graph' => $graph,
+                'graph' => $compiledGraphArray,
                 'content_hash' => hash('sha256', $encodedGraph),
                 'published_at' => now(),
                 'published_by' => $publishedBy,
