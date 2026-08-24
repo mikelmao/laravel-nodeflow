@@ -5,9 +5,10 @@ use Nodeflow\Graph\GraphTypeCatalog;
 use Nodeflow\Graph\GraphValidator;
 use Nodeflow\Nodeflow;
 use Nodeflow\Nodes\NodeRegistry;
-use Tests\Support\FakeSendNode;
+use Nodeflow\Triggers\TriggerDriverRegistry;
 use Nodeflow\Triggers\TriggerNodeRegistry;
 use Nodeflow\Triggers\TriggerSourceRegistry;
+use Tests\Support\FakeSendNode;
 
 beforeEach(function () {
     Nodeflow::register([FakeSendNode::class]);
@@ -254,6 +255,7 @@ it('rejects a graph referencing a node type that implements neither cardinality 
     $result = (new GraphValidator(
         $registry,
         app(TriggerNodeRegistry::class),
+        app(TriggerDriverRegistry::class),
         app(TriggerSourceRegistry::class),
         $types,
     ))->validate(Graph::fromArray(triggeredGraph([

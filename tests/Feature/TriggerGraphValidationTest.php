@@ -1,5 +1,7 @@
 <?php
 
+use Nodeflow\Contracts\TriggerDriver;
+use Nodeflow\Contracts\TriggerNode;
 use Nodeflow\Contracts\TriggerSource;
 use Nodeflow\Graph\Graph;
 use Nodeflow\Graph\GraphTypeCatalog;
@@ -7,8 +9,10 @@ use Nodeflow\Graph\GraphValidator;
 use Nodeflow\Nodeflow;
 use Nodeflow\Schema\Field;
 use Nodeflow\Schema\TriggerDefinition;
+use Nodeflow\Triggers\TriggerActivationDescriptor;
 use Nodeflow\Triggers\TriggerMatch;
 use Nodeflow\Triggers\TriggerOccurrence;
+use Nodeflow\Triggers\TriggerSourceRegistry;
 
 class ConfiguredGraphTriggerSource implements TriggerSource
 {
@@ -81,9 +85,406 @@ class WrongTypedEventGraphTriggerSource implements TriggerSource
     }
 }
 
+class DescriptorGraphTriggerDriver implements TriggerDriver
+{
+    public static function key(): string
+    {
+        return 'test.descriptor';
+    }
+
+    public function sourceRegistered(TriggerSource $source): void
+    {
+    }
+
+    public function validate(TriggerActivationDescriptor $descriptor): array
+    {
+        return $descriptor->qualifier === 'invalid'
+            ? ['qualifier' => ['The qualifier is invalid.']]
+            : [];
+    }
+}
+
+class BoundaryFailureGraphTriggerDriver implements TriggerDriver
+{
+    public static bool $throwDuringValidation = false;
+
+    public static function key(): string
+    {
+        return 'test.boundary';
+    }
+
+    public function sourceRegistered(TriggerSource $source): void
+    {
+    }
+
+    public function validate(TriggerActivationDescriptor $descriptor): array
+    {
+        if (self::$throwDuringValidation) {
+            throw new RuntimeException('secret driver validation detail');
+        }
+
+        return [];
+    }
+}
+
+class DescriptorGraphTriggerSource implements TriggerSource
+{
+    public static function key(): string
+    {
+        return 'test.hard-coded-orders';
+    }
+
+    public static function driver(): string
+    {
+        return 'test.descriptor';
+    }
+
+    public function definition(): TriggerDefinition
+    {
+        return TriggerDefinition::make('Hard-coded orders')
+            ->fields([Field::text('account')->required()]);
+    }
+
+    public function resolve(TriggerOccurrence $occurrence, array $config): TriggerMatch
+    {
+        return TriggerMatch::make();
+    }
+}
+
+class CollidingDescriptorGraphTriggerSource implements TriggerSource
+{
+    public static function key(): string
+    {
+        return 'test.colliding-descriptor';
+    }
+
+    public static function driver(): string
+    {
+        return 'test.descriptor';
+    }
+
+    public function definition(): TriggerDefinition
+    {
+        return TriggerDefinition::make('Colliding descriptor source')
+            ->fields([Field::text('mode')->required()]);
+    }
+
+    public function resolve(TriggerOccurrence $occurrence, array $config): TriggerMatch
+    {
+        return TriggerMatch::make();
+    }
+}
+
+class BoundaryFailureGraphTriggerSource implements TriggerSource
+{
+    public static bool $throwDuringDefinition = false;
+
+    public static function key(): string
+    {
+        return 'test.boundary-source';
+    }
+
+    public static function driver(): string
+    {
+        return 'test.boundary';
+    }
+
+    public function definition(): TriggerDefinition
+    {
+        if (self::$throwDuringDefinition) {
+            throw new RuntimeException('secret source definition detail');
+        }
+
+        return TriggerDefinition::make('Boundary source');
+    }
+
+    public function resolve(TriggerOccurrence $occurrence, array $config): TriggerMatch
+    {
+        return TriggerMatch::make();
+    }
+}
+
+class MissingDriverGraphTriggerNode implements TriggerNode
+{
+    public static function type(): string
+    {
+        return 'test.missing-driver-trigger';
+    }
+
+    public function definition(): TriggerDefinition
+    {
+        return TriggerDefinition::make('Missing driver');
+    }
+
+    public function driver(): string
+    {
+        return 'test.missing-driver';
+    }
+
+    public function defaultConfig(): array
+    {
+        return [];
+    }
+
+    public function validate(array $config, TriggerSourceRegistry $sources): array
+    {
+        return [];
+    }
+
+    public function compile(array $config): TriggerActivationDescriptor
+    {
+        return new TriggerActivationDescriptor('test.missing-driver', 'test.orders', null, []);
+    }
+}
+
+class UnknownSourceGraphTriggerNode implements TriggerNode
+{
+    public static function type(): string
+    {
+        return 'test.unknown-source-trigger';
+    }
+
+    public function definition(): TriggerDefinition
+    {
+        return TriggerDefinition::make('Unknown source');
+    }
+
+    public function driver(): string
+    {
+        return 'test.descriptor';
+    }
+
+    public function defaultConfig(): array
+    {
+        return [];
+    }
+
+    public function validate(array $config, TriggerSourceRegistry $sources): array
+    {
+        return [];
+    }
+
+    public function compile(array $config): TriggerActivationDescriptor
+    {
+        return new TriggerActivationDescriptor('test.descriptor', 'test.missing-source', null, []);
+    }
+}
+
+class HardCodedSourceGraphTriggerNode implements TriggerNode
+{
+    public static function type(): string
+    {
+        return 'test.hard-coded-source-trigger';
+    }
+
+    public function definition(): TriggerDefinition
+    {
+        return TriggerDefinition::make('Hard-coded source')
+            ->fields([Field::text('mode')->required()]);
+    }
+
+    public function driver(): string
+    {
+        return 'test.descriptor';
+    }
+
+    public function defaultConfig(): array
+    {
+        return [];
+    }
+
+    public function validate(array $config, TriggerSourceRegistry $sources): array
+    {
+        return ($config['custom'] ?? null) === 'valid'
+            ? []
+            : ['custom' => ['The custom configuration is invalid.']];
+    }
+
+    public function compile(array $config): TriggerActivationDescriptor
+    {
+        return new TriggerActivationDescriptor(
+            'test.descriptor',
+            'test.hard-coded-orders',
+            $config['qualifier'] ?? null,
+            [],
+        );
+    }
+}
+
+class MismatchedDescriptorGraphTriggerNode implements TriggerNode
+{
+    public static function type(): string
+    {
+        return 'test.mismatched-descriptor-trigger';
+    }
+
+    public function definition(): TriggerDefinition
+    {
+        return TriggerDefinition::make('Mismatched descriptor');
+    }
+
+    public function driver(): string
+    {
+        return 'test.descriptor';
+    }
+
+    public function defaultConfig(): array
+    {
+        return [];
+    }
+
+    public function validate(array $config, TriggerSourceRegistry $sources): array
+    {
+        return [];
+    }
+
+    public function compile(array $config): TriggerActivationDescriptor
+    {
+        return new TriggerActivationDescriptor('test.fake', 'test.orders', null, []);
+    }
+}
+
+class CollidingDescriptorGraphTriggerNode implements TriggerNode
+{
+    public static function type(): string
+    {
+        return 'test.colliding-descriptor-trigger';
+    }
+
+    public function definition(): TriggerDefinition
+    {
+        return TriggerDefinition::make('Colliding descriptor')
+            ->fields([Field::text('mode')->required()]);
+    }
+
+    public function driver(): string
+    {
+        return 'test.descriptor';
+    }
+
+    public function defaultConfig(): array
+    {
+        return [];
+    }
+
+    public function validate(array $config, TriggerSourceRegistry $sources): array
+    {
+        return [];
+    }
+
+    public function compile(array $config): TriggerActivationDescriptor
+    {
+        return new TriggerActivationDescriptor('test.descriptor', 'test.colliding-descriptor', null, []);
+    }
+}
+
+class BoundaryFailureGraphTriggerNode implements TriggerNode
+{
+    public static ?string $failure = null;
+
+    public static int $compilations = 0;
+
+    public static function type(): string
+    {
+        return 'test.boundary-failure-trigger';
+    }
+
+    public function definition(): TriggerDefinition
+    {
+        $this->throwAt('definition');
+
+        return TriggerDefinition::make('Boundary failure')
+            ->fields([Field::text('mode')->required()]);
+    }
+
+    public function driver(): string
+    {
+        $this->throwAt('driver');
+
+        return self::$failure === 'unregistered-driver'
+            ? 'test.missing-boundary'
+            : 'test.boundary';
+    }
+
+    public function defaultConfig(): array
+    {
+        return [];
+    }
+
+    public function validate(array $config, TriggerSourceRegistry $sources): array
+    {
+        $this->throwAt('custom-validation');
+
+        return ($config['custom'] ?? null) === 'valid'
+            ? []
+            : ['custom' => ['The custom configuration is invalid.']];
+    }
+
+    public function compile(array $config): TriggerActivationDescriptor
+    {
+        self::$compilations++;
+        $this->throwAt('compile');
+
+        return new TriggerActivationDescriptor('test.boundary', 'test.boundary-source', null, []);
+    }
+
+    private function throwAt(string $boundary): void
+    {
+        if (self::$failure === $boundary) {
+            throw new RuntimeException("secret {$boundary} detail");
+        }
+    }
+}
+
+class ThrowingConstructionGraphTriggerNode implements TriggerNode
+{
+    public function __construct()
+    {
+        throw new RuntimeException('secret constructor detail');
+    }
+
+    public static function type(): string
+    {
+        return 'test.throwing-construction-trigger';
+    }
+
+    public function definition(): TriggerDefinition
+    {
+        return TriggerDefinition::make('Unreachable');
+    }
+
+    public function driver(): string
+    {
+        return 'test.boundary';
+    }
+
+    public function defaultConfig(): array
+    {
+        return [];
+    }
+
+    public function validate(array $config, TriggerSourceRegistry $sources): array
+    {
+        return [];
+    }
+
+    public function compile(array $config): TriggerActivationDescriptor
+    {
+        return new TriggerActivationDescriptor('test.boundary', 'test.boundary-source', null, []);
+    }
+}
+
 function triggerGraphErrors(array $graph): array
 {
     return app(GraphValidator::class)->validate(Graph::fromArray($graph))->errors();
+}
+
+function directTriggerGraph(string $type, array $config = []): array
+{
+    $graph = triggeredExitGraph();
+    $graph['nodes'][0] = ['id' => 'trigger', 'type' => $type, 'config' => $config];
+
+    return $graph;
 }
 
 it('accepts one trigger whose started edge leads to an executable entry', function () {
@@ -99,14 +500,19 @@ it('accepts one trigger whose started edge leads to an executable entry', functi
 });
 
 it('rejects an executable graph start and a graph with no trigger', function () {
-    $errors = triggerGraphErrors([
+    $result = app(GraphValidator::class)->validate(Graph::fromArray([
         'start' => 'first-action',
         'nodes' => [['id' => 'first-action', 'type' => 'core.exit', 'config' => []]],
         'edges' => [],
-    ]);
+    ]));
 
-    expect($errors)->toContain('The graph must contain exactly one trigger node.')
-        ->and($errors)->toContain('The graph start must be its trigger node.');
+    expect($result->errors())->toBe([
+        'The graph must contain exactly one trigger node.',
+        'The graph start must be its trigger node.',
+    ])->and($result->nodeErrors())->toBe([
+        ['node' => null, 'field' => null, 'message' => 'The graph must contain exactly one trigger node.'],
+        ['node' => null, 'field' => null, 'message' => 'The graph start must be its trigger node.'],
+    ]);
 });
 
 it('rejects multiple triggers', function () {
@@ -114,14 +520,45 @@ it('rejects multiple triggers', function () {
     $graph['nodes'][] = ['id' => 'second-trigger', 'type' => 'test.fake_trigger', 'config' => ['source' => 'test.orders']];
     $graph['edges'][] = ['from' => 'second-trigger', 'output' => 'started', 'to' => 'first-action'];
 
-    expect(triggerGraphErrors($graph))->toContain('The graph must contain exactly one trigger node.');
+    $result = app(GraphValidator::class)->validate(Graph::fromArray($graph));
+
+    expect($result->errors())->toBe(['The graph must contain exactly one trigger node.'])
+        ->and($result->nodeErrors())->toBe([[
+            'node' => null,
+            'field' => null,
+            'message' => 'The graph must contain exactly one trigger node.',
+        ]]);
+});
+
+it('attributes a multiple-trigger start mismatch to the graph', function () {
+    $graph = triggeredExitGraph();
+    $graph['nodes'][] = ['id' => 'second-trigger', 'type' => 'test.fake_trigger', 'config' => ['source' => 'test.orders']];
+    $graph['edges'][] = ['from' => 'second-trigger', 'output' => 'started', 'to' => 'first-action'];
+    $graph['start'] = 'first-action';
+
+    $result = app(GraphValidator::class)->validate(Graph::fromArray($graph));
+
+    expect($result->errors())->toBe([
+        'The graph must contain exactly one trigger node.',
+        'The graph start must be its trigger node.',
+    ])->and($result->nodeErrors())->toBe([
+        ['node' => null, 'field' => null, 'message' => 'The graph must contain exactly one trigger node.'],
+        ['node' => null, 'field' => null, 'message' => 'The graph start must be its trigger node.'],
+    ]);
 });
 
 it('rejects a start that does not name the sole trigger', function () {
     $graph = triggeredExitGraph();
     $graph['start'] = 'first-action';
 
-    expect(triggerGraphErrors($graph))->toContain('The graph start must be its trigger node.');
+    $result = app(GraphValidator::class)->validate(Graph::fromArray($graph));
+
+    expect($result->errors())->toBe(['The graph start must be its trigger node.'])
+        ->and($result->nodeErrors())->toBe([[
+            'node' => 'trigger',
+            'field' => null,
+            'message' => 'The graph start must be its trigger node.',
+        ]]);
 });
 
 it('rejects a trigger with an incoming edge', function () {
@@ -205,4 +642,186 @@ it('rejects source fields that collide with trigger reserved fields', function (
 
     expect(implode(' ', triggerGraphErrors(triggeredExitGraph('test.colliding-orders'))))
         ->toContain('field [source] collides with a reserved trigger field');
+});
+
+it('validates definition and custom rules for direct trigger node implementations', function () {
+    Nodeflow::registerTriggerDrivers([DescriptorGraphTriggerDriver::class]);
+    Nodeflow::registerTriggerNodes([HardCodedSourceGraphTriggerNode::class]);
+
+    $result = app(GraphValidator::class)->validate(Graph::fromArray(
+        directTriggerGraph(HardCodedSourceGraphTriggerNode::type())
+    ));
+
+    expect($result->nodeErrors())->toContain(
+        ['node' => 'trigger', 'field' => 'mode', 'message' => 'The mode field is required.'],
+        ['node' => 'trigger', 'field' => 'custom', 'message' => 'The custom configuration is invalid.'],
+    );
+});
+
+it('rejects a direct trigger node whose declared driver is not registered', function () {
+    Nodeflow::registerTriggerNodes([MissingDriverGraphTriggerNode::class]);
+
+    expect(triggerGraphErrors(directTriggerGraph(MissingDriverGraphTriggerNode::type())))
+        ->toContain('Trigger node [trigger] uses unregistered driver [test.missing-driver].');
+});
+
+it('rejects a descriptor-selected source that is not registered', function () {
+    Nodeflow::registerTriggerDrivers([DescriptorGraphTriggerDriver::class]);
+    Nodeflow::registerTriggerNodes([UnknownSourceGraphTriggerNode::class]);
+
+    expect(triggerGraphErrors(directTriggerGraph(UnknownSourceGraphTriggerNode::type())))
+        ->toContain(
+            'Trigger node [trigger] selected source [test.missing-source], which is not registered for driver [test.descriptor].'
+        );
+});
+
+it('validates a hard-coded descriptor source without requiring config source', function () {
+    Nodeflow::registerTriggerDrivers([DescriptorGraphTriggerDriver::class]);
+    Nodeflow::registerTriggerSources([DescriptorGraphTriggerSource::class]);
+    Nodeflow::registerTriggerNodes([HardCodedSourceGraphTriggerNode::class]);
+
+    $missing = app(GraphValidator::class)->validate(Graph::fromArray(directTriggerGraph(
+        HardCodedSourceGraphTriggerNode::type(),
+        ['mode' => 'automatic', 'custom' => 'valid'],
+    )));
+    $valid = app(GraphValidator::class)->validate(Graph::fromArray(directTriggerGraph(
+        HardCodedSourceGraphTriggerNode::type(),
+        ['mode' => 'automatic', 'custom' => 'valid', 'account' => 'primary'],
+    )));
+
+    expect($missing->nodeErrors())->toContain([
+        'node' => 'trigger',
+        'field' => 'account',
+        'message' => 'The account field is required.',
+    ])->and($valid->passes())->toBeTrue();
+});
+
+it('merges descriptor driver validation errors', function () {
+    Nodeflow::registerTriggerDrivers([DescriptorGraphTriggerDriver::class]);
+    Nodeflow::registerTriggerSources([DescriptorGraphTriggerSource::class]);
+    Nodeflow::registerTriggerNodes([HardCodedSourceGraphTriggerNode::class]);
+
+    $result = app(GraphValidator::class)->validate(Graph::fromArray(directTriggerGraph(
+        HardCodedSourceGraphTriggerNode::type(),
+        ['mode' => 'automatic', 'custom' => 'valid', 'account' => 'primary', 'qualifier' => 'invalid'],
+    )));
+
+    expect($result->nodeErrors())->toContain([
+        'node' => 'trigger',
+        'field' => 'qualifier',
+        'message' => 'The qualifier is invalid.',
+    ]);
+});
+
+it('rejects a compiled descriptor whose driver differs from its trigger node', function () {
+    Nodeflow::registerTriggerDrivers([DescriptorGraphTriggerDriver::class]);
+    Nodeflow::registerTriggerNodes([MismatchedDescriptorGraphTriggerNode::class]);
+
+    expect(triggerGraphErrors(directTriggerGraph(MismatchedDescriptorGraphTriggerNode::type())))
+        ->toContain(
+            'Trigger node [trigger] compiled driver [test.fake] but declares driver [test.descriptor].'
+        );
+});
+
+it('rejects descriptor-selected source fields that collide with direct trigger fields', function () {
+    Nodeflow::registerTriggerDrivers([DescriptorGraphTriggerDriver::class]);
+    Nodeflow::registerTriggerSources([CollidingDescriptorGraphTriggerSource::class]);
+    Nodeflow::registerTriggerNodes([CollidingDescriptorGraphTriggerNode::class]);
+
+    expect(implode(' ', triggerGraphErrors(directTriggerGraph(
+        CollidingDescriptorGraphTriggerNode::type(),
+        ['mode' => 'automatic'],
+    ))))->toContain('field [mode] collides with a reserved trigger field');
+});
+
+it('converts extension exceptions into deterministic structured errors', function (
+    string $boundary,
+    string $message,
+) {
+    BoundaryFailureGraphTriggerNode::$failure = in_array($boundary, [
+        'definition',
+        'custom-validation',
+        'driver',
+        'compile',
+    ], true) ? $boundary : null;
+    BoundaryFailureGraphTriggerNode::$compilations = 0;
+    BoundaryFailureGraphTriggerDriver::$throwDuringValidation = $boundary === 'driver-validation';
+    BoundaryFailureGraphTriggerSource::$throwDuringDefinition = $boundary === 'source-definition';
+
+    Nodeflow::registerTriggerDrivers([BoundaryFailureGraphTriggerDriver::class]);
+    Nodeflow::registerTriggerSources([BoundaryFailureGraphTriggerSource::class]);
+    Nodeflow::registerTriggerNodes([BoundaryFailureGraphTriggerNode::class]);
+
+    $result = app(GraphValidator::class)->validate(Graph::fromArray(
+        directTriggerGraph(BoundaryFailureGraphTriggerNode::type(), ['mode' => 'automatic', 'custom' => 'valid'])
+    ));
+
+    expect($result->errors())->toBe([$message])
+        ->and($result->nodeErrors())->toBe([[
+            'node' => 'trigger',
+            'field' => null,
+            'message' => $message,
+        ]])
+        ->and(implode(' ', $result->errors()))->not->toContain('secret');
+})->with([
+    'definition' => ['definition', 'Trigger node [trigger] definition could not be validated.'],
+    'custom validation' => ['custom-validation', 'Trigger node [trigger] custom validation could not be completed.'],
+    'driver declaration' => ['driver', 'Trigger node [trigger] could not declare its driver.'],
+    'compilation' => ['compile', 'Trigger node [trigger] could not compile its activation descriptor.'],
+    'driver validation' => ['driver-validation', 'Trigger node [trigger] driver validation could not be completed.'],
+    'source definition' => ['source-definition', 'Trigger node [trigger] source definition could not be validated.'],
+]);
+
+it('converts trigger construction exceptions into deterministic structured errors', function () {
+    Nodeflow::registerTriggerNodes([ThrowingConstructionGraphTriggerNode::class]);
+
+    $result = app(GraphValidator::class)->validate(Graph::fromArray(
+        directTriggerGraph(ThrowingConstructionGraphTriggerNode::type())
+    ));
+
+    expect($result->errors())->toBe(['Trigger node [trigger] validation could not be completed.'])
+        ->and($result->nodeErrors())->toBe([[
+            'node' => 'trigger',
+            'field' => null,
+            'message' => 'Trigger node [trigger] validation could not be completed.',
+        ]])
+        ->and(implode(' ', $result->errors()))->not->toContain('secret');
+});
+
+it('compiles only once base and custom validation and driver registration are safe', function () {
+    Nodeflow::registerTriggerDrivers([BoundaryFailureGraphTriggerDriver::class]);
+    Nodeflow::registerTriggerSources([BoundaryFailureGraphTriggerSource::class]);
+    Nodeflow::registerTriggerNodes([BoundaryFailureGraphTriggerNode::class]);
+    BoundaryFailureGraphTriggerDriver::$throwDuringValidation = false;
+    BoundaryFailureGraphTriggerSource::$throwDuringDefinition = false;
+    BoundaryFailureGraphTriggerNode::$compilations = 0;
+
+    BoundaryFailureGraphTriggerNode::$failure = null;
+    app(GraphValidator::class)->validate(Graph::fromArray(directTriggerGraph(
+        BoundaryFailureGraphTriggerNode::type(),
+        ['custom' => 'valid'],
+    )));
+
+    BoundaryFailureGraphTriggerNode::$failure = null;
+    app(GraphValidator::class)->validate(Graph::fromArray(directTriggerGraph(
+        BoundaryFailureGraphTriggerNode::type(),
+        ['mode' => 'automatic'],
+    )));
+
+    BoundaryFailureGraphTriggerNode::$failure = 'unregistered-driver';
+    app(GraphValidator::class)->validate(Graph::fromArray(directTriggerGraph(
+        BoundaryFailureGraphTriggerNode::type(),
+        ['mode' => 'automatic', 'custom' => 'valid'],
+    )));
+
+    expect(BoundaryFailureGraphTriggerNode::$compilations)->toBe(0);
+
+    BoundaryFailureGraphTriggerNode::$failure = null;
+    $valid = app(GraphValidator::class)->validate(Graph::fromArray(directTriggerGraph(
+        BoundaryFailureGraphTriggerNode::type(),
+        ['mode' => 'automatic', 'custom' => 'valid'],
+    )));
+
+    expect($valid->passes())->toBeTrue()
+        ->and(BoundaryFailureGraphTriggerNode::$compilations)->toBe(1);
 });
