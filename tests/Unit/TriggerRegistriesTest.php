@@ -329,6 +329,16 @@ it('rejects malformed public stable keys before registry state or listeners chan
     'invalid UTF-8' => ["bad\xFF", 'valid UTF-8'],
 ]);
 
+it('rejects run-origin keys at the public trigger driver registry boundary', function (string $key) {
+    MutableStableKeyDriver::$key = $key;
+
+    expect(fn () => app(TriggerDriverRegistry::class)->register(MutableStableKeyDriver::class))
+        ->toThrow(InvalidArgumentException::class, $key)
+        ->and(array_values(app(TriggerDriverRegistry::class)->all()))
+        ->not->toContain(MutableStableKeyDriver::class)
+        ->and(MutableStableKeyDriver::$sourceRegistrations)->toBe(0);
+})->with(['manual', 'subflow']);
+
 it('rejects malformed source driver keys before source registration side effects', function () {
     MutableStableKeySource::$driver = 'bad/driver';
 

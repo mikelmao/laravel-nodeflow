@@ -150,6 +150,52 @@ final class UnregisteredEvent
     public function __construct(public string $secret = 'must-not-be-read') {}
 }
 
+final class PrivateConstructorOrderPlacedEvent
+{
+    /**
+     * @param  array<string, array{users: string[], total: int}>  $deliveries
+     */
+    private function __construct(
+        public string $eventId,
+        public array $deliveries,
+    ) {}
+
+    /**
+     * @param  array<string, array{users: string[], total: int}>  $deliveries
+     */
+    public static function make(string $eventId, array $deliveries): self
+    {
+        return new self($eventId, $deliveries);
+    }
+}
+
+final class PrivateConstructorEventSource extends OrderPlacedEventSource
+{
+    public static function key(): string
+    {
+        return 'test.private_constructor_event';
+    }
+
+    public static function eventClass(): string
+    {
+        return PrivateConstructorOrderPlacedEvent::class;
+    }
+
+    public function snapshot(object $event): LaravelEventOccurrence
+    {
+        if (! $event instanceof PrivateConstructorOrderPlacedEvent) {
+            throw new InvalidArgumentException('Expected a private-constructor order-placed event.');
+        }
+
+        self::$snapshots++;
+
+        return new LaravelEventOccurrence($event::class, [
+            'event_id' => $event->eventId,
+            'deliveries' => $event->deliveries,
+        ]);
+    }
+}
+
 final class InvalidEventClassSource extends OrderPlacedEventSource
 {
     public static function key(): string
@@ -651,6 +697,21 @@ it('preserves normal synchronous Laravel event timing', function () {
         expect(OrderPlacedEventSource::$occurrences)->toHaveCount(1)
             ->and(Run::withoutTenancy()->count())->toBe(1);
     });
+});
+
+it('registers and dispatches a concrete event with a private constructor', function () {
+    Nodeflow::registerTriggerSources([PrivateConstructorEventSource::class]);
+    publishOrderPlacedFlow('org-1', source: PrivateConstructorEventSource::key());
+
+    Event::dispatch(PrivateConstructorOrderPlacedEvent::make('private-1', [
+        'org-1' => ['users' => ['7'], 'total' => 75],
+    ]));
+
+    $run = Run::withoutTenancy()->sole();
+
+    expect($run->started_via)->toBe('event')
+        ->and($run->trigger_data)->toBe(['total' => 75])
+        ->and($run->subjects()->pluck('subject_id')->all())->toBe(['7']);
 });
 
 it('rejects registration of a source whose allowlisted event class does not exist', function () {

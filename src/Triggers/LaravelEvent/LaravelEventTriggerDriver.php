@@ -51,7 +51,7 @@ class LaravelEventTriggerDriver implements TriggerDriver
 
         $eventReflection = new ReflectionClass($declaredEventClass);
 
-        if (! $eventReflection->isInstantiable()) {
+        if ($eventReflection->isInterface() || $eventReflection->isAbstract()) {
             throw new InvalidArgumentException(
                 "Laravel event trigger source [{$source::key()}] declared invalid event class [{$declaredEventClass}]."
             );

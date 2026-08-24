@@ -16,6 +16,15 @@ use Nodeflow\Triggers\Webhook\WebhookTriggerSource;
 use Tests\Support\FakeTriggerDriver;
 
 final class GeneratedSourceEvent {}
+final class GeneratedPrivateConstructorEvent
+{
+    private function __construct() {}
+
+    public static function make(): self
+    {
+        return new self;
+    }
+}
 final class GeneratedSourceModel extends Model {}
 
 beforeEach(function () {
@@ -75,6 +84,22 @@ it('scaffolds a generic custom-driver source without runtime selectors', functio
         ->and(file_get_contents($path))->not->toContain('class_exists($config')
         ->not->toContain('$config[\'model\']')
         ->not->toContain('$config[\'event\']');
+});
+
+it('scaffolds an event source for a concrete event with a private constructor', function () {
+    $this->artisan('nodeflow:make-trigger-source', [
+        'name' => 'PrivateEventSource',
+        '--driver' => 'event',
+        '--key' => 'shop.private_event',
+        '--event' => GeneratedPrivateConstructorEvent::class,
+    ])->assertExitCode(0);
+
+    $path = $this->root.'/app/Nodeflow/TriggerSources/PrivateEventSource.php';
+    expectParseablePhp($path);
+    require $path;
+
+    expect(App\Nodeflow\TriggerSources\PrivateEventSource::eventClass())
+        ->toBe(GeneratedPrivateConstructorEvent::class);
 });
 
 it('requires the built-in allowlist selector before writing anything', function (string $driver, string $option) {

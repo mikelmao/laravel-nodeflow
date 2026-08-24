@@ -193,7 +193,11 @@ class MakeTriggerSourceCommand extends GeneratorCommand
         }
 
         $reflection = new ReflectionClass($class);
-        if (! $reflection->isInstantiable() || ($driver === 'model' && ! is_a($class, Model::class, true))) {
+        $compatible = $driver === 'model'
+            ? $reflection->isInstantiable() && is_a($class, Model::class, true)
+            : ! $reflection->isInterface() && ! $reflection->isAbstract();
+
+        if (! $compatible) {
             throw new InvalidArgumentException("The --{$option} class [{$class}] is not a compatible concrete class.");
         }
 

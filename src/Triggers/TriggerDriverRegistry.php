@@ -26,6 +26,12 @@ class TriggerDriverRegistry
 
             $key = StableKey::assert($class::key(), 'trigger driver key', 191);
 
+            if (in_array($key, ['manual', 'subflow'], true)) {
+                throw new InvalidArgumentException(
+                    "Trigger driver key [{$key}] is reserved for a run origin."
+                );
+            }
+
             if (isset($this->drivers[$key]) && $this->drivers[$key] !== $class) {
                 throw new InvalidArgumentException(
                     "Trigger driver key [{$key}] is already registered by [{$this->drivers[$key]}]."
