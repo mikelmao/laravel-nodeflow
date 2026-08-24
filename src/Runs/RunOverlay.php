@@ -60,6 +60,21 @@ class RunOverlay
             ];
         }
 
+        $triggerNodeId = (string) $run->trigger_node_id;
+
+        if (isset($nodes[$triggerNodeId])) {
+            $origin = in_array((string) $run->started_via, ['manual', 'subflow'], true)
+                ? 'bypassed'
+                : 'triggered';
+            $nodes[$triggerNodeId] = [
+                'reached' => true,
+                'byOutput' => (object) [$origin => 1],
+                'waiting' => 0,
+                'failed' => 0,
+                'error' => null,
+            ];
+        }
+
         return [
             'status' => (string) $run->status,
             'terminal' => in_array((string) $run->status, self::TERMINAL_STATUSES, true),

@@ -166,6 +166,21 @@ it('carries an overlay entry for every node in the pinned graph', function () {
         ->and($overlay['terminal'])->toBeFalse();
 });
 
+it('exposes the safe run origin and trigger snapshot in the existing run wire shape', function () {
+    allowRunViewing();
+    $this->run->update([
+        'started_via' => 'test.fake',
+        'trigger_data' => ['delivery' => 'd-1'],
+    ]);
+
+    $run = runPage($this, $this->run->id)->assertOk()->json('props.run');
+
+    expect($run['started_via'])->toBe('test.fake')
+        ->and($run['trigger_node_id'])->toBe('trigger')
+        ->and($run['trigger_data'])->toBe(['delivery' => 'd-1'])
+        ->and($run)->not->toHaveKeys(['idempotency_key', 'engine_workflow_id']);
+});
+
 it('serves urls whose node sentinel survives route generation', function () {
     // E4: the client substitutes into these, so both the sentinel and the
     // host's chosen prefix must arrive intact. Counterfactual: build the URL by

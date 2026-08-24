@@ -62,3 +62,24 @@ it('exposes the run identity a node legitimately needs, per audience', function 
         ->and($context->subjectType())->toBe('user')
         ->and($context->subjectIds())->toBe(['1', '2']);
 });
+
+it('exposes complete and top-level trigger data identically on both context types', function (string $class) {
+    $this->run->update(['trigger_data' => ['delivery' => 'd-1', 'nested' => ['key' => 'value']]]);
+    $context = $class === SubjectContext::class
+        ? new SubjectContext($this->run->fresh(), 'n1', [], '1', ['id' => 1])
+        : new AudienceContext($this->run->fresh(), 'n1', [], 'user', ['1']);
+
+    expect($context->triggerData())->toBe(['delivery' => 'd-1', 'nested' => ['key' => 'value']])
+        ->and($context->triggerData('delivery'))->toBe('d-1')
+        ->and($context->triggerData('missing'))->toBeNull()
+        ->and($context->triggerData('missing', 'fallback'))->toBe('fallback')
+        ->and($context->triggerData('nested.key', 'no-dot-paths'))->toBe('no-dot-paths');
+
+    $this->run->update(['trigger_data' => null]);
+    $empty = $class === SubjectContext::class
+        ? new SubjectContext($this->run->fresh(), 'n1', [], '1', ['id' => 1])
+        : new AudienceContext($this->run->fresh(), 'n1', [], 'user', ['1']);
+
+    expect($empty->triggerData())->toBe([])
+        ->and($empty->triggerData('missing', 42))->toBe(42);
+})->with([SubjectContext::class, AudienceContext::class]);

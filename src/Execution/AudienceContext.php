@@ -64,6 +64,13 @@ class AudienceContext
         return $key === null ? $this->config : ($this->config[$key] ?? $default);
     }
 
+    public function triggerData(?string $key = null, mixed $default = null): mixed
+    {
+        $data = $this->run->trigger_data ?? [];
+
+        return $key === null ? $data : ($data[$key] ?? $default);
+    }
+
     public function isTest(): bool
     {
         return $this->run->is_test;

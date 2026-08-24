@@ -91,6 +91,22 @@ it('distinguishes a never-reached node from a node reached with zero subjects', 
         ->toBe(array_sum((array) $nodes['nobody']['byOutput']));
 });
 
+it('decorates the trigger as bypassed for manual and subflow runs and triggered for driver runs', function () {
+    $manual = (array) ($this->snapshot)()['nodes'];
+
+    $this->run->update(['started_via' => 'subflow']);
+    $subflow = (array) ($this->snapshot)()['nodes'];
+
+    $this->run->update(['started_via' => 'test.fake']);
+    $triggered = (array) ($this->snapshot)()['nodes'];
+
+    expect($manual['trigger']['reached'])->toBeTrue()
+        ->and((array) $manual['trigger']['byOutput'])->toBe(['bypassed' => 1])
+        ->and((array) $subflow['trigger']['byOutput'])->toBe(['bypassed' => 1])
+        ->and((array) $triggered['trigger']['byOutput'])->toBe(['triggered' => 1])
+        ->and($this->run->nodeExecutions()->where('node_id', 'trigger')->count())->toBe(0);
+});
+
 /**
  * E13's second half. Counterfactual: derive `reached` from execution rows only,
  * and the node holding the entire audience mid-wait renders dimmed with no

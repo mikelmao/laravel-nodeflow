@@ -35,6 +35,10 @@ it('creates a run pinned to the current version with subjects at the start node'
     expect($run->flow_version_id)->toBe($this->flow->fresh()->current_version_id)
         ->and($run->subjects()->count())->toBe(2)
         ->and($run->subjects()->first()->current_node_id)->toBe('n1')
+        ->and($run->started_via)->toBe('manual')
+        ->and($run->trigger_node_id)->toBe('trigger')
+        ->and($run->trigger_data)->toBeNull()
+        ->and($run->nodeExecutions()->count())->toBe(0)
         ->and($run->engine_workflow_id)->not->toBeNull();
 });
 

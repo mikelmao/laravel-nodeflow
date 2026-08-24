@@ -41,7 +41,7 @@ beforeEach(function () {
         'correlation_id' => null,
         'started_via' => 'manual',
         'trigger_node_id' => 'trigger',
-        'trigger_data' => null,
+        'trigger_data' => ['parent-occurrence' => 'p-1'],
         'strategy' => 'cohort',
         'status' => 'running',
     ]);
@@ -54,6 +54,11 @@ it('starts a child run and seeds the lineage chain with the parent run id', func
         ->and($child->flow_version_id)->toBe($this->childFlow->current_version_id)
         ->and($child->tenant_id)->toBe('org-1')
         ->and($child->correlation_id)->toBe((string) $this->parentRun->id)
+        ->and($child->started_via)->toBe('subflow')
+        ->and($child->trigger_node_id)->toBe('trigger')
+        ->and($child->trigger_data)->toBe(['parent-occurrence' => 'p-1'])
+        ->and($child->subjects()->pluck('current_node_id')->unique()->all())->toBe(['c1'])
+        ->and($child->nodeExecutions()->count())->toBe(0)
         ->and($child->subjects()->count())->toBe(2);
 });
 
@@ -74,6 +79,15 @@ it('refuses to start beyond the depth limit', function () {
 
     expect($child)->toBeNull()
         ->and(Run::withoutTenancy()->count())->toBe(1); // only the parent run exists
+});
+
+it('keeps the existing no-published-version diagnostic for a child flow', function () {
+    $draft = Flow::create(['tenant_id' => 'org-1', 'name' => 'Draft child', 'status' => 'draft']);
+
+    expect(fn () => app(SubFlowStarter::class)->start($this->parentRun, $draft->id, 'user', ['1']))
+        ->toThrow(RuntimeException::class, "Flow [{$draft->id}] has no published version.");
+
+    expect(Run::withoutTenancy()->count())->toBe(1);
 });
 
 it('refuses to start a flow belonging to a different tenant than the parent run', function () {

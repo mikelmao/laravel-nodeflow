@@ -56,6 +56,13 @@ class SubjectContext
         return $key === null ? $this->config : ($this->config[$key] ?? $default);
     }
 
+    public function triggerData(?string $key = null, mixed $default = null): mixed
+    {
+        $data = $this->run->trigger_data ?? [];
+
+        return $key === null ? $data : ($data[$key] ?? $default);
+    }
+
     /**
      * True when this run must not cause externally visible side effects.
      * Every node that sends, charges, or writes to a third party MUST honour this.
