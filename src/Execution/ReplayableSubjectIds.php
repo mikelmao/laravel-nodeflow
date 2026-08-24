@@ -8,11 +8,19 @@ use Iterator;
 use IteratorAggregate;
 use Traversable;
 
-/** @implements IteratorAggregate<int, string> */
+/**
+ * A factory Closure and an IteratorAggregate implementation must return a
+ * fresh iterable or iterator for every replay.
+ *
+ * @implements IteratorAggregate<int, string>
+ */
 final class ReplayableSubjectIds implements IteratorAggregate
 {
     private function __construct(private readonly Closure $factory) {}
 
+    /**
+     * @param  iterable<mixed>|Closure(): iterable<mixed>  $subjectIds
+     */
     public static function from(iterable|Closure $subjectIds): self
     {
         if ($subjectIds instanceof Closure) {
@@ -29,7 +37,7 @@ final class ReplayableSubjectIds implements IteratorAggregate
 
         if ($subjectIds instanceof Iterator) {
             throw new InvalidArgumentException(
-                'A directly supplied subject ID iterator may be one-shot; provide a factory Closure instead.'
+                'A directly supplied subject ID iterator may be one-shot; provide a factory Closure that returns a fresh iterable for every replay instead.'
             );
         }
 

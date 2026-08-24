@@ -20,6 +20,7 @@ use Nodeflow\Triggers\TriggerMatch;
 use Nodeflow\Triggers\TriggerOccurrence;
 use Nodeflow\Triggers\Webhook\WebhookOccurrence;
 use Nodeflow\Triggers\Webhook\WebhookCredentials;
+use Nodeflow\Triggers\Webhook\WebhookSourceFailure;
 use Nodeflow\Triggers\Webhook\WebhookSourceRejected;
 use Nodeflow\Triggers\TriggerDriverRegistry;
 use Nodeflow\Triggers\TriggerSourceRegistry;
@@ -456,6 +457,78 @@ it('rejects an empty lazy webhook audience', function () {
     )->assertUnprocessable();
 
     expect(Run::withoutTenancy()->count())->toBe(0);
+});
+
+it('sanitizes a lazy webhook audience failure during the empty check', function () {
+    [$url, $secret] = publishedHttpContractWebhook();
+    $reported = new class implements ExceptionHandler
+    {
+        public array $exceptions = [];
+
+        public function report(Throwable $e) { $this->exceptions[] = $e; }
+
+        public function shouldReport(Throwable $e) { return true; }
+
+        public function render($request, Throwable $e) { throw $e; }
+
+        public function renderForConsole($output, Throwable $e): void {}
+    };
+    app()->instance(ExceptionHandler::class, $reported);
+    HttpContractWebhookSource::$resolver = fn (): TriggerMatch => TriggerMatch::make()
+        ->forTenant('org-1', 'user', fn (): array => throw new RuntimeException('raw-body:secret-before-yield'));
+    $body = json_encode(['password' => 'secret-before-yield'], JSON_THROW_ON_ERROR);
+    $timestamp = (string) now()->timestamp;
+
+    $response = $this->call(
+        'POST',
+        $url,
+        server: signedWebhookHeaders($timestamp, $body, $secret, 'lazy-before-yield'),
+        content: $body,
+    )->assertStatus(503)->assertJsonPath('message', 'The webhook run could not be started.');
+
+    expect($response->getContent())->not->toContain('secret-before-yield', 'raw-body')
+        ->and($reported->exceptions)->toHaveCount(1)
+        ->and($reported->exceptions[0])->toBeInstanceOf(WebhookSourceFailure::class)
+        ->and($reported->exceptions[0]->getPrevious())->toBeNull()
+        ->and($reported->exceptions[0]->getMessage())->not->toContain('secret-before-yield', 'raw-body');
+});
+
+it('sanitizes a lazy webhook audience failure during run traversal', function () {
+    [$url, $secret] = publishedHttpContractWebhook();
+    $reported = new class implements ExceptionHandler
+    {
+        public array $exceptions = [];
+
+        public function report(Throwable $e) { $this->exceptions[] = $e; }
+
+        public function shouldReport(Throwable $e) { return true; }
+
+        public function render($request, Throwable $e) { throw $e; }
+
+        public function renderForConsole($output, Throwable $e): void {}
+    };
+    app()->instance(ExceptionHandler::class, $reported);
+    HttpContractWebhookSource::$resolver = fn (): TriggerMatch => TriggerMatch::make()
+        ->forTenant('org-1', 'user', function (): Generator {
+            yield '10';
+
+            throw new RuntimeException('raw-body:secret-after-yield');
+        });
+    $body = json_encode(['password' => 'secret-after-yield'], JSON_THROW_ON_ERROR);
+    $timestamp = (string) now()->timestamp;
+
+    $response = $this->call(
+        'POST',
+        $url,
+        server: signedWebhookHeaders($timestamp, $body, $secret, 'lazy-after-yield'),
+        content: $body,
+    )->assertStatus(503)->assertJsonPath('message', 'The webhook run could not be started.');
+
+    expect($response->getContent())->not->toContain('secret-after-yield', 'raw-body')
+        ->and($reported->exceptions)->toHaveCount(1)
+        ->and($reported->exceptions[0])->toBeInstanceOf(WebhookSourceFailure::class)
+        ->and($reported->exceptions[0]->getPrevious())->toBeNull()
+        ->and($reported->exceptions[0]->getMessage())->not->toContain('secret-after-yield', 'raw-body');
 });
 
 it('translates malformed lazy webhook audiences as source failures', function () {

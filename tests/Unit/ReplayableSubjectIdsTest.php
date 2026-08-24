@@ -17,6 +17,25 @@ it('defers factory invocation and replays normalized subject IDs', function () {
         ->and($calls)->toBe(2);
 });
 
+it('replays by requesting a new iterator from an iterator aggregate', function () {
+    $subjectIds = new class implements IteratorAggregate
+    {
+        public int $calls = 0;
+
+        public function getIterator(): Traversable
+        {
+            $this->calls++;
+
+            return new ArrayIterator([10, 20]);
+        }
+    };
+    $replayable = ReplayableSubjectIds::from($subjectIds);
+
+    expect(iterator_to_array($replayable, false))->toBe(['10', '20'])
+        ->and(iterator_to_array($replayable, false))->toBe(['10', '20'])
+        ->and($subjectIds->calls)->toBe(2);
+});
+
 it('rejects a directly supplied one-shot generator', function () {
     $generator = (function (): Generator {
         yield 10;
