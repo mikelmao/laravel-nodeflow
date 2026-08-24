@@ -22,7 +22,7 @@ beforeEach(function () {
     $this->root = sys_get_temp_dir().'/nodeflow-make-trigger-source-'.bin2hex(random_bytes(6));
     mkdir($this->root.'/app/Providers', 0777, true);
     file_put_contents($this->root.'/composer.json', json_encode(['autoload' => ['psr-4' => ['App\\' => 'app/']]]));
-    file_put_contents($this->root.'/app/Providers/NodeflowServiceProvider.php', "<?php\nclass NodeflowServiceProvider\n{\n    protected array \$triggerSources = [\n    ];\n}\n");
+    file_put_contents($this->root.'/app/Providers/NodeflowServiceProvider.php', "<?php\nclass NodeflowServiceProvider extends \\Illuminate\\Support\\ServiceProvider\n{\n    protected array \$triggerSources = [\n    ];\n}\n");
     $this->app->setBasePath($this->root);
 });
 
@@ -101,9 +101,32 @@ it('rejects unknown drivers malformed keys and traversal before mutation', funct
 it('prints the exact manual source registration and does not duplicate its own anchor', function () {
     $provider = $this->root.'/app/Providers/NodeflowServiceProvider.php';
     file_put_contents($provider, "<?php\nclass NodeflowServiceProvider {}\n");
-    Artisan::call('nodeflow:make-trigger-source', ['name' => 'ManualSource', '--driver' => 'webhook', '--key' => 'shop.manual_source']);
-    expect(Artisan::output())->toContain('\\Nodeflow\\Nodeflow::registerTriggerSources([')
-        ->toContain('\\App\\Nodeflow\\TriggerSources\\ManualSource::class,');
+    $exit = Artisan::call('nodeflow:make-trigger-source', ['name' => 'ManualSource', '--driver' => 'webhook', '--key' => 'shop.manual_source']);
+    $path = $this->root.'/app/Nodeflow/TriggerSources/ManualSource.php';
+    expect($exit)->toBe(0)
+        ->and(Artisan::output())->toContain('\\Nodeflow\\Nodeflow::registerTriggerSources([')
+        ->toContain('\\App\\Nodeflow\\TriggerSources\\ManualSource::class,')
+        ->and($path)->toBeFile();
+    expectParseablePhp($path);
+});
+
+it('fails and removes the generated source when a real provider write fails', function () {
+    $provider = $this->root.'/app/Providers/NodeflowServiceProvider.php';
+    $before = file_get_contents($provider);
+    $files = new class($provider) extends Filesystem
+    {
+        public function __construct(private string $provider) {}
+        public function move($path, $target) { return $target === $this->provider ? false : parent::move($path, $target); }
+    };
+    $this->app->instance(Filesystem::class, $files);
+    $this->app->instance('files', $files);
+
+    $this->artisan('nodeflow:make-trigger-source', [
+        'name' => 'ProviderFailureSource', '--driver' => 'webhook', '--key' => 'shop.provider_failure',
+    ])->assertExitCode(1);
+
+    expect($this->root.'/app/Nodeflow/TriggerSources/ProviderFailureSource.php')->not->toBeFile()
+        ->and(file_get_contents($provider))->toBe($before);
 });
 
 it('rejects a registered source key collision without installing a driver listener', function () {

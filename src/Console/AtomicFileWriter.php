@@ -14,6 +14,11 @@ use Throwable;
  * renamed into place. If a later commit (or the caller's transaction callback)
  * fails, only targets still carrying this operation's committed inode/bytes are
  * rolled back; concurrent external replacements are never overwritten.
+ *
+ * Portable PHP has no openat(2)-style directory handle API, so it cannot keep
+ * a renamed ancestor pinned by descriptor. We snapshot and repeatedly verify
+ * every ancestor inode instead; when a post-rename swap is detected, cleanup
+ * follows the visible path only when it still resolves to our installed inode.
  */
 final class AtomicFileWriter
 {
@@ -37,7 +42,9 @@ final class AtomicFileWriter
 
         $roots = $this->canonicalRoots($allowedRoots);
         $snapshots = [];
+        $ancestors = [];
         $staged = [];
+        $reservations = [];
         $committed = [];
 
         try {
@@ -58,15 +65,18 @@ final class AtomicFileWriter
             foreach ($writes as $path => $contents) {
                 $this->files->ensureDirectoryExists(dirname($path));
                 $this->assertSafePath($path, $roots);
+                $ancestors[$path] = $this->snapshotAncestors($path, $roots);
                 $staged[$path] = $this->stage($path, $contents, $snapshots[$path]['mode'] ?? null, $validator);
             }
 
             foreach ($writes as $path => $contents) {
-                $this->assertSafePath($path, $roots);
+                $this->assertAncestors($path, $ancestors[$path], $roots);
                 $snapshot = $snapshots[$path];
                 $stagedIdentity = $staged[$path]['identity'];
+                $committed[$path] = $this->expectedCommit($staged[$path]['path'], $contents, $stagedIdentity, $snapshot);
                 if ($snapshot === null) {
                     $placeholder = $this->exclusiveFile($path);
+                    $reservations[$path] = ['path' => $path, 'identity' => $placeholder];
                     try {
                         if (! $this->sameIdentity($path, $placeholder)) {
                             throw new InvalidArgumentException("Target [{$path}] changed during generation; it was not overwritten.");
@@ -87,13 +97,6 @@ final class AtomicFileWriter
                     // removes/replaces it before move() returns, rollback can
                     // restore a now-missing original or report the external
                     // replacement without ever applying metadata to it.
-                    $committed[$path] = [
-                        'contents' => $contents,
-                        'mode' => $snapshot['mode'],
-                        'uid' => $snapshot['uid'],
-                        'gid' => $snapshot['gid'],
-                        'identity' => $stagedIdentity,
-                    ];
                     try {
                         $this->moveOrVerify($staged[$path]['path'], $path, $stagedIdentity);
                     } catch (Throwable $e) {
@@ -104,7 +107,9 @@ final class AtomicFileWriter
                     }
                 }
                 $installedIdentity = $stagedIdentity;
+                $this->assertAncestors($path, $ancestors[$path], $roots);
                 unset($staged[$path]);
+                unset($reservations[$path]);
 
                 // Record ownership of the inode before any post-rename read or
                 // metadata operation. A hostile/injected filesystem can change
@@ -117,14 +122,7 @@ final class AtomicFileWriter
                 if (! $this->sameIdentity($path, $installedIdentity)) {
                     throw new InvalidArgumentException("Installed target [{$path}] changed before verification.");
                 }
-                $committed[$path] ??= [
-                    'contents' => $contents,
-                    'mode' => (int) $installedStat['mode'],
-                    'uid' => (int) $installedStat['uid'],
-                    'gid' => (int) $installedStat['gid'],
-                    'identity' => $installedIdentity,
-                ];
-
+                $this->assertAncestors($path, $ancestors[$path], $roots);
                 $this->applyMetadata($path, $snapshot);
                 $installed = $this->snapshot($path);
                 if ($installed === null || $installed['contents'] !== $contents) {
@@ -137,9 +135,15 @@ final class AtomicFileWriter
             if ($afterCommit !== null) {
                 $afterCommit();
             }
+            foreach (array_keys($writes) as $path) {
+                $this->assertAncestors($path, $ancestors[$path], $roots);
+                if (! $this->matchesSnapshot($path, $committed[$path])) {
+                    throw new InvalidArgumentException("Committed target [{$path}] changed before final verification.");
+                }
+            }
         } catch (Throwable $failure) {
-            $rollbackFailures = $this->rollback($snapshots, $committed, $roots);
-            $cleanupFailures = $this->cleanup($staged);
+            $cleanupFailures = $this->cleanup([...array_values($staged), ...array_values($reservations)], $roots);
+            $rollbackFailures = $this->rollback($snapshots, $committed, $ancestors, $roots);
             $manual = array_values(array_unique([...$rollbackFailures, ...$cleanupFailures]));
 
             if ($manual !== []) {
@@ -156,7 +160,7 @@ final class AtomicFileWriter
             throw new InvalidArgumentException('Atomic write failed; no committed files remain changed.', previous: $failure);
         }
 
-        $cleanupFailures = $this->cleanup($staged);
+        $cleanupFailures = $this->cleanup([...array_values($staged), ...array_values($reservations)], $roots);
         if ($cleanupFailures !== []) {
             throw new InvalidArgumentException(
                 'Atomic write completed but temporary files require manual recovery ['.implode(', ', $cleanupFailures).'].',
@@ -203,6 +207,77 @@ final class AtomicFileWriter
         return array_values(array_unique($canonical));
     }
 
+    /** @param list<string> $roots @return array<string, array<string,int>> */
+    private function snapshotAncestors(string $path, array $roots): array
+    {
+        $parent = dirname($path);
+        $realParent = realpath($parent);
+        if ($realParent === false) {
+            throw new InvalidArgumentException("Target [{$path}] has no canonical parent.");
+        }
+        $root = $this->rootFor($realParent, $roots);
+        $paths = [$root];
+        $relative = trim(substr($realParent, strlen($root)), DIRECTORY_SEPARATOR);
+        $cursor = $root;
+        if ($relative !== '') {
+            foreach (explode(DIRECTORY_SEPARATOR, $relative) as $segment) {
+                $cursor .= DIRECTORY_SEPARATOR.$segment;
+                $paths[] = $cursor;
+            }
+        }
+
+        $snapshot = [];
+        foreach ($paths as $ancestor) {
+            $stat = @lstat($ancestor);
+            if ($stat === false || is_link($ancestor) || ! is_dir($ancestor)) {
+                throw new InvalidArgumentException("Target [{$path}] has an unsafe ancestor [{$ancestor}].");
+            }
+            $snapshot[$ancestor] = $this->identity($stat);
+        }
+        if ($realParent === false || ! $this->withinRoot($realParent, $root)) {
+            throw new InvalidArgumentException("Target [{$path}] escaped its allowed root while ancestors were inspected.");
+        }
+
+        return $snapshot;
+    }
+
+    /** @param array<string, array<string,int>> $snapshot @param list<string> $roots */
+    private function assertAncestors(string $path, array $snapshot, array $roots): void
+    {
+        $this->assertSafePath($path, $roots);
+        foreach ($snapshot as $ancestor => $identity) {
+            $stat = @lstat($ancestor);
+            if ($stat === false || is_link($ancestor) || ! is_dir($ancestor) || $this->identity($stat) !== $identity) {
+                throw new InvalidArgumentException("Target [{$path}] ancestor [{$ancestor}] changed during the atomic operation.");
+            }
+        }
+        $root = array_key_first($snapshot);
+        $realParent = realpath(dirname($path));
+        if ($root === null || $realParent === false || ! $this->withinRoot($realParent, $root)) {
+            throw new InvalidArgumentException("Target [{$path}] escaped its allowed root during the atomic operation.");
+        }
+    }
+
+    /** @param list<string> $roots */
+    private function rootFor(string $path, array $roots): string
+    {
+        foreach ($roots as $root) {
+            if ($this->withinRoot($path, $root)) return $root;
+        }
+
+        throw new InvalidArgumentException("Target [{$path}] is outside every allowed root.");
+    }
+
+    private function withinRoot(string $path, string $root): bool
+    {
+        if (DIRECTORY_SEPARATOR === '\\') {
+            $path = strtolower($path);
+            $root = strtolower($root);
+        }
+
+        return $path === $root || str_starts_with($path, $root.DIRECTORY_SEPARATOR);
+    }
+
     /** @param list<string> $roots */
     private function assertSafePath(string $path, array $roots): void
     {
@@ -243,7 +318,7 @@ final class AtomicFileWriter
         }
 
         foreach ($roots as $root) {
-            if ($realAncestor === $root || str_starts_with($realAncestor, $root.DIRECTORY_SEPARATOR)) {
+            if ($this->withinRoot($realAncestor, $root)) {
                 return;
             }
         }
@@ -347,7 +422,24 @@ final class AtomicFileWriter
     /** @return array<string,int> */
     private function identity(array $stat): array
     {
-        return ['dev' => (int) $stat['dev'], 'ino' => (int) $stat['ino']];
+        return ['dev' => (int) $stat['dev'], 'ino' => (int) $stat['ino'], 'type' => (int) $stat['mode'] & 0170000];
+    }
+
+    /** @return array{contents:string,mode:int,uid:int,gid:int,identity:array<string,int>} */
+    private function expectedCommit(string $staged, string $contents, array $identity, ?array $original): array
+    {
+        $stat = @lstat($staged);
+        if ($stat === false || $this->identity($stat) !== $identity) {
+            throw new InvalidArgumentException("Staged target [{$staged}] changed before commit.");
+        }
+
+        return [
+            'contents' => $contents,
+            'mode' => $original['mode'] ?? (int) $stat['mode'],
+            'uid' => $original['uid'] ?? (int) $stat['uid'],
+            'gid' => $original['gid'] ?? (int) $stat['gid'],
+            'identity' => $identity,
+        ];
     }
 
     private function applyMetadata(string $path, ?array $snapshot): void
@@ -367,16 +459,31 @@ final class AtomicFileWriter
     /**
      * @param array<string, array|null> $snapshots
      * @param array<string, array> $committed
+     * @param array<string, array<string, array<string,int>>> $ancestors
      * @param list<string> $roots
      * @return list<string>
      */
-    private function rollback(array $snapshots, array $committed, array $roots): array
+    private function rollback(array $snapshots, array $committed, array $ancestors, array $roots): array
     {
         $failures = [];
         foreach (array_reverse(array_keys($committed)) as $path) {
             try {
-                $this->assertSafePath($path, $roots);
                 $original = $snapshots[$path];
+                try {
+                    $this->assertAncestors($path, $ancestors[$path], $roots);
+                } catch (Throwable) {
+                    if ($this->matchesSnapshot($path, $committed[$path])) {
+                        if (! @unlink($path) || @lstat($path) !== false) {
+                            throw new InvalidArgumentException('Could not remove the operation-owned target after an ancestor swap.');
+                        }
+                    } elseif (@lstat($path) !== false) {
+                        throw new InvalidArgumentException('An external target occupies the path after an ancestor swap.');
+                    }
+                    if ($original !== null) {
+                        throw new InvalidArgumentException('The original target requires manual recovery after an ancestor swap.');
+                    }
+                    continue;
+                }
                 if (! $this->matchesSnapshot($path, $committed[$path])) {
                     if (@lstat($path) !== false) {
                         throw new InvalidArgumentException('The committed target changed externally.');
@@ -384,7 +491,7 @@ final class AtomicFileWriter
                     if ($original === null) {
                         continue;
                     }
-                    $this->restoreMissing($path, $original);
+                    $this->restoreMissing($path, $original, $ancestors[$path], $roots);
                     continue;
                 }
                 if ($original === null) {
@@ -398,11 +505,13 @@ final class AtomicFileWriter
                 // artifact. They may pre-date today's validator and must be
                 // restored exactly even when they are malformed/legacy.
                 $staged = $this->stage($path, $original['contents'], $original['mode'], static function (): void {});
+                $this->assertAncestors($path, $ancestors[$path], $roots);
                 if (! $this->matchesSnapshot($path, $committed[$path])) {
-                    $this->cleanup([$staged]);
+                    $this->cleanup([$staged], $roots);
                     throw new InvalidArgumentException('The committed target changed before rollback.');
                 }
                 $this->moveOrVerify($staged['path'], $path, $staged['identity']);
+                $this->assertAncestors($path, $ancestors[$path], $roots);
                 $this->applyMetadata($path, $original);
                 $restored = $this->snapshot($path);
                 if ($restored === null
@@ -419,10 +528,11 @@ final class AtomicFileWriter
     }
 
     /** Restore an overwritten original only while the target remains absent. */
-    private function restoreMissing(string $path, array $original): void
+    private function restoreMissing(string $path, array $original, array $ancestors, array $roots): void
     {
         $staged = $this->stage($path, $original['contents'], $original['mode'], static function (): void {});
         try {
+            $this->assertAncestors($path, $ancestors, $roots);
             $placeholder = $this->exclusiveFile($path);
             try {
                 if (! $this->sameIdentity($path, $placeholder)) {
@@ -435,6 +545,7 @@ final class AtomicFileWriter
                 }
                 throw $e;
             }
+            $this->assertAncestors($path, $ancestors, $roots);
             $this->applyMetadata($path, $original);
             $restored = $this->snapshot($path);
             if ($restored === null
@@ -443,31 +554,31 @@ final class AtomicFileWriter
                 throw new InvalidArgumentException('The restored target did not verify.');
             }
         } catch (Throwable $failure) {
+            // Once the sibling temporary has been renamed, its inode is the
+            // restored target. A root-wide identity search here would mistake
+            // that successful restore for an orphan and delete it.
             $cleanupFailures = $this->cleanup([$staged]);
             if ($cleanupFailures !== []) {
                 throw new InvalidArgumentException('Rollback temporary requires manual recovery.', previous: $failure);
             }
             throw $failure;
         }
-        if ($this->cleanup([$staged]) !== []) {
-            throw new InvalidArgumentException('Rollback temporary requires manual recovery.');
-        }
     }
 
     /** @param array<int|string, array{path:string, identity:array<string,int>}> $staged @return list<string> */
-    private function cleanup(array $staged): array
+    private function cleanup(array $staged, array $roots = []): array
     {
         $failures = [];
         foreach ($staged as $temporary) {
             try {
-                if (! $this->sameIdentity($temporary['path'], $temporary['identity'])) {
-                    if (@lstat($temporary['path']) !== false) {
-                        $failures[] = $temporary['path'];
-                    }
+                $owned = $this->sameIdentity($temporary['path'], $temporary['identity'])
+                    ? $temporary['path']
+                    : $this->findIdentity($temporary['identity'], $roots);
+                if ($owned === null) {
                     continue;
                 }
-                if (! @unlink($temporary['path']) || @lstat($temporary['path']) !== false) {
-                    $failures[] = $temporary['path'];
+                if (! @unlink($owned) || @lstat($owned) !== false) {
+                    $failures[] = $owned;
                 }
             } catch (Throwable) {
                 $failures[] = $temporary['path'];
@@ -475,5 +586,30 @@ final class AtomicFileWriter
         }
 
         return $failures;
+    }
+
+    /** Find an operation-owned inode stranded by an ancestor rename inside an allowed root. */
+    private function findIdentity(array $identity, array $roots): ?string
+    {
+        $match = null;
+        foreach ($roots as $root) {
+            try {
+                $iterator = new \RecursiveIteratorIterator(
+                    new \RecursiveDirectoryIterator($root, \FilesystemIterator::SKIP_DOTS),
+                    \RecursiveIteratorIterator::SELF_FIRST,
+                );
+                foreach ($iterator as $entry) {
+                    $path = $entry->getPathname();
+                    $stat = @lstat($path);
+                    if ($stat === false || $this->identity($stat) !== $identity) continue;
+                    if ($match !== null) return null;
+                    $match = $path;
+                }
+            } catch (Throwable) {
+                return null;
+            }
+        }
+
+        return $match;
     }
 }

@@ -4,6 +4,7 @@ namespace Nodeflow\Console;
 
 use Illuminate\Filesystem\Filesystem;
 use InvalidArgumentException;
+use Throwable;
 
 /** Writes one generator kit only when every rendered PHP file survives byte-for-byte. */
 final class VerifiedGeneratorWriter

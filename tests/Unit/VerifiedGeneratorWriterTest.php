@@ -3,6 +3,24 @@
 use Illuminate\Filesystem\Filesystem;
 use Nodeflow\Console\VerifiedGeneratorWriter;
 
+it('reports malformed generated PHP at the intended boundary without leaking contents or paths', function () {
+    $root = sys_get_temp_dir().'/nodeflow-parse-boundary-'.bin2hex(random_bytes(6));
+    mkdir($root, 0777, true);
+    $target = $root.'/SecretNamedTarget.php';
+
+    expect(fn () => (new VerifiedGeneratorWriter(new Filesystem, [$root]))->write([
+        $target => '<?php TOP_SECRET malformed {',
+    ]))->toThrow(InvalidArgumentException::class, 'generator stub did not produce parseable PHP');
+
+    try {
+        (new VerifiedGeneratorWriter(new Filesystem, [$root]))->write([$target => '<?php TOP_SECRET malformed {']);
+    } catch (InvalidArgumentException $e) {
+        expect($e->getMessage())->not->toContain('TOP_SECRET')->not->toContain($target);
+    }
+    expect($target)->not->toBeFile();
+    rmdir($root);
+});
+
 it('restores every original through verified atomic replacements when a generated write fails', function () {
     $root = sys_get_temp_dir().'/nodeflow-verified-writer-'.bin2hex(random_bytes(6));
     mkdir($root, 0777, true);
@@ -117,6 +135,148 @@ it('rejects symlink targets and symlink ancestors without touching their outside
     rmdir($outside);
     rmdir($root);
 })->with(['symlink target' => [false], 'symlink ancestor' => [true]]);
+
+it('detects an ancestor swapped to a symlink during rename and removes only its installed inode', function () {
+    if (DIRECTORY_SEPARATOR === '\\') $this->markTestSkipped('Unix symlink semantics are not portable to Windows.');
+
+    $root = sys_get_temp_dir().'/nodeflow-ancestor-swap-'.bin2hex(random_bytes(6));
+    $outside = sys_get_temp_dir().'/nodeflow-ancestor-outside-'.bin2hex(random_bytes(6));
+    $parent = $root.'/nested';
+    $parked = $root.'/nested-parked';
+    mkdir($parent, 0777, true);
+    mkdir($outside, 0777, true);
+    $target = $parent.'/Target.php';
+    $files = new class($parent, $parked, $outside) extends Filesystem
+    {
+        public function __construct(private string $parent, private string $parked, private string $outside) {}
+
+        public function move($path, $target)
+        {
+            rename($this->parent, $this->parked);
+            symlink($this->outside, $this->parent);
+
+            return rename($this->parked.'/'.basename($path), $target);
+        }
+    };
+
+    expect(fn () => (new VerifiedGeneratorWriter($files, [$root]))->write([
+        $target => '<?php final class Generated {}',
+    ]))->toThrow(InvalidArgumentException::class)
+        ->and($outside.'/Target.php')->not->toBeFile()
+        ->and(glob($outside.'/*.nodeflow-tmp-*') ?: [])->toBe([]);
+
+    is_link($parent) ? unlink($parent) : rmdir($parent);
+    rmdir($parked);
+    rmdir($outside);
+    rmdir($root);
+});
+
+it('detects a replaced parent after rename without deleting an external target', function () {
+    $root = sys_get_temp_dir().'/nodeflow-parent-replace-'.bin2hex(random_bytes(6));
+    $parent = $root.'/nested';
+    $parked = $root.'/nested-parked';
+    mkdir($parent, 0777, true);
+    $target = $parent.'/Target.php';
+    $external = '<?php final class ExternalReplacement {}';
+    $files = new class($parent, $parked, $external) extends Filesystem
+    {
+        public function __construct(private string $parent, private string $parked, private string $external) {}
+
+        public function move($path, $target)
+        {
+            $moved = parent::move($path, $target);
+            rename($this->parent, $this->parked);
+            mkdir($this->parent);
+            file_put_contents($target, $this->external);
+
+            return $moved;
+        }
+    };
+
+    expect(fn () => (new VerifiedGeneratorWriter($files, [$root]))->write([
+        $target => '<?php final class Generated {}',
+    ]))->toThrow(InvalidArgumentException::class)
+        ->and(file_get_contents($target))->toBe($external)
+        ->and($parked.'/Target.php')->not->toBeFile();
+
+    unlink($target);
+    rmdir($parent);
+    rmdir($parked);
+    rmdir($root);
+});
+
+it('detects a parent that disappears after rename and cleans the stranded operation inode', function () {
+    $root = sys_get_temp_dir().'/nodeflow-parent-disappear-'.bin2hex(random_bytes(6));
+    $parent = $root.'/nested';
+    $parked = $root.'/nested-parked';
+    mkdir($parent, 0777, true);
+    $target = $parent.'/Target.php';
+    $files = new class($parent, $parked) extends Filesystem
+    {
+        public function __construct(private string $parent, private string $parked) {}
+
+        public function move($path, $target)
+        {
+            $moved = parent::move($path, $target);
+            rename($this->parent, $this->parked);
+
+            return $moved;
+        }
+    };
+
+    expect(fn () => (new VerifiedGeneratorWriter($files, [$root]))->write([
+        $target => '<?php final class Generated {}',
+    ]))->toThrow(InvalidArgumentException::class)
+        ->and($target)->not->toBeFile()
+        ->and($parked.'/Target.php')->not->toBeFile()
+        ->and(glob($parked.'/*.nodeflow-tmp-*') ?: [])->toBe([]);
+
+    rmdir($parked);
+    rmdir($root);
+});
+
+it('revalidates each parent before a multi-file commit and rolls back earlier files', function () {
+    $root = sys_get_temp_dir().'/nodeflow-multi-parent-swap-'.bin2hex(random_bytes(6));
+    $firstParent = $root.'/first';
+    $secondParent = $root.'/second';
+    $parked = $root.'/second-parked';
+    mkdir($firstParent, 0777, true);
+    mkdir($secondParent, 0777, true);
+    $first = $firstParent.'/First.php';
+    $second = $secondParent.'/Second.php';
+    $external = $secondParent.'/External.php';
+    $files = new class($secondParent, $parked, $external) extends Filesystem
+    {
+        private int $moves = 0;
+        public function __construct(private string $secondParent, private string $parked, private string $external) {}
+        public function move($path, $target)
+        {
+            $moved = parent::move($path, $target);
+            if (++$this->moves === 1) {
+                rename($this->secondParent, $this->parked);
+                mkdir($this->secondParent);
+                file_put_contents($this->external, 'external');
+            }
+
+            return $moved;
+        }
+    };
+
+    expect(fn () => (new VerifiedGeneratorWriter($files, [$root]))->write([
+        $first => '<?php final class FirstGenerated {}',
+        $second => '<?php final class SecondGenerated {}',
+    ]))->toThrow(InvalidArgumentException::class)
+        ->and($first)->not->toBeFile()
+        ->and($second)->not->toBeFile()
+        ->and(file_get_contents($external))->toBe('external')
+        ->and(glob($parked.'/*.nodeflow-tmp-*') ?: [])->toBe([]);
+
+    unlink($external);
+    rmdir($firstParent);
+    rmdir($secondParent);
+    rmdir($parked);
+    rmdir($root);
+});
 
 it('never overwrites or deletes a target raced in after non-force preflight', function () {
     $root = sys_get_temp_dir().'/nodeflow-race-root-'.bin2hex(random_bytes(6));

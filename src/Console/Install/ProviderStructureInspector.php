@@ -38,7 +38,7 @@ final class ProviderStructureInspector
         }
 
         $classes = self::classesNamed($tokens, 'NodeflowServiceProvider');
-        if (count($classes) !== 1 || $classes[0]['namespace'] !== $expectedNamespace) {
+        if (count($classes) !== 1 || strcasecmp($classes[0]['namespace'], $expectedNamespace) !== 0) {
             return false;
         }
 
@@ -47,8 +47,8 @@ final class ProviderStructureInspector
         $name = '(?<parent>\\\\?[A-Za-z_\\x80-\\xff][A-Za-z0-9_\\x80-\\xff]*(?:\\\\[A-Za-z_\\x80-\\xff][A-Za-z0-9_\\x80-\\xff]*)*)';
         if (! $class['topLevel']
             || $class['abstract']
-            || preg_match('/^classNodeflowServiceProviderextends'.$name.'(?:implements.+)?$/', $class['declaration'], $match) !== 1
-            || $resolver->resolve($match['parent']) !== 'Illuminate\\Support\\ServiceProvider') {
+            || preg_match('/^classNodeflowServiceProviderextends'.$name.'(?:implements.+)?$/i', $class['declaration'], $match) !== 1
+            || strcasecmp($resolver->resolve($match['parent']), 'Illuminate\\Support\\ServiceProvider') !== 0) {
             return false;
         }
 
@@ -67,7 +67,7 @@ final class ProviderStructureInspector
         }
 
         $boot = $members['methods']['boot'] ?? [];
-        $attributes = $members['methods']['subjectAttributes'] ?? [];
+        $attributes = $members['methods']['subjectattributes'] ?? [];
         if (count($boot) !== 1 || count($attributes) !== 1) {
             return false;
         }
@@ -76,8 +76,8 @@ final class ProviderStructureInspector
         $attributes = $attributes[0];
         if ($last >= $boot['function']
             || $boot['function'] >= $attributes['function']
-            || $boot['signature'] !== 'publicfunctionboot():void'
-            || $attributes['signature'] !== 'protectedfunctionsubjectAttributes():array') {
+            || strtolower($boot['signature']) !== 'publicfunctionboot():void'
+            || strtolower($attributes['signature']) !== 'protectedfunctionsubjectattributes():array') {
             return false;
         }
 
@@ -124,7 +124,7 @@ final class ProviderStructureInspector
         for ($index = $open + 1; $index < $close; $index++) {
             $token = $tokens[$index];
             if (! is_array($token) || $token[0] !== T_STRING
-                || ! in_array($token[1], ['registerTriggerDrivers', 'registerTriggerNodes', 'registerTriggerSources'], true)) {
+                || ! in_array(strtolower($token[1]), ['registertriggerdrivers', 'registertriggernodes', 'registertriggersources'], true)) {
                 continue;
             }
             $separator = self::previousSignificant($tokens, $index - 1);
@@ -138,7 +138,7 @@ final class ProviderStructureInspector
                 || ! in_array($tokens[$class][0], [T_STRING, T_NAME_QUALIFIED, T_NAME_FULLY_QUALIFIED], true)) {
                 return null;
             }
-            if ($resolver->resolve($tokens[$class][1]) === 'Nodeflow\\Nodeflow') {
+            if (strcasecmp($resolver->resolve($tokens[$class][1]), 'Nodeflow\\Nodeflow') === 0) {
                 $count++;
             }
         }
@@ -161,35 +161,25 @@ final class ProviderStructureInspector
             return ['status' => 'ambiguous'];
         }
 
-        $named = array_values(array_filter(
-            self::classesNamed($tokens, 'NodeflowServiceProvider'),
-            static fn (array $class): bool => $class['topLevel'],
-        ));
-        if ($named !== []) {
-            if (count($named) !== 1) {
-                return ['status' => 'ambiguous'];
-            }
-            $classes = $named;
-        } else {
-            // Extracted/generated package providers may have a package-specific
-            // class name. Only fall back to a unique concrete top-level class
-            // that demonstrably extends Laravel's ServiceProvider; a helper
-            // class must never become a registration target by property shape.
-            if (self::namespaceCount($tokens) > 1) {
-                return ['status' => 'ambiguous'];
-            }
-            $resolver = PhpNameResolver::forSource($source);
-            $classes = array_values(array_filter(
-                self::classesNamed($tokens, null),
-                static fn (array $class): bool => self::isServiceProviderClass($class, $resolver),
-            ));
-            if ($classes === []) {
-                return ['status' => 'missing'];
-            }
-            if (count($classes) !== 1) {
-                return ['status' => 'ambiguous'];
-            }
+        if (self::namespaceCount($tokens) > 1) {
+            return ['status' => 'ambiguous'];
         }
+        $resolver = PhpNameResolver::forSource($source);
+        $candidates = array_values(array_filter(
+            self::classesNamed($tokens, null),
+            static fn (array $class): bool => self::isServiceProviderClass($class, $resolver),
+        ));
+        if ($candidates === []) {
+            return ['status' => 'missing'];
+        }
+        $preferred = array_values(array_filter(
+            $candidates,
+            static fn (array $class): bool => strcasecmp($class['name'], 'NodeflowServiceProvider') === 0,
+        ));
+        if (count($preferred) > 1 || ($preferred === [] && count($candidates) > 1)) {
+            return ['status' => 'ambiguous'];
+        }
+        $classes = $preferred !== [] ? $preferred : $candidates;
 
         $matches = [];
         foreach ($classes as $class) {
@@ -207,7 +197,7 @@ final class ProviderStructureInspector
                 $open = $equals === null ? null : self::nextSignificant($tokens, $equals + 1);
                 $close = $open === null || $tokens[$open] !== '[' ? null : self::matchingBracket($tokens, $open, $class['close']);
                 $matches[] = [
-                    'valid' => self::compactCode($tokens, $memberStart, $index) === 'protectedarray'
+                    'valid' => strtolower(self::compactCode($tokens, $memberStart, $index)) === 'protectedarray'
                         && $equals !== null && $tokens[$equals] === '='
                         && $open !== null && $tokens[$open] === '[' && $close !== null,
                     'position' => $index,
@@ -254,8 +244,8 @@ final class ProviderStructureInspector
 
         return $class['topLevel']
             && ! $class['abstract']
-            && preg_match('/^class[A-Za-z_\\x80-\\xff][A-Za-z0-9_\\x80-\\xff]*extends'.$name.'(?:implements.+)?$/', $class['declaration'], $match) === 1
-            && $resolver->resolve($match['parent']) === 'Illuminate\\Support\\ServiceProvider';
+            && preg_match('/^class[A-Za-z_\\x80-\\xff][A-Za-z0-9_\\x80-\\xff]*extends'.$name.'(?:implements.+)?$/i', $class['declaration'], $match) === 1
+            && strcasecmp($resolver->resolve($match['parent']), 'Illuminate\\Support\\ServiceProvider') === 0;
     }
 
     /** @return array<int, int> token index => raw byte offset */
@@ -402,7 +392,7 @@ final class ProviderStructureInspector
         return false;
     }
 
-    /** @return array<int, array{namespace: string, open: int, close: int, topLevel: bool, abstract: bool, declaration: string}> */
+    /** @return array<int, array{name: string, namespace: string, open: int, close: int, topLevel: bool, abstract: bool, declaration: string}> */
     private static function classesNamed(array $tokens, ?string $wanted): array
     {
         $classes = [];
@@ -459,9 +449,10 @@ final class ProviderStructureInspector
                 return [];
             }
 
-            if ($wanted === null || $tokens[$nameIndex][1] === $wanted) {
+            if ($wanted === null || strcasecmp($tokens[$nameIndex][1], $wanted) === 0) {
                 $previous = self::previousSignificant($tokens, $index - 1);
                 $classes[] = [
+                    'name' => $tokens[$nameIndex][1],
                     'namespace' => $namespace,
                     'open' => $open,
                     'close' => $close,
@@ -543,7 +534,7 @@ final class ProviderStructureInspector
                     && $arrayOpen !== null && $tokens[$arrayOpen] === '[') {
                     $properties[$token[1]][] = [
                         'position' => $index,
-                        'prefix' => self::compactCode($tokens, $memberStart, $index),
+                        'prefix' => strtolower(self::compactCode($tokens, $memberStart, $index)),
                     ];
                 }
                 continue;
@@ -568,7 +559,7 @@ final class ProviderStructureInspector
             if ($methodClose === null || $methodClose > $close) {
                 continue;
             }
-            $methods[$tokens[$nameIndex][1]][] = [
+            $methods[strtolower($tokens[$nameIndex][1])][] = [
                 'function' => $index,
                 'open' => $methodOpen,
                 'close' => $methodClose,
@@ -640,18 +631,18 @@ final class ProviderStructureInspector
     private static function registrationOperation(string $statement, PhpNameResolver $resolver): array|false|null
     {
         $name = '(?<class>\\\\?[A-Za-z_\\x80-\\xff][A-Za-z0-9_\\x80-\\xff]*(?:\\\\[A-Za-z_\\x80-\\xff][A-Za-z0-9_\\x80-\\xff]*)*)';
-        if (preg_match('/^'.$name.'::(?<method>register|registerTriggerDrivers|registerTriggerNodes|registerTriggerSources)\\((?<argument>.*)\\)$/s', $statement, $match) === 1) {
-            if ($resolver->resolve($match['class']) !== 'Nodeflow\\Nodeflow') {
+        if (preg_match('/^'.$name.'::(?<method>register|registerTriggerDrivers|registerTriggerNodes|registerTriggerSources)\\((?<argument>.*)\\)$/is', $statement, $match) === 1) {
+            if (strcasecmp($resolver->resolve($match['class']), 'Nodeflow\\Nodeflow') !== 0) {
                 return false;
             }
 
             $calls = [
                 'register' => ['$this->nodes', 'nodes', null],
-                'registerTriggerDrivers' => ['$this->triggerDrivers', 'drivers', 0],
-                'registerTriggerNodes' => ['$this->triggerNodes', 'trigger-nodes', 1],
-                'registerTriggerSources' => ['$this->triggerSources', 'sources', 2],
+                'registertriggerdrivers' => ['$this->triggerDrivers', 'drivers', 0],
+                'registertriggernodes' => ['$this->triggerNodes', 'trigger-nodes', 1],
+                'registertriggersources' => ['$this->triggerSources', 'sources', 2],
             ];
-            [$argument, $required, $phase] = $calls[$match['method']];
+            [$argument, $required, $phase] = $calls[strtolower($match['method'])];
 
             if ($match['argument'] === $argument) {
                 return ['required' => $required, 'phase' => $phase];
@@ -664,8 +655,8 @@ final class ProviderStructureInspector
             return $phase === null ? null : ['required' => null, 'phase' => $phase];
         }
 
-        if (preg_match('/^app\\('.$name.'::class\\)->register\\(\\.\\.\\.\\$this->subjectAttributes\\(\\)\\)$/', $statement, $match) === 1) {
-            return $resolver->resolve($match['class']) === 'Nodeflow\\Schema\\SubjectAttributeRegistry'
+        if (preg_match('/^app\\('.$name.'::class\\)->register\\(\\.\\.\\.\\$this->subjectAttributes\\(\\)\\)$/i', $statement, $match) === 1) {
+            return strcasecmp($resolver->resolve($match['class']), 'Nodeflow\\Schema\\SubjectAttributeRegistry') === 0
                 ? ['required' => 'attributes', 'phase' => null]
                 : false;
         }
@@ -683,7 +674,7 @@ final class ProviderStructureInspector
 
     private static function isDirectArrayReturn(string $statement): bool
     {
-        if (! str_starts_with($statement, 'return[')) {
+        if (! str_starts_with(strtolower($statement), 'return[')) {
             return false;
         }
 

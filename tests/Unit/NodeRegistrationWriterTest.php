@@ -299,7 +299,7 @@ it('refuses to guess when the anchor is ambiguous', function () {
     $path = writeProviderFixture(<<<'PHP'
     <?php
 
-    class NodeflowServiceProvider
+    class NodeflowServiceProvider extends \Illuminate\Support\ServiceProvider
     {
         protected array $nodes = [
         ];
@@ -490,7 +490,7 @@ it('only treats a unique real provider-owned array property as a registration ho
 })->with([
     'string literal' => [<<<'PHP'
         <?php
-        class NodeflowServiceProvider
+        class NodeflowServiceProvider extends \Illuminate\Support\ServiceProvider
         {
             public string $example = 'protected array $triggerSources = [';
         }
@@ -509,21 +509,21 @@ it('only treats a unique real provider-owned array property as a registration ho
         {
             protected array $triggerSources = [];
         }
-        class NodeflowServiceProvider
+        class NodeflowServiceProvider extends \Illuminate\Support\ServiceProvider
         {
             use TriggerHomes;
         }
         PHP, NodeRegistrationOutcome::AnchorMissing],
     'wrong property type' => [<<<'PHP'
         <?php
-        class NodeflowServiceProvider
+        class NodeflowServiceProvider extends \Illuminate\Support\ServiceProvider
         {
             protected string $triggerSources = 'protected array $triggerSources = [';
         }
         PHP, NodeRegistrationOutcome::AnchorAmbiguous],
     'duplicate real properties' => [<<<'PHP'
         <?php
-        class NodeflowServiceProvider
+        class NodeflowServiceProvider extends \Illuminate\Support\ServiceProvider
         {
             protected array $triggerSources = [];
             protected array $triggerSources = [];
@@ -559,6 +559,37 @@ it('does not select a helper property over the unique differently named package 
 
     expect($outcome)->toBe(NodeRegistrationOutcome::AnchorMissing)
         ->and(file_get_contents($path))->toBe($before);
+});
+
+it('ignores an unrelated exact-name decoy and selects the unique valid package service provider', function () {
+    $path = writeProviderFixture(<<<'PHP'
+        <?php
+
+        namespace Vendor\Package;
+
+        use Illuminate\Support\ServiceProvider as BaseProvider;
+
+        class NodeflowServiceProvider
+        {
+            protected array $triggerSources = [];
+        }
+
+        class PackageProvider extends bAsEpRoViDeR
+        {
+            protected array $triggerSources = [];
+        }
+        PHP);
+
+    $outcome = (new NodeRegistrationWriter(new Filesystem))->appendTo(
+        $path,
+        NodeRegistrationWriter::TRIGGER_SOURCE_ANCHOR,
+        'Vendor\\Package\\OrderPlaced::class',
+        '\\Vendor\\Package\\OrderPlaced::class',
+    );
+
+    $contents = file_get_contents($path);
+    expect($outcome)->toBe(NodeRegistrationOutcome::Appended)
+        ->and(strpos($contents, 'OrderPlaced::class'))->toBeGreaterThan(strpos($contents, 'class PackageProvider'));
 });
 
 it('refuses an ambiguous package file containing multiple service providers', function () {

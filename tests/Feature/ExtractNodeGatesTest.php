@@ -1647,7 +1647,7 @@ it('refuses a node still registered through a legacy Nodeflow::register() call',
     use App\Nodeflow\Nodes\LegacyNode;
     use Nodeflow\Nodeflow;
 
-    class NodeflowServiceProvider
+    class NodeflowServiceProvider extends \Illuminate\Support\ServiceProvider
     {
         protected array $nodes = [
             LegacyNode::class,
@@ -1688,7 +1688,7 @@ it('does not refuse when the host provider carries only the exempted use import 
 
     use App\Nodeflow\Nodes\GateFiveCleanNode;
 
-    class NodeflowServiceProvider
+    class NodeflowServiceProvider extends \Illuminate\Support\ServiceProvider
     {
         protected array $nodes = [
             GateFiveCleanNode::class,
@@ -1775,7 +1775,7 @@ it('scopes the nodes home to NodeflowServiceProvider when a decoy class owns the
 
     use App\Nodeflow\Nodes\MinorTwoNode;
 
-    class NodeflowServiceProvider
+    class NodeflowServiceProvider extends \Illuminate\Support\ServiceProvider
     {
         protected array $nodes = [
             MinorTwoNode::class,

@@ -221,3 +221,49 @@ it('uses a bounded tenant-neutral query set and never scans inactive historical 
         ->and($missing[0])->toContain("flow {$liveFlow->id} version {$liveVersion->id}")
         ->toContain('gone.other_tenant');
 });
+
+it('chunks thousands of live versions and never builds an oversized IN clause', function () {
+    $flowId = DB::table('nodeflow_flows')->insertGetId([
+        'tenant_id' => 'org-scale', 'name' => 'Scale', 'status' => 'draft', 'reentry_policy' => 'reenter',
+        'draft_revision' => 0, 'created_at' => now(), 'updated_at' => now(),
+    ]);
+    $graphValue = healthTriggerGraph();
+    $graphValue['nodes'][] = ['id' => 'work', 'type' => 'gone.scale', 'config' => []];
+    $graph = json_encode($graphValue);
+    foreach (array_chunk(range(1, 1001), 100) as $versions) {
+        DB::table('nodeflow_flow_versions')->insert(array_map(static fn (int $version): array => [
+            'tenant_id' => 'org-scale', 'flow_id' => $flowId, 'version' => $version,
+            'graph' => $graph, 'content_hash' => 'scale-'.$version, 'created_at' => now(), 'updated_at' => now(),
+        ], $versions));
+    }
+    DB::table('nodeflow_flow_versions')->where('flow_id', $flowId)->orderBy('id')->pluck('id')
+        ->chunk(100)
+        ->each(function ($ids): void {
+            DB::table('nodeflow_runs')->insert($ids->map(static fn (int $id): array => [
+                'flow_version_id' => $id, 'tenant_id' => 'org-scale', 'strategy' => 'cohort',
+                'status' => 'waiting', 'is_test' => false, 'started_via' => 'manual',
+                'trigger_node_id' => 'trigger', 'trigger_data' => '[]', 'steps_taken' => 0,
+                'created_at' => now(), 'updated_at' => now(),
+            ])->all());
+        });
+
+    $largestIn = 0;
+    $versionBatchQueries = 0;
+    DB::listen(function (QueryExecuted $query) use (&$largestIn, &$versionBatchQueries): void {
+        preg_match_all('/\bin\s*\(([^)]*)\)/i', $query->sql, $matches);
+        foreach ($matches[1] ?? [] as $placeholders) {
+            $largestIn = max($largestIn, substr_count($placeholders, '?'));
+        }
+        if (str_contains($query->sql, 'from "nodeflow_flow_versions"') && str_contains(strtolower($query->sql), ' in ')) {
+            $versionBatchQueries++;
+        }
+    });
+
+    $missing = CheckNodeTypesResolver::findMissingTypes(app(NodeRegistry::class));
+
+    expect($largestIn)->toBeLessThanOrEqual(CheckNodeTypesResolver::QUERY_CHUNK_SIZE)
+        ->and($versionBatchQueries)->toBeGreaterThan(1)
+        ->and($missing)->toHaveCount(1001)
+        ->and($missing[0])->toContain('missing executable node type')
+        ->and($missing[1000])->toContain('missing executable node type');
+});

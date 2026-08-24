@@ -13,7 +13,7 @@ beforeEach(function () {
     $this->root = sys_get_temp_dir().'/nodeflow-make-trigger-node-'.bin2hex(random_bytes(6));
     mkdir($this->root.'/app/Providers', 0777, true);
     file_put_contents($this->root.'/composer.json', json_encode(['autoload' => ['psr-4' => ['App\\' => 'app/']]]));
-    file_put_contents($this->root.'/app/Providers/NodeflowServiceProvider.php', "<?php\nclass NodeflowServiceProvider\n{\n    protected array \$triggerNodes = [\n    ];\n}\n");
+    file_put_contents($this->root.'/app/Providers/NodeflowServiceProvider.php', "<?php\nclass NodeflowServiceProvider extends \\Illuminate\\Support\\ServiceProvider\n{\n    protected array \$triggerNodes = [\n    ];\n}\n");
     $this->app->setBasePath($this->root);
 });
 
@@ -122,15 +122,35 @@ it('prints the exact manual trigger-node registration when its anchor is unsafe'
         'name' => 'ManualNode', '--driver' => 'webhook', '--type' => 'shop.manual_node',
     ]);
 
-    expect($exit)->toBe(1)
+    expect($exit)->toBe(0)
         ->and(Artisan::output())->toContain('\\Nodeflow\\Nodeflow::registerTriggerNodes([')
         ->toContain('\\App\\Nodeflow\\Triggers\\ManualNode::class,')
-        ->and($this->root.'/app/Nodeflow/Triggers/ManualNode.php')->not->toBeFile();
+        ->and($this->root.'/app/Nodeflow/Triggers/ManualNode.php')->toBeFile();
+    expectParseablePhp($this->root.'/app/Nodeflow/Triggers/ManualNode.php');
+});
+
+it('fails and removes the generated node when a real provider write fails', function () {
+    $provider = $this->root.'/app/Providers/NodeflowServiceProvider.php';
+    $before = file_get_contents($provider);
+    $files = new class($provider) extends Filesystem
+    {
+        public function __construct(private string $provider) {}
+        public function move($path, $target) { return $target === $this->provider ? false : parent::move($path, $target); }
+    };
+    $this->app->instance(Filesystem::class, $files);
+    $this->app->instance('files', $files);
+
+    $this->artisan('nodeflow:make-trigger', [
+        'name' => 'ProviderFailureNode', '--driver' => 'webhook', '--type' => 'shop.provider_failure',
+    ])->assertExitCode(1);
+
+    expect($this->root.'/app/Nodeflow/Triggers/ProviderFailureNode.php')->not->toBeFile()
+        ->and(file_get_contents($provider))->toBe($before);
 });
 
 it('deduplicates and preserves CRLF provider formatting', function () {
     $provider = $this->root.'/app/Providers/NodeflowServiceProvider.php';
-    file_put_contents($provider, "<?php\r\nclass NodeflowServiceProvider\r\n{\r\n    protected array \$triggerNodes = [\r\n    ];\r\n}\r\n");
+    file_put_contents($provider, "<?php\r\nclass NodeflowServiceProvider extends \\Illuminate\\Support\\ServiceProvider\r\n{\r\n    protected array \$triggerNodes = [\r\n    ];\r\n}\r\n");
 
     $arguments = ['name' => 'CrlfNode', '--driver' => 'webhook', '--type' => 'shop.crlf_node'];
     $this->artisan('nodeflow:make-trigger', $arguments)->assertExitCode(0);

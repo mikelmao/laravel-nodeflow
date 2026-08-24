@@ -3,6 +3,7 @@
 use Illuminate\Filesystem\Filesystem;
 use Nodeflow\Console\Install\InstallOutcome;
 use Nodeflow\Console\Install\ProviderStep;
+use Nodeflow\Console\Install\ProviderStructureInspector;
 use Nodeflow\Console\NodeRegistrationWriter;
 
 beforeEach(function () {
@@ -53,6 +54,28 @@ it('creates a provider whose trigger extension anchors each appear exactly once'
     expect(substr_count($contents, NodeRegistrationWriter::TRIGGER_NODE_ANCHOR))->toBe(1);
     expect(substr_count($contents, NodeRegistrationWriter::TRIGGER_SOURCE_ANCHOR))->toBe(1);
     expect(substr_count($contents, NodeRegistrationWriter::ATTRIBUTE_ANCHOR))->toBe(1);
+});
+
+it('accepts valid mixed-case PHP class aliases and registration method calls', function () {
+    $source = str_replace('{{ namespace }}', 'App\\Providers', file_get_contents(__DIR__.'/../../../stubs/nodeflow-provider.stub'));
+    $source = str_replace(
+        ['use Nodeflow\\Nodeflow;', 'class NodeflowServiceProvider extends ServiceProvider', 'public function boot()', 'protected function subjectAttributes()', 'Nodeflow::register(', 'Nodeflow::registerTriggerDrivers(', 'Nodeflow::registerTriggerNodes(', 'Nodeflow::registerTriggerSources('],
+        ['use Nodeflow\\Nodeflow as NoDeFlOwApi;', 'class nOdEfLoWsErViCePrOvIdEr extends sErViCePrOvIdEr', 'public function BoOt()', 'protected function SuBjEcTaTtRiBuTeS()', 'nOdEfLoWaPi::ReGiStEr(', 'nOdEfLoWaPi::ReGiStErTrIgGeRdRiVeRs(', 'nOdEfLoWaPi::ReGiStErTrIgGeRnOdEs(', 'nOdEfLoWaPi::ReGiStErTrIgGeRsOuRcEs('],
+        $source,
+    );
+
+    expect(ProviderStructureInspector::valid($source, 'app\\providers'))->toBeTrue();
+});
+
+it('rejects mixed-case source registration before the driver phase', function () {
+    $source = str_replace('{{ namespace }}', 'App\\Providers', file_get_contents(__DIR__.'/../../../stubs/nodeflow-provider.stub'));
+    $source = str_replace(
+        'Nodeflow::register($this->nodes);',
+        "NoDeFlOw::ReGiStErTrIgGeRsOuRcEs([\\App\\EarlySource::class]);\n        Nodeflow::register(\$this->nodes);",
+        $source,
+    );
+
+    expect(ProviderStructureInspector::valid($source, 'App\\Providers'))->toBeFalse();
 });
 
 it('validates a custom provider stub completely before creating the destination', function (Closure $mutate) {

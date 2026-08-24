@@ -15,7 +15,7 @@ beforeEach(function () {
     $this->root = sys_get_temp_dir().'/nodeflow-make-trigger-driver-'.bin2hex(random_bytes(6));
     mkdir($this->root.'/app/Providers', 0777, true);
     file_put_contents($this->root.'/composer.json', json_encode(['autoload' => ['psr-4' => ['App\\' => 'app/']]]));
-    file_put_contents($this->root.'/app/Providers/NodeflowServiceProvider.php', "<?php\nclass NodeflowServiceProvider\n{\n    protected array \$triggerDrivers = [\n    ];\n    protected array \$triggerNodes = [\n    ];\n}\n");
+    file_put_contents($this->root.'/app/Providers/NodeflowServiceProvider.php', "<?php\nclass NodeflowServiceProvider extends \\Illuminate\\Support\\ServiceProvider\n{\n    protected array \$triggerDrivers = [\n    ];\n    protected array \$triggerNodes = [\n    ];\n}\n");
     $this->app->setBasePath($this->root);
 });
 
@@ -179,8 +179,33 @@ it('prints exact manual driver then node registration calls when provider insert
         ->toContain('\\Nodeflow\\Nodeflow::registerTriggerNodes([\\App\\Nodeflow\\Triggers\\ManualDriverTrigger::class]);')
         ->and(strpos($output, 'registerTriggerDrivers'))->toBeLessThan(strpos($output, 'registerTriggerNodes'))
         ->and(file_get_contents($provider))->toBe($before)
-        ->and($exit)->toBe(1)
-        ->and($this->root.'/app/Nodeflow/TriggerDrivers/ManualDriver.php')->not->toBeFile();
+        ->and($exit)->toBe(0)
+        ->and($this->root.'/app/Nodeflow/TriggerDrivers/ManualDriver.php')->toBeFile()
+        ->and($this->root.'/app/Nodeflow/Triggers/ManualDriverTrigger.php')->toBeFile()
+        ->and($this->root.'/tests/Feature/Nodeflow/TriggerDrivers/ManualDriverTest.php')->toBeFile();
+    expectParseablePhp($this->root.'/app/Nodeflow/TriggerDrivers/ManualDriver.php');
+    expectParseablePhp($this->root.'/app/Nodeflow/Triggers/ManualDriverTrigger.php');
+    expectParseablePhp($this->root.'/tests/Feature/Nodeflow/TriggerDrivers/ManualDriverTest.php');
+});
+
+it('fails and removes the complete kit when a real provider write fails', function () {
+    $provider = $this->root.'/app/Providers/NodeflowServiceProvider.php';
+    $before = file_get_contents($provider);
+    $files = new class($provider) extends Filesystem
+    {
+        public function __construct(private string $provider) {}
+        public function move($path, $target) { return $target === $this->provider ? false : parent::move($path, $target); }
+    };
+    $this->app->instance(Filesystem::class, $files);
+    $this->app->instance('files', $files);
+
+    $this->artisan('nodeflow:make-trigger-driver', ['name' => 'ProviderFailureDriver', '--key' => 'shop.provider_failure'])
+        ->assertExitCode(1);
+
+    expect($this->root.'/app/Nodeflow/TriggerDrivers/ProviderFailureDriver.php')->not->toBeFile()
+        ->and($this->root.'/app/Nodeflow/Triggers/ProviderFailureDriverTrigger.php')->not->toBeFile()
+        ->and($this->root.'/tests/Feature/Nodeflow/TriggerDrivers/ProviderFailureDriverTest.php')->not->toBeFile()
+        ->and(file_get_contents($provider))->toBe($before);
 });
 
 it('preserves CRLF while registering both kit classes in order', function () {

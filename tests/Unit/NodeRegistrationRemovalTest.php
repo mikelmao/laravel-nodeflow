@@ -233,7 +233,7 @@ it('ignores a second anchor in a comment and removes from the real provider prop
 
     namespace App\Providers;
 
-    class NodeflowServiceProvider
+    class NodeflowServiceProvider extends \Illuminate\Support\ServiceProvider
     {
         // protected array $nodes = [
         protected array $nodes = [
@@ -268,7 +268,7 @@ it('restores the original bytes and reports WriteFailed when the file never pars
 
     namespace App\Providers;
 
-    class NodeflowServiceProvider
+    class NodeflowServiceProvider extends \Illuminate\Support\ServiceProvider
     {
         protected array $nodes = [
             \App\Nodeflow\Nodes\SendMessage::class,
@@ -386,7 +386,7 @@ it('clears the body of a single-line array where the entry is not on its own lin
 
     namespace App\Providers;
 
-    class NodeflowServiceProvider
+    class NodeflowServiceProvider extends \Illuminate\Support\ServiceProvider
     {
         protected array $nodes = [\App\Nodeflow\Nodes\SendMessage::class];
     }

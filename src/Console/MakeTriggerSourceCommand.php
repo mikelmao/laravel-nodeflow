@@ -51,22 +51,23 @@ class MakeTriggerSourceCommand extends GeneratorCommand
                 (bool) $this->option('force'),
                 function () use ($class, &$registrationOutcome): void {
                     $registrationOutcome = $this->registrationOutcome($class);
-                    if (! in_array($registrationOutcome, [NodeRegistrationOutcome::Appended, NodeRegistrationOutcome::AlreadyPresent], true)) {
-                        throw new InvalidArgumentException('Automatic provider registration was unsafe; the generated file was rolled back.');
+                    if ($registrationOutcome === NodeRegistrationOutcome::WriteFailed) {
+                        throw new InvalidArgumentException('Automatic provider registration failed while writing; the generated file was rolled back.');
                     }
                 },
             );
         } catch (InvalidArgumentException $e) {
             $this->components->error($e->getMessage());
-            if ($class !== null && $registrationOutcome !== null) {
-                $this->manualRegistration($class);
-            }
 
             return self::FAILURE;
         }
 
         $this->components->info("Trigger source [{$path}] created successfully.");
-        $this->components->info($registrationOutcome === NodeRegistrationOutcome::Appended ? 'Registered trigger source.' : 'Trigger source already registered.');
+        if ($this->requiresManualRegistration($registrationOutcome)) {
+            $this->manualRegistration($class);
+        } else {
+            $this->components->info($registrationOutcome === NodeRegistrationOutcome::Appended ? 'Registered trigger source.' : 'Trigger source already registered.');
+        }
 
         return self::SUCCESS;
     }
@@ -223,6 +224,15 @@ class MakeTriggerSourceCommand extends GeneratorCommand
         $this->line('    \\Nodeflow\\Nodeflow::registerTriggerSources([');
         $this->line('        \\'.ltrim($class, '\\').'::class,');
         $this->line('    ]);');
+    }
+
+    private function requiresManualRegistration(?NodeRegistrationOutcome $outcome): bool
+    {
+        return in_array($outcome, [
+            NodeRegistrationOutcome::ProviderMissing,
+            NodeRegistrationOutcome::AnchorMissing,
+            NodeRegistrationOutcome::AnchorAmbiguous,
+        ], true);
     }
 
     protected function getOptions(): array

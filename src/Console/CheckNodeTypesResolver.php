@@ -2,7 +2,6 @@
 
 namespace Nodeflow\Console;
 
-use Illuminate\Support\Collection;
 use Nodeflow\Models\FlowVersion;
 use Nodeflow\Models\Run;
 use Nodeflow\Models\TriggerActivation;
@@ -15,6 +14,8 @@ use Throwable;
 class CheckNodeTypesResolver
 {
     private const LIVE_STATUSES = ['pending', 'running', 'waiting', 'blocked'];
+
+    public const QUERY_CHUNK_SIZE = 200;
 
     /** @return string[] deterministic, actionable failure descriptions */
     public static function findMissingTypes(
@@ -31,78 +32,90 @@ class CheckNodeTypesResolver
         // Routing and liveness are system state. Every query intentionally
         // bypasses ambient tenancy, and only the two reachable version sets are
         // loaded: published active activations and versions pinned by live runs.
-        $activations = TriggerActivation::withoutTenancy()
+        TriggerActivation::withoutTenancy()
             ->select('nodeflow_trigger_activations.*')
             ->join('nodeflow_flows as health_flows', 'health_flows.id', '=', 'nodeflow_trigger_activations.flow_id')
             ->where('health_flows.status', 'active')
-            ->orderBy('nodeflow_trigger_activations.flow_version_id')
-            ->get();
+            ->chunkById(self::QUERY_CHUNK_SIZE, function ($activations) use ($triggerNodes, $drivers, $sources, &$issues): void {
+                $versionIds = $activations->pluck('flow_version_id')->map(static fn (mixed $id): string => (string) $id)->unique()->values()->all();
+                $versions = FlowVersion::withoutTenancy()->whereIn('id', $versionIds)->get()
+                    ->keyBy(static fn (FlowVersion $version): string => (string) $version->id);
 
-        $liveVersionIds = Run::withoutTenancy()
+                foreach ($activations as $activation) {
+                    $identity = self::identity((string) $activation->flow_id, (string) $activation->flow_version_id, (string) $activation->trigger_node_id);
+                    $version = $versions->get((string) $activation->flow_version_id);
+                    $type = self::triggerTypeFromGraph($version?->graph, (string) $activation->trigger_node_id);
+                    if ($type === null) {
+                        self::issue($issues, $identity, 'graph', "{$identity} malformed trigger graph; restore the published graph/version metadata.");
+                    } elseif (! $triggerNodes->has($type)) {
+                        self::missingTriggerNode($issues, $identity, $type);
+                    }
+                    self::checkRouting($issues, $identity, (string) $activation->driver, (string) $activation->source, $drivers, $sources);
+                }
+            }, 'nodeflow_trigger_activations.id', 'id');
+
+        Run::withoutTenancy()
+            ->select('flow_version_id')
             ->whereIn('status', self::LIVE_STATUSES)
             ->whereNotNull('flow_version_id')
             ->distinct()
             ->orderBy('flow_version_id')
-            ->pluck('flow_version_id')
-            ->map(static fn (mixed $id): string => (string) $id)
-            ->all();
-
-        $versionIds = collect($activations)->pluck('flow_version_id')
-            ->map(static fn (mixed $id): string => (string) $id)
-            ->merge($liveVersionIds)
-            ->unique()->values()->all();
-        $versions = $versionIds === []
-            ? collect()
-            : FlowVersion::withoutTenancy()->whereIn('id', $versionIds)->get()->keyBy(static fn (FlowVersion $v): string => (string) $v->id);
-
-        $runs = $liveVersionIds === []
-            ? collect()
-            : Run::withoutTenancy()
-                ->select(['flow_version_id', 'started_via', 'trigger_node_id'])
-                ->whereIn('status', self::LIVE_STATUSES)
-                ->whereIn('flow_version_id', $liveVersionIds)
-                ->orderBy('flow_version_id')
-                ->orderBy('id')
-                ->get()
-                ->groupBy(static fn (Run $run): string => (string) $run->flow_version_id);
-
-        foreach ($activations as $activation) {
-            $identity = self::identity((string) $activation->flow_id, (string) $activation->flow_version_id, (string) $activation->trigger_node_id);
-            $version = $versions->get((string) $activation->flow_version_id);
-            $type = self::triggerTypeFromGraph($version?->graph, (string) $activation->trigger_node_id);
-            if ($type === null) {
-                self::issue($issues, $identity, 'graph', "{$identity} malformed trigger graph; restore the published graph/version metadata.");
-            } elseif (! $triggerNodes->has($type)) {
-                self::missingTriggerNode($issues, $identity, $type);
-            }
-            self::checkRouting($issues, $identity, (string) $activation->driver, (string) $activation->source, $drivers, $sources);
-        }
-
-        foreach ($liveVersionIds as $versionId) {
-            /** @var FlowVersion|null $version */
-            $version = $versions->get($versionId);
-            if ($version === null) {
-                continue;
-            }
-            self::checkLiveVersion(
-                $version,
-                $runs->get($versionId, collect()),
-                $nodes,
-                $triggerNodes,
-                $drivers,
-                $sources,
-                $issues,
-            );
-        }
+            ->chunk(self::QUERY_CHUNK_SIZE, function ($rows) use ($nodes, $triggerNodes, $drivers, $sources, &$issues): void {
+                $versionIds = $rows->pluck('flow_version_id')->map(static fn (mixed $id): string => (string) $id)->values()->all();
+                self::checkLiveBatch($versionIds, $nodes, $triggerNodes, $drivers, $sources, $issues);
+            });
 
         ksort($issues, SORT_STRING);
 
         return array_values($issues);
     }
 
+    /** @param list<string> $versionIds */
+    private static function checkLiveBatch(
+        array $versionIds,
+        NodeRegistry $nodes,
+        TriggerNodeRegistry $triggerNodes,
+        TriggerDriverRegistry $drivers,
+        TriggerSourceRegistry $sources,
+        array &$issues,
+    ): void {
+        if ($versionIds === []) return;
+
+        $versions = FlowVersion::withoutTenancy()->whereIn('id', $versionIds)->get()
+            ->keyBy(static fn (FlowVersion $version): string => (string) $version->id);
+        $states = [];
+        foreach ($versionIds as $versionId) {
+            $states[$versionId] = ['requiresTrigger' => false, 'triggerIds' => []];
+        }
+
+        $tuples = Run::withoutTenancy()
+            ->select(['flow_version_id', 'started_via', 'trigger_node_id'])
+            ->whereIn('status', self::LIVE_STATUSES)
+            ->whereIn('flow_version_id', $versionIds)
+            ->distinct()
+            ->orderBy('flow_version_id')
+            ->orderBy('started_via')
+            ->orderBy('trigger_node_id')
+            ->lazy(self::QUERY_CHUNK_SIZE);
+        foreach ($tuples as $tuple) {
+            $versionId = (string) $tuple->flow_version_id;
+            if (! isset($states[$versionId]) || in_array((string) $tuple->started_via, ['manual', 'subflow'], true)) continue;
+            $states[$versionId]['requiresTrigger'] = true;
+            $triggerId = (string) $tuple->trigger_node_id;
+            if ($triggerId !== '') $states[$versionId]['triggerIds'][$triggerId] = true;
+        }
+
+        foreach ($versionIds as $versionId) {
+            /** @var FlowVersion|null $version */
+            $version = $versions->get($versionId);
+            if ($version === null) continue;
+            self::checkLiveVersion($version, $states[$versionId], $nodes, $triggerNodes, $drivers, $sources, $issues);
+        }
+    }
+
     private static function checkLiveVersion(
         FlowVersion $version,
-        Collection $runs,
+        array $runState,
         NodeRegistry $nodes,
         TriggerNodeRegistry $triggerNodes,
         TriggerDriverRegistry $drivers,
@@ -117,12 +130,8 @@ class CheckNodeTypesResolver
             return;
         }
 
-        $triggerRuns = $runs->filter(static fn (Run $run): bool => ! in_array((string) $run->started_via, ['manual', 'subflow'], true));
-        $requiresTrigger = $triggerRuns->isNotEmpty();
-        $triggerIds = $triggerRuns->pluck('trigger_node_id')
-            ->map(static fn (mixed $id): string => (string) $id)
-            ->filter(static fn (string $id): bool => $id !== '')
-            ->unique()->values()->all();
+        $requiresTrigger = $runState['requiresTrigger'];
+        $triggerIds = array_keys($runState['triggerIds']);
         if ($requiresTrigger && $triggerIds === []) {
             $triggerIds = [$start];
         }

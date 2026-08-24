@@ -56,16 +56,13 @@ class MakeTriggerDriverCommand extends GeneratorCommand
                 (bool) $this->option('force'),
                 function () use ($driverClass, $nodeClass, &$registrationOutcome): void {
                     $registrationOutcome = $this->registrationOutcome($driverClass, $nodeClass);
-                    if (! in_array($registrationOutcome, [NodeRegistrationOutcome::Appended, NodeRegistrationOutcome::AlreadyPresent], true)) {
-                        throw new InvalidArgumentException('Automatic provider registration was unsafe; the complete extension kit was rolled back.');
+                    if ($registrationOutcome === NodeRegistrationOutcome::WriteFailed) {
+                        throw new InvalidArgumentException('Automatic provider registration failed while writing; the complete extension kit was rolled back.');
                     }
                 },
             );
         } catch (InvalidArgumentException $e) {
             $this->components->error($e->getMessage());
-            if ($driverClass !== null && $nodeClass !== null && $registrationOutcome !== null) {
-                $this->manualRegistration($driverClass, $nodeClass);
-            }
 
             return self::FAILURE;
         }
@@ -73,7 +70,11 @@ class MakeTriggerDriverCommand extends GeneratorCommand
         $this->components->info("Trigger driver [{$driverClass}] created.");
         $this->components->info("Reference trigger [{$nodeClass}] created with type [{$type}].");
         $this->components->info('Contract test ['.$this->testPath($driverClass).'] created.');
-        $this->components->info('Registered trigger driver and reference node in dependency order.');
+        if ($this->requiresManualRegistration($registrationOutcome)) {
+            $this->manualRegistration($driverClass, $nodeClass);
+        } else {
+            $this->components->info('Registered trigger driver and reference node in dependency order.');
+        }
 
         return self::SUCCESS;
     }
@@ -195,6 +196,15 @@ class MakeTriggerDriverCommand extends GeneratorCommand
         $this->components->warn('Automatic provider registration was unsafe. Register the extension kit yourself in this order:');
         $this->line("    \\Nodeflow\\Nodeflow::registerTriggerDrivers([\\{$driverClass}::class]);");
         $this->line("    \\Nodeflow\\Nodeflow::registerTriggerNodes([\\{$nodeClass}::class]);");
+    }
+
+    private function requiresManualRegistration(?NodeRegistrationOutcome $outcome): bool
+    {
+        return in_array($outcome, [
+            NodeRegistrationOutcome::ProviderMissing,
+            NodeRegistrationOutcome::AnchorMissing,
+            NodeRegistrationOutcome::AnchorAmbiguous,
+        ], true);
     }
 
     protected function getOptions(): array
