@@ -924,9 +924,9 @@ describe('useEditorController', () => {
     })
 
     it.each([
-        ['newer then stale', ['2026-08-24T17:00:00Z', '2026-08-24T15:00:00Z']],
-        ['stale then newer', ['2026-08-24T15:00:00Z', '2026-08-24T17:00:00Z']],
-    ])('keeps a monotonic pending credential watermark for %s rotation props', async (_label, observations) => {
+        ['newer then stale', ['2026-08-24T17:00:00Z', '2026-08-24T15:00:00Z'], '2026-08-24T16:00:00Z'],
+        ['stale then newer', ['2026-08-24T15:00:00Z', '2026-08-24T17:00:00Z'], '2026-08-24T17:00:00Z'],
+    ])('uses the credential watermark only for disclosure safety when props arrive %s', async (_label, observations, expectedRotatedAt) => {
         let resolveRotation!: (response: Response) => void
         let currentWebhook = { endpoint_url: 'https://example.test/hooks/current', active: true, secret_rotated_at: '2026-08-24T14:00:00Z' }
         vi.stubGlobal('fetch', vi.fn((url: string) => url === urls.rotate_webhook_secret
@@ -960,7 +960,7 @@ describe('useEditorController', () => {
         expect(view.result.current.nodeInspectorProps?.webhook).toEqual({
             endpoint_url: 'https://example.test/hooks/current',
             active: false,
-            secret_rotated_at: '2026-08-24T17:00:00Z',
+            secret_rotated_at: expectedRotatedAt,
         })
         expect(view.result.current.nodeInspectorProps?.webhookSecret).toBeNull()
     })
@@ -1004,7 +1004,7 @@ describe('useEditorController', () => {
         expect(view.result.current.nodeInspectorProps?.webhook).toEqual({
             endpoint_url: 'https://example.test/hooks/current',
             active: false,
-            secret_rotated_at: '2026-08-24T17:00:00Z',
+            secret_rotated_at: '2026-08-24T16:00:00Z',
         })
         expect(view.result.current.nodeInspectorProps?.webhookSecret).toBeNull()
     })
@@ -1040,10 +1040,7 @@ describe('useEditorController', () => {
         view.rerender()
         await act(async () => resolveRotation(Response.json({ secret: 'equal-secret', rotated_at: '2026-08-24T16:00:00Z' })))
 
-        expect(view.result.current.nodeInspectorProps?.webhook).toEqual({
-            ...currentWebhook,
-            secret_rotated_at: '2026-08-24T16:00:00.000Z',
-        })
+        expect(view.result.current.nodeInspectorProps?.webhook).toEqual(currentWebhook)
         expect(view.result.current.nodeInspectorProps?.webhookSecret).toBe('equal-secret')
     })
 
@@ -1094,6 +1091,96 @@ describe('useEditorController', () => {
         await waitFor(() => expect(fetchMock.mock.calls.filter(([url]) => url === urls.rotate_webhook_secret)).toHaveLength(2))
         await act(async () => resolveRotation(Response.json({ secret: 'fresh-after-fence', rotated_at: '2026-08-24T18:00:00Z' })))
         expect(view.result.current.nodeInspectorProps?.webhookSecret).toBe('fresh-after-fence')
+    })
+
+    it('uses the latest compatible display metadata after a different credential invalidates the local secret', async () => {
+        const rotations: Array<(response: Response) => void> = []
+        let currentWebhook = { endpoint_url: 'https://example.test/hooks/a', active: true, secret_rotated_at: '2026-08-24T14:00:00Z' }
+        const fetchMock = vi.fn((url: string) => url === urls.rotate_webhook_secret
+            ? new Promise<Response>((resolve) => { rotations.push(resolve) })
+            : Promise.resolve(Response.json({ draft_revision: 8 })))
+        vi.stubGlobal('fetch', fetchMock)
+        const triggered: Graph = {
+            start: 'hook',
+            nodes: [{ id: 'hook', type: webhook.type, config: { source: 'orders' }, position: { x: 0, y: 0 } }],
+            edges: [],
+        }
+        const view = renderHook(() => useEditorController({
+            flow,
+            graph: triggered,
+            palette: [send, exit],
+            trigger_nodes: [webhook],
+            trigger_sources: { webhook: [{ key: 'orders', driver: 'webhook', label: 'Orders', icon: null, description: null, fields: [], default_config: {} }] },
+            webhook: currentWebhook,
+            urls,
+            autosaveDebounceMs: 1,
+        }))
+        act(() => view.result.current.actions.selectNode('hook'))
+        act(() => view.result.current.nodeInspectorProps?.onRotateWebhookSecret?.())
+        await waitFor(() => expect(rotations).toHaveLength(1))
+
+        currentWebhook = { endpoint_url: 'https://example.test/hooks/b', active: true, secret_rotated_at: '2026-08-24T17:00:00Z' }
+        view.rerender()
+        currentWebhook = { endpoint_url: 'https://example.test/hooks/a', active: false, secret_rotated_at: '2026-08-24T16:00:00Z' }
+        view.rerender()
+        await act(async () => rotations[0]?.(Response.json({ secret: 'unsafe-local-secret', rotated_at: '2026-08-24T16:00:00Z' })))
+
+        expect(view.result.current.nodeInspectorProps?.webhook).toEqual(currentWebhook)
+        expect(view.result.current.nodeInspectorProps?.webhookSecret).toBeNull()
+
+        act(() => view.result.current.nodeInspectorProps?.onRotateWebhookSecret?.())
+        await waitFor(() => expect(rotations).toHaveLength(2))
+        await act(async () => rotations[1]?.(Response.json({ secret: 'next-operation-secret', rotated_at: '2026-08-24T18:00:00Z' })))
+        currentWebhook = { ...currentWebhook, secret_rotated_at: '2026-08-24T18:00:00Z' }
+        view.rerender()
+
+        expect(view.result.current.nodeInspectorProps?.webhook).toEqual(currentWebhook)
+        expect(view.result.current.nodeInspectorProps?.webhookSecret).toBe('next-operation-secret')
+    })
+
+    it('honors a latest null observation and does not bind the next rotation to a removed endpoint', async () => {
+        const rotations: Array<(response: Response) => void> = []
+        let currentWebhook: Parameters<typeof useEditorController>[0]['webhook'] = {
+            endpoint_url: 'https://example.test/hooks/a',
+            active: true,
+            secret_rotated_at: '2026-08-24T14:00:00Z',
+        }
+        vi.stubGlobal('fetch', vi.fn((url: string) => url === urls.rotate_webhook_secret
+            ? new Promise<Response>((resolve) => { rotations.push(resolve) })
+            : Promise.resolve(Response.json({ draft_revision: 8 }))))
+        const triggered: Graph = {
+            start: 'hook',
+            nodes: [{ id: 'hook', type: webhook.type, config: { source: 'orders' }, position: { x: 0, y: 0 } }],
+            edges: [],
+        }
+        const view = renderHook(() => useEditorController({
+            flow,
+            graph: triggered,
+            palette: [send, exit],
+            trigger_nodes: [webhook],
+            trigger_sources: { webhook: [{ key: 'orders', driver: 'webhook', label: 'Orders', icon: null, description: null, fields: [], default_config: {} }] },
+            webhook: currentWebhook,
+            urls,
+            autosaveDebounceMs: 1,
+        }))
+        act(() => view.result.current.actions.selectNode('hook'))
+        act(() => view.result.current.nodeInspectorProps?.onRotateWebhookSecret?.())
+        await waitFor(() => expect(rotations).toHaveLength(1))
+
+        currentWebhook = { endpoint_url: 'https://example.test/hooks/a', active: false, secret_rotated_at: '2026-08-24T15:00:00Z' }
+        view.rerender()
+        currentWebhook = null
+        view.rerender()
+        await act(async () => rotations[0]?.(Response.json({ secret: 'removed-endpoint-secret', rotated_at: '2026-08-24T16:00:00Z' })))
+
+        expect(view.result.current.nodeInspectorProps?.webhook).toBeNull()
+        expect(view.result.current.nodeInspectorProps?.webhookSecret).toBeNull()
+
+        act(() => view.result.current.nodeInspectorProps?.onRotateWebhookSecret?.())
+        await waitFor(() => expect(rotations).toHaveLength(2))
+        await act(async () => rotations[1]?.(Response.json({ secret: 'must-not-bind-stale-endpoint', rotated_at: '2026-08-24T18:00:00Z' })))
+        expect(view.result.current.nodeInspectorProps?.webhook).toBeNull()
+        expect(view.result.current.nodeInspectorProps?.webhookSecret).toBeNull()
     })
 
     it('orders post-rotation metadata without regressing or retaining an invalid disclosure', async () => {

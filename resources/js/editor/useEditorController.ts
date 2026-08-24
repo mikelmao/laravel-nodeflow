@@ -221,9 +221,9 @@ type WebhookClientState = {
 }
 
 type PendingWebhookMetadata = {
-    credential: WebhookMetadata | null
+    credentialHighWatermark: WebhookMetadata | null
     invalidated: boolean
-    latestActive: boolean | null
+    latest: WebhookMetadata | null
 }
 
 type CredentialRelation = 'same' | 'older' | 'newer' | 'different' | 'unknown'
@@ -278,48 +278,43 @@ function coalescePendingWebhookMetadata(current: PendingWebhookMetadata | null, 
     const copied = incoming === null ? null : { ...incoming }
     if (current === null) {
         return {
-            credential: copied,
+            credentialHighWatermark: copied,
             invalidated: copied === null || (copied.secret_rotated_at !== null && parsedTimestamp(copied.secret_rotated_at) === null),
-            latestActive: copied?.active ?? null,
+            latest: copied,
         }
     }
-    if (current.credential === null || copied === null) {
+    if (current.credentialHighWatermark === null || copied === null) {
         return {
-            credential: current.credential ?? copied,
+            credentialHighWatermark: current.credentialHighWatermark ?? copied,
             invalidated: true,
-            latestActive: current.credential === null ? copied?.active ?? current.latestActive : current.latestActive,
+            latest: copied,
         }
     }
-    const currentIdentity = metadataIdentity(current.credential)
+    const currentIdentity = metadataIdentity(current.credentialHighWatermark)
     const incomingIdentity = metadataIdentity(copied)
-    if (currentIdentity === null || incomingIdentity === null) return { ...current, invalidated: true }
+    if (currentIdentity === null || incomingIdentity === null) return { ...current, invalidated: true, latest: copied }
     const relation = credentialRelation(currentIdentity, incomingIdentity)
-    if (relation === 'newer') return { credential: copied, invalidated: current.invalidated, latestActive: copied.active }
-    if (relation === 'same' || relation === 'older') return { ...current, latestActive: copied.active }
-    if (relation === 'different') return { ...current, invalidated: true }
+    if (relation === 'newer') return { credentialHighWatermark: copied, invalidated: current.invalidated, latest: copied }
+    if (relation === 'same' || relation === 'older') return { ...current, latest: copied }
+    if (relation === 'different') return { credentialHighWatermark: copied, invalidated: true, latest: copied }
 
-    const currentTime = parsedTimestamp(current.credential.secret_rotated_at)
+    const currentTime = parsedTimestamp(current.credentialHighWatermark.secret_rotated_at)
     const incomingTime = parsedTimestamp(copied.secret_rotated_at)
-    const preferIncoming = current.credential.endpoint_url === copied.endpoint_url && currentTime === null && incomingTime !== null
+    const preferIncoming = current.credentialHighWatermark.endpoint_url === copied.endpoint_url && currentTime === null && incomingTime !== null
     return {
-        credential: preferIncoming ? copied : current.credential,
+        credentialHighWatermark: preferIncoming ? copied : current.credentialHighWatermark,
         invalidated: true,
-        latestActive: current.credential.endpoint_url === copied.endpoint_url ? copied.active : current.latestActive,
+        latest: copied,
     }
 }
 
 function reconcilePendingWebhookMetadata(current: WebhookClientState, pending: PendingWebhookMetadata | null): WebhookClientState {
     if (pending === null) return current
-    const reconciled = reconcileWebhookMetadata(current, pending.credential)
-    let metadata = reconciled.metadata
-    if (metadata !== null
-        && pending.credential !== null
-        && metadata.endpoint_url === pending.credential.endpoint_url
-        && pending.latestActive !== null
-    ) metadata = { ...metadata, active: pending.latestActive }
+    const display = reconcileWebhookMetadata(current, pending.latest)
+    const credentialSafety = reconcileWebhookMetadata(current, pending.credentialHighWatermark)
     return {
-        metadata,
-        disclosure: pending.invalidated ? null : reconciled.disclosure,
+        metadata: display.metadata,
+        disclosure: pending.invalidated ? null : credentialSafety.disclosure,
     }
 }
 
