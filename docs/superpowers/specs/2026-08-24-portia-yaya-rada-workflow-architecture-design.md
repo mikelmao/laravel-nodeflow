@@ -118,7 +118,15 @@ Publishing fails if Yaya does not accept every required artifact. A workflow ver
 
 When an alert reaches its configured push time, Rada sends a signed `rada.alert.triggered` event to Portia. The event includes a stable Rada alert ID, affected town identifiers, relevant alert facts, and occurrence time.
 
-Portia records the event in an inbound event inbox using the Rada event ID as the unique key. A duplicate request returns the prior acknowledgement and does not create another run. Portia starts each matching active FSP workflow with correlation key `rada:{rada_alert_id}`.
+Portia exposes one Rada ingress endpoint rather than one endpoint per workflow. It records the event in an inbound event inbox using the Rada event ID as the unique key. A duplicate request returns the prior acknowledgement and does not resnapshot the target set.
+
+At first acceptance, Portia snapshots every matching active Rada trigger activation and persists one delivery row per pinned activation, uniquely keyed by the Rada alert ID and activation ID. Each delivery is queued and retried independently. This fixes the set of workflow versions that the accepted alert must start even if an FSP republishes, disables, or replaces a workflow while delivery is retrying.
+
+A Portia-owned `rada` trigger driver/source maps those delivery jobs into Nodeflow's generic trigger contracts. For each pinned activation, the worker invokes the driver directly; the driver resolves its source, asks Yaya for an idempotent frozen audience snapshot, and passes the single tenant match to `TriggerRunStarter` with `rada_alert_id` as the occurrence identity. It does not route this critical one-activation delivery through the generic occurrence dispatcher's best-effort fan-out loop. Nodeflow's flow-version-scoped idempotency returns the existing run when the same delivery job is repeated. A delivery becomes complete only after a run is returned or an explicit permanent non-match is recorded; transient failures remain retryable.
+
+The generic Nodeflow webhook driver is not this ingress: its endpoint token identifies one already-selected flow activation. The built-in Laravel-event driver is also not used for the critical handoff because its deliberate per-activation failure isolation cannot make the original synchronous publisher retry a missed FSP activation.
+
+The Rada inbox and delivery ledger are pre-run handoff durability, not a second workflow runtime. They stop at successful run creation and contain no graph cursor, node state, timer, or Yaya command progress. Nodeflow owns all durability after `TriggerRunStarter` returns.
 
 The current direct Rada-to-Yaya alert path remains available during rollout but is not part of the target architecture.
 
@@ -327,6 +335,7 @@ Key metrics include:
 - Add Portia organization-to-Yaya FSP mapping and scoped authentication.
 - Build immutable artifact publication and Yaya projection sync.
 - Add streaming audience support, durable activity policy wiring, and terminal status reconciliation to Nodeflow.
+- Add the Portia Rada trigger extension plus the alert inbox and pinned per-activation delivery ledger.
 - Define and version the inter-service command and event schemas.
 - Add cross-service trace and idempotency conventions.
 
@@ -399,3 +408,4 @@ The first production expansion requires:
 6. Large audiences are frozen in Yaya and streamed into Portia as opaque subject IDs.
 7. Acceptance uses both an event for prompt orchestration and an authoritative command-time precondition for safety.
 8. Initial transport is signed, idempotent HTTP. A broker can be introduced later without changing ownership or message semantics.
+9. Rada ingress uses a Portia inbox and one retryable delivery per pinned activation only until Nodeflow run creation; it does not duplicate Nodeflow's workflow durability.

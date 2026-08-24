@@ -12,9 +12,10 @@
 
 ## Prerequisite and scope
 
-Execute and merge `docs/superpowers/plans/2026-08-24-first-class-trigger-nodes.md` first. This plan
-modifies the `TriggerTenantMatch`, `CreateRun`, and trigger-dispatcher boundaries created there. Do
-not apply these changes to the legacy `EventTriggerListener`/mutable `TriggerMatch` implementation.
+The first-class trigger plan is satisfied by commit `e99f8d7`. This plan is based on the merged
+`TriggerMatch`, `TriggerTenantMatch`, `TriggerRunStarter`, webhook driver, and `CreateRun` APIs. It
+removes every eager audience conversion now present at those boundaries and preserves the merged
+trigger activation, run-idempotency, and dispatch-recovery behavior.
 
 This plan changes only generic Nodeflow behavior. It does not add Rada, Portia, Yaya, SMS, offer, or
 HTTP-client concepts to the package.
@@ -25,7 +26,10 @@ Audience admission:
 
 - `src/Execution/ReplayableSubjectIds.php` — a fresh iterable for each matching flow/run.
 - `src/Contracts/BatchTenantResolver.php` — optional set-based ownership capability.
+- `src/Triggers/TriggerMatch.php` — accepts a replayable source without eagerly converting it.
 - `src/Triggers/TriggerTenantMatch.php` — carries the replayable stream instead of an array.
+- `src/Triggers/TriggerRunStarter.php` — delegates admission and ownership checks to one boundary.
+- `src/Triggers/Webhook/WebhookTriggerDriver.php` — validates a replayable audience without consuming it.
 - `src/Execution/AudienceMaterialiser.php` — fixed-size validation and `insertOrIgnore` batches.
 - `src/Execution/CreateRun.php` — streams IDs and derives strategy from the admitted count.
 
@@ -46,8 +50,13 @@ Failure projection:
 
 **Files:**
 - Create: `src/Execution/ReplayableSubjectIds.php`
+- Modify: `src/Triggers/TriggerMatch.php`
 - Modify: `src/Triggers/TriggerTenantMatch.php`
+- Modify: `src/Triggers/Webhook/WebhookTriggerDriver.php`
 - Modify: `tests/Feature/CustomTriggerDriverTest.php`
+- Modify: `tests/Feature/TriggerRunStarterTest.php`
+- Modify: `tests/Feature/WebhookTriggerTest.php`
+- Modify: `tests/Unit/TriggerRegistriesTest.php`
 - Create: `tests/Unit/ReplayableSubjectIdsTest.php`
 
 - [ ] **Step 1: Write failing replay and laziness tests**
@@ -75,18 +84,26 @@ it('rejects a one-shot generator unless its factory is supplied', function () {
     expect(fn () => ReplayableSubjectIds::from($generator))
         ->toThrow(InvalidArgumentException::class, 'one-shot');
 });
+
+it('rejects blank identifiers lazily without consuming a later replay', function () {
+    $ids = ReplayableSubjectIds::from(fn (): iterable => ['10', ' ', '20']);
+
+    expect(fn () => iterator_to_array($ids, false))
+        ->toThrow(InvalidArgumentException::class, 'blank subject ID');
+});
 ```
 
-In `CustomTriggerDriverTest`, publish two matching flows for one activation tenant. Return the
-audience as a closure and assert each run receives all subjects, proving the first run cannot consume
-the second run's source.
+In `CustomTriggerDriverTest`, publish two matching flows for one activation tenant and configure the
+source to return the same `TriggerMatch` instance for both activation resolutions. Build that match
+from an audience factory closure and assert each run receives all subjects, proving the first run
+cannot consume the second run's source.
 
 - [ ] **Step 2: Run the focused tests and confirm the value is absent**
 
 Run: `vendor/bin/pest tests/Unit/ReplayableSubjectIdsTest.php tests/Feature/CustomTriggerDriverTest.php --compact`
 
-Expected: FAIL because `ReplayableSubjectIds` does not exist and `TriggerTenantMatch` still stores an
-array.
+Expected: FAIL because `ReplayableSubjectIds` does not exist and the merged trigger boundary still
+converts every audience to an array.
 
 - [ ] **Step 3: Implement the replayable iterable**
 
@@ -133,8 +150,23 @@ final class ReplayableSubjectIds implements IteratorAggregate
         }
 
         foreach ($subjects as $subjectId) {
-            yield (string) $subjectId;
+            $subjectId = (string) $subjectId;
+
+            if (trim($subjectId) === '') {
+                throw new InvalidArgumentException('A trigger audience must not contain a blank subject ID.');
+            }
+
+            yield $subjectId;
         }
+    }
+
+    public function isEmpty(): bool
+    {
+        foreach ($this as $_) {
+            return false;
+        }
+
+        return true;
     }
 }
 ```
@@ -146,32 +178,57 @@ Replace the array-promoted `subjectIds` property in `TriggerTenantMatch` with:
 ```php
 final readonly class TriggerTenantMatch
 {
-    public ReplayableSubjectIds $subjectIds;
-
     public function __construct(
-        public string $tenantId,
-        public string $subjectType,
+        string $tenantId,
+        string $subjectType,
         iterable|Closure $subjectIds,
         public array $triggerData = [],
-        public ?string $occurrenceId = null,
+        ?string $occurrenceId = null,
     ) {
+        if (trim($tenantId) === '') {
+            throw new InvalidArgumentException('A trigger tenant match must have a nonblank tenant ID.');
+        }
+
+        if (trim($subjectType) === '') {
+            throw new InvalidArgumentException('A trigger tenant match must have a nonblank subject type.');
+        }
+
+        if ($occurrenceId !== null && trim($occurrenceId) === '') {
+            throw new InvalidArgumentException('A trigger tenant match occurrence ID must be null or nonblank.');
+        }
+
+        $this->tenantId = $tenantId;
+        $this->subjectType = $subjectType;
         $this->subjectIds = ReplayableSubjectIds::from($subjectIds);
+        $this->occurrenceId = $occurrenceId;
     }
+
+    public string $tenantId;
+    public string $subjectType;
+    public ReplayableSubjectIds $subjectIds;
+    public ?string $occurrenceId;
 }
 ```
 
-Keep `TriggerOccurrenceDispatcher` and `TriggerRunStarter` passing `$match->subjectIds` as an
-iterable. Existing arrays remain source-compatible; large remote audiences use a closure returning a
-fresh cursor/page generator.
+Change `TriggerMatch::forTenant()` to accept `iterable|Closure` and pass the source directly into
+`TriggerTenantMatch`; remove its `iterator_to_array()` conversion. Change the webhook driver's empty
+audience check from strict array comparison to `$matches[0]->subjectIds->isEmpty()`. That check starts
+a fresh replay, so the later run still receives the complete audience.
+
+Keep `TriggerOccurrenceDispatcher` passing each replayable match unchanged. Existing arrays remain
+source-compatible; large remote audiences use a closure returning a fresh cursor/page generator.
+Update existing assertions that compare `subjectIds` to an array to explicitly collect the iterable
+with `iterator_to_array($match->subjectIds, false)`. Tests that previously expected blank IDs to fail
+at match construction must now begin iteration and assert the same failure there.
 
 - [ ] **Step 5: Rerun and commit the replay boundary**
 
-Run: `vendor/bin/pest tests/Unit/ReplayableSubjectIdsTest.php tests/Feature/CustomTriggerDriverTest.php tests/Feature/TriggerRunStarterTest.php --compact`
+Run: `vendor/bin/pest tests/Unit/ReplayableSubjectIdsTest.php tests/Unit/TriggerRegistriesTest.php tests/Feature/CustomTriggerDriverTest.php tests/Feature/TriggerRunStarterTest.php tests/Feature/WebhookTriggerTest.php --compact`
 
 Expected: PASS, including two runs consuming the same lazy source independently.
 
 ```bash
-git add src/Execution/ReplayableSubjectIds.php src/Triggers/TriggerTenantMatch.php tests/Unit/ReplayableSubjectIdsTest.php tests/Feature/CustomTriggerDriverTest.php
+git add src/Execution/ReplayableSubjectIds.php src/Triggers/TriggerMatch.php src/Triggers/TriggerTenantMatch.php src/Triggers/Webhook/WebhookTriggerDriver.php tests/Unit/ReplayableSubjectIdsTest.php tests/Unit/TriggerRegistriesTest.php tests/Feature/CustomTriggerDriverTest.php tests/Feature/TriggerRunStarterTest.php tests/Feature/WebhookTriggerTest.php
 git commit -m "feat: stream replayable trigger audiences"
 ```
 
@@ -181,6 +238,7 @@ git commit -m "feat: stream replayable trigger audiences"
 - Create: `src/Contracts/BatchTenantResolver.php`
 - Modify: `src/Execution/AudienceMaterialiser.php`
 - Modify: `src/Execution/CreateRun.php`
+- Modify: `src/Triggers/TriggerRunStarter.php`
 - Modify: `config/nodeflow.php`
 - Modify: `tests/Feature/AudienceMaterialiserTest.php`
 - Modify: `tests/Feature/TriggerRunStarterTest.php`
@@ -220,7 +278,11 @@ expect($count)->toBe(4)
 
 Add a second case whose batch resolver omits subject `3`; assert
 `CrossTenantSubjectException('3')` and zero run subjects. Retain the existing scalar
-`TenantResolver` test to prove backwards-compatible per-subject validation.
+`TenantResolver` test to prove backwards-compatible per-subject validation. Add a
+`TriggerRunStarterTest` case that starts a trigger match through a `BatchTenantResolver`, asserts
+that scalar `ownsSubject()` is never called, and records only bounded batch calls. This proves
+ownership is enforced once in the materializer rather than once in the starter and again during
+admission.
 
 - [ ] **Step 2: Run and confirm eager/scalar behavior**
 
@@ -294,6 +356,12 @@ an unbounded PHP `$seen` set.
 
 - [ ] **Step 5: Make `CreateRun` derive strategy after streaming**
 
+Remove the `TenantResolver` dependency, scalar ownership loop, and audience array conversion from
+`TriggerRunStarter`; pass `$match->subjectIds` directly to `CreateRun`. `AudienceMaterialiser` is the
+single ownership-enforcement boundary, using `BatchTenantResolver` when available and the scalar
+fallback otherwise. A `CrossTenantSubjectException` still propagates through `TriggerRunStarter`, so
+the merged webhook driver continues translating it into `WebhookSourceRejected`.
+
 Remove `iterator_to_array()` and `count($ids)` from `CreateRun`. Create the pending run with an
 explicit option or provisional `cohort`, stream directly into the materializer, then update the
 automatic strategy from the inserted count inside the same transaction:
@@ -314,8 +382,8 @@ if (! array_key_exists('strategy', $options)) {
 }
 ```
 
-Keep the prerequisite plan's unique idempotency recovery and start the engine only after the
-materialization transaction commits.
+Keep merged `CreateRun` idempotency recovery, deterministic workflow instance identity, and dispatch
+recovery unchanged. Start the engine only after the materialization transaction commits.
 
 - [ ] **Step 6: Rerun and commit bounded admission**
 
@@ -325,7 +393,7 @@ Expected: PASS with batch calls bounded to configured size, duplicates ignored, 
 rolling back the entire audience.
 
 ```bash
-git add src/Contracts/BatchTenantResolver.php src/Execution/AudienceMaterialiser.php src/Execution/CreateRun.php config/nodeflow.php tests/Feature/AudienceMaterialiserTest.php tests/Feature/TriggerRunStarterTest.php
+git add src/Contracts/BatchTenantResolver.php src/Execution/AudienceMaterialiser.php src/Execution/CreateRun.php src/Triggers/TriggerRunStarter.php config/nodeflow.php tests/Feature/AudienceMaterialiserTest.php tests/Feature/TriggerRunStarterTest.php
 git commit -m "feat: materialize large audiences in tenant-safe batches"
 ```
 
@@ -563,13 +631,16 @@ git commit -m "feat: apply node policies to durable activities"
 
 - [ ] **Step 1: Write failing projection tests**
 
-Create a live Nodeflow run with `engine_workflow_id = workflow-91` and active subjects, then dispatch
-this event twice through Laravel's event dispatcher so the test proves provider registration as well
-as listener behavior:
+Create a live Nodeflow run with active subjects but leave `engine_workflow_id` null. This models the
+real race where the deterministic durable workflow has started and emitted a failure before
+`CreateRun` persisted its returned handle. Dispatch this event twice through Laravel's event
+dispatcher so the test proves provider registration, race handling, and idempotency:
 
 ```php
+$instanceId = "nodeflow-run:{$run->id}";
+
 $event = new WorkflowFailed(
-    instanceId: 'workflow-91',
+    instanceId: $instanceId,
     runId: 'durable-run-4',
     workflowType: 'class',
     workflowClass: FlowInterpreter::class,
@@ -584,7 +655,9 @@ Event::dispatch($event);
 
 Assert the run is `failed`, `ended_at` is set, `error` contains the exception/message, every formerly
 active subject is `failed` with a null cursor, and duplicate delivery does not change the original
-terminal timestamp. Add an event for a non-Nodeflow workflow class and assert it changes nothing.
+terminal timestamp. Add coverage for a run whose `engine_workflow_id` already equals its
+deterministic instance ID. Events with a malformed or unrelated instance ID, a mismatched persisted
+handle, or a non-Nodeflow workflow class must change nothing.
 
 - [ ] **Step 2: Run and confirm no listener exists**
 
@@ -600,6 +673,8 @@ final class ProjectWorkflowFailure
 {
     private const LIVE = ['pending', 'running', 'waiting', 'blocked'];
 
+    private const INSTANCE_PREFIX = 'nodeflow-run:';
+
     public function handle(WorkflowFailed $event): void
     {
         if ($event->workflowClass !== FlowInterpreter::class) {
@@ -607,10 +682,7 @@ final class ProjectWorkflowFailure
         }
 
         DB::transaction(function () use ($event): void {
-            $run = Run::withoutTenancy()
-                ->where('engine_workflow_id', $event->instanceId)
-                ->lockForUpdate()
-                ->first();
+            $run = $this->runFor($event);
 
             if ($run === null || ! in_array($run->status, self::LIVE, true)) {
                 return;
@@ -635,12 +707,45 @@ final class ProjectWorkflowFailure
             ]);
         });
     }
+
+    private function runFor(WorkflowFailed $event): ?Run
+    {
+        if (! str_starts_with($event->instanceId, self::INSTANCE_PREFIX)) {
+            return null;
+        }
+
+        $id = substr($event->instanceId, strlen(self::INSTANCE_PREFIX));
+
+        if ($id === '' || ! ctype_digit($id) || (int) $id < 1) {
+            return null;
+        }
+
+        $run = Run::withoutTenancy()->whereKey((int) $id)->lockForUpdate()->first();
+
+        if ($run === null) {
+            return null;
+        }
+
+        $expected = self::INSTANCE_PREFIX.$run->id;
+
+        if (! hash_equals($expected, $event->instanceId)) {
+            return null;
+        }
+
+        if ($run->engine_workflow_id !== null
+            && ! hash_equals($expected, (string) $run->engine_workflow_id)) {
+            return null;
+        }
+
+        return $run;
+    }
 }
 ```
 
 Import `DB`, `Str`, `Run`, `FlowInterpreter`, and the durable event. Looking up by
-`engine_workflow_id` ensures failures from other durable workflows cannot collide with Nodeflow run
-primary keys.
+the exact merged `nodeflow-run:{run_id}` identity closes the start-before-handle-persistence race.
+The workflow-class check, strict prefix parsing, primary-key lookup, recomputed identity, and optional
+persisted-handle comparison prevent unrelated durable workflows from mutating Nodeflow runs.
 
 - [ ] **Step 4: Register the event and expose terminal state**
 
@@ -731,7 +836,9 @@ making every package test run pay that cost.
 Document these exact behaviors:
 
 - `required-contracts.md`: `BatchTenantResolver` is optional and falls back safely to
-  `ownsSubject()`; hosts serving large remote audiences should bind the batch contract.
+  `ownsSubject()`; hosts serving large remote audiences should bind the batch contract. Document
+  that `TriggerMatch`, `TriggerTenantMatch`, `TriggerRunStarter`, and the webhook driver preserve a
+  replayable audience and that ownership is enforced centrally during materialization.
 - `writing-nodes.md`: `$tries`, `$backoff`, `$timeout`, and `$nonRetryableErrorTypes` are frozen at
   publish; audience-node transport exceptions retry the durable activity, while stable business
   rejection should return a `NodeResult` output.
@@ -765,8 +872,9 @@ git commit -m "docs: publish Nodeflow production readiness guidance"
 
 ## Completion gate
 
-Do not begin the Portia–Yaya capability-foundation plan until all six tasks pass, the prerequisite
-trigger plan is merged, and a Nodeflow release/tag containing both is available to `portia-engine`.
+Do not begin the Portia–Yaya capability-foundation plan until all six tasks pass and a Nodeflow
+release/tag containing merged first-class triggers plus this readiness work is available to
+`portia-engine`.
 The release contract must include replayable audiences, `BatchTenantResolver`, published activity
 policy, and terminal failure projection; downstream plans must use those APIs rather than copying
 their mechanics into Portia.
