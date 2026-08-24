@@ -8,6 +8,7 @@ use Nodeflow\Execution\Steps\WaitStep;
 use Nodeflow\Graph\Graph;
 use Nodeflow\Workflows\Activities\CompleteRunActivity;
 use Nodeflow\Workflows\Activities\LoadGraphActivity;
+use Nodeflow\Workflows\Activities\ResolveRunEntryNodeActivity;
 use Nodeflow\Workflows\Activities\RunNodeActivity;
 use Workflow\V2\Attributes\Signal;
 use Workflow\V2\Workflow;
@@ -46,6 +47,10 @@ class FlowInterpreter extends Workflow
     public function handle(int $runId, int $maxSteps = 1000, ?string $entryNodeId = null): void
     {
         $graph = Graph::fromArray(self::activity(LoadGraphActivity::class, $runId));
+
+        if ($entryNodeId === null) {
+            $entryNodeId = self::activity(ResolveRunEntryNodeActivity::class, $runId);
+        }
 
         $loop = (new InterpreterLoop)->steps($graph, $maxSteps, $entryNodeId);
         $send = null;
