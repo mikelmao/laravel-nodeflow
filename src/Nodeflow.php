@@ -66,4 +66,10 @@ class Nodeflow
     {
         require __DIR__.'/Http/routes.php';
     }
+
+    /** Register only the host-configured public webhook entry point. */
+    public static function webhookRoutes(): void
+    {
+        require __DIR__.'/Http/webhook-routes.php';
+    }
 }

@@ -37,11 +37,14 @@ class WebhookTriggerNode extends AbstractTriggerNode
 
     public function compile(array $config): TriggerActivationDescriptor
     {
+        $metadata = $config;
+        unset($metadata['source']);
+
         return new TriggerActivationDescriptor(
             driver: $this->driver(),
             source: (string) $config['source'],
             qualifier: null,
-            metadata: [],
+            metadata: $metadata,
         );
     }
 }

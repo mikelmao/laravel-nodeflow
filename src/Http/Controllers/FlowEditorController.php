@@ -192,10 +192,27 @@ class FlowEditorController extends Controller
         // reset it (see PublishFlow) and clients stay open across a publish: the
         // editor must keep echoing the current token on its next autosave, and
         // this is the only response that would otherwise leave it guessing.
-        return response()->json([
+        $response = [
             'version' => $result->version->version,
             'draft_revision' => (int) ($flow->draft_revision ?? 0),
-        ]);
+        ];
+
+        if ($result->webhookUrl !== null) {
+            $response['webhook_url'] = $result->webhookUrl;
+        }
+
+        if ($result->webhookSecret !== null) {
+            $response['webhook_secret'] = $result->webhookSecret;
+        }
+
+        $json = response()->json($response);
+
+        if ($result->webhookSecret !== null) {
+            $json->headers->set('Cache-Control', 'no-store');
+            $json->headers->set('Pragma', 'no-cache');
+        }
+
+        return $json;
     }
 
     /**

@@ -5,6 +5,7 @@ use Nodeflow\Http\Controllers\FieldOptionsController;
 use Nodeflow\Http\Controllers\FlowEditorController;
 use Nodeflow\Http\Controllers\RunSubjectsController;
 use Nodeflow\Http\Controllers\RunViewController;
+use Nodeflow\Http\Controllers\WebhookSecretController;
 
 /*
  * Loaded by Nodeflow::routes(), which a host calls inside its own Route::group —
@@ -21,6 +22,8 @@ Route::put('flows/{flow}/draft', [FlowEditorController::class, 'draft'])->name('
 Route::post('flows/{flow}/validate', [FlowEditorController::class, 'validate'])
     ->name('nodeflow.flows.validate');
 Route::post('flows/{flow}/publish', [FlowEditorController::class, 'publish'])->name('nodeflow.flows.publish');
+Route::post('flows/{flow}/webhook-secret/rotate', WebhookSecretController::class)
+    ->name('nodeflow.webhooks.secret.rotate');
 
 /*
  * Keyed by node type and field key, never by a class name. The source is read from

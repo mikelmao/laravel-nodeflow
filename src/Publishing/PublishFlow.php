@@ -8,12 +8,15 @@ use Nodeflow\Graph\Graph;
 use Nodeflow\Graph\GraphValidator;
 use Nodeflow\Models\Flow;
 use Nodeflow\Models\FlowVersion;
+use Nodeflow\Triggers\Webhook\WebhookCredentials;
+use Nodeflow\Triggers\Webhook\WebhookTriggerDriver;
 
 class PublishFlow
 {
     public function __construct(
         private GraphValidator $validator,
         private CompileTriggerActivation $compileActivation,
+        private WebhookCredentials $webhookCredentials,
     ) {}
 
     public function publish(
@@ -96,7 +99,10 @@ class PublishFlow
                 'published_by' => $publishedBy,
             ]);
 
-            $this->compileActivation->compile($lockedFlow, $version, $compiledGraph);
+            $activation = $this->compileActivation->compile($lockedFlow, $version, $compiledGraph);
+            $webhook = $activation->driver === WebhookTriggerDriver::key()
+                ? $this->webhookCredentials->forPublication($lockedFlow)
+                : null;
 
             // The draft became this version, so it is no longer pending work. Left
             // behind, the editor reopens showing an already-published graph as
@@ -123,7 +129,11 @@ class PublishFlow
                 'draft_updated_at' => null,
             ]);
 
-            return [new PublishResult($version), $lockedFlow];
+            return [new PublishResult(
+                $version,
+                $webhook['url'] ?? null,
+                $webhook['secret'] ?? null,
+            ), $lockedFlow];
         });
 
         // Transaction work happens on the locked reload so a rollback can never

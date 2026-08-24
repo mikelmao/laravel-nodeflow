@@ -10,6 +10,10 @@ return [
         'subject_page' => 50,
         'trigger_data_bytes' => 65_536,
     ],
+    'webhooks' => [
+        'replay_window_seconds' => 300,
+        'max_body_bytes' => 1_048_576,
+    ],
 
     /*
      * What a null return from TenantResolver::currentTenantId() means.
