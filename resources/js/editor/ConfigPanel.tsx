@@ -2,7 +2,8 @@ import { controlFor } from '../controls'
 import type { ControlMap } from '../controls'
 import { FieldControlIdProvider } from '../controls/FieldControlId'
 import { useFieldOptions } from '../controls/useFieldOptions'
-import { useId, type FocusEvent } from 'react'
+import { cloneJsonValue } from '../graph/json'
+import { useId, useMemo, type FocusEvent } from 'react'
 import type { FieldPayload, GraphComponentPayload, NodeCardData, NodeErrorEntry } from '../graph/types'
 
 type FieldRowProps = {
@@ -18,8 +19,17 @@ type FieldRowProps = {
 
 function FieldRow({ id, nodeType, field, value, controls, errors, onChange, onFieldBlur }: FieldRowProps) {
     const controlId = `nf-${useId().replace(/:/g, '')}`
-    const loaded = useFieldOptions(nodeType, field)
-    const Control = controlFor(field.type, controls)
+    // Host controls are allowed to use mutable UI models. Give each mounted
+    // field a private, stable JSON copy so an in-place edit cannot mutate the
+    // palette, current document, or an undo snapshot before onChange commits.
+    const controlField = useMemo(() => ({
+        ...field,
+        default: copiedControlValue(field.default),
+        options: { ...field.options },
+    }), [field])
+    const controlValue = useMemo(() => copiedControlValue(value), [value])
+    const loaded = useFieldOptions(nodeType, controlField)
+    const Control = controlFor(controlField.type, controls)
     const fieldErrors = loaded.error === null ? errors : [...errors, loaded.error]
 
     return (
@@ -34,8 +44,8 @@ function FieldRow({ id, nodeType, field, value, controls, errors, onChange, onFi
         >
             <FieldControlIdProvider id={controlId}>
                 <Control
-                    field={field}
-                    value={value}
+                    field={controlField}
+                    value={controlValue}
                     onChange={onChange}
                     errors={fieldErrors}
                     options={loaded.options}
@@ -44,6 +54,14 @@ function FieldRow({ id, nodeType, field, value, controls, errors, onChange, onFi
             </FieldControlIdProvider>
         </div>
     )
+}
+
+function copiedControlValue(value: unknown): unknown {
+    try {
+        return cloneJsonValue(value)
+    } catch {
+        return null
+    }
 }
 
 function NodeIssueList({ entries }: { entries: NodeErrorEntry[] }) {

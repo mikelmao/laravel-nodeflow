@@ -887,6 +887,99 @@ describe('FlowEditor', () => {
         expect(screen.getByLabelText(/Template/)).toHaveValue('welcome')
     })
 
+    it('isolates nested executable config from an in-place mutating host control', async () => {
+        const fetchMock = successfulFetch()
+        vi.stubGlobal('fetch', fetchMock)
+        const MutatingObject = ({ value, onChange }: FieldControlProps) => {
+            const current = value as { rules: { tags: string[] }[] }
+            return <button type="button" onClick={() => {
+                current.rules[0]!.tags.push('changed')
+                onChange(current)
+            }}>Executable value: {current.rules[0]!.tags.join(',')}</button>
+        }
+        const nestedDefinition: NodeTypePayload = {
+            ...sendDefinition,
+            fields: [{ ...sendDefinition.fields[0]!, key: 'routing', type: 'mutating-object', label: 'Routing' }],
+            default_config: {},
+        }
+        const inputGraph: Graph = {
+            start: 'send1',
+            nodes: [{ id: 'send1', type: 'app.send', config: { routing: { rules: [{ tags: ['original'] }] } }, position: { x: 0, y: 0 } }],
+            edges: [],
+        }
+
+        renderEditor({ graph: inputGraph, palette: [nestedDefinition, exitDefinition], controls: { 'mutating-object': MutatingObject } })
+        fireEvent.click(canvasNode('send1'))
+        fireEvent.click(screen.getByRole('button', { name: 'Executable value: original' }))
+
+        expect(screen.getByRole('button', { name: 'Executable value: original,changed' })).toBeInTheDocument()
+        expect(inputGraph.nodes![0]!.config).toEqual({ routing: { rules: [{ tags: ['original'] }] } })
+        await waitFor(() => expect(fetchMock.mock.calls.filter(([url]) => url === urls.draft)).toHaveLength(1))
+        expect(requestBody(fetchMock, urls.draft)).toMatchObject({
+            graph: { nodes: [expect.objectContaining({ config: { routing: { rules: [{ tags: ['original', 'changed'] }] } } })] },
+        })
+
+        fireEvent.keyDown(document, { key: 'z', ctrlKey: true })
+        expect(screen.getByRole('button', { name: 'Executable value: original' })).toBeInTheDocument()
+        expect(screen.getByRole('button', { name: 'Undo' })).toBeDisabled()
+        expect(screen.getByRole('button', { name: 'Redo' })).toBeEnabled()
+        fireEvent.keyDown(document, { key: 'z', ctrlKey: true, shiftKey: true })
+        expect(screen.getByRole('button', { name: 'Executable value: original,changed' })).toBeInTheDocument()
+    })
+
+    it('isolates a source-contributed trigger field default from a mutating host control', async () => {
+        const fetchMock = successfulFetch()
+        vi.stubGlobal('fetch', fetchMock)
+        const MutatingArray = ({ value, onChange }: FieldControlProps) => {
+            const current = value as string[]
+            return <button type="button" onClick={() => {
+                current.push('updated')
+                onChange(current)
+            }}>Trigger value: {current.join(',')}</button>
+        }
+        const sourceDefault = ['created']
+        const sourceField = {
+            ...sendDefinition.fields[0]!,
+            key: 'events',
+            type: 'mutating-array',
+            label: 'Source events',
+            default: sourceDefault,
+        }
+        const triggerDefinition: TriggerNodeTypePayload = {
+            ...triggerNodes[0]!,
+            fields: [sourceField],
+        }
+        const inputGraph: Graph = {
+            start: 'trigger',
+            nodes: [
+                { id: 'trigger', type: triggerDefinition.type, config: {}, position: { x: 0, y: 0 } },
+                { id: 'send1', type: 'app.send', config: { template: 'welcome' }, position: { x: 300, y: 0 } },
+            ],
+            edges: [{ from: 'trigger', to: 'send1', output: 'started' }],
+        }
+
+        renderEditor({ graph: inputGraph, trigger_nodes: [triggerDefinition], controls: { 'mutating-array': MutatingArray } })
+        fireEvent.click(canvasNode('trigger'))
+        fireEvent.click(screen.getByRole('button', { name: 'Trigger value: created' }))
+
+        expect(screen.getByRole('button', { name: 'Trigger value: created,updated' })).toBeInTheDocument()
+        expect(sourceDefault).toEqual(['created'])
+        expect(sourceField.default).toEqual(['created'])
+        expect(inputGraph.nodes![0]!.config).toEqual({})
+        await waitFor(() => expect(fetchMock.mock.calls.filter(([url]) => url === urls.draft)).toHaveLength(1))
+        expect(requestBody(fetchMock, urls.draft)).toMatchObject({
+            graph: { nodes: expect.arrayContaining([expect.objectContaining({ id: 'trigger', config: { events: ['created', 'updated'] } })]) },
+        })
+
+        fireEvent.keyDown(document, { key: 'z', ctrlKey: true })
+        expect(screen.getByRole('button', { name: 'Trigger value: created' })).toBeInTheDocument()
+        expect(sourceField.default).toEqual(['created'])
+        expect(screen.getByRole('button', { name: 'Undo' })).toBeDisabled()
+        expect(screen.getByRole('button', { name: 'Redo' })).toBeEnabled()
+        fireEvent.keyDown(document, { key: 'z', ctrlKey: true, shiftKey: true })
+        expect(screen.getByRole('button', { name: 'Trigger value: created,updated' })).toBeInTheDocument()
+    })
+
     // Two focusable descendants remain one field transaction until focus leaves their shared field row.
     it('undoes compound custom-control edits together after focus leaves that field', () => {
         const Compound = ({ value, onChange }: FieldControlProps) => <>
