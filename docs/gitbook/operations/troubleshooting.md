@@ -45,11 +45,11 @@ When the host uses Laravel failed-job storage and has its `failed_jobs` table, a
 
 ## An event does not create a run
 
-**Likely cause:** the trigger is not registered, listens for another event class, does not match its configuration, returns no tenant audience, or the flow is not active with a current version.
+**Likely cause:** the source is not registered, allowlists another concrete event class, rejects the event snapshot/configuration, returns no tenant audience, or the flow is not active with a current version.
 
-**Verify:** confirm the trigger registration and event dispatch in the host, then inspect the active flow's stored trigger type and configuration through its authorized flow view. `EventTriggerListener` reports a start failure for one flow and continues with other matches.
+**Verify:** confirm driver → node → source registration and host occurrence delivery, then inspect the active flow's immutable activation (driver, source, qualifier, trigger node, descriptor, and pinned version). The shared occurrence dispatcher reports one activation failure and continues with other matches; Laravel-event/model listeners also isolate source-level failures.
 
-**Correct:** register the trigger in the application provider, correct `event()`, `resolve()`, and `matchesConfig()`, then publish an active version. Triggered runs are always live; do not dispatch production events to test node behavior. See [Writing triggers](../building-automations/writing-triggers.md).
+**Correct:** register driver → node → source in dependency order, correct the source's `eventClass()`, explicit value-only `snapshot()`, and `resolve()` methods, then publish an active version. Use `php artisan nodeflow:check-node-types` to identify a missing trigger node, driver, or source registration for an active activation or trigger-origin live run. Triggered runs are always live; do not dispatch production events to test node behavior. See [Writing triggers](../building-automations/writing-triggers.md).
 
 ## Draft save reports a stale conflict
 

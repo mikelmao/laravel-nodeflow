@@ -132,7 +132,7 @@ The check happens after the visible effect, so a test run sends a real receipt. 
 
 Test mode does not replace the supplied audience with a sample subject, hide run records from normal operations, or simulate routing without persistence. It also does not intercept events emitted by a node. Use a dedicated test tenant or test-safe subjects when host code itself has visible behavior.
 
-Event-triggered runs are always live. `EventTriggerListener` supplies the trigger idempotency key but no `is_test` option, so dispatching a real application event can reach real node effects. A child run created by the built-in `core.start_flow` node inherits its parent run's `is_test` value; it still needs every child-flow node to be test-safe.
+Webhook, model, and Laravel-event trigger runs are live by default: their source match supplies trigger data and occurrence identity but no `is_test` option, so dispatching a real occurrence can reach real node effects. A child run created by the built-in `core.start_flow` node inherits its parent run's `is_test` value; it still needs every child-flow node to be test-safe.
 
 ## Next step
 

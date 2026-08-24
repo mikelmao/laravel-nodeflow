@@ -28,7 +28,7 @@ it('does NOT catch a tenant_id change made through the query builder', function 
     // did it to update BelongsToTenant's comment and docs/02-integration.md in
     // the same commit. Without it, the comment and the docs could quietly
     // become false while the suite stayed green.
-    $flow = Flow::create(['name' => 'Welcome', 'trigger_type' => 'app.x', 'status' => 'draft', 'tenant_id' => 'acme']);
+    $flow = Flow::create(['name' => 'Welcome', 'status' => 'draft', 'tenant_id' => 'acme']);
 
     Flow::withoutTenancy()->where('id', $flow->id)->update(['tenant_id' => 'globex']);
 

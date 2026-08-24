@@ -4,8 +4,13 @@ namespace Nodeflow\Engine;
 
 interface WorkflowEngine
 {
-    /** @return string the engine's workflow id */
-    public function start(string $workflowClass, array $args): string;
+    /**
+     * Infrastructure contract: deterministic recovery callers supply a stable
+     * instance id; other callers may omit it and retain engine-generated ids.
+     *
+     * @return string the engine's workflow id
+     */
+    public function start(string $workflowClass, array $args, ?string $instanceId = null): string;
 
     public function signal(string $workflowId, string $method, array $args = []): void;
 

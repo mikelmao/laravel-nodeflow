@@ -66,3 +66,14 @@ it('validates every multiselect choice against its declared options', function (
         ->and(Validator::make(['towns' => ['a', 'z']], $rules)->passes())->toBeFalse()
         ->and(Validator::make(['towns' => 'a'], $rules)->passes())->toBeFalse();
 });
+
+it('validates dotted field keys as literal flat config keys', function () {
+    $field = Field::text('template.variant')->required();
+    $rules = $field->rules();
+
+    expect($rules)->toHaveKey('template\.variant')
+        ->and($field->toWireArray()['key'])->toBe('template.variant')
+        ->and(Validator::make(['template.variant' => 'welcome'], $rules)->passes())->toBeTrue()
+        ->and(Validator::make(['template' => ['variant' => 'welcome']], $rules)->passes())->toBeFalse()
+        ->and(Validator::make([], $rules)->errors()->keys())->toBe(['template.variant']);
+});

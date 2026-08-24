@@ -9,6 +9,9 @@ export type HttpMethod = 'GET' | 'PUT' | 'POST'
 const TYPE_PLACEHOLDER = '__NODEFLOW_TYPE__'
 const FIELD_PLACEHOLDER = '__NODEFLOW_FIELD__'
 const NODE_PLACEHOLDER = '__NODEFLOW_NODE__'
+const SOURCE_PLACEHOLDER = '__NODEFLOW_SOURCE__'
+
+export type WebhookRotationResponse = { secret: string; rotatedAt: string | null }
 
 /**
  * Read CSRF from Laravel's decoded XSRF cookie, with the host page's meta tag
@@ -94,6 +97,17 @@ export function optionsUrl(template: string, nodeType: string, fieldKey: string)
         [TYPE_PLACEHOLDER]: nodeType,
         [FIELD_PLACEHOLDER]: fieldKey,
     })
+}
+
+/** Resolve only the source sentinel; the field-options hook resolves type and field lazily. */
+export function triggerSourceOptionsTemplate(template: string, sourceKey: string): string {
+    return substituteSentinels(template, { [SOURCE_PLACEHOLDER]: sourceKey })
+}
+
+export function webhookRotationResponse(data: Record<string, unknown> | null): WebhookRotationResponse | null {
+    if (typeof data?.secret !== 'string' || data.secret === '') return null
+    if (data.rotated_at !== null && typeof data.rotated_at !== 'string') return null
+    return { secret: data.secret, rotatedAt: data.rotated_at ?? null }
 }
 
 export function subjectsUrl(template: string, nodeId: string): string {

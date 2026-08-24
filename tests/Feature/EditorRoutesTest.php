@@ -5,9 +5,233 @@ use Illuminate\Routing\RouteCollection;
 use Illuminate\Support\Facades\Gate;
 use Illuminate\Support\Facades\Route;
 use Nodeflow\Contracts\TenantResolver;
+use Nodeflow\Contracts\TriggerSource;
+use Nodeflow\Editor\SaveDraft;
+use Nodeflow\Editor\StaleDraftException;
 use Nodeflow\Models\Concerns\TenancyGuardSuspension;
 use Nodeflow\Models\Flow;
 use Nodeflow\Nodeflow;
+use Nodeflow\Schema\Field;
+use Nodeflow\Schema\TriggerDefinition;
+use Nodeflow\Triggers\TriggerMatch;
+use Nodeflow\Triggers\TriggerOccurrence;
+use Nodeflow\Triggers\Webhook\WebhookTriggerSource;
+use Tests\Support\FakeOptionSource;
+use Tests\Support\FakeTriggerDriver;
+use Tests\Support\FakeTriggerNode;
+use Tests\Support\FakeTriggerSource;
+
+class EditorCollisionWebhookSource implements WebhookTriggerSource
+{
+    public static function key(): string
+    {
+        return 'test.editor-collision';
+    }
+
+    public static function driver(): string
+    {
+        return 'webhook';
+    }
+
+    public function definition(): TriggerDefinition
+    {
+        return TriggerDefinition::make('Colliding source')->fields([
+            Field::text('source')->required(),
+        ]);
+    }
+
+    public function resolve(TriggerOccurrence $occurrence, array $config): TriggerMatch
+    {
+        return TriggerMatch::make();
+    }
+}
+
+class EditorWebhookSource implements WebhookTriggerSource
+{
+    public static function key(): string
+    {
+        return 'test.editor-webhook';
+    }
+
+    public static function driver(): string
+    {
+        return 'webhook';
+    }
+
+    public function definition(): TriggerDefinition
+    {
+        return TriggerDefinition::make('Editor webhook source')
+            ->description('A custom allowlisted source.')
+            ->fields([
+                Field::select('account')->default('primary')->options([
+                    'primary' => 'Primary',
+                ]),
+                Field::select('template')->optionsFrom(FakeOptionSource::class),
+            ]);
+    }
+
+    public function resolve(TriggerOccurrence $occurrence, array $config): TriggerMatch
+    {
+        return TriggerMatch::make();
+    }
+}
+
+interface EditorNarrowWebhookSource extends WebhookTriggerSource
+{
+}
+
+class EditorGenericSameDriverSource implements TriggerSource
+{
+    public static function key(): string
+    {
+        return 'test.editor-generic-webhook';
+    }
+
+    public static function driver(): string
+    {
+        return 'webhook';
+    }
+
+    public function definition(): TriggerDefinition
+    {
+        return TriggerDefinition::make('Generic same-driver source');
+    }
+
+    public function resolve(TriggerOccurrence $occurrence, array $config): TriggerMatch
+    {
+        return TriggerMatch::make();
+    }
+}
+
+class EditorNarrowWebhookSourceImplementation implements EditorNarrowWebhookSource
+{
+    public static function key(): string
+    {
+        return 'test.editor-narrow-webhook';
+    }
+
+    public static function driver(): string
+    {
+        return 'webhook';
+    }
+
+    public function definition(): TriggerDefinition
+    {
+        return TriggerDefinition::make('Narrow webhook source')->fields([
+            Field::select('template')->optionsFrom(FakeOptionSource::class),
+        ]);
+    }
+
+    public function resolve(TriggerOccurrence $occurrence, array $config): TriggerMatch
+    {
+        return TriggerMatch::make();
+    }
+}
+
+class EditorNarrowWebhookTriggerNode extends \Nodeflow\Triggers\AbstractTriggerNode
+{
+    public static function type(): string
+    {
+        return 'test.editor-narrow-trigger';
+    }
+
+    public function definition(): TriggerDefinition
+    {
+        return TriggerDefinition::make('Narrow webhook trigger')->fields([
+            Field::select('source')->required(),
+        ]);
+    }
+
+    public function driver(): string
+    {
+        return 'webhook';
+    }
+
+    protected function sourceType(): string
+    {
+        return EditorNarrowWebhookSource::class;
+    }
+
+    public function compile(array $config): \Nodeflow\Triggers\TriggerActivationDescriptor
+    {
+        return new \Nodeflow\Triggers\TriggerActivationDescriptor(
+            'webhook',
+            (string) $config['source'],
+            null,
+            [],
+        );
+    }
+}
+
+class StatefulEditorWebhookSource implements WebhookTriggerSource
+{
+    public static int $definitions = 0;
+
+    public static function key(): string
+    {
+        return 'test.editor-stateful-source';
+    }
+
+    public static function driver(): string
+    {
+        return 'webhook';
+    }
+
+    public function definition(): TriggerDefinition
+    {
+        self::$definitions++;
+
+        return TriggerDefinition::make('Stateful editor source')->fields([
+            self::$definitions === 1
+                ? Field::text('account')->required()
+                : Field::text('source')->required(),
+        ]);
+    }
+
+    public function resolve(TriggerOccurrence $occurrence, array $config): TriggerMatch
+    {
+        return TriggerMatch::make();
+    }
+}
+
+class StatefulEditorWebhookTriggerNode extends \Nodeflow\Triggers\AbstractTriggerNode
+{
+    public static int $definitions = 0;
+
+    public static function type(): string
+    {
+        return 'test.editor-stateful-trigger';
+    }
+
+    public function definition(): TriggerDefinition
+    {
+        self::$definitions++;
+
+        return TriggerDefinition::make('Stateful editor trigger')->fields([
+            Field::select('source')->required(),
+        ]);
+    }
+
+    public function driver(): string
+    {
+        return 'webhook';
+    }
+
+    protected function sourceType(): string
+    {
+        return WebhookTriggerSource::class;
+    }
+
+    public function compile(array $config): \Nodeflow\Triggers\TriggerActivationDescriptor
+    {
+        return new \Nodeflow\Triggers\TriggerActivationDescriptor(
+            'webhook',
+            (string) $config['source'],
+            null,
+            [],
+        );
+    }
+}
 
 beforeEach(function () {
     $this->tenant = 'org-1';
@@ -32,21 +256,17 @@ beforeEach(function () {
     $this->user = new User;
     $this->user->id = 1;
 
-    $this->flow = Flow::create(['name' => 'A', 'trigger_type' => 'manual', 'status' => 'draft']);
+    $this->flow = Flow::create(['name' => 'A', 'status' => 'draft']);
 });
 
 function exitGraph(): array
 {
-    return [
-        'start' => 'e1',
-        'nodes' => [['id' => 'e1', 'type' => 'core.exit', 'config' => []]],
-        'edges' => [],
-    ];
+    return triggeredExitGraph();
 }
 
 function graphWithConcurrentWaits(): array
 {
-    return [
+    return triggeredGraph([
         'start' => 'c1',
         'nodes' => [
             ['id' => 'c1', 'type' => 'core.condition', 'config' => [
@@ -64,7 +284,7 @@ function graphWithConcurrentWaits(): array
             ['from' => 'w1', 'output' => 'default', 'to' => 'e1'],
             ['from' => 'w2', 'output' => 'default', 'to' => 'e1'],
         ],
-    ];
+    ]);
 }
 
 function allowEverything(): void
@@ -90,7 +310,6 @@ it('four-oh-fours another tenants flow rather than forbidding it', function () {
     $theirs = TenancyGuardSuspension::run(fn () => Flow::withoutTenancy()->create([
         'tenant_id' => 'org-2',
         'name' => 'Theirs',
-        'trigger_type' => 'manual',
         'status' => 'draft',
     ]));
 
@@ -128,7 +347,6 @@ it('renders the editor props the client is written against', function () {
     $response->assertJsonPath('component', 'nodeflow/editor')
         ->assertJsonPath('props.flow.id', $this->flow->id)
         ->assertJsonPath('props.flow.name', 'A')
-        ->assertJsonPath('props.flow.trigger_type', 'manual')
         ->assertJsonPath('props.flow.status', 'draft')
         ->assertJsonPath('props.flow.version', null)
         ->assertJsonPath('props.flow.draft_revision', 0)
@@ -143,11 +361,158 @@ it('renders the editor props the client is written against', function () {
         ->assertJsonPath('props.graph', ['start' => '', 'nodes' => [], 'edges' => []]);
 
     $palette = collect($response->json('props.palette'));
+    $triggerNodes = collect($response->json('props.trigger_nodes'));
 
     expect($palette->pluck('type'))->toContain('core.condition')
         ->and($palette->firstWhere('type', 'core.condition'))
-        ->toHaveKeys(['label', 'group', 'outputs', 'fields', 'default_config', 'cardinality'])
-        ->and($response->json('props.triggers'))->toBeArray();
+        ->toHaveKeys(['kind', 'label', 'group', 'outputs', 'fields', 'default_config', 'cardinality'])
+        ->and($palette->firstWhere('type', 'core.condition')['kind'])->toBe('executable')
+        ->and($triggerNodes->pluck('type'))->toContain(
+            'core.trigger.webhook',
+            'core.trigger.model_observer',
+            'core.trigger.laravel_event',
+        )
+        ->and($triggerNodes->firstWhere('type', 'core.trigger.webhook'))
+        ->toMatchArray([
+            'kind' => 'trigger',
+            'driver' => 'webhook',
+            'outputs' => ['started'],
+        ])
+        ->toHaveKeys(['label', 'icon', 'description', 'fields', 'default_config'])
+        ->and($response->json('props.trigger_sources'))->toMatchArray([
+            'webhook' => [],
+            'model' => [],
+            'event' => [],
+        ])
+        ->and($response->json('props.flow'))->not->toHaveKeys([
+            'trigger_type',
+            'trigger_config',
+        ]);
+});
+
+it('exposes custom trigger nodes and allowlisted sources without class names', function () {
+    allowEverything();
+    Nodeflow::registerTriggerDrivers([FakeTriggerDriver::class]);
+    Nodeflow::registerTriggerNodes([FakeTriggerNode::class]);
+    Nodeflow::registerTriggerSources([FakeTriggerSource::class, EditorWebhookSource::class]);
+
+    $response = editPage($this, $this->flow->id)->assertOk();
+
+    $node = collect($response->json('props.trigger_nodes'))->firstWhere('type', 'test.fake_trigger');
+    $source = $response->json('props.trigger_sources')['test.fake'][0];
+    $webhookSource = $response->json('props.trigger_sources.webhook.0');
+
+    expect($node)->toMatchArray([
+        'kind' => 'trigger',
+        'driver' => 'test.fake',
+        'label' => 'Fake trigger',
+        'outputs' => ['started'],
+        'default_config' => ['source' => 'test.orders'],
+    ])->and($source)->toMatchArray([
+        'key' => 'test.orders',
+        'driver' => 'test.fake',
+        'label' => 'Fake source',
+        'fields' => [],
+        'default_config' => [],
+    ])->and($webhookSource)->toMatchArray([
+        'key' => 'test.editor-webhook',
+        'driver' => 'webhook',
+        'label' => 'Editor webhook source',
+        'description' => 'A custom allowlisted source.',
+        'default_config' => ['account' => 'primary'],
+    ])->and($webhookSource['fields'][0])->toMatchArray([
+        'key' => 'account',
+        'default' => 'primary',
+        'options' => ['primary' => 'Primary'],
+    ])->and($response->getContent())
+        ->not->toContain(FakeTriggerNode::class, FakeTriggerSource::class, FakeTriggerDriver::class);
+});
+
+it('authors compatible source keys per trigger node without same-driver guesses', function () {
+    allowEverything();
+    Nodeflow::registerTriggerNodes([EditorNarrowWebhookTriggerNode::class]);
+    Nodeflow::registerTriggerSources([
+        EditorWebhookSource::class,
+        EditorGenericSameDriverSource::class,
+        EditorNarrowWebhookSourceImplementation::class,
+    ]);
+
+    $response = editPage($this, $this->flow->id)->assertOk();
+    $nodes = collect($response->json('props.trigger_nodes'));
+
+    expect($nodes->firstWhere('type', 'core.trigger.webhook')['compatible_source_keys'])
+        ->toBe(['test.editor-webhook', 'test.editor-narrow-webhook'])
+        ->and($nodes->firstWhere('type', EditorNarrowWebhookTriggerNode::type())['compatible_source_keys'])
+        ->toBe(['test.editor-narrow-webhook'])
+        ->and($nodes->firstWhere('type', 'core.trigger.model_observer')['compatible_source_keys'])
+        ->toBe([])
+        ->and(collect($response->json('props.trigger_sources.webhook'))->pluck('key')->all())
+        ->toBe([
+            'test.editor-webhook',
+            'test.editor-generic-webhook',
+            'test.editor-narrow-webhook',
+        ]);
+
+    $this->actingAs($this->user)
+        ->getJson("/nodeflow/flows/{$this->flow->id}/trigger-nodes/test.editor-narrow-trigger/sources/test.editor-narrow-webhook/fields/template/options")
+        ->assertOk()
+        ->assertJsonPath('options.welcome', 'Welcome message');
+
+    $this->actingAs($this->user)
+        ->getJson("/nodeflow/flows/{$this->flow->id}/trigger-nodes/test.editor-narrow-trigger/sources/test.editor-webhook/fields/template/options")
+        ->assertNotFound();
+});
+
+it('materializes each trigger definition once for one internally consistent editor payload', function () {
+    allowEverything();
+    StatefulEditorWebhookTriggerNode::$definitions = 0;
+    StatefulEditorWebhookSource::$definitions = 0;
+    Nodeflow::registerTriggerNodes([StatefulEditorWebhookTriggerNode::class]);
+    Nodeflow::registerTriggerSources([StatefulEditorWebhookSource::class]);
+
+    $response = editPage($this, $this->flow->id)->assertOk();
+    $node = collect($response->json('props.trigger_nodes'))
+        ->firstWhere('type', StatefulEditorWebhookTriggerNode::type());
+    $source = collect($response->json('props.trigger_sources.webhook'))
+        ->firstWhere('key', StatefulEditorWebhookSource::key());
+
+    expect(StatefulEditorWebhookTriggerNode::$definitions)->toBe(1)
+        ->and(StatefulEditorWebhookSource::$definitions)->toBe(1)
+        ->and($node['compatible_source_keys'])->toContain(StatefulEditorWebhookSource::key())
+        ->and(array_column($source['fields'], 'key'))->toBe(['account']);
+});
+
+it('returns structured collision errors and does not partially publish', function () {
+    allowEverything();
+    Nodeflow::registerTriggerSources([EditorCollisionWebhookSource::class]);
+
+    $graph = triggeredExitGraph();
+    $graph['nodes'][0]['type'] = 'core.trigger.webhook';
+    $graph['nodes'][0]['config'] = ['source' => 'test.editor-collision'];
+
+    $this->actingAs($this->user)
+        ->postJson("/nodeflow/flows/{$this->flow->id}/validate", ['graph' => $graph])
+        ->assertUnprocessable()
+        ->assertJsonPath('node_errors.0.node', 'trigger')
+        ->assertJsonFragment([
+            'field' => 'source',
+            'message' => 'The source field [source] collides with a reserved trigger field.',
+        ]);
+
+    $this->actingAs($this->user)
+        ->postJson("/nodeflow/flows/{$this->flow->id}/publish", [
+            'graph' => $graph,
+            'draft_revision' => 0,
+        ])
+        ->assertUnprocessable()
+        ->assertJsonFragment([
+            'field' => 'source',
+            'message' => 'The source field [source] collides with a reserved trigger field.',
+        ]);
+
+    expect($this->flow->fresh()->current_version_id)->toBeNull()
+        ->and($this->flow->versions()->count())->toBe(0)
+        ->and($this->flow->triggerActivation()->exists())->toBeFalse();
 });
 
 it('shows the draft graph in preference to the published version', function () {
@@ -168,8 +533,8 @@ it('shows the draft graph in preference to the published version', function () {
         ->assertJsonPath('props.flow.version', 1);
 
     $draft = exitGraph();
-    $draft['nodes'][0]['id'] = 'unsaved';
-    $draft['start'] = 'unsaved';
+    $draft['nodes'][1]['id'] = 'unsaved';
+    $draft['edges'][0]['to'] = 'unsaved';
 
     app(\Nodeflow\Editor\SaveDraft::class)->save(
         $this->flow->fresh(),
@@ -222,7 +587,7 @@ it('returns a graph-shaped object in the 409 even when there is no draft left', 
         ->assertOk();
 
     $this->actingAs($this->user)
-        ->postJson("/nodeflow/flows/{$this->flow->id}/publish", ['graph' => exitGraph()])
+        ->postJson("/nodeflow/flows/{$this->flow->id}/publish", ['graph' => exitGraph(), 'draft_revision' => 1])
         ->assertOk();
 
     $response = $this->actingAs($this->user)
@@ -327,7 +692,6 @@ it('four-oh-fours another tenants flow before validating authorization', functio
     $theirs = TenancyGuardSuspension::run(fn () => Flow::withoutTenancy()->create([
         'tenant_id' => 'org-2',
         'name' => 'Theirs',
-        'trigger_type' => 'manual',
         'status' => 'draft',
     ]));
 
@@ -368,11 +732,47 @@ it('publishes a valid graph and freezes a version', function () {
     allowEverything();
 
     $this->actingAs($this->user)
-        ->postJson("/nodeflow/flows/{$this->flow->id}/publish", ['graph' => exitGraph()])
+        ->postJson("/nodeflow/flows/{$this->flow->id}/publish", ['graph' => exitGraph(), 'draft_revision' => 0])
         ->assertOk()
         ->assertJsonPath('version', 1);
 
     expect($this->flow->fresh()->current_version_id)->not->toBeNull();
+});
+
+it('requires a nonnegative integer draft revision to publish', function (mixed $revision) {
+    allowEverything();
+
+    $payload = ['graph' => exitGraph()];
+    if ($revision !== 'missing') {
+        $payload['draft_revision'] = $revision;
+    }
+
+    $this->actingAs($this->user)
+        ->postJson("/nodeflow/flows/{$this->flow->id}/publish", $payload)
+        ->assertStatus(422)
+        ->assertJsonValidationErrors('draft_revision');
+})->with(['missing', -1, 1.5, 'one']);
+
+it('returns the winning draft and revision when publish loses an autosave race', function () {
+    allowEverything();
+    $newer = exitGraph();
+    $newer['nodes'][1]['id'] = 'newer';
+    $newer['edges'][0]['to'] = 'newer';
+
+    app(SaveDraft::class)->save($this->flow, $newer, 0);
+
+    $this->actingAs($this->user)
+        ->postJson("/nodeflow/flows/{$this->flow->id}/publish", [
+            'graph' => exitGraph(),
+            'draft_revision' => 0,
+        ])
+        ->assertStatus(409)
+        ->assertJsonPath('graph', $newer)
+        ->assertJsonPath('draft_revision', 1)
+        ->assertJsonPath('message', (new StaleDraftException([], 0))->getMessage());
+
+    expect($this->flow->versions()->count())->toBe(0)
+        ->and($this->flow->fresh()->draft_graph)->toBe($newer);
 });
 
 it('returns the current draft revision alongside the published version', function () {
@@ -388,7 +788,7 @@ it('returns the current draft revision alongside the published version', functio
         ->assertOk();
 
     $response = $this->actingAs($this->user)
-        ->postJson("/nodeflow/flows/{$this->flow->id}/publish", ['graph' => exitGraph()])
+        ->postJson("/nodeflow/flows/{$this->flow->id}/publish", ['graph' => exitGraph(), 'draft_revision' => 1])
         ->assertOk();
 
     expect($response->json('draft_revision'))->toBe(1);
@@ -409,14 +809,17 @@ it('returns per-node errors when publish is rejected', function () {
     allowEverything();
 
     $this->actingAs($this->user)
-        ->postJson("/nodeflow/flows/{$this->flow->id}/publish", ['graph' => [
+        ->postJson("/nodeflow/flows/{$this->flow->id}/publish", ['draft_revision' => 0, 'graph' => [
             'start' => 'w1',
             'nodes' => [['id' => 'w1', 'type' => 'core.wait', 'config' => []]],
             'edges' => [],
         ]])
         ->assertStatus(422)
-        ->assertJsonPath('node_errors.0.node', 'w1')
-        ->assertJsonPath('node_errors.0.field', 'duration');
+        ->assertJsonFragment([
+            'node' => 'w1',
+            'field' => 'duration',
+            'message' => 'The duration field is required.',
+        ]);
 });
 
 it('four-twenty-twos a published node with no id rather than exploding', function () {
@@ -428,7 +831,7 @@ it('four-twenty-twos a published node with no id rather than exploding', functio
     allowEverything();
 
     $this->actingAs($this->user)
-        ->postJson("/nodeflow/flows/{$this->flow->id}/publish", ['graph' => [
+        ->postJson("/nodeflow/flows/{$this->flow->id}/publish", ['draft_revision' => 0, 'graph' => [
             'start' => 'n1',
             'nodes' => [['type' => 'core.exit', 'config' => []]],
             'edges' => [],
@@ -443,7 +846,7 @@ it('four-twenty-twos a published edge with no target rather than exploding', fun
     allowEverything();
 
     $this->actingAs($this->user)
-        ->postJson("/nodeflow/flows/{$this->flow->id}/publish", ['graph' => [
+        ->postJson("/nodeflow/flows/{$this->flow->id}/publish", ['draft_revision' => 0, 'graph' => [
             'start' => 'e1',
             'nodes' => [['id' => 'e1', 'type' => 'core.exit', 'config' => []]],
             'edges' => [['from' => 'e1', 'output' => 'default']],
@@ -460,7 +863,7 @@ it('still reports a missing start node as a renderable publish error, not a fiel
     allowEverything();
 
     $this->actingAs($this->user)
-        ->postJson("/nodeflow/flows/{$this->flow->id}/publish", ['graph' => [
+        ->postJson("/nodeflow/flows/{$this->flow->id}/publish", ['draft_revision' => 0, 'graph' => [
             'nodes' => [['id' => 'e1', 'type' => 'core.exit', 'config' => []]],
             'edges' => [],
         ]])
@@ -511,7 +914,7 @@ it('denies publishing to someone who may edit but not publish', function () {
     Gate::define('nodeflow.publish', fn ($user, $flow = null) => false);
 
     $this->actingAs($this->user)
-        ->postJson("/nodeflow/flows/{$this->flow->id}/publish", ['graph' => exitGraph()])
+        ->postJson("/nodeflow/flows/{$this->flow->id}/publish", ['graph' => exitGraph(), 'draft_revision' => 0])
         ->assertForbidden();
 });
 
@@ -525,6 +928,7 @@ it('ignores a version id smuggled into the publish payload', function () {
     $this->actingAs($this->user)
         ->postJson("/nodeflow/flows/{$this->flow->id}/publish", [
             'graph' => exitGraph(),
+            'draft_revision' => 0,
             'current_version_id' => 99999,
         ])
         ->assertOk();
@@ -551,6 +955,10 @@ it('hands the client the urls for its own endpoints', function () {
     // characters so route() cannot re-encode them out from under the client.
     expect($response->json('props.urls.options'))->toBe(
         "http://localhost/nodeflow/flows/{$this->flow->id}/nodes/__NODEFLOW_TYPE__/fields/__NODEFLOW_FIELD__/options"
+    )->and($response->json('props.urls.trigger_options'))->toBe(
+        "http://localhost/nodeflow/flows/{$this->flow->id}/trigger-nodes/__NODEFLOW_TYPE__/fields/__NODEFLOW_FIELD__/options"
+    )->and($response->json('props.urls.trigger_source_options'))->toBe(
+        "http://localhost/nodeflow/flows/{$this->flow->id}/trigger-nodes/__NODEFLOW_TYPE__/sources/__NODEFLOW_SOURCE__/fields/__NODEFLOW_FIELD__/options"
     );
 });
 
@@ -574,5 +982,26 @@ it('resolves its urls through the hosts own route name prefix', function () {
         ->assertJsonPath('props.urls.draft', "http://localhost/admin/flows/{$this->flow->id}/draft")
         ->assertJsonPath('props.urls.validate', "http://localhost/admin/flows/{$this->flow->id}/validate")
         ->assertJsonPath('props.urls.publish', "http://localhost/admin/flows/{$this->flow->id}/publish")
-        ->assertJsonPath('props.urls.options', "http://localhost/admin/flows/{$this->flow->id}/nodes/__NODEFLOW_TYPE__/fields/__NODEFLOW_FIELD__/options");
+        ->assertJsonPath('props.urls.options', "http://localhost/admin/flows/{$this->flow->id}/nodes/__NODEFLOW_TYPE__/fields/__NODEFLOW_FIELD__/options")
+        ->assertJsonPath('props.urls.trigger_options', "http://localhost/admin/flows/{$this->flow->id}/trigger-nodes/__NODEFLOW_TYPE__/fields/__NODEFLOW_FIELD__/options")
+        ->assertJsonPath('props.urls.trigger_source_options', "http://localhost/admin/flows/{$this->flow->id}/trigger-nodes/__NODEFLOW_TYPE__/sources/__NODEFLOW_SOURCE__/fields/__NODEFLOW_FIELD__/options");
+});
+
+it('resolves editor urls through host domain parameters', function () {
+    allowEverything();
+    Route::setRoutes(new RouteCollection);
+    Route::middleware('web')
+        ->domain('{workspace}.example.test')
+        ->prefix('admin')
+        ->name('tenant.')
+        ->group(fn () => Nodeflow::routes());
+
+    $response = $this->actingAs($this->user)
+        ->withHeaders(['X-Inertia' => 'true', 'X-Inertia-Version' => ''])
+        ->get("http://acme.example.test/admin/flows/{$this->flow->id}/edit");
+
+    $response->assertOk()
+        ->assertJsonPath('props.urls.publish', "http://acme.example.test/admin/flows/{$this->flow->id}/publish")
+        ->assertJsonPath('props.urls.rotate_webhook_secret', "http://acme.example.test/admin/flows/{$this->flow->id}/webhook-secret/rotate")
+        ->assertJsonPath('props.urls.trigger_options', "http://acme.example.test/admin/flows/{$this->flow->id}/trigger-nodes/__NODEFLOW_TYPE__/fields/__NODEFLOW_FIELD__/options");
 });

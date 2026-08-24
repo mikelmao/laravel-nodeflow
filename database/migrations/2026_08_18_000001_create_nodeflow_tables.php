@@ -2,18 +2,23 @@
 
 use Illuminate\Database\Migrations\Migration;
 use Illuminate\Database\Schema\Blueprint;
+use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Schema;
 
 return new class extends Migration
 {
     public function up(): void
     {
+        $activationRoutingCollation = in_array(
+            DB::connection()->getDriverName(),
+            ['mysql', 'mariadb'],
+            true,
+        ) ? 'utf8mb4_bin' : null;
+
         Schema::create('nodeflow_flows', function (Blueprint $t) {
             $t->id();
             $t->string('tenant_id')->index();
             $t->string('name');
-            $t->string('trigger_type');
-            $t->json('trigger_config')->nullable();
             $t->string('status')->default('draft');
             $t->string('reentry_policy')->default('reenter');
             $t->foreignId('current_version_id')->nullable();
@@ -29,7 +34,7 @@ return new class extends Migration
             // author — it just is not the token.
             $t->unsignedInteger('draft_revision')->default(0);
             $t->timestamps();
-            $t->index(['tenant_id', 'trigger_type', 'status']);
+            $t->index(['tenant_id', 'status']);
         });
 
         Schema::create('nodeflow_flow_versions', function (Blueprint $t) {
@@ -45,16 +50,61 @@ return new class extends Migration
             $t->unique(['flow_id', 'version']);
         });
 
+        Schema::create('nodeflow_trigger_activations', function (Blueprint $t) use ($activationRoutingCollation) {
+            $t->id();
+            $t->foreignId('flow_id')->unique()->constrained('nodeflow_flows')->cascadeOnDelete();
+            $t->foreignId('flow_version_id')->unique()->constrained('nodeflow_flow_versions')->cascadeOnDelete();
+            $t->string('tenant_id')->index();
+            // Three utf8mb4 columns at 191 characters each total 2,292 bytes,
+            // under MySQL's 3,072-byte index limit while leaving stable IDs roomy.
+            $driver = $t->string('driver', 191);
+            $source = $t->string('source', 191);
+            $qualifier = $t->string('qualifier', 191)->nullable();
+
+            // MySQL-family default collations are commonly case-insensitive,
+            // which would alias extension-owned routing keys. PostgreSQL and
+            // SQLite already compare these strings case-exactly and must never
+            // receive a MySQL collation name.
+            if ($activationRoutingCollation !== null) {
+                $driver->collation('utf8mb4_bin');
+                $source->collation('utf8mb4_bin');
+                $qualifier->collation('utf8mb4_bin');
+            }
+
+            $driver->index();
+            $source->index();
+            $qualifier->index();
+            $t->string('trigger_node_id');
+            $t->json('descriptor');
+            $t->timestamps();
+            $t->index(['driver', 'source', 'qualifier']);
+        });
+
+        Schema::create('nodeflow_webhook_endpoints', function (Blueprint $t) {
+            $t->id();
+            $t->foreignId('flow_id')->unique()->constrained('nodeflow_flows')->cascadeOnDelete();
+            $t->string('token')->unique();
+            $t->text('signing_secret');
+            $t->timestamp('secret_rotated_at')->nullable();
+            $t->timestamps();
+        });
+
         Schema::create('nodeflow_runs', function (Blueprint $t) {
             $t->id();
             $t->foreignId('flow_version_id')->constrained('nodeflow_flow_versions');
             $t->string('tenant_id')->index();
             $t->string('correlation_id')->nullable()->index();
             $t->string('engine_workflow_id')->nullable()->index();
+            $t->string('engine_entry_node_id')->nullable();
+            $t->string('engine_dispatch_status')->nullable()->index();
+            $t->text('engine_dispatch_error')->nullable();
             $t->string('strategy');
             $t->string('status')->default('pending');
             $t->boolean('is_test')->default(false);
             $t->string('idempotency_key')->nullable();
+            $t->string('started_via');
+            $t->string('trigger_node_id');
+            $t->json('trigger_data')->nullable();
             $t->unsignedInteger('steps_taken')->default(0);
             $t->text('error')->nullable();
             $t->timestamp('started_at')->nullable();
@@ -112,7 +162,8 @@ return new class extends Migration
     {
         foreach ([
             'nodeflow_templates', 'nodeflow_node_executions', 'nodeflow_run_subjects',
-            'nodeflow_runs', 'nodeflow_flow_versions', 'nodeflow_flows',
+            'nodeflow_runs', 'nodeflow_webhook_endpoints', 'nodeflow_trigger_activations',
+            'nodeflow_flow_versions', 'nodeflow_flows',
         ] as $table) {
             Schema::dropIfExists($table);
         }

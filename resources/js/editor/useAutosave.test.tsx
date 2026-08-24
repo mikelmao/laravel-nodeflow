@@ -330,7 +330,7 @@ describe('useAutosave', () => {
             (props: { graph: Graph }) => useAutosave({ url: URL, initialRevision: 0, graph: props.graph, debounceMs: 10 }),
             { initialProps: { graph: graph('a') } },
         )
-        await act(async () => expect(result.current.preparePublish()).resolves.toBe(true))
+        await act(async () => expect(result.current.preparePublish()).resolves.toBe(0))
         act(() => result.current.finishPublish(5))
         rerender({ graph: graph('b') })
         await act(async () => {
@@ -339,7 +339,7 @@ describe('useAutosave', () => {
         await waitFor(() => expect(fetchMock).toHaveBeenCalled())
         expect(JSON.parse(fetchMock.mock.calls[0]![1].body).draft_revision).toBe(5)
 
-        await act(async () => expect(result.current.preparePublish()).resolves.toBe(true))
+        await act(async () => expect(result.current.preparePublish()).resolves.toBe(6))
         rerender({ graph: graph('queued-after-invalid-publish') })
         act(() => result.current.finishPublish(Number.NaN))
         expect(result.current.status).toBe('error')
@@ -369,7 +369,7 @@ describe('useAutosave', () => {
         await act(async () => vi.advanceTimersByTime(20))
         expect(fetchMock).toHaveBeenCalledTimes(1)
         const preparation = result.current.preparePublish()
-        let overlappingPreparation: boolean | null = null
+        let overlappingPreparation: number | false | null = null
         const overlapping = result.current.preparePublish().then((ready) => {
             overlappingPreparation = ready
         })
@@ -379,7 +379,7 @@ describe('useAutosave', () => {
         await act(async () => overlapping)
         rerender({ graph: graph('during-publish') })
         await act(async () => resolveSave(Response.json({ draft_revision: 1 })))
-        await act(async () => expect(preparation).resolves.toBe(true))
+        await act(async () => expect(preparation).resolves.toBe(1))
         // Counterfactual: a prepare after the first is ready can replace its target and launch a PUT before its POST finishes.
         await act(async () => expect(result.current.preparePublish()).resolves.toBe(false))
         await act(async () => vi.advanceTimersByTime(100))
@@ -387,7 +387,7 @@ describe('useAutosave', () => {
         expect(fetchMock).toHaveBeenCalledTimes(1)
         const finishFirst = result.current.finishPublish
         const prepareFirst = result.current.preparePublish
-        let sameBatchPreparation!: Promise<boolean>
+        let sameBatchPreparation!: Promise<number | false>
         act(() => {
             finishFirst(1)
             sameBatchPreparation = prepareFirst()
@@ -396,7 +396,7 @@ describe('useAutosave', () => {
         await act(async () => expect(sameBatchPreparation).resolves.toBe(false))
         expect(fetchMock).toHaveBeenCalledTimes(1)
 
-        await act(async () => expect(result.current.preparePublish()).resolves.toBe(true))
+        await act(async () => expect(result.current.preparePublish()).resolves.toBe(2))
         expect(fetchMock).toHaveBeenCalledTimes(2)
         expect(result.current.revision).toBe(2)
 
@@ -415,7 +415,7 @@ describe('useAutosave', () => {
         expect(JSON.parse(fetchMock.mock.calls[2]![1].body)).toMatchObject({ graph: { start: 'during-second-publish' }, draft_revision: 2 })
 
         await waitFor(() => expect(result.current.revision).toBe(3))
-        await act(async () => expect(result.current.preparePublish()).resolves.toBe(true))
+        await act(async () => expect(result.current.preparePublish()).resolves.toBe(3))
         act(() => result.current.finishPublish(3))
     })
 
@@ -427,7 +427,7 @@ describe('useAutosave', () => {
             (props: { graph: Graph }) => useAutosave({ url: URL, initialRevision: 0, graph: props.graph, debounceMs: 10 }),
             { initialProps: { graph: graph('a') } },
         )
-        await act(async () => expect(result.current.preparePublish()).resolves.toBe(true))
+        await act(async () => expect(result.current.preparePublish()).resolves.toBe(0))
         rerender({ graph: graph('abandoned') })
         rerender({ graph: graph('a') })
         act(() => result.current.finishPublish(0))
@@ -447,7 +447,7 @@ describe('useAutosave', () => {
             { initialProps: { graph: graph('a') } },
         )
         rerender({ graph: graph('b') })
-        let prepared: boolean | null = null
+        let prepared: number | false | null = null
         const preparation = result.current.preparePublish().then((value) => {
             prepared = value
         })
@@ -456,7 +456,7 @@ describe('useAutosave', () => {
         expect(prepared).toBeNull()
         await act(async () => resolveSave(Response.json({ draft_revision: 1 })))
         await act(async () => preparation)
-        expect(prepared).toBe(true)
+        expect(prepared).toBe(1)
         expect(result.current.revision).toBe(1)
     })
 
@@ -493,7 +493,7 @@ describe('useAutosave', () => {
         expect(fetchMock).toHaveBeenCalledTimes(1)
 
         const oldFinish = result.current.finishPublish
-        let oldPrepared: boolean | null = null
+        let oldPrepared: number | false | null = null
         const oldPreparation = result.current.preparePublish().then((ready) => {
             oldPrepared = ready
         })
@@ -534,10 +534,10 @@ describe('useAutosave', () => {
             { initialProps: { identity: 'publish-old' } },
         )
         const oldFinish = result.current.finishPublish
-        await act(async () => expect(result.current.preparePublish()).resolves.toBe(true))
+        await act(async () => expect(result.current.preparePublish()).resolves.toBe(4))
 
         rerender({ identity: 'publish-new' })
-        await act(async () => expect(result.current.preparePublish()).resolves.toBe(true))
+        await act(async () => expect(result.current.preparePublish()).resolves.toBe(4))
         act(() => oldFinish(99))
         expect(result.current.revision).toBe(4)
     })

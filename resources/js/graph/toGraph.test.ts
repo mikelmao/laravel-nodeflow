@@ -1,10 +1,11 @@
 import { describe, expect, it } from 'vitest'
 import { toCanvas } from './toCanvas'
 import { defsByType, resolveOutput, toGraph } from './toGraph'
-import type { Graph, NodeTypePayload } from './types'
+import type { Graph, GraphComponentPayload, NodeTypePayload } from './types'
 
 function def(type: string, outputs: string[]): NodeTypePayload {
   return {
+    kind: 'executable',
     type,
     label: type,
     group: 'General',
@@ -36,6 +37,52 @@ const graph = {
 }
 
 describe('toGraph', () => {
+  it('round-trips a custom trigger with its started edge and canvas kind', () => {
+    const customTrigger = {
+      kind: 'trigger',
+      type: 'custom.trigger',
+      driver: 'custom',
+      label: 'Custom trigger',
+      icon: null,
+      description: 'Starts custom work.',
+      outputs: ['started'],
+      fields: [],
+      default_config: { source: 'orders' },
+      compatible_source_keys: ['orders'],
+    } as const satisfies GraphComponentPayload
+    const customDefs = defsByType([customTrigger, def('app.send', ['sent'])])
+    const triggerGraph: Graph = {
+      start: 'trigger1',
+      nodes: [
+        { id: 'trigger1', type: 'custom.trigger', config: { source: 'vip' }, position: { x: 12.5, y: -4 } },
+        { id: 'send1', type: 'app.send', config: {}, position: { x: 200, y: 20 } },
+      ],
+      edges: [{ from: 'trigger1', to: 'send1', output: 'started' }],
+    }
+
+    const canvas = toCanvas(triggerGraph, customDefs)
+    const converted = toGraph(canvas, 'trigger1', customDefs)
+
+    expect(canvas.nodes.map((node) => node.data.kind)).toEqual(['trigger', 'executable'])
+    expect(converted.graph).toEqual(triggerGraph)
+    expect(converted.unresolved).toEqual([])
+  })
+
+  it('emits nested config references independently from the canvas', () => {
+    const canvas = toCanvas({
+      start: 'n1',
+      nodes: [{ id: 'n1', type: 'app.send', config: { routing: { tags: ['vip'] } }, position: { x: 0, y: 0 } }],
+      edges: [],
+    })
+
+    const converted = toGraph(canvas, 'n1', defs).graph
+    const emitted = converted.nodes![0]!.config as { routing: { tags: string[] } }
+    emitted.routing.tags.push('new')
+
+    expect(canvas.nodes[0]!.data.config).toEqual({ routing: { tags: ['vip'] } })
+    expect(emitted).not.toBe(canvas.nodes[0]!.data.config)
+  })
+
   // The round-trip case §9 asks for, with positions present on every node so
   // the assertion is identity rather than "close enough".
   // Counterfactual: drop `position` from the emitted node, or drop `config`, or

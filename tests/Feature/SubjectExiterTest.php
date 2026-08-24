@@ -12,10 +12,13 @@ use Nodeflow\Models\RunSubject;
 use Nodeflow\Nodeflow;
 
 beforeEach(function () {
-    $flow = Flow::create(['tenant_id' => 'org-1', 'name' => 'F', 'trigger_type' => 'manual', 'status' => 'active']);
+    $flow = Flow::create(['tenant_id' => 'org-1', 'name' => 'F', 'status' => 'active']);
     $version = FlowVersion::create(['flow_id' => $flow->id, 'version' => 1, 'graph' => ['nodes' => [], 'edges' => []], 'content_hash' => 'h']);
     $this->run = Run::create([
         'flow_version_id' => $version->id, 'tenant_id' => 'org-1',
+        'started_via' => 'manual',
+        'trigger_node_id' => 'trigger',
+        'trigger_data' => null,
         'strategy' => 'cohort', 'status' => 'waiting', 'engine_workflow_id' => 'wf-1',
     ]);
 
@@ -43,10 +46,13 @@ it('signals the workflow exactly once when the last subject exits', function () 
 });
 
 it('records the exit but sends no signal for a run that has already finished', function () {
-    $flow = Flow::create(['tenant_id' => 'org-1', 'name' => 'F2', 'trigger_type' => 'manual', 'status' => 'active']);
+    $flow = Flow::create(['tenant_id' => 'org-1', 'name' => 'F2', 'status' => 'active']);
     $version = FlowVersion::create(['flow_id' => $flow->id, 'version' => 1, 'graph' => ['nodes' => [], 'edges' => []], 'content_hash' => 'h2']);
     $finishedRun = Run::create([
         'flow_version_id' => $version->id, 'tenant_id' => 'org-1',
+        'started_via' => 'manual',
+        'trigger_node_id' => 'trigger',
+        'trigger_data' => null,
         'strategy' => 'cohort', 'status' => 'completed', 'engine_workflow_id' => 'wf-2',
     ]);
 

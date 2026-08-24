@@ -1,0 +1,20 @@
+<?php
+
+use Nodeflow\Triggers\TriggerDriverRegistry;
+use Nodeflow\Triggers\TriggerNodeRegistry;
+use {{ driver }};
+use {{ node }};
+
+it('registers the {{ key }} trigger extension kit', function () {
+    app(TriggerDriverRegistry::class)->register({{ driverClass }}::class);
+    app(TriggerNodeRegistry::class)->register({{ nodeClass }}::class);
+
+    $driver = app(TriggerDriverRegistry::class)->resolve('{{ key }}');
+    $node = app(TriggerNodeRegistry::class)->resolve('{{ type }}');
+    $occurrence = $driver->occurrence('example.source', ['id' => 1]);
+
+    expect($node->driver())->toBe('{{ key }}')
+        ->and($node->definition()->label)->not->toBeEmpty()
+        ->and($occurrence->driver)->toBe('{{ key }}')
+        ->and($occurrence->source)->toBe('example.source');
+});

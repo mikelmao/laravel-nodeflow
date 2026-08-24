@@ -1,319 +1,333 @@
 <?php
 
-use App\Providers\ManualRegistrationProbe;
 use Illuminate\Support\Facades\Artisan;
-use Nodeflow\Schema\TriggerDefinition;
-use Nodeflow\Triggers\Trigger;
-use Nodeflow\Triggers\TriggerMatch;
-use Nodeflow\Triggers\TriggerRegistry;
+use Illuminate\Filesystem\Filesystem;
+use Nodeflow\Contracts\TriggerNode;
+use Nodeflow\Graph\GraphTypeCatalog;
+use Nodeflow\Triggers\TriggerActivationDescriptor;
+use Nodeflow\Triggers\TriggerNodeRegistry;
 
-function triggerManualRegistrationSnippet(string $output): string
-{
-    $lines = preg_split('/\R/', $output) ?: [];
-    $start = null;
-
-    foreach ($lines as $index => $line) {
-        if (str_contains($line, 'app(') && str_contains($line, 'TriggerRegistry::class')) {
-            $start = $index;
-
-            break;
-        }
-    }
-
-    if ($start === null) {
-        return '';
-    }
-
-    for ($end = $start; $end < count($lines); $end++) {
-        if (trim($lines[$end]) === ');') {
-            return implode(PHP_EOL, array_slice($lines, $start, $end - $start + 1));
-        }
-    }
-
-    return '';
-}
-
-/** A stand-in host event, so --event can name a class that genuinely exists. */
-class MakeTriggerTestEvent
-{
-    public function __construct(public string $tenantId = 't1', public array $userIds = ['7']) {}
-}
-
-/**
- * A second, distinct stand-in host event. Needed because two generated
- * triggers `require`d into the same process cannot share an FQCN — PHP
- * fatals with "class already declared" — and the leak-detection test below
- * needs two invocations whose --event genuinely differ.
- */
-class MakeTriggerTestEventTwo
-{
-    public function __construct(public string $tenantId = 't2', public array $userIds = ['9']) {}
-}
+final class TriggerClassCollisionFixture {}
 
 beforeEach(function () {
-    $this->root = sys_get_temp_dir().'/nodeflow-make-trigger-'.bin2hex(random_bytes(6));
-
-    mkdir($this->root.'/app', 0777, true);
-
-    file_put_contents($this->root.'/composer.json', json_encode([
-        'autoload' => ['psr-4' => ['App\\' => 'app/']],
-    ]));
-
+    $this->root = sys_get_temp_dir().'/nodeflow-make-trigger-node-'.bin2hex(random_bytes(6));
+    mkdir($this->root.'/app/Providers', 0777, true);
+    file_put_contents($this->root.'/composer.json', json_encode(['autoload' => ['psr-4' => ['App\\' => 'app/']]]));
+    file_put_contents($this->root.'/app/Providers/NodeflowServiceProvider.php', "<?php\nclass NodeflowServiceProvider extends \\Illuminate\\Support\\ServiceProvider\n{\n    protected array \$triggerNodes = [\n    ];\n}\n");
     $this->app->setBasePath($this->root);
 });
 
 afterEach(function () {
-    $delete = function (string $dir) use (&$delete) {
-        foreach (scandir($dir) as $entry) {
-            if ($entry === '.' || $entry === '..') {
-                continue;
-            }
+    $delete = function (string $dir) use (&$delete): void {
+        foreach (scandir($dir) ?: [] as $entry) {
+            if ($entry === '.' || $entry === '..') continue;
             $path = $dir.'/'.$entry;
             is_dir($path) ? $delete($path) : unlink($path);
         }
         rmdir($dir);
     };
-
-    if (is_dir($this->root)) {
-        $delete($this->root);
-    }
+    if (is_dir($this->root)) $delete($this->root);
 });
 
-it('generates a trigger at the conventional path naming the event class', function () {
+it('scaffolds a parseable registerable trigger node for a registered driver', function () {
     $this->artisan('nodeflow:make-trigger', [
-        'name' => 'FloodAlertFires',
-        '--event' => MakeTriggerTestEvent::class,
-        '--type' => 'rada.flood_alert',
+        'name' => 'StripePayment', '--driver' => 'webhook', '--type' => 'shop.stripe_payment',
     ])->assertExitCode(0);
 
-    $path = $this->root.'/app/Nodeflow/Triggers/FloodAlertFires.php';
+    $path = $this->root.'/app/Nodeflow/Triggers/StripePayment.php';
+    expectParseablePhp($path);
+    require $path;
 
-    expect($path)->toBeFile();
+    app(TriggerNodeRegistry::class)->register(App\Nodeflow\Triggers\StripePayment::class);
+    $node = app(TriggerNodeRegistry::class)->resolve('shop.stripe_payment');
+    $descriptor = $node->compile(['source' => 'shop.orders', 'mode' => 'safe']);
 
-    expect(file_get_contents($path))
-        ->toContain('namespace App\Nodeflow\Triggers;')
-        ->toContain('class FloodAlertFires extends Trigger')
-        ->toContain("return 'rada.flood_alert';")
-        ->toContain('return \MakeTriggerTestEvent::class;');
+    expect($node)->toBeInstanceOf(TriggerNode::class)
+        ->and($node->driver())->toBe('webhook')
+        ->and($descriptor)->toBeInstanceOf(TriggerActivationDescriptor::class)
+        ->and($descriptor->metadata)->toBe(['mode' => 'safe'])
+        ->and(file_get_contents($this->root.'/app/Providers/NodeflowServiceProvider.php'))
+        ->toContain('\\App\\Nodeflow\\Triggers\\StripePayment::class,');
 });
 
-it('produces a trigger the registry accepts and whose methods execute', function () {
-    // The require-and-execute test, for the same reason node.stub has one: php -l
-    // resolves no symbols, so a rename of TriggerDefinition::make(),
-    // ::description() or TriggerMatch::make() would leave this suite green while
-    // the stub fataled in every host that generated from it.
+it('rejects unknown reserved malformed and colliding driver or graph keys before mutation', function (array $arguments) {
+    $provider = $this->root.'/app/Providers/NodeflowServiceProvider.php';
+    $before = file_get_contents($provider);
+
+    $this->artisan('nodeflow:make-trigger', array_merge(['name' => 'BadTrigger'], $arguments))
+        ->assertExitCode(1);
+
+    expect($this->root.'/app/Nodeflow/Triggers/BadTrigger.php')->not->toBeFile()
+        ->and(file_get_contents($provider))->toBe($before);
+})->with([
+    'unknown driver' => [['--driver' => 'missing.driver', '--type' => 'shop.valid']],
+    'manual is not a trigger driver' => [['--driver' => 'manual', '--type' => 'shop.valid']],
+    'subflow is not a trigger driver' => [['--driver' => 'subflow', '--type' => 'shop.valid']],
+    'malformed type' => [['--driver' => 'webhook', '--type' => '../bad']],
+    'package type' => [['--driver' => 'webhook', '--type' => 'core.custom']],
+]);
+
+it('rejects path traversal and refuses overwrite', function () {
     $this->artisan('nodeflow:make-trigger', [
-        'name' => 'OrderPlacedTrigger',
-        '--event' => MakeTriggerTestEvent::class,
-        '--type' => 'shop.order_placed',
-    ])->assertExitCode(0);
-
-    require $this->root.'/app/Nodeflow/Triggers/OrderPlacedTrigger.php';
-
-    $class = 'App\Nodeflow\Triggers\OrderPlacedTrigger';
-
-    app(TriggerRegistry::class)->register($class);
-
-    expect($class::type())->toBe('shop.order_placed');
-    expect($class::event())->toBe(MakeTriggerTestEvent::class);
-
-    $trigger = new $class;
-
-    expect($trigger)->toBeInstanceOf(Trigger::class);
-
-    // definition() executes the whole TriggerDefinition chain as a side effect.
-    expect($trigger->definition())->toBeInstanceOf(TriggerDefinition::class);
-    expect($trigger->definition()->toArray())->toHaveKey('label');
-
-    // resolve() must return a real TriggerMatch, not null: the scaffolded body is
-    // a safe no-op, and "no tenants" is a legitimate answer, but the type is not
-    // optional and a stub returning nothing would fatal on the first event.
-    $match = $trigger->resolve(new MakeTriggerTestEvent);
-
-    expect($match)->toBeInstanceOf(TriggerMatch::class);
-    expect($match->tenants())->toBe([]);
-
-    // The two commented overrides must stay commented, and the inherited defaults
-    // must therefore still answer.
-    expect($trigger->idempotencyKey(new MakeTriggerTestEvent))->toBeNull();
-    expect($trigger->matchesConfig(new MakeTriggerTestEvent, []))->toBeTrue();
-});
-
-it('registers the trigger in the provider through the trigger anchor', function () {
-    // E24. Counterfactual: skip registration and this fails — and a host whose
-    // generated trigger is never registered gets a listener that was never
-    // attached, so the trigger silently never fires.
-    mkdir($this->root.'/app/Providers', 0777, true);
-    file_put_contents($this->root.'/app/Providers/NodeflowServiceProvider.php', <<<'PHP'
-    <?php
-
-    namespace App\Providers;
-
-    use Illuminate\Support\ServiceProvider;
-
-    class NodeflowServiceProvider extends ServiceProvider
-    {
-        protected array $triggers = [
-        ];
-    }
-    PHP);
+        'name' => '../Escaped', '--driver' => 'webhook', '--type' => 'shop.escaped',
+    ])->assertExitCode(1);
 
     $this->artisan('nodeflow:make-trigger', [
-        'name' => 'RegisteredTrigger',
-        '--event' => MakeTriggerTestEvent::class,
-        '--type' => 'shop.registered',
+        'name' => 'Kept', '--driver' => 'webhook', '--type' => 'shop.kept',
     ])->assertExitCode(0);
+    $path = $this->root.'/app/Nodeflow/Triggers/Kept.php';
+    $before = file_get_contents($path);
+    $provider = $this->root.'/app/Providers/NodeflowServiceProvider.php';
+    $providerBefore = file_get_contents($provider);
 
-    expect(file_get_contents($this->root.'/app/Providers/NodeflowServiceProvider.php'))
-        ->toContain('\App\Nodeflow\Triggers\RegisteredTrigger::class,');
+    $this->artisan('nodeflow:make-trigger', [
+        'name' => 'Kept', '--driver' => 'webhook', '--type' => 'shop.changed',
+    ])->assertExitCode(1);
+
+    expect(file_get_contents($path))->toBe($before)
+        ->and(file_get_contents($provider))->toBe($providerBefore)
+        ->and($this->root.'/app/Nodeflow/Escaped.php')->not->toBeFile();
 });
 
-it('prints the line that registers the trigger when there is no provider, and still exits zero', function () {
-    // Same contract as make-node: never guess, always explain, and generating the
-    // file is still a success.
-    $exitCode = Artisan::call('nodeflow:make-trigger', [
-        'name' => 'ManualTrigger',
-        '--event' => MakeTriggerTestEvent::class,
-        '--type' => 'shop.manual',
+it('refuses shared graph catalog collisions before file or provider mutation', function () {
+    app(GraphTypeCatalog::class)->claim('shop.claimed', 'executable', self::class);
+    $provider = $this->root.'/app/Providers/NodeflowServiceProvider.php';
+    $before = file_get_contents($provider);
+
+    $this->artisan('nodeflow:make-trigger', [
+        'name' => 'ClaimedTrigger', '--driver' => 'webhook', '--type' => 'shop.claimed',
+    ])->assertExitCode(1);
+
+    expect($this->root.'/app/Nodeflow/Triggers/ClaimedTrigger.php')->not->toBeFile()
+        ->and(file_get_contents($provider))->toBe($before);
+});
+
+it('refuses a loaded generated class collision before mutation', function () {
+    class_alias(TriggerClassCollisionFixture::class, 'App\\Nodeflow\\Triggers\\LoadedTrigger');
+    $provider = $this->root.'/app/Providers/NodeflowServiceProvider.php';
+    $before = file_get_contents($provider);
+
+    $this->artisan('nodeflow:make-trigger', [
+        'name' => 'LoadedTrigger', '--driver' => 'webhook', '--type' => 'shop.loaded_trigger',
+    ])->assertExitCode(1);
+
+    expect($this->root.'/app/Nodeflow/Triggers/LoadedTrigger.php')->not->toBeFile()
+        ->and(file_get_contents($provider))->toBe($before);
+});
+
+it('prints the exact manual trigger-node registration when its anchor is unsafe', function () {
+    file_put_contents($this->root.'/app/Providers/NodeflowServiceProvider.php', "<?php\nclass NodeflowServiceProvider {}\n");
+
+    $exit = Artisan::call('nodeflow:make-trigger', [
+        'name' => 'ManualNode', '--driver' => 'webhook', '--type' => 'shop.manual_node',
     ]);
-    $output = Artisan::output();
 
-    expect($exitCode)->toBe(0);
-    expect($output)->toContain('TriggerRegistry');
-    $snippet = triggerManualRegistrationSnippet($output);
-    expect($snippet)->not->toBe('');
-
-    mkdir($this->root.'/app/Providers', 0777, true);
-
-    $probePath = $this->root.'/app/Providers/ManualRegistrationProbe.php';
-    file_put_contents(
-        $probePath,
-        "<?php\n\nnamespace App\\Providers;\n\n"
-        ."final class ManualRegistrationProbe\n{\n"
-        ."    public static function run(): void\n    {\n"
-        .$snippet."\n    }\n}\n",
-    );
-
-    expectParseablePhp($probePath);
-
-    require $this->root.'/app/Nodeflow/Triggers/ManualTrigger.php';
-    require $probePath;
-
-    ManualRegistrationProbe::run();
-
-    expect(app(TriggerRegistry::class)->has('shop.manual'))->toBeTrue();
+    expect($exit)->toBe(0)
+        ->and(Artisan::output())->toContain('\\Nodeflow\\Nodeflow::registerTriggerNodes([')
+        ->toContain('\\App\\Nodeflow\\Triggers\\ManualNode::class,')
+        ->and($this->root.'/app/Nodeflow/Triggers/ManualNode.php')->toBeFile();
+    expectParseablePhp($this->root.'/app/Nodeflow/Triggers/ManualNode.php');
 });
 
-it('warns but still generates when the event class does not exist', function () {
-    // Generating the trigger before writing the event is a normal order of work,
-    // and ::class renders without a loaded class. Counterfactual: reject the
-    // missing class and this fails, blocking that order of work.
-    $this->artisan('nodeflow:make-trigger', [
-        'name' => 'FutureTrigger',
-        '--event' => 'App\Events\NotWrittenYet',
-        '--type' => 'shop.future',
-    ])
-        ->expectsOutputToContain('App\Events\NotWrittenYet')
-        ->assertExitCode(0);
+it('fails and removes the generated node when a real provider write fails', function () {
+    $provider = $this->root.'/app/Providers/NodeflowServiceProvider.php';
+    $before = file_get_contents($provider);
+    $files = new class($provider) extends Filesystem
+    {
+        public function __construct(private string $provider) {}
+        public function move($path, $target) { return $target === $this->provider ? false : parent::move($path, $target); }
+    };
+    $this->app->instance(Filesystem::class, $files);
+    $this->app->instance('files', $files);
 
-    expect($this->root.'/app/Nodeflow/Triggers/FutureTrigger.php')->toBeFile();
-});
-
-it('fails without --event when it cannot prompt', function () {
-    // There is no sane default for an event class, and a trigger whose event() is
-    // wrong never fires. Counterfactual: derive one from the class name and this
-    // fails — the derived value would be a class that does not exist, silently.
     $this->artisan('nodeflow:make-trigger', [
-        'name' => 'NoEventTrigger',
-        '--type' => 'shop.no_event',
+        'name' => 'ProviderFailureNode', '--driver' => 'webhook', '--type' => 'shop.provider_failure',
     ])->assertExitCode(1);
 
-    expect($this->root.'/app/Nodeflow/Triggers/NoEventTrigger.php')->not->toBeFile();
+    expect($this->root.'/app/Nodeflow/Triggers/ProviderFailureNode.php')->not->toBeFile()
+        ->and(file_get_contents($provider))->toBe($before);
 });
 
-it('rejects a reserved core type', function () {
+it('rolls back provider registration when the generated node disappears during provider commit', function () {
+    $provider = $this->root.'/app/Providers/NodeflowServiceProvider.php';
+    $node = $this->root.'/app/Nodeflow/Triggers/VanishingNode.php';
+    $before = file_get_contents($provider);
+    $files = new class($provider, $node) extends Filesystem
+    {
+        private bool $intercept = true;
+        public function __construct(private string $provider, private string $node) {}
+        public function move($path, $target)
+        {
+            $moved = parent::move($path, $target);
+            if ($this->intercept && $target === $this->provider) {
+                $this->intercept = false;
+                unlink($this->node);
+            }
+
+            return $moved;
+        }
+    };
+    $this->app->instance(Filesystem::class, $files);
+    $this->app->instance('files', $files);
+
     $this->artisan('nodeflow:make-trigger', [
-        'name' => 'ReservedTrigger',
-        '--event' => MakeTriggerTestEvent::class,
-        '--type' => 'core.something',
+        'name' => 'VanishingNode', '--driver' => 'webhook', '--type' => 'shop.vanishing_node',
     ])->assertExitCode(1);
 
-    expect($this->root.'/app/Nodeflow/Triggers/ReservedTrigger.php')->not->toBeFile();
+    expect($node)->not->toBeFile()
+        ->and(file_get_contents($provider))->toBe($before)
+        ->and(glob($this->root.'/app/Providers/*.nodeflow-tmp-*') ?: [])->toBe([])
+        ->and(glob(dirname($node).'/*.nodeflow-tmp-*') ?: [])->toBe([]);
 });
 
-it('rejects a malformed type', function () {
+it('rolls back the node when the provider changes after the artifact commit', function () {
+    $provider = $this->root.'/app/Providers/NodeflowServiceProvider.php';
+    $node = $this->root.'/app/Nodeflow/Triggers/RacedProviderNode.php';
+    $external = "<?php\n// external provider replacement\n";
+    $files = new class($provider, $node, $external) extends Filesystem
+    {
+        private bool $intercept = true;
+        public function __construct(private string $provider, private string $node, private string $external) {}
+        public function move($path, $target)
+        {
+            $moved = parent::move($path, $target);
+            if ($this->intercept && $target === $this->node) {
+                $this->intercept = false;
+                unlink($this->provider);
+                file_put_contents($this->provider, $this->external);
+            }
+
+            return $moved;
+        }
+    };
+    $this->app->instance(Filesystem::class, $files);
+    $this->app->instance('files', $files);
+
     $this->artisan('nodeflow:make-trigger', [
-        'name' => 'BadTypeTrigger',
-        '--event' => MakeTriggerTestEvent::class,
-        '--type' => 'Shop Order',
+        'name' => 'RacedProviderNode', '--driver' => 'webhook', '--type' => 'shop.raced_provider_node',
     ])->assertExitCode(1);
 
-    expect($this->root.'/app/Nodeflow/Triggers/BadTypeTrigger.php')->not->toBeFile();
+    expect($node)->not->toBeFile()
+        ->and(file_get_contents($provider))->toBe($external)
+        ->and(glob($this->root.'/app/Providers/*.nodeflow-tmp-*') ?: [])->toBe([]);
 });
 
-it('generates a file that passes php -l', function () {
-    $this->artisan('nodeflow:make-trigger', [
-        'name' => 'LintedTrigger',
-        '--event' => MakeTriggerTestEvent::class,
-        '--type' => 'shop.linted',
-    ])->assertExitCode(0);
+it('does not overwrite provider bytes changed in place after registration planning', function () {
+    $provider = $this->root.'/app/Providers/NodeflowServiceProvider.php';
+    $node = $this->root.'/app/Nodeflow/Triggers/StalePlanNode.php';
+    $external = "<?php\n// changed after planning\n";
+    $files = new class($provider, $external) extends Filesystem
+    {
+        private int $providerReads = 0;
+        public function __construct(private string $provider, private string $external) {}
+        public function get($path, $lock = false)
+        {
+            if ($path === $this->provider && ++$this->providerReads === 2) {
+                file_put_contents($this->provider, $this->external);
+            }
 
-    expectParseablePhp($this->root.'/app/Nodeflow/Triggers/LintedTrigger.php');
-});
-
-it('validates each invocation independently, even when the command instance is reused', function () {
-    // Symfony's Application resolves one command object per command name and
-    // keeps it for the process's lifetime, so a second artisan() call of
-    // nodeflow:make-trigger reuses this exact same MakeTriggerCommand
-    // instance rather than a fresh one. Counterfactual: without resetting
-    // $resolvedType/$resolvedEvent at the top of handle(), triggerType() and
-    // eventClass() would short-circuit on their memoized-not-null guard and
-    // return the FIRST call's already-validated values, silently rendering
-    // the first trigger's type and event into the second file while still
-    // reporting success.
-    $this->artisan('nodeflow:make-trigger', [
-        'name' => 'FirstInvocationTrigger',
-        '--event' => MakeTriggerTestEvent::class,
-        '--type' => 'shop.first_invocation',
-    ])->assertExitCode(0);
+            return parent::get($path, $lock);
+        }
+    };
+    $this->app->instance(Filesystem::class, $files);
+    $this->app->instance('files', $files);
 
     $this->artisan('nodeflow:make-trigger', [
-        'name' => 'SecondInvocationTrigger',
-        '--event' => MakeTriggerTestEventTwo::class,
-        '--type' => 'shop.second_invocation',
-    ])->assertExitCode(0);
-
-    $secondFile = file_get_contents($this->root.'/app/Nodeflow/Triggers/SecondInvocationTrigger.php');
-
-    expect($secondFile)
-        ->toContain("return 'shop.second_invocation';")
-        ->toContain('return \MakeTriggerTestEventTwo::class;')
-        ->not->toContain("return 'shop.first_invocation';")
-        ->not->toContain('return \MakeTriggerTestEvent::class;');
-});
-
-it('refuses a --type colliding with an already-registered trigger type', function () {
-    // Same rule, and the same reason, as MakeNodeCommand's NodeRegistry check:
-    // TriggerRegistry keys by type, so a second trigger sharing an existing
-    // type would silently replace the first one in every host boot that
-    // resolves it. The registry is genuinely populated here — a real
-    // register() call, not merely a file written to disk — so the collision
-    // triggerType() must catch is real.
-    $this->artisan('nodeflow:make-trigger', [
-        'name' => 'FirstClaimantTrigger',
-        '--event' => MakeTriggerTestEvent::class,
-        '--type' => 'shop.claimed_type',
-    ])->assertExitCode(0);
-
-    require $this->root.'/app/Nodeflow/Triggers/FirstClaimantTrigger.php';
-
-    app(TriggerRegistry::class)->register('App\Nodeflow\Triggers\FirstClaimantTrigger');
-
-    $this->artisan('nodeflow:make-trigger', [
-        'name' => 'SecondClaimantTrigger',
-        '--event' => MakeTriggerTestEvent::class,
-        '--type' => 'shop.claimed_type',
+        'name' => 'StalePlanNode', '--driver' => 'webhook', '--type' => 'shop.stale_plan_node',
     ])->assertExitCode(1);
 
-    expect($this->root.'/app/Nodeflow/Triggers/SecondClaimantTrigger.php')->not->toBeFile();
+    expect($node)->not->toBeFile()
+        ->and(file_get_contents($provider))->toBe($external);
 });
+
+it('guards an already-present provider registration while committing the generated node', function () {
+    $provider = $this->root.'/app/Providers/NodeflowServiceProvider.php';
+    file_put_contents($provider, "<?php\nclass NodeflowServiceProvider extends \\Illuminate\\Support\\ServiceProvider\n{\n    protected array \$triggerNodes = [\n        \\App\\Nodeflow\\Triggers\\GuardedNode::class,\n    ];\n}\n");
+    $node = $this->root.'/app/Nodeflow/Triggers/GuardedNode.php';
+    $external = "<?php\n// external provider replacement\n";
+    $files = new class($provider, $node, $external) extends Filesystem
+    {
+        private bool $intercept = true;
+        public function __construct(private string $provider, private string $node, private string $external) {}
+        public function move($path, $target)
+        {
+            $moved = parent::move($path, $target);
+            if ($this->intercept && $target === $this->node) {
+                $this->intercept = false;
+                unlink($this->provider);
+                file_put_contents($this->provider, $this->external);
+            }
+
+            return $moved;
+        }
+    };
+    $this->app->instance(Filesystem::class, $files);
+    $this->app->instance('files', $files);
+
+    $this->artisan('nodeflow:make-trigger', [
+        'name' => 'GuardedNode', '--driver' => 'webhook', '--type' => 'shop.guarded_node',
+    ])->assertExitCode(1);
+
+    expect($node)->not->toBeFile()
+        ->and(file_get_contents($provider))->toBe($external);
+});
+
+it('deduplicates and preserves CRLF provider formatting', function () {
+    $provider = $this->root.'/app/Providers/NodeflowServiceProvider.php';
+    file_put_contents($provider, "<?php\r\nclass NodeflowServiceProvider extends \\Illuminate\\Support\\ServiceProvider\r\n{\r\n    protected array \$triggerNodes = [\r\n    ];\r\n}\r\n");
+
+    $arguments = ['name' => 'CrlfNode', '--driver' => 'webhook', '--type' => 'shop.crlf_node'];
+    $this->artisan('nodeflow:make-trigger', $arguments)->assertExitCode(0);
+    $this->artisan('nodeflow:make-trigger', array_merge($arguments, ['--force' => true]))->assertExitCode(0);
+
+    $contents = file_get_contents($provider);
+    expect(substr_count($contents, '\\App\\Nodeflow\\Triggers\\CrlfNode::class'))->toBe(1)
+        ->and(preg_match('/(?<!\r)\n/', $contents))->toBe(0);
+});
+
+it('fails and restores generator writes before touching a CRLF provider', function (string $mode, bool $existing) {
+    $path = $this->root.'/app/Nodeflow/Triggers/VerifiedTrigger.php';
+    $original = '<?php // pre-existing trigger';
+    if ($existing) {
+        mkdir(dirname($path), 0777, true);
+        file_put_contents($path, $original);
+    }
+    $provider = $this->root.'/app/Providers/NodeflowServiceProvider.php';
+    file_put_contents($provider, str_replace("\n", "\r\n", file_get_contents($provider)));
+    $providerBefore = file_get_contents($provider);
+    $files = new class($path, $mode) extends Filesystem
+    {
+        private bool $intercept = true;
+
+        public function __construct(private string $target, private string $mode) {}
+
+        public function put($path, $contents, $lock = false)
+        {
+            if (str_contains($path, '.nodeflow-tmp-') && $this->intercept) {
+                $this->intercept = false;
+                $written = $this->mode === 'short' ? substr($contents, 0, -1) : '<?php malformed {';
+                parent::put($path, $written, $lock);
+
+                return $this->mode === 'short' ? strlen($contents) - 1 : strlen($contents);
+            }
+
+            return parent::put($path, $contents, $lock);
+        }
+    };
+    $this->app->instance(Filesystem::class, $files);
+    $this->app->instance('files', $files);
+
+    $this->artisan('nodeflow:make-trigger', [
+        'name' => 'VerifiedTrigger', '--driver' => 'webhook', '--type' => 'shop.verified_trigger', '--force' => $existing,
+    ])->expectsOutputToContain('generation transaction failed')->assertExitCode(1);
+
+    expect(file_get_contents($provider))->toBe($providerBefore);
+    if ($existing) {
+        expect(file_get_contents($path))->toBe($original);
+    } else {
+        expect($path)->not->toBeFile();
+    }
+})->with([
+    'short new write' => ['short', false],
+    'changed overwrite' => ['changed', true],
+]);

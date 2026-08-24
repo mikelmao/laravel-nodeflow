@@ -19,9 +19,14 @@ class InterpreterLoop
      * Yields WaitStep and RunNodeStep. The caller sends back, for each
      * RunNodeStep, the array of node ids that now hold subjects.
      */
-    public function steps(Graph $graph, int $maxSteps): Generator
+    public function steps(Graph $graph, int $maxSteps, ?string $entryNodeId = null): Generator
     {
-        $cursor = [$graph->startNodeId()];
+        // Run creation has already resolved and validated a trigger graph's
+        // executable entry. Keeping that fact explicit avoids guessing from an
+        // output name: an ordinary executable node may legitimately expose an
+        // output called `started`. The fallback preserves direct callers and
+        // workflows created before entry_node_id was added.
+        $cursor = [$entryNodeId ?? $graph->startNodeId()];
         $steps = 0;
 
         while ($cursor !== [] && $steps < $maxSteps) {

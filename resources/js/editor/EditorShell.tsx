@@ -198,7 +198,7 @@ export function EditorShell({ mode, toolbar, library, canvas, inspector, notices
     const libraryToggleLabel = isNarrow || !libraryOpen ? 'Open Node Library' : 'Collapse Node Library'
     const inspectorToggleLabel = isNarrow || !inspectorOpen ? 'Open Inspector' : 'Collapse Inspector'
 
-    return <section data-testid="editor-shell" className={`${modeClass} flex flex-col ${className ?? ''}`.trim()} style={shellStyle(libraryWidth, inspectorWidth, isNarrow || libraryOpen, isNarrow || inspectorOpen)}>
+    return <section data-testid="editor-shell" data-nodeflow-editor-root className={`${modeClass} flex flex-col ${className ?? ''}`.trim()} style={shellStyle(libraryWidth, inspectorWidth, isNarrow || libraryOpen, isNarrow || inspectorOpen)}>
         {toolbar}
         <div className="flex shrink-0 items-center justify-between gap-2 border-b border-border bg-background px-3 py-2">
             {(!isNarrow || !libraryDrawerOpen) && <button ref={libraryTrigger} type="button" aria-label={libraryToggleLabel} title={libraryToggleLabel} onClick={isNarrow ? openLibrary : () => onLibraryOpenChange(!libraryOpen)} className="rounded-md border border-border px-2 py-1 text-sm">Node Library</button>}

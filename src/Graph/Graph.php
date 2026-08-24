@@ -2,6 +2,8 @@
 
 namespace Nodeflow\Graph;
 
+use RuntimeException;
+
 class Graph
 {
     private function __construct(
@@ -46,9 +48,50 @@ class Graph
         return array_keys($this->nodes);
     }
 
+    /** @return string[] */
+    public function triggerNodeIds(GraphTypeCatalog $types): array
+    {
+        return array_values(array_filter(
+            $this->nodeIds(),
+            fn (string $id): bool => $types->family($this->nodes[$id]['type'] ?? '') === 'trigger',
+        ));
+    }
+
     public function edges(): array
     {
         return $this->edges;
+    }
+
+    public function incomingEdges(string $id): array
+    {
+        return array_values(array_filter(
+            $this->edges,
+            fn (array $edge): bool => ($edge['to'] ?? null) === $id,
+        ));
+    }
+
+    public function entryNodeId(GraphTypeCatalog $types): string
+    {
+        $triggers = $this->triggerNodeIds($types);
+
+        if (count($triggers) !== 1) {
+            throw new RuntimeException('The graph must contain exactly one trigger node.');
+        }
+
+        $trigger = $triggers[0];
+        $targets = $this->targetsFor($trigger, 'started');
+
+        if (count($targets) !== 1) {
+            throw new RuntimeException("Trigger node [{$trigger}] must have exactly one [started] edge target.");
+        }
+
+        $entry = $targets[0];
+
+        if ($types->family($this->node($entry)['type'] ?? '') !== 'executable') {
+            throw new RuntimeException("Trigger node [{$trigger}] must start an executable node.");
+        }
+
+        return $entry;
     }
 
     /**

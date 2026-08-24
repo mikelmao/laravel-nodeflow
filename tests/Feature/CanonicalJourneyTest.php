@@ -9,6 +9,7 @@ use Nodeflow\Execution\Steps\RunNodeStep;
 use Nodeflow\Execution\Steps\WaitStep;
 use Nodeflow\Execution\SubjectExiter;
 use Nodeflow\Graph\Graph;
+use Nodeflow\Graph\GraphTypeCatalog;
 use Nodeflow\Models\Flow;
 use Nodeflow\Models\RunSubject;
 use Nodeflow\Nodeflow;
@@ -59,7 +60,7 @@ beforeEach(function () {
     JourneySendNode::reset();
     Nodeflow::register([JourneySendNode::class]);
 
-    $this->graph = [
+    $this->graph = triggeredGraph([
         'start' => 's1',
         'nodes' => [
             ['id' => 's1', 'type' => 'test.journey_send', 'config' => []],
@@ -79,9 +80,9 @@ beforeEach(function () {
             ['from' => 'c1', 'output' => 'no', 'to' => 'x1'],
             ['from' => 'f1', 'output' => 'sent', 'to' => 'x1'],
         ],
-    ];
+    ]);
 
-    $flow = Flow::create(['name' => 'Flood alert journey', 'trigger_type' => 'manual', 'status' => 'draft']);
+    $flow = Flow::create(['name' => 'Flood alert journey', 'status' => 'draft']);
 
     app(PublishFlow::class)->publish($flow, $this->graph);
 
@@ -94,7 +95,7 @@ it('drives the canonical journey end to end and leaves no subject active', funct
 
     // Exactly what FlowInterpreter::handle() does, with awaitWithTimeout replaced
     // by the thing a wait actually races: a subject leaving the flow.
-    $loop = (new InterpreterLoop)->steps($graph, 100);
+    $loop = (new InterpreterLoop)->steps($graph, 100, $graph->entryNodeId(app(GraphTypeCatalog::class)));
     $send = null;
     $order = [];
 

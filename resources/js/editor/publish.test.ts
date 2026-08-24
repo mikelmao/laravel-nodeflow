@@ -40,6 +40,30 @@ describe('interpretPublish', () => {
         }
     })
 
+    it('reads optional one-time webhook metadata without accepting unsafe shapes', () => {
+        expect(interpretPublish(result(200, {
+            version: 4,
+            draft_revision: 7,
+            webhook_url: 'https://example.test/hooks/token',
+            webhook_secret: 'one-time-secret',
+        }), known)).toEqual({
+            kind: 'published',
+            version: 4,
+            revision: 7,
+            webhookUrl: 'https://example.test/hooks/token',
+            webhookSecret: 'one-time-secret',
+        })
+
+        expect(interpretPublish(result(200, {
+            version: 4,
+            draft_revision: 7,
+            webhook_secret: { unsafe: true },
+        }), known)).toEqual({
+            kind: 'failed',
+            message: 'The publish response contained invalid webhook metadata.',
+        })
+    })
+
     it('reads a semantic failure by the presence of node_errors', () => {
         // Looking at errors instead would silently misclassify this valid semantic response.
         const entry = { node: 'w1', field: 'duration', message: 'not a duration' }

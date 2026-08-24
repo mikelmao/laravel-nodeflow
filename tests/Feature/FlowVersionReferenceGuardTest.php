@@ -33,7 +33,6 @@ beforeEach(function () {
             $flow = Flow::withoutTenancy()->create([
                 'tenant_id' => $tenantId,
                 'name' => "{$tenantId} flow",
-                'trigger_type' => 'manual',
                 'status' => 'active',
             ]);
 
@@ -41,41 +40,52 @@ beforeEach(function () {
                 'tenant_id' => $tenantId,
                 'flow_id' => $flow->id,
                 'version' => 1,
-                'graph' => [
-                    'start' => 'n1',
-                    'nodes' => [['id' => 'n1', 'type' => 'core.exit', 'config' => []]],
-                    'edges' => [],
-                ],
+                'graph' => triggeredExitGraph(),
                 'content_hash' => "hash-{$tenantId}",
             ]);
         });
     };
 });
 
-it('allows a null or same-tenant current version', function () {
-    $draft = Flow::create(['name' => 'Draft', 'trigger_type' => 'manual', 'status' => 'draft']);
-    $version = ($this->makeVersion)('org-1');
-
-    $flow = Flow::create([
-        'name' => 'Published',
-        'trigger_type' => 'manual',
-        'status' => 'active',
-        'current_version_id' => $version->id,
+it('allows a null current version and a version owned by the exact flow', function () {
+    $flow = Flow::create(['name' => 'Draft', 'status' => 'draft']);
+    $version = FlowVersion::create([
+        'flow_id' => $flow->id,
+        'version' => 1,
+        'graph' => triggeredExitGraph(),
+        'content_hash' => 'own-version',
     ]);
 
-    expect($draft->current_version_id)->toBeNull()
-        ->and($flow->current_version_id)->toBe($version->id);
+    expect($flow->current_version_id)->toBeNull();
+
+    $flow->update(['current_version_id' => $version->id]);
+
+    expect($flow->current_version_id)->toBe($version->id);
+});
+
+it('refuses a same-tenant current version owned by a different flow', function () {
+    $foreign = ($this->makeVersion)('org-1');
+
+    expect(fn () => Flow::create([
+        'name' => 'Unsafe create',
+        'status' => 'active',
+        'current_version_id' => $foreign->id,
+    ]))->toThrow(InvalidFlowVersionReferenceException::class, 'does not belong to Flow');
+
+    $flow = Flow::create(['name' => 'Draft', 'status' => 'draft']);
+
+    expect(fn () => $flow->update(['current_version_id' => $foreign->id]))
+        ->toThrow(InvalidFlowVersionReferenceException::class, 'does not belong to Flow');
 });
 
 it('refuses a missing current version on create and update', function () {
     expect(fn () => Flow::create([
         'name' => 'Missing',
-        'trigger_type' => 'manual',
         'status' => 'active',
         'current_version_id' => 999999,
     ]))->toThrow(InvalidFlowVersionReferenceException::class, 'current_version_id');
 
-    $flow = Flow::create(['name' => 'Draft', 'trigger_type' => 'manual', 'status' => 'draft']);
+    $flow = Flow::create(['name' => 'Draft', 'status' => 'draft']);
 
     expect(fn () => $flow->update(['current_version_id' => 999999]))
         ->toThrow(InvalidFlowVersionReferenceException::class, '999999');
@@ -86,12 +96,11 @@ it('refuses a cross-tenant current version on create and update', function () {
 
     expect(fn () => Flow::create([
         'name' => 'Unsafe',
-        'trigger_type' => 'manual',
         'status' => 'active',
         'current_version_id' => $foreign->id,
     ]))->toThrow(CrossTenantWriteException::class, 'current_version_id');
 
-    $flow = Flow::create(['name' => 'Draft', 'trigger_type' => 'manual', 'status' => 'draft']);
+    $flow = Flow::create(['name' => 'Draft', 'status' => 'draft']);
 
     expect(fn () => $flow->update(['current_version_id' => $foreign->id]))
         ->toThrow(CrossTenantWriteException::class, "'org-2'");
@@ -99,7 +108,7 @@ it('refuses a cross-tenant current version on create and update', function () {
 
 it('does not let guard suspension create a contradictory flow reference', function () {
     $version = ($this->makeVersion)('org-1');
-    $flow = Flow::create(['name' => 'Draft', 'trigger_type' => 'manual', 'status' => 'draft']);
+    $flow = Flow::create(['name' => 'Draft', 'status' => 'draft']);
 
     expect(fn () => TenancyGuardSuspension::run(
         fn () => $flow->update(['tenant_id' => 'org-2', 'current_version_id' => $version->id])
@@ -107,8 +116,13 @@ it('does not let guard suspension create a contradictory flow reference', functi
 });
 
 it('queries the version only when a flow write can change the invariant', function () {
-    $version = ($this->makeVersion)('org-1');
-    $flow = Flow::create(['name' => 'Draft', 'trigger_type' => 'manual', 'status' => 'draft']);
+    $flow = Flow::create(['name' => 'Draft', 'status' => 'draft']);
+    $version = FlowVersion::create([
+        'flow_id' => $flow->id,
+        'version' => 1,
+        'graph' => triggeredExitGraph(),
+        'content_hash' => 'query-own-version',
+    ]);
     $versionQueries = [];
 
     DB::listen(function (QueryExecuted $query) use (&$versionQueries) {
@@ -126,7 +140,7 @@ it('queries the version only when a flow write can change the invariant', functi
 
 it('documents that a query-builder flow update bypasses model events', function () {
     $foreign = ($this->makeVersion)('org-2');
-    $flow = Flow::create(['name' => 'Draft', 'trigger_type' => 'manual', 'status' => 'draft']);
+    $flow = Flow::create(['name' => 'Draft', 'status' => 'draft']);
 
     Flow::withoutTenancy()->whereKey($flow->id)->update(['current_version_id' => $foreign->id]);
 
@@ -139,6 +153,9 @@ it('allows a run to reference a same-tenant version', function () {
     $run = Run::create([
         'flow_version_id' => $version->id,
         'tenant_id' => 'org-1',
+        'started_via' => 'manual',
+        'trigger_node_id' => 'trigger',
+        'trigger_data' => null,
         'strategy' => 'cohort',
         'status' => 'pending',
     ]);
@@ -150,6 +167,9 @@ it('refuses null and missing run version references', function () {
     expect(fn () => Run::create([
         'flow_version_id' => null,
         'tenant_id' => 'org-1',
+        'started_via' => 'manual',
+        'trigger_node_id' => 'trigger',
+        'trigger_data' => null,
         'strategy' => 'cohort',
         'status' => 'pending',
     ]))->toThrow(InvalidFlowVersionReferenceException::class, 'null');
@@ -157,6 +177,9 @@ it('refuses null and missing run version references', function () {
     expect(fn () => Run::create([
         'flow_version_id' => 999999,
         'tenant_id' => 'org-1',
+        'started_via' => 'manual',
+        'trigger_node_id' => 'trigger',
+        'trigger_data' => null,
         'strategy' => 'cohort',
         'status' => 'pending',
     ]))->toThrow(InvalidFlowVersionReferenceException::class, '999999');
@@ -169,6 +192,9 @@ it('refuses cross-tenant run references on create and update', function () {
     expect(fn () => Run::create([
         'flow_version_id' => $foreign->id,
         'tenant_id' => 'org-1',
+        'started_via' => 'manual',
+        'trigger_node_id' => 'trigger',
+        'trigger_data' => null,
         'strategy' => 'cohort',
         'status' => 'pending',
     ]))->toThrow(CrossTenantWriteException::class, 'flow_version_id');
@@ -176,6 +202,9 @@ it('refuses cross-tenant run references on create and update', function () {
     $run = Run::create([
         'flow_version_id' => $own->id,
         'tenant_id' => 'org-1',
+        'started_via' => 'manual',
+        'trigger_node_id' => 'trigger',
+        'trigger_data' => null,
         'strategy' => 'cohort',
         'status' => 'pending',
     ]);
@@ -189,6 +218,9 @@ it('does not let guard suspension create a contradictory run reference', functio
     $run = Run::create([
         'flow_version_id' => $version->id,
         'tenant_id' => 'org-1',
+        'started_via' => 'manual',
+        'trigger_node_id' => 'trigger',
+        'trigger_data' => null,
         'strategy' => 'cohort',
         'status' => 'pending',
     ]);
@@ -203,6 +235,9 @@ it('queries the version only when a run write can change the invariant', functio
     $run = Run::create([
         'flow_version_id' => $version->id,
         'tenant_id' => 'org-1',
+        'started_via' => 'manual',
+        'trigger_node_id' => 'trigger',
+        'trigger_data' => null,
         'strategy' => 'cohort',
         'status' => 'pending',
     ]);
@@ -229,6 +264,9 @@ it('documents that a query-builder run update bypasses model events', function (
     $run = Run::create([
         'flow_version_id' => $own->id,
         'tenant_id' => 'org-1',
+        'started_via' => 'manual',
+        'trigger_node_id' => 'trigger',
+        'trigger_data' => null,
         'strategy' => 'cohort',
         'status' => 'pending',
     ]);

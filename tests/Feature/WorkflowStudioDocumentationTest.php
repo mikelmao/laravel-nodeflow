@@ -13,13 +13,16 @@ it('documents the Workflow Studio editor and its non-mutating validation contrac
     $graph = workflowStudioDoc('reference/graph-format.md');
     $testing = workflowStudioDoc('contributing/testing.md');
 
-    expect($integration)->toContain('eight routes')
-        ->and($routes)->toContain('Nodeflow registers eight routes')
+    expect($integration)->toContain('eleven authenticated routes')
+        ->and($routes)->toContain('Nodeflow registers eleven authenticated routes')
+        ->and($routes)->toContain('one separate public webhook route')
         ->and($routes)->toContain('| `POST` | `flows/{flow}/validate` | `nodeflow.flows.validate` |')
         ->and($routes)->toContain('`publish` / `nodeflow.publish`')
         ->and($routes)->toContain('{"valid":true,"warnings":[]}')
         ->and($routes)->toContain('The flow is not ready to publish.')
         ->and($routes)->toContain('does not save a draft or create a version')
+        ->and($routes)->toContain('nodeflow.webhooks.secret.rotate')
+        ->and($routes)->toContain('nodeflow.webhooks.receive')
         ->and($editor)->toContain('full-height workspace')
         ->and($editor)->toContain('<FlowEditor {...props} mode="embedded" />')
         ->and($editor)->toContain('toolbarSlots')
@@ -29,6 +32,8 @@ it('documents the Workflow Studio editor and its non-mutating validation contrac
         ->and($editor)->toContain('ToolbarSlots,')
         ->and($editor)->toContain('href="/admin/flows"')
         ->and($editor)->toContain('Node Library')
+        ->and($editor)->toContain('Trigger Library')
+        ->and($editor)->toContain('one-time signing secret')
         ->and($editor)->toContain('drag')
         ->and($editor)->toContain('Undo')
         ->and($editor)->toContain('Redo')

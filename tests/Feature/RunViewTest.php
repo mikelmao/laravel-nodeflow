@@ -1,6 +1,7 @@
 <?php
 
 use Illuminate\Foundation\Auth\User;
+use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Gate;
 use Illuminate\Support\Facades\Route;
 use Nodeflow\Contracts\TenantResolver;
@@ -27,21 +28,24 @@ beforeEach(function () {
     $this->user = new User;
     $this->user->id = 1;
 
-    $this->flow = Flow::create(['name' => 'A', 'trigger_type' => 'manual', 'status' => 'active']);
+    $this->flow = Flow::create(['name' => 'A', 'status' => 'active']);
 
     // The run's pinned version. 'pinned' is the node that proves the run view
     // read this graph and not another.
     $this->version = FlowVersion::create([
         'flow_id' => $this->flow->id, 'version' => 1, 'content_hash' => 'h1',
-        'graph' => [
+        'graph' => triggeredGraph([
             'start' => 'pinned',
             'nodes' => [['id' => 'pinned', 'type' => 'core.exit', 'config' => []]],
             'edges' => [],
-        ],
+        ]),
     ]);
 
     $this->run = Run::create([
         'flow_version_id' => $this->version->id, 'tenant_id' => 'org-1',
+        'started_via' => 'manual',
+        'trigger_node_id' => 'trigger',
+        'trigger_data' => null,
         'strategy' => 'cohort', 'status' => 'running',
     ]);
 });
@@ -76,7 +80,7 @@ it('four-oh-fours another tenants run rather than forbidding it', function () {
 
     $theirs = TenancyGuardSuspension::run(function () {
         $flow = Flow::withoutTenancy()->create([
-            'tenant_id' => 'org-2', 'name' => 'Theirs', 'trigger_type' => 'manual', 'status' => 'active',
+            'tenant_id' => 'org-2', 'name' => 'Theirs', 'status' => 'active',
         ]);
         $version = FlowVersion::withoutTenancy()->create([
             'flow_id' => $flow->id, 'tenant_id' => 'org-2', 'version' => 1, 'content_hash' => 'h', 'graph' => ['start' => 'x', 'nodes' => [], 'edges' => []],
@@ -84,6 +88,9 @@ it('four-oh-fours another tenants run rather than forbidding it', function () {
 
         return Run::withoutTenancy()->create([
             'flow_version_id' => $version->id, 'tenant_id' => 'org-2',
+            'started_via' => 'manual',
+            'trigger_node_id' => 'trigger',
+            'trigger_data' => null,
             'strategy' => 'cohort', 'status' => 'running',
         ]);
     });
@@ -131,11 +138,11 @@ it('renders the runs own version and not the flows newest published version', fu
 
     $newer = FlowVersion::create([
         'flow_id' => $this->flow->id, 'version' => 2, 'content_hash' => 'h2',
-        'graph' => [
+        'graph' => triggeredGraph([
             'start' => 'newer',
             'nodes' => [['id' => 'newer', 'type' => 'core.exit', 'config' => []]],
             'edges' => [],
-        ],
+        ]),
     ]);
     $this->flow->update(['current_version_id' => $newer->id]);
 
@@ -155,9 +162,60 @@ it('carries an overlay entry for every node in the pinned graph', function () {
 
     $overlay = runPage($this, $this->run->id)->assertOk()->json('props.overlay');
 
-    expect(array_keys($overlay['nodes']))->toBe(['pinned'])
+    expect(array_keys($overlay['nodes']))->toBe(['trigger', 'pinned'])
         ->and($overlay['nodes']['pinned']['reached'])->toBeFalse()
         ->and($overlay['terminal'])->toBeFalse();
+});
+
+it('supplies discriminated executable and trigger definitions for the pinned graph', function () {
+    allowRunViewing();
+
+    $palette = collect(runPage($this, $this->run->id)->assertOk()->json('props.palette'));
+
+    expect($palette->firstWhere('type', 'core.exit')['kind'])->toBe('executable')
+        ->and($palette->firstWhere('type', 'test.fake_trigger'))
+        ->toMatchArray([
+            'kind' => 'trigger',
+            'driver' => 'test.fake',
+            'outputs' => ['started'],
+            'default_config' => ['source' => 'test.orders'],
+        ]);
+});
+
+it('exposes safe origin fields without leaking execution-only trigger data', function () {
+    allowRunViewing();
+    $this->run->update([
+        'started_via' => 'test.fake',
+        'trigger_data' => [
+            'delivery' => 'd-1',
+            'nested' => ['authorization' => 'Bearer secret-token'],
+            'serialized' => json_encode(['private' => ['account' => 42]], JSON_THROW_ON_ERROR),
+        ],
+    ]);
+    DB::table('nodeflow_runs')->where('id', $this->run->id)->update([
+        'engine_entry_node_id' => 'private-entry-node',
+        'engine_dispatch_status' => 'failed',
+        'engine_dispatch_error' => 'private dispatch infrastructure detail',
+    ]);
+
+    $response = runPage($this, $this->run->id)->assertOk();
+    $run = $response->json('props.run');
+
+    expect($run['started_via'])->toBe('test.fake')
+        ->and($run['trigger_node_id'])->toBe('trigger')
+        ->and($run)->not->toHaveKeys([
+            'trigger_data',
+            'idempotency_key',
+            'engine_workflow_id',
+            'engine_entry_node_id',
+            'engine_dispatch_status',
+            'engine_dispatch_error',
+        ])
+        ->and($response->getContent())->not->toContain(
+            'private-entry-node',
+            'private dispatch infrastructure detail',
+            'engine_dispatch_status',
+        );
 });
 
 it('serves urls whose node sentinel survives route generation', function () {

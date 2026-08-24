@@ -20,7 +20,7 @@ beforeEach(function () {
         }
     });
 
-    $this->flow = Flow::create(['name' => 'A', 'trigger_type' => 'manual', 'status' => 'draft']);
+    $this->flow = Flow::create(['name' => 'A', 'status' => 'draft']);
 
     // Assigned rather than mass-assigned: Model's default $guarded is ['*'], so
     // new User(['id' => 1]) would silently leave id unset and the
@@ -43,7 +43,7 @@ it('denies run abilities when the host has defined no gates', function () {
         'flow_id' => $this->flow->id,
         'tenant_id' => 'org-1',
         'version' => 1,
-        'graph' => ['start' => 'n1', 'nodes' => [['id' => 'n1', 'type' => 'core.exit', 'config' => []]], 'edges' => []],
+        'graph' => triggeredExitGraph(),
         'content_hash' => 'x',
         'published_at' => now(),
     ]);
@@ -51,6 +51,9 @@ it('denies run abilities when the host has defined no gates', function () {
     $run = Run::create([
         'flow_version_id' => $version->id,
         'tenant_id' => 'org-1',
+        'started_via' => 'manual',
+        'trigger_node_id' => 'trigger',
+        'trigger_data' => null,
         'strategy' => 'cohort',
         'status' => 'pending',
     ]);

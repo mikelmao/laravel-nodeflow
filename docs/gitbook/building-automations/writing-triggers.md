@@ -1,176 +1,530 @@
 # Writing triggers
 
-> **Experimental:** Nodeflow is pre-release software. A trigger starts real work from application events, so make event delivery and any downstream side effects safe to repeat.
+Triggers are a three-part extension boundary:
 
-A trigger turns one host event into tenant-specific audiences and starts every matching active flow. Its stable type is stored on flows; keep that value unchanged while any flow uses it.
+- a `TriggerNode` defines the graph authoring shape and compiles immutable routing metadata;
+- a `TriggerDriver` owns how occurrences arrive and validates its descriptors;
+- a `TriggerSource` is a host allowlist entry that turns a typed occurrence into tenant audiences.
 
-Generate a trigger with its event class and an explicit, domain-owned type:
+At runtime, `TriggerSource::resolve()` receives only descriptor metadata compiled by the node, not the complete raw authoring config. A node that accepts a broad source family must preserve every validated source field in that metadata. Otherwise a source can pass publication validation and then lose the values it requires at runtime. A narrower `sourceType()` or `supportsSource()` implementation may deliberately narrow that shared contract.
 
-```bash
-php artisan nodeflow:make-trigger FloodAlertTrigger --event="App\\Events\\FloodAlertFires" --type=app.flood_alert
-```
+Nodeflow registers the `webhook`, `model`, and `event` drivers and their built-in trigger nodes unconditionally. The host registers sources explicitly. Flow authors therefore select stable keys; they never submit a PHP model class, event class, listener class, or arbitrary service name.
 
-The command is `nodeflow:make-trigger {name}`. It writes the class to `app/Nodeflow/Triggers/<Name>.php` by default and offers these options:
+## Graph invariant
 
-| Option | Default | Validation and behavior |
-| --- | --- | --- |
-| `--event=` | none | Required when the command cannot prompt. An interactive command prompts for it. A class or interface that is not yet loadable produces a warning but still generates the class; `::class` needs no loaded class. It must be the exact concrete class Laravel dispatches, such as `App\Events\FloodAlertFires`. A parent class or interface may be accepted by the generator but never matches: runtime lookup uses the exact `$event::class`. |
-| `--type=` | Interactive: class name converted to snake case; non-interactive: the same value with a warning | Must match lowercase letters and digits in dot- or underscore-separated segments, such as `app.flood_alert`. `core.` is reserved. The command refuses a type already owned by another registered trigger, but direct duplicate registration can still replace it. |
-| `--force`, `-f` | off | Overwrites an existing generated class. |
+A publishable graph contains exactly one trigger node. `graph.start` must name it. The trigger accepts no incoming edge and has exactly one `started` edge to an executable entry node. Multiple trigger nodes are not supported. Trigger nodes are declarative and are never executed; the run starts at their `started` target.
 
-When the generated provider contains exactly one trigger anchor, the command also adds the class to its `$triggers` array. Otherwise it prints the registration call. Generation without `--event` fails before it writes a file; a missing event class only warns because creating the event after the trigger is a valid order of work.
+Built-in graph types are `core.trigger.webhook`, `core.trigger.model_observer`, and `core.trigger.laravel_event`. The server supplies trigger-node and compatible-source palettes to the editor. A driver with no registered compatible source displays an empty state rather than an author-controlled class input.
 
-> **Warning:** `TriggerRegistry` calls `forEvent($event::class)`. Do not register an interface or parent event class as a catch-all listener: it attaches successfully but the fired concrete event finds no trigger and starts no run.
+Stable driver and source keys use `[a-z][a-z0-9._-]*` and are at most 191 bytes. Graph node types use the same grammar and are at most 255 bytes. Registration rejects collisions. Source fields are combined into the node as flat config; source keys must not collide with node-owned fields. Dots in a field key are literal keys, not nested-object paths.
 
-## Implement the event and trigger
+## Webhook source
 
-Define the host event first so its public data is a deliberate contract for the trigger.
-
-**File: `app/Events/FloodAlertFires.php`**
-
-```php
-<?php
-
-namespace App\Events;
-
-class FloodAlertFires
-{
-    /** @param array<string, list<int|string>> $residentIdsByOrganization */
-    public function __construct(
-        public readonly string $alertId,
-        public readonly string $severity,
-        public readonly array $residentIdsByOrganization,
-    ) {}
-}
-```
-
-**File: `app/Nodeflow/Triggers/FloodAlertTrigger.php`**
+This complete source accepts a signed JSON order delivery. The webhook driver supplies the request's `Idempotency-Key` as the occurrence identity, so the source cannot override it.
 
 ```php
 <?php
 
 namespace App\Nodeflow\Triggers;
 
-use App\Events\FloodAlertFires;
-use Nodeflow\Schema\Field;
+use InvalidArgumentException;
 use Nodeflow\Schema\TriggerDefinition;
-use Nodeflow\Triggers\Trigger;
 use Nodeflow\Triggers\TriggerMatch;
+use Nodeflow\Triggers\TriggerOccurrence;
+use Nodeflow\Triggers\Webhook\WebhookOccurrence;
+use Nodeflow\Triggers\Webhook\WebhookSourceRejected;
+use Nodeflow\Triggers\Webhook\WebhookTriggerDriver;
+use Nodeflow\Triggers\Webhook\WebhookTriggerSource;
 
-class FloodAlertTrigger extends Trigger
+final class OrderWebhookSource implements WebhookTriggerSource
 {
-    public static function type(): string
+    public static function key(): string
     {
-        return 'app.flood_alert';
+        return 'shop.order_webhook';
     }
 
-    public static function event(): string
+    public static function driver(): string
     {
-        return FloodAlertFires::class;
+        return WebhookTriggerDriver::key();
     }
 
     public function definition(): TriggerDefinition
     {
-        return TriggerDefinition::make('Flood alert')
-            ->description('Start for residents affected by a flood alert.')
-            ->fields([
-                Field::select('minimum_severity')
-                    ->label('Minimum severity')
-                    ->options([
-                        'moderate' => 'Moderate',
-                        'severe' => 'Severe',
-                    ])
-                    ->required(),
-            ]);
+        return TriggerDefinition::make('Order webhook')
+            ->description('Starts for an allowlisted order delivery.');
     }
 
-    public function resolve(object $event): TriggerMatch
+    public function resolve(TriggerOccurrence $occurrence, array $config): TriggerMatch
     {
-        /** @var FloodAlertFires $event */
-        $match = TriggerMatch::make();
-
-        foreach ($event->residentIdsByOrganization as $organizationId => $residentIds) {
-            $match->forTenant(
-                tenantId: (string) $organizationId,
-                subjectType: 'resident',
-                subjectIds: $residentIds,
-            );
+        if (! $occurrence->payload instanceof WebhookOccurrence) {
+            throw new InvalidArgumentException('Expected a webhook occurrence.');
         }
 
-        return $match;
-    }
+        $payload = $occurrence->payload->payload;
+        $tenantId = $payload['tenant_id'] ?? null;
+        $orderId = $payload['order_id'] ?? null;
 
-    public function matchesConfig(object $event, array $config): bool
-    {
-        /** @var FloodAlertFires $event */
-        return match ($config['minimum_severity'] ?? null) {
-            'moderate' => in_array($event->severity, ['moderate', 'severe'], true),
-            'severe' => $event->severity === 'severe',
-            default => false,
-        };
-    }
+        if (! is_string($tenantId) || ! is_string($orderId)) {
+            throw new WebhookSourceRejected('The webhook payload is incomplete.');
+        }
 
-    public function idempotencyKey(object $event): ?string
-    {
-        /** @var FloodAlertFires $event */
-        return 'flood-alert:'.$event->alertId;
+        return TriggerMatch::make()->forTenant(
+            tenantId: $tenantId,
+            subjectType: 'order',
+            subjectIds: [$orderId],
+            triggerData: [
+                'delivery_id' => $occurrence->payload->deliveryId,
+                'event' => $payload['event'] ?? null,
+            ],
+        );
     }
 }
 ```
 
-**Abstract method signatures (partial):** `Trigger` requires these exact methods:
+For each webhook activation the source must return exactly one non-empty audience for that activation's tenant. A missing audience, a second audience, a tenant mismatch, or a subject rejected by `TenantResolver::ownsSubject()` produces a sanitized `422` response. Explicit source rejection is a payload-level `422`: throw `Nodeflow\Triggers\Webhook\WebhookSourceRejected` with a safe internal message when a validly delivered payload cannot be accepted. The public response does not expose that message.
+
+`InvalidArgumentException` and every other unexpected source exception represent an incompatible occurrence, source bug, dependency failure, or other infrastructure/unexpected condition. Nodeflow removes the original exception from the webhook boundary and returns a sanitized `503`; reports and responses must never include the raw payload. Keep every exception message free of secrets because host reporting still observes unexpected failures elsewhere in the trigger pipeline.
+
+### Sign and send the request
+
+Public webhook routes are opt-in:
 
 ```php
-public static function type(): string;
-public static function event(): string;
-public function definition(): TriggerDefinition;
-public function resolve(object $event): TriggerMatch;
+Route::middleware(['api', 'throttle:webhooks'])
+    ->domain('hooks.example.com')
+    ->group(fn () => \Nodeflow\Nodeflow::webhookRoutes());
 ```
 
-`type()` is the stored, stable trigger type. `event()` returns the event class to listen for. `definition()` supplies the editor label, optional description, and fields. `resolve()` returns the audience selected from one event. The inherited `matchesConfig(object $event, array $config): bool` accepts every event by default; override it when each flow's `trigger_config` should narrow the event. The inherited `idempotencyKey(object $event): ?string` returns `null`; override it only with a stable identity for this event delivery, such as the alert ID above.
+The route is `POST hooks/{token}` with name `nodeflow.webhooks.receive`. A flow's first webhook publication creates a stable endpoint token and encrypted signing secret. The publish response shows the plaintext secret once. Later publications return no secret. The authenticated rotation route replaces it, invalidates the old secret immediately, returns the replacement once, and sets `Cache-Control: no-store` and `Pragma: no-cache`.
 
-`TriggerMatch::forTenant(string $tenantId, string $subjectType, iterable $subjectIds): self` records one audience per tenant. Its stored shape is:
+Send these exact headers:
 
-```php
-[
-    'organization-42' => [
-        'subject_type' => 'resident',
-        'subject_ids' => ['101', '102'],
-    ],
-]
-```
+- `X-Nodeflow-Timestamp`: a base-10 Unix timestamp inside `nodeflow.webhooks.replay_window_seconds` (default 300);
+- `X-Nodeflow-Signature`: `sha256=` followed by the lowercase HMAC hex;
+- `Idempotency-Key`: a nonblank delivery identity of at most 255 bytes.
 
-Calling `forTenant()` again for the same tenant replaces that tenant's earlier audience; merge IDs before calling it when one event has several sources for that tenant. The match preserves the supplied IDs until run materialization. Materialization then string-normalizes them and removes repeated IDs.
-
-## Register at application boot
-
-**File: `app/Providers/NodeflowServiceProvider.php` (partial `boot()` method)**
+The signed message is `timestamp`.`raw request body`. Do not re-encode JSON before signing:
 
 ```php
-app(\Nodeflow\Triggers\TriggerRegistry::class)->register(
-    \App\Nodeflow\Triggers\FloodAlertTrigger::class,
+$timestamp = (string) time();
+$body = json_encode($payload, JSON_THROW_ON_ERROR);
+$signature = 'sha256='.hash_hmac(
+    'sha256',
+    $timestamp.'.'.$body,
+    $secret,
 );
+
+Http::withHeaders([
+    'Content-Type' => 'application/json',
+    'X-Nodeflow-Timestamp' => $timestamp,
+    'X-Nodeflow-Signature' => $signature,
+    'Idempotency-Key' => $deliveryId,
+])->withBody($body, 'application/json')->post($endpointUrl);
 ```
 
-Register in a provider's `boot()` method. Registration attaches the Laravel event listener immediately, so provider boot ordering does not require the package provider to run later. An unregistered trigger is absent from both the editor palette and event processing.
+The body is rejected before HMAC work when it exceeds `nodeflow.webhooks.max_body_bytes` (default 1 MiB). Responses are:
 
-There is at most one listener per distinct event class. If two registered trigger classes return the same `event()` class, the one listener asks the registry for all triggers for that event and handles each exactly once. Trigger types are registry keys: direct registration of another class with the same type silently replaces the earlier class. Use one owner for every stable type; the generator refuses known collisions to prevent the usual case.
+| Status | Meaning |
+| --- | --- |
+| `202 Accepted` | A run was created or an idempotent duplicate was found; JSON contains `run_id` and `duplicate`. |
+| `404` | The token is unknown, inactive, or no longer points to a webhook activation. |
+| `401` | Signature headers are missing/malformed, outside the replay window, or the HMAC is invalid. |
+| `413` | Raw body exceeds the configured byte limit. |
+| `422` | Idempotency is invalid, JSON is malformed/not an array, or the source cannot resolve its one tenant audience. |
+| `503` | Verification configuration, registration, source execution, or durable run dispatch is unavailable; retry with the same idempotency key. |
 
-## Know what a fired event starts
+Unsigned webhooks are not supported. Put rate limiting, trusted proxy handling, domain restrictions, and any additional middleware in the host route group. Never log the signing secret, signature, token, or raw request body; Nodeflow's public errors and stored dispatch errors are intentionally sanitized.
 
-For each trigger selected by the event class, Nodeflow calls `resolve()`, then processes every tenant audience independently. Within that tenant it finds flows that are all of the following:
+## Model observer source
 
-- owned by that tenant;
-- `active`;
-- configured with the trigger's stable type; and
-- holding a current published version.
+The built-in model driver observes only `created`, `updated`, `deleted`, and `restored`. `modelClass()` is the allowlist; authors choose only the source and event. For `updated`, optional `changed_fields` starts an activation when at least one configured name changed. Eloquent query-builder bulk updates are not observed because they emit no model lifecycle event.
 
-It calls `matchesConfig()` for each candidate flow and starts one run for each flow that returns `true`. A failure while one flow or tenant is starting is reported to Laravel's error handler and does not stop the remaining flows or tenant audiences. `resolve()` and `matchesConfig()` themselves are outside that per-flow `try` block, so make them deterministic and handle expected bad event data before returning a match.
+```php
+<?php
 
-The trigger's idempotency key is passed to every started run. Repeated delivery returns an existing run when the same **flow version** and non-null key already exist. It does not deduplicate across different flow versions: publishing a new version intentionally gives the same event key a separate idempotency scope. With a `null` key, every delivery can create another run.
+namespace App\Nodeflow\Triggers;
 
-The database unique constraint backs the pre-check. Two concurrent deliveries can both see no run; one insert wins and the loser re-queries and returns that winner after a matching unique-constraint error. This removes duplicate run rows for the same `(flow_version_id, idempotency_key)`, not duplicate external effects that a node may already have performed. Nodes must still make their own side effects idempotent.
+use App\Models\Order;
+use InvalidArgumentException;
+use Nodeflow\Schema\TriggerDefinition;
+use Nodeflow\Triggers\ModelObserver\ModelObserverTriggerDriver;
+use Nodeflow\Triggers\ModelObserver\ModelObserverTriggerSource;
+use Nodeflow\Triggers\ModelObserver\ModelOccurrence;
+use Nodeflow\Triggers\TriggerMatch;
+use Nodeflow\Triggers\TriggerOccurrence;
 
-## Next step
+final class OrderModelSource implements ModelObserverTriggerSource
+{
+    public static function key(): string
+    {
+        return 'shop.order_model';
+    }
 
-Expose only safe branching data to authors with [Subject attributes](subject-attributes.md).
+    public static function driver(): string
+    {
+        return ModelObserverTriggerDriver::key();
+    }
+
+    public static function modelClass(): string
+    {
+        return Order::class;
+    }
+
+    public function definition(): TriggerDefinition
+    {
+        return TriggerDefinition::make('Order lifecycle');
+    }
+
+    public function resolve(TriggerOccurrence $occurrence, array $config): TriggerMatch
+    {
+        if (! $occurrence->payload instanceof ModelOccurrence) {
+            throw new InvalidArgumentException('Expected a model occurrence.');
+        }
+
+        $model = $occurrence->payload;
+        $tenantId = $model->attributes['tenant_id'] ?? null;
+
+        if (! is_string($tenantId)) {
+            throw new InvalidArgumentException('Order tenant is missing.');
+        }
+
+        $identity = hash('sha256', json_encode([
+            $model->event,
+            $model->modelKey,
+            $model->attributes,
+            $model->original,
+            $model->changedFields,
+        ], JSON_THROW_ON_ERROR));
+
+        return TriggerMatch::make()->forTenant(
+            tenantId: $tenantId,
+            subjectType: 'order',
+            subjectIds: [$model->modelKey],
+            triggerData: [
+                'event' => $model->event,
+                'changed_fields' => $model->changedFields,
+                'status' => $model->attributes['status'] ?? null,
+            ],
+            occurrenceId: $identity,
+        );
+    }
+}
+```
+
+Nodeflow snapshots the model key, connection name, attributes, raw originals, and changed field names into immutable value data before registering the callback. Scalars, arrays, backed enums, dates, JSON-serializable values, and strings are normalized; unsupported objects reject the observation without vetoing persistence. The source controls the smaller, sanitized `trigger_data` stored on the run.
+
+Delivery occurs after the outermost database transaction commits. If no transaction is open, Laravel runs the callback immediately. A rollback emits no run. The snapshot and matching activation versions are captured before the callback, so later model mutation or flow publication cannot move that occurrence. Use the model's emitting connection; do not assume the default database connection.
+
+## Laravel event source
+
+`eventClass()` must return one existing, concrete, instantiable class. Nodeflow attaches one shared listener per exact event class and fans out to registered sources and tenant activations. Interfaces, abstract classes, parent-class catch-alls, and author-entered class strings are not supported.
+
+```php
+<?php
+
+namespace App\Nodeflow\Triggers;
+
+use App\Events\OrderPlaced;
+use InvalidArgumentException;
+use Nodeflow\Schema\TriggerDefinition;
+use Nodeflow\Triggers\LaravelEvent\LaravelEventOccurrence;
+use Nodeflow\Triggers\LaravelEvent\LaravelEventTriggerDriver;
+use Nodeflow\Triggers\LaravelEvent\LaravelEventTriggerSource;
+use Nodeflow\Triggers\TriggerMatch;
+use Nodeflow\Triggers\TriggerOccurrence;
+
+final class OrderPlacedSource implements LaravelEventTriggerSource
+{
+    public static function key(): string
+    {
+        return 'shop.order_placed';
+    }
+
+    public static function driver(): string
+    {
+        return LaravelEventTriggerDriver::key();
+    }
+
+    public static function eventClass(): string
+    {
+        return OrderPlaced::class;
+    }
+
+    public function definition(): TriggerDefinition
+    {
+        return TriggerDefinition::make('Order placed');
+    }
+
+    public function snapshot(object $event): LaravelEventOccurrence
+    {
+        if (! $event instanceof OrderPlaced) {
+            throw new InvalidArgumentException('Expected OrderPlaced.');
+        }
+
+        return new LaravelEventOccurrence(OrderPlaced::class, [
+            'order_id' => (string) $event->orderId,
+            'tenant_id' => (string) $event->tenantId,
+            'customer_id' => (string) $event->customerId,
+        ]);
+    }
+
+    public function resolve(TriggerOccurrence $occurrence, array $config): TriggerMatch
+    {
+        if (! $occurrence->payload instanceof LaravelEventOccurrence) {
+            throw new InvalidArgumentException('Expected a Laravel event occurrence.');
+        }
+
+        $data = $occurrence->payload->data;
+
+        return TriggerMatch::make()->forTenant(
+            tenantId: (string) $data['tenant_id'],
+            subjectType: 'customer',
+            subjectIds: [(string) $data['customer_id']],
+            triggerData: ['order_id' => (string) $data['order_id']],
+            occurrenceId: 'order-placed:'.(string) $data['order_id'],
+        );
+    }
+}
+```
+
+The source owns the explicit value-only snapshot. Nodeflow performs no reflection-based property extraction and no automatic event serialization. `LaravelEventOccurrence` accepts JSON-safe scalar/array data and rejects objects, resources, non-finite floats, recursive arrays, excessive depth, and excessive value count.
+
+Laravel event delivery follows Laravel's normal synchronous timing. Nodeflow does not defer it automatically. If a source must observe committed state, the host should implement Laravel's after-commit event contract or dispatch after commit. One source/activation failure is reported and isolated so it cannot abort other sources or the host's event dispatch.
+
+## Register sources and extensions
+
+Keep explicit arrays in the host provider. Built-ins need not be repeated:
+
+```php
+use App\Nodeflow\Triggers\OrderModelSource;
+use App\Nodeflow\Triggers\OrderPlacedSource;
+use App\Nodeflow\Triggers\OrderWebhookSource;
+use Nodeflow\Nodeflow;
+
+protected array $triggerDrivers = [];
+protected array $triggerNodes = [];
+protected array $triggerSources = [
+    OrderWebhookSource::class,
+    OrderModelSource::class,
+    OrderPlacedSource::class,
+];
+
+public function boot(): void
+{
+    Nodeflow::registerTriggerDrivers($this->triggerDrivers);
+    Nodeflow::registerTriggerNodes($this->triggerNodes);
+    Nodeflow::registerTriggerSources($this->triggerSources);
+}
+```
+
+Registration order is driver → node → source because source registration calls `TriggerDriver::sourceRegistered()`. Registering the same key for another class is rejected; registration is not a last-writer-wins override.
+
+## Custom node on a built-in driver
+
+A custom node can reuse webhook delivery while adding an authoring field. `AbstractTriggerNode` supplies source selection and source-registry validation; the subclass owns definition, compatibility, and deterministic compilation.
+
+```php
+<?php
+
+namespace App\Nodeflow\Triggers;
+
+use Nodeflow\Schema\Field;
+use Nodeflow\Schema\TriggerDefinition;
+use Nodeflow\Triggers\AbstractTriggerNode;
+use Nodeflow\Triggers\TriggerActivationDescriptor;
+use Nodeflow\Triggers\Webhook\WebhookTriggerDriver;
+use Nodeflow\Triggers\Webhook\WebhookTriggerSource;
+
+final class PartnerWebhookTrigger extends AbstractTriggerNode
+{
+    public static function type(): string
+    {
+        return 'shop.trigger.partner_webhook';
+    }
+
+    protected function sourceType(): string
+    {
+        return WebhookTriggerSource::class;
+    }
+
+    public function definition(): TriggerDefinition
+    {
+        return TriggerDefinition::make('Partner webhook')->fields([
+            Field::select('source')->required(),
+            Field::select('region')->required()->options([
+                'eu' => 'Europe',
+                'us' => 'United States',
+            ]),
+        ]);
+    }
+
+    public function driver(): string
+    {
+        return WebhookTriggerDriver::key();
+    }
+
+    public function compile(array $config): TriggerActivationDescriptor
+    {
+        $source = $this->source($config);
+        unset($config['source']);
+
+        return new TriggerActivationDescriptor(
+            driver: $this->driver(),
+            source: $source,
+            qualifier: null,
+            metadata: $config,
+        );
+    }
+}
+```
+
+Register it with `Nodeflow::registerTriggerNodes([PartnerWebhookTrigger::class]);`. Its broad `WebhookTriggerSource` compatibility means compilation copies every validated flat field except the reserved `source` selector. That includes the node-owned `region` and fields contributed by whichever webhook source is selected. Its sources must still implement `WebhookTriggerSource`, and the built-in webhook protocol remains signed.
+
+## Custom driver and reference node
+
+Generate an atomic extension kit:
+
+```bash
+php artisan nodeflow:make-trigger-driver QueueTriggerDriver --key=queue
+```
+
+The command creates these three artifacts and inserts the driver before the reference node in the host provider:
+
+- `app/Nodeflow/TriggerDrivers/QueueTriggerDriver.php`
+- `app/Nodeflow/Triggers/QueueTriggerDriverTrigger.php`
+- `tests/Feature/Nodeflow/TriggerDrivers/QueueTriggerDriverTest.php`
+
+The generated driver is:
+
+```php
+<?php
+
+namespace App\Nodeflow\TriggerDrivers;
+
+use Nodeflow\Contracts\TriggerDriver;
+use Nodeflow\Contracts\TriggerSource;
+use Nodeflow\Triggers\TriggerActivationDescriptor;
+use Nodeflow\Triggers\TriggerOccurrence;
+
+class QueueTriggerDriver implements TriggerDriver
+{
+    public static function key(): string
+    {
+        return 'queue';
+    }
+
+    public function sourceRegistered(TriggerSource $source): void
+    {
+        // TODO: install one deduplicated listener for this source family.
+    }
+
+    public function validate(TriggerActivationDescriptor $descriptor): array
+    {
+        if ($descriptor->driver !== self::key()) {
+            return ['driver' => ['The activation descriptor uses another trigger driver.']];
+        }
+
+        // TODO: validate driver-specific routing metadata.
+        return [];
+    }
+
+    public function occurrence(string $source, mixed $payload, ?string $qualifier = null): TriggerOccurrence
+    {
+        return new TriggerOccurrence(self::key(), $source, $payload, $qualifier);
+    }
+}
+```
+
+The generated reference node is:
+
+```php
+<?php
+
+namespace App\Nodeflow\Triggers;
+
+use Nodeflow\Schema\Field;
+use Nodeflow\Schema\TriggerDefinition;
+use Nodeflow\Triggers\AbstractTriggerNode;
+use Nodeflow\Triggers\TriggerActivationDescriptor;
+
+class QueueTriggerDriverTrigger extends AbstractTriggerNode
+{
+    public static function type(): string
+    {
+        return 'queue.trigger';
+    }
+
+    public function definition(): TriggerDefinition
+    {
+        return TriggerDefinition::make('Queue Trigger Driver Trigger')
+            ->description('TODO: describe when this trigger starts a flow.')
+            ->fields([Field::select('source')->required()]);
+    }
+
+    public function driver(): string
+    {
+        return 'queue';
+    }
+
+    public function compile(array $config): TriggerActivationDescriptor
+    {
+        $source = $this->source($config);
+        unset($config['source']);
+
+        return new TriggerActivationDescriptor(
+            driver: $this->driver(),
+            source: $source,
+            qualifier: null,
+            metadata: $config,
+        );
+    }
+}
+```
+
+The reference node deliberately copies every validated flat config field except `source` into descriptor metadata. A custom node may transform fields, but it must retain the runtime contract of every source it declares compatible.
+
+The generated Pest contract is immediately runnable and verifies the stable driver and graph keys plus occurrence routing:
+
+```php
+<?php
+
+use App\Nodeflow\TriggerDrivers\QueueTriggerDriver;
+use App\Nodeflow\Triggers\QueueTriggerDriverTrigger;
+use Nodeflow\Triggers\TriggerDriverRegistry;
+use Nodeflow\Triggers\TriggerNodeRegistry;
+
+it('registers the queue trigger extension kit', function () {
+    app(TriggerDriverRegistry::class)->register(QueueTriggerDriver::class);
+    app(TriggerNodeRegistry::class)->register(QueueTriggerDriverTrigger::class);
+
+    $driver = app(TriggerDriverRegistry::class)->resolve('queue');
+    $node = app(TriggerNodeRegistry::class)->resolve('queue.trigger');
+    $occurrence = $driver->occurrence('example.source', ['id' => 1]);
+
+    expect($node->driver())->toBe('queue')
+        ->and($node->definition()->label)->not->toBeEmpty()
+        ->and($occurrence->driver)->toBe('queue')
+        ->and($occurrence->source)->toBe('example.source');
+});
+```
+
+After generating or registering a compatible source, the dependency order is driver → node → source:
+
+```php
+use App\Nodeflow\TriggerDrivers\QueueTriggerDriver;
+use App\Nodeflow\Triggers\QueueTriggerDriverTrigger;
+use App\Nodeflow\TriggerSources\QueueMessageSource;
+use Nodeflow\Nodeflow;
+
+Nodeflow::registerTriggerDrivers([QueueTriggerDriver::class]);
+Nodeflow::registerTriggerNodes([QueueTriggerDriverTrigger::class]);
+Nodeflow::registerTriggerSources([QueueMessageSource::class]);
+```
+
+The `TriggerDriver` contract intentionally does not prescribe transport-specific dispatch methods. An extension owns its listener or adapter, creates trusted `TriggerOccurrence` values, snapshots activation candidates before extension code can mutate publication state, and hands them to `TriggerOccurrenceDispatcher`. The shared dispatcher validates pinned descriptors, isolates per-activation failures, enforces tenant matching, and starts exact pinned versions.
+
+## Unsupported authoring shortcuts
+
+Schedules are not supported. Unsigned webhooks are not supported. Arbitrary model/event class author input is not supported. Expression interpolation is not supported. Multiple trigger nodes are not supported. Eloquent query-builder bulk updates are not observed.
+
+Next, read [Starting runs](starting-runs.md) for persistence, idempotency, and recovery semantics.

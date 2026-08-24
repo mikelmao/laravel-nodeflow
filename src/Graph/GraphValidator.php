@@ -2,16 +2,34 @@
 
 namespace Nodeflow\Graph;
 
+use Illuminate\Support\Facades\Validator;
 use Nodeflow\Nodes\HandlesAudience;
 use Nodeflow\Nodes\HandlesSubject;
 use Nodeflow\Nodes\NodeRegistry;
+use Nodeflow\Triggers\TriggerDefinitionContext;
+use Nodeflow\Triggers\TriggerDriverRegistry;
+use Nodeflow\Triggers\TriggerNodeRegistry;
+use Nodeflow\Triggers\TriggerSourceCompatibility;
+use Nodeflow\Triggers\TriggerSourceRegistry;
+use Throwable;
 
 class GraphValidator
 {
-    public function __construct(private NodeRegistry $registry) {}
+    public function __construct(
+        private NodeRegistry $registry,
+        private TriggerNodeRegistry $triggers,
+        private TriggerDriverRegistry $drivers,
+        private TriggerSourceRegistry $sources,
+        private TriggerSourceCompatibility $sourceCompatibility,
+        private GraphTypeCatalog $types,
+    ) {}
 
-    public function validate(Graph $graph): GraphValidationResult
+    public function validate(
+        Graph $graph,
+        ?TriggerDefinitionContext $definitions = null,
+    ): GraphValidationResult
     {
+        $definitions ??= new TriggerDefinitionContext;
         $errors = [];
         $warnings = [];
         $nodeErrors = [];
@@ -26,6 +44,22 @@ class GraphValidator
             $nodeErrors[] = ['node' => $graph->startNodeId(), 'field' => null, 'message' => end($errors)];
         }
 
+        $triggerIds = $graph->triggerNodeIds($this->types);
+
+        if (count($triggerIds) !== 1) {
+            $errors[] = 'The graph must contain exactly one trigger node.';
+            $nodeErrors[] = ['node' => null, 'field' => null, 'message' => end($errors)];
+        }
+
+        if (! in_array($graph->startNodeId(), $triggerIds, true)) {
+            $errors[] = 'The graph start must be its trigger node.';
+            $nodeErrors[] = [
+                'node' => count($triggerIds) === 1 ? $triggerIds[0] : null,
+                'field' => null,
+                'message' => end($errors),
+            ];
+        }
+
         foreach ($graph->duplicateNodeIds() as $id) {
             $errors[] = "Node id [{$id}] is used by more than one node. Node ids must be unique — ".
                 'rename or remove the duplicate so each node keeps its own id.';
@@ -35,8 +69,28 @@ class GraphValidator
         foreach ($graph->nodeIds() as $id) {
             $node = $graph->node($id);
             $type = $node['type'] ?? '';
+            $family = $this->types->family($type);
 
-            if (! $this->registry->has($type)) {
+            if ($family === 'trigger') {
+                if (! $this->triggers->has($type)) {
+                    $errors[] = "Node [{$id}] uses unknown type [{$type}].";
+                    $nodeErrors[] = ['node' => $id, 'field' => null, 'message' => end($errors)];
+
+                    continue;
+                }
+
+                try {
+                    $this->validateTriggerNode($id, $node, $definitions, $errors, $nodeErrors);
+                } catch (Throwable) {
+                    $message = "Trigger node [{$id}] validation could not be completed.";
+                    $errors[] = $message;
+                    $nodeErrors[] = ['node' => $id, 'field' => null, 'message' => $message];
+                }
+
+                continue;
+            }
+
+            if ($family !== 'executable' || ! $this->registry->has($type)) {
                 $errors[] = "Node [{$id}] uses unknown type [{$type}].";
                 $nodeErrors[] = ['node' => $id, 'field' => null, 'message' => end($errors)];
 
@@ -71,10 +125,18 @@ class GraphValidator
 
             $from = $graph->node($edge['from']);
 
-            if ($from !== null && $this->registry->has($from['type'] ?? '')) {
-                $outputs = $this->registry->resolve($from['type'])->definition()->outputNames();
+            if ($from !== null) {
+                $fromType = $from['type'] ?? '';
+                $family = $this->types->family($fromType);
+                $outputs = match ($family) {
+                    'executable' => $this->registry->has($fromType)
+                        ? $this->registry->resolve($fromType)->definition()->outputNames()
+                        : null,
+                    'trigger' => $this->triggers->has($fromType) ? ['started'] : null,
+                    default => null,
+                };
 
-                if (! in_array($edge['output'], $outputs, true)) {
+                if ($outputs !== null && ! in_array($edge['output'], $outputs, true)) {
                     $errors[] = "Node [{$edge['from']}] has no output [{$edge['output']}].";
                     $nodeErrors[] = ['node' => $edge['from'], 'field' => null, 'message' => end($errors)];
                 }
@@ -97,6 +159,29 @@ class GraphValidator
             $seenOutputs[$key] = true;
         }
 
+        foreach ($triggerIds as $triggerId) {
+            if ($graph->incomingEdges($triggerId) !== []) {
+                $errors[] = "Trigger node [{$triggerId}] cannot have incoming edges.";
+                $nodeErrors[] = ['node' => $triggerId, 'field' => null, 'message' => end($errors)];
+            }
+
+            $targets = $graph->targetsFor($triggerId, 'started');
+
+            if (count($targets) !== 1) {
+                $errors[] = "Trigger node [{$triggerId}] must have exactly one [started] edge target.";
+                $nodeErrors[] = ['node' => $triggerId, 'field' => null, 'message' => end($errors)];
+
+                continue;
+            }
+
+            $target = $graph->node($targets[0]);
+
+            if ($this->types->family($target['type'] ?? '') !== 'executable') {
+                $errors[] = "Trigger node [{$triggerId}] must start an executable node.";
+                $nodeErrors[] = ['node' => $triggerId, 'field' => null, 'message' => end($errors)];
+            }
+        }
+
         if (($cycle = $this->findCycle($graph)) !== null) {
             $path = implode(' -> ', $cycle);
             $errors[] = "The flow contains a cycle: {$path}. Flows must be acyclic.";
@@ -111,6 +196,260 @@ class GraphValidator
         }
 
         return new GraphValidationResult($errors, $warnings, $nodeErrors);
+    }
+
+    private function validateTriggerNode(
+        string $id,
+        array $node,
+        TriggerDefinitionContext $definitions,
+        array &$errors,
+        array &$nodeErrors,
+    ): void
+    {
+        $trigger = $this->triggers->resolve($node['type']);
+        $config = $node['config'] ?? [];
+        $fieldErrors = [];
+        $canCompile = true;
+        $definition = null;
+
+        try {
+            $definition = $definitions->node($trigger);
+            $fieldErrors = $this->mergeFieldErrors(
+                $fieldErrors,
+                Validator::make($config, $definition->rules())->errors()->toArray(),
+            );
+        } catch (Throwable) {
+            $this->addTriggerError(
+                $id,
+                "Trigger node [{$id}] definition could not be validated.",
+                $errors,
+                $nodeErrors,
+            );
+            $canCompile = false;
+        }
+
+        try {
+            $fieldErrors = $this->mergeFieldErrors(
+                $fieldErrors,
+                $trigger->validate($config, $this->sources),
+            );
+        } catch (Throwable) {
+            $this->addTriggerError(
+                $id,
+                "Trigger node [{$id}] custom validation could not be completed.",
+                $errors,
+                $nodeErrors,
+            );
+            $canCompile = false;
+        }
+
+        $driverKey = null;
+
+        try {
+            $driverKey = $trigger->driver();
+        } catch (Throwable) {
+            $this->addTriggerError(
+                $id,
+                "Trigger node [{$id}] could not declare its driver.",
+                $errors,
+                $nodeErrors,
+            );
+            $canCompile = false;
+        }
+
+        if ($driverKey !== null && ! $this->drivers->has($driverKey)) {
+            $this->addTriggerError(
+                $id,
+                "Trigger node [{$id}] uses unregistered driver [{$driverKey}].",
+                $errors,
+                $nodeErrors,
+            );
+            $canCompile = false;
+        }
+
+        if (! $canCompile || $definition === null || $driverKey === null || isset($fieldErrors['source'])) {
+            $this->addTriggerFieldErrors($id, $fieldErrors, $errors, $nodeErrors);
+
+            return;
+        }
+
+        try {
+            $sourceKey = $trigger->source($config);
+        } catch (Throwable) {
+            $this->addTriggerError(
+                $id,
+                "Trigger node [{$id}] could not select its trigger source.",
+                $errors,
+                $nodeErrors,
+            );
+            $this->addTriggerFieldErrors($id, $fieldErrors, $errors, $nodeErrors);
+
+            return;
+        }
+
+        if (! $this->sources->has($driverKey, $sourceKey)) {
+            $this->addTriggerError(
+                $id,
+                "Trigger node [{$id}] selected source [{$sourceKey}], which is not registered for driver [{$driverKey}].",
+                $errors,
+                $nodeErrors,
+            );
+            $this->addTriggerFieldErrors($id, $fieldErrors, $errors, $nodeErrors);
+
+            return;
+        }
+
+        try {
+            $source = $this->sources->resolve($driverKey, $sourceKey);
+
+            if (! $this->sourceCompatibility->supports($trigger, $source)) {
+                $fieldErrors = $this->mergeFieldErrors($fieldErrors, [
+                    'source' => ["The selected source is not compatible with trigger node [{$node['type']}]."],
+                ]);
+            }
+
+            $sourceDefinition = $definitions->source($source);
+        } catch (Throwable) {
+            $this->addTriggerError(
+                $id,
+                "Trigger node [{$id}] source definition could not be validated.",
+                $errors,
+                $nodeErrors,
+            );
+            $this->addTriggerFieldErrors($id, $fieldErrors, $errors, $nodeErrors);
+
+            return;
+        }
+
+        $collisions = $definition->collidingFieldKeys($sourceDefinition);
+
+        foreach ($collisions as $field) {
+            $message = "The source field [{$field}] collides with a reserved trigger field.";
+            $errors[] = "Trigger node [{$id}]: {$message}";
+            $nodeErrors[] = ['node' => $id, 'field' => $field, 'message' => $message];
+        }
+
+        if ($collisions === []) {
+            try {
+                $fieldErrors = $this->mergeFieldErrors(
+                    $fieldErrors,
+                    Validator::make(
+                        $config,
+                        $this->sourceCompatibility->combinedDefinition($trigger, $source, $definitions)->rules(),
+                    )->errors()->toArray(),
+                );
+            } catch (Throwable) {
+                $this->addTriggerError(
+                    $id,
+                    "Trigger node [{$id}] source fields could not be validated.",
+                    $errors,
+                    $nodeErrors,
+                );
+                $canCompile = false;
+            }
+        }
+
+        $this->addTriggerFieldErrors($id, $fieldErrors, $errors, $nodeErrors);
+
+        if (! $canCompile || $collisions !== [] || $fieldErrors !== []) {
+            return;
+        }
+
+        try {
+            $descriptor = $trigger->compile($config);
+        } catch (Throwable) {
+            $this->addTriggerError(
+                $id,
+                "Trigger node [{$id}] could not compile its activation descriptor.",
+                $errors,
+                $nodeErrors,
+            );
+
+            return;
+        }
+
+        if ($descriptor->driver !== $driverKey) {
+            $this->addTriggerError(
+                $id,
+                "Trigger node [{$id}] compiled driver [{$descriptor->driver}] but declares driver [{$driverKey}].",
+                $errors,
+                $nodeErrors,
+            );
+
+            return;
+        }
+
+        if ($descriptor->source !== $sourceKey) {
+            $this->addTriggerError(
+                $id,
+                "Trigger node [{$id}] compiled source [{$descriptor->source}] but selected source [{$sourceKey}].",
+                $errors,
+                $nodeErrors,
+            );
+
+            return;
+        }
+
+        try {
+            $driver = $this->drivers->resolve($descriptor->driver);
+            $fieldErrors = $this->mergeFieldErrors($fieldErrors, $driver->validate($descriptor));
+        } catch (Throwable) {
+            $this->addTriggerError(
+                $id,
+                "Trigger node [{$id}] driver validation could not be completed.",
+                $errors,
+                $nodeErrors,
+            );
+        }
+
+        $this->addTriggerFieldErrors($id, $fieldErrors, $errors, $nodeErrors);
+    }
+
+    private function addTriggerError(
+        string $id,
+        string $message,
+        array &$errors,
+        array &$nodeErrors,
+    ): void {
+        $errors[] = $message;
+        $nodeErrors[] = ['node' => $id, 'field' => null, 'message' => $message];
+    }
+
+    private function addTriggerFieldErrors(
+        string $id,
+        array $fieldErrors,
+        array &$errors,
+        array &$nodeErrors,
+    ): void {
+        foreach ($fieldErrors as $field => $messages) {
+            $message = implode(' ', $messages);
+            $errors[] = "Node [{$id}] field [{$field}]: {$message}";
+            $nodeErrors[] = ['node' => $id, 'field' => $field, 'message' => $message];
+        }
+    }
+
+    private function mergeFieldErrors(array ...$groups): array
+    {
+        $merged = [];
+
+        foreach ($groups as $group) {
+            foreach ($group as $field => $messages) {
+                $field = (string) $field;
+                $messages = is_array($messages) ? $messages : [$messages];
+
+                foreach ($messages as $message) {
+                    $message = is_string($message)
+                        ? $message
+                        : 'The field configuration is invalid.';
+
+                    if (! in_array($message, $merged[$field] ?? [], true)) {
+                        $merged[$field][] = $message;
+                    }
+                }
+            }
+        }
+
+        return $merged;
     }
 
     /**

@@ -5,9 +5,9 @@ use Nodeflow\Execution\Steps\RunNodeStep;
 use Nodeflow\Execution\Steps\WaitStep;
 use Nodeflow\Graph\Graph;
 
-function drive(Graph $graph, array $responses, int $maxSteps = 100): array
+function drive(Graph $graph, array $responses, int $maxSteps = 100, ?string $entryNodeId = null): array
 {
-    $loop = (new InterpreterLoop)->steps($graph, $maxSteps);
+    $loop = (new InterpreterLoop)->steps($graph, $maxSteps, $entryNodeId);
     $seen = [];
 
     while ($loop->valid()) {
@@ -19,6 +19,39 @@ function drive(Graph $graph, array $responses, int $maxSteps = 100): array
 
     return $seen;
 }
+
+it('does not mistake an executable started output for a declarative trigger', function () {
+    $graph = Graph::fromArray([
+        'start' => 'n1',
+        'nodes' => [
+            ['id' => 'n1', 'type' => 'test.send', 'config' => []],
+            ['id' => 'n2', 'type' => 'core.exit', 'config' => []],
+        ],
+        'edges' => [['from' => 'n1', 'output' => 'started', 'to' => 'n2']],
+    ]);
+
+    $steps = drive($graph, [['n2'], []]);
+
+    expect($steps)->toHaveCount(2)
+        ->and($steps[0]->nodeId)->toBe('n1')
+        ->and($steps[1]->nodeId)->toBe('n2');
+});
+
+it('starts at the explicit executable entry when the caller resolved one', function () {
+    $graph = Graph::fromArray([
+        'start' => 'trigger',
+        'nodes' => [
+            ['id' => 'trigger', 'type' => 'test.fake_trigger', 'config' => []],
+            ['id' => 'entry', 'type' => 'core.exit', 'config' => []],
+        ],
+        'edges' => [['from' => 'trigger', 'output' => 'started', 'to' => 'entry']],
+    ]);
+
+    $steps = drive($graph, [[]], entryNodeId: 'entry');
+
+    expect($steps)->toHaveCount(1)
+        ->and($steps[0]->nodeId)->toBe('entry');
+});
 
 it('walks a linear graph node by node', function () {
     $graph = Graph::fromArray([

@@ -16,7 +16,7 @@ import {
 } from '@xyflow/react'
 import '@xyflow/react/dist/style.css'
 import { useCallback, useEffect, useMemo, useRef, useState, type DragEvent, type MouseEvent } from 'react'
-import type { CanvasEdge, CanvasNode, NodeCardData, NodeTypePayload } from '../graph/types'
+import type { CanvasEdge, CanvasNode, GraphComponentPayload, NodeCardData } from '../graph/types'
 import { CanvasContext, type NodeDecorationMap, type NodeRendererMap } from './context'
 import { CANVAS_ORIGIN, NODE_MIN_HEIGHT, NODE_WIDTH } from './layout'
 import { NodeCard } from './NodeCard'
@@ -38,7 +38,7 @@ export type CanvasActions = {
 export type CanvasProps = {
     nodes: NodeflowNode[]
     edges: NodeflowEdge[]
-    defs: Record<string, NodeTypePayload>
+    defs: Record<string, GraphComponentPayload>
     renderers?: NodeRendererMap
     nodeErrors?: Record<string, string[]>
     /** Per-node badges and dimming. The editor passes none; the run view does. */

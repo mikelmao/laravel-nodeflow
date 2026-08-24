@@ -4,12 +4,17 @@ namespace Nodeflow\Http\Controllers;
 
 use Illuminate\Foundation\Auth\Access\AuthorizesRequests;
 use Illuminate\Http\JsonResponse;
+use Illuminate\Http\Request;
 use Illuminate\Routing\Controller;
 use Nodeflow\Models\Flow;
 use Nodeflow\Nodes\NodeRegistry;
 use Nodeflow\Schema\Field;
 use Nodeflow\Schema\OptionSource;
 use Nodeflow\Schema\UnknownOptionSourceException;
+use Nodeflow\Triggers\TriggerDefinitionContext;
+use Nodeflow\Triggers\TriggerNodeRegistry;
+use Nodeflow\Triggers\TriggerSourceCompatibility;
+use Nodeflow\Triggers\TriggerSourceRegistry;
 use Symfony\Component\HttpKernel\Exception\NotFoundHttpException;
 
 /**
@@ -20,17 +25,21 @@ use Symfony\Component\HttpKernel\Exception\NotFoundHttpException;
  * editor page load, including nodes the author never places — a dozen domain nodes
  * would mean a dozen tenant-scoped lookups to draw a sidebar.
  *
- * The route carries a node type and a field key. It does NOT carry the source
- * class, and this controller never reads one from the request. The class comes from
- * the node's own definition(), so the set of instantiable classes is exactly the
- * set some node declared — not "anything in the application".
+ * Routes carry stable component, source, and field keys. They do NOT carry an
+ * option-source class, and this controller never reads one from the request. The
+ * class comes from an allowlisted component's definition(), so the set of
+ * instantiable classes is exactly the set a node or trigger source declared —
+ * not "anything in the application".
  */
 class FieldOptionsController extends Controller
 {
     use AuthorizesRequests;
 
-    public function __invoke(Flow $flow, string $type, string $field): JsonResponse
+    public function __invoke(Request $request): JsonResponse
     {
+        $flow = $this->boundFlow($request);
+        $type = $this->routeString($request, 'type');
+        $field = $this->routeString($request, 'field');
         $this->authorize('update', $flow);
 
         $registry = app(NodeRegistry::class);
@@ -45,12 +54,82 @@ class FieldOptionsController extends Controller
             throw new NotFoundHttpException("Node type [{$type}] declares no field [{$field}].");
         }
 
+        return $this->options($declared, $type, $field);
+    }
+
+    public function trigger(Request $request): JsonResponse
+    {
+        $flow = $this->boundFlow($request);
+        $type = $this->routeString($request, 'type');
+        $field = $this->routeString($request, 'field');
+        $this->authorize('update', $flow);
+
+        $triggers = app(TriggerNodeRegistry::class);
+
+        if (! $triggers->has($type)) {
+            throw new NotFoundHttpException("Unknown trigger node type [{$type}].");
+        }
+
+        $trigger = $triggers->resolve($type);
+        $definitions = new TriggerDefinitionContext;
+        $declared = $this->field($definitions->node($trigger)->fieldObjects(), $field);
+
+        if ($declared === null) {
+            throw new NotFoundHttpException("Trigger node type [{$type}] declares no field [{$field}].");
+        }
+
+        return $this->options($declared, $type, $field);
+    }
+
+    public function triggerSource(Request $request): JsonResponse
+    {
+        $flow = $this->boundFlow($request);
+        $type = $this->routeString($request, 'type');
+        $source = $this->routeString($request, 'source');
+        $field = $this->routeString($request, 'field');
+        $this->authorize('update', $flow);
+
+        $triggers = app(TriggerNodeRegistry::class);
+
+        if (! $triggers->has($type)) {
+            throw new NotFoundHttpException("Unknown trigger node type [{$type}].");
+        }
+
+        $trigger = $triggers->resolve($type);
+        $driver = $trigger->driver();
+        $sources = app(TriggerSourceRegistry::class);
+
+        if (! $sources->has($driver, $source)) {
+            throw new NotFoundHttpException("Unknown trigger source [{$source}] for node type [{$type}].");
+        }
+
+        $resolvedSource = $sources->resolve($driver, $source);
+        $compatibility = app(TriggerSourceCompatibility::class);
+        $definitions = new TriggerDefinitionContext;
+
+        if (! $compatibility->authorable($trigger, $resolvedSource, $definitions)) {
+            throw new NotFoundHttpException("Trigger source [{$source}] is incompatible with node type [{$type}].");
+        }
+
+        $sourceDefinition = $definitions->source($resolvedSource);
+
+        $declared = $this->field($sourceDefinition->fieldObjects(), $field);
+
+        if ($declared === null) {
+            throw new NotFoundHttpException("Trigger source [{$source}] declares no field [{$field}].");
+        }
+
+        return $this->options($declared, $type.':'.$source, $field);
+    }
+
+    private function options(Field $declared, string $component, string $field): JsonResponse
+    {
         $sourceClass = $declared->optionsSourceClass();
 
         if ($sourceClass === null) {
             // Static options already travel in the palette payload. Answering here
             // would imply this endpoint is where they come from.
-            throw new NotFoundHttpException("Field [{$field}] on [{$type}] has no dynamic option source.");
+            throw new NotFoundHttpException("Field [{$field}] on [{$component}] has no dynamic option source.");
         }
 
         $source = app($sourceClass);
@@ -76,5 +155,27 @@ class FieldOptionsController extends Controller
         }
 
         return null;
+    }
+
+    private function boundFlow(Request $request): Flow
+    {
+        $flow = $request->route('flow');
+
+        if (! $flow instanceof Flow) {
+            $flow = (new Flow)->resolveRouteBinding($flow);
+        }
+
+        abort_unless($flow instanceof Flow, 404);
+
+        return $flow;
+    }
+
+    private function routeString(Request $request, string $key): string
+    {
+        $value = $request->route($key);
+
+        abort_unless(is_string($value), 404);
+
+        return $value;
     }
 }

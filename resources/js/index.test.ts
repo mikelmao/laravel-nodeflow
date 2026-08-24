@@ -1,4 +1,9 @@
 import { describe, expect, it } from 'vitest'
+import * as PublicSurface from '.'
+// @ts-expect-error WebhookDetailsProps contains the one-time secret and is intentionally private.
+import type { WebhookDetailsProps } from '.'
+// @ts-expect-error The controller result includes private inspector state and is intentionally private.
+import type { UseEditorControllerResult } from '.'
 import {
     Canvas,
     controlFor,
@@ -12,6 +17,9 @@ import {
     normalizeOverlay,
     overlayFor,
     rendererFor,
+    categoryPresentation,
+    nodeSummary,
+    NodeflowIcon,
     Unregistered,
     useOverlayPolling,
 } from '.'
@@ -21,6 +29,8 @@ import type {
     CanvasEdge,
     CanvasNode,
     CanvasProps,
+    CategoryPresentation,
+    ConfigPanelProps,
     ControlMap,
     EditorUrls,
     EditorMode,
@@ -35,6 +45,9 @@ import type {
     FlowRunProps,
     FlowSummary,
     Graph,
+    GraphComponentKind,
+    GraphComponentPayload,
+    GraphConfig,
     GraphEdge,
     GraphNode,
     NodeBadge,
@@ -49,16 +62,20 @@ import type {
     NodeRendererMap,
     NodeRendererProps,
     NodeTypePayload,
+    NodeIconName,
+    NodeLibraryProps,
     OverlaySnapshot,
     PublishErrorBody,
     RunSubjectRow,
     RunSummary,
     RunUrls,
     TriggerPayload,
+    TriggerNodeTypePayload,
+    TriggerSourcePayload,
+    TriggerSourcesPayload,
     ToolbarSlots,
-    UseEditorControllerOptions,
-    UseEditorControllerResult,
     ValidationOutcome,
+    WebhookMetadata,
 } from '.'
 
 type EveryPublicType =
@@ -67,6 +84,8 @@ type EveryPublicType =
     | CanvasEdge
     | CanvasNode
     | CanvasProps
+    | CategoryPresentation
+    | ConfigPanelProps
     | ControlMap
     | EditorUrls
     | EditorMode
@@ -81,6 +100,9 @@ type EveryPublicType =
     | FlowRunProps
     | FlowSummary
     | Graph
+    | GraphComponentKind
+    | GraphComponentPayload
+    | GraphConfig
     | GraphEdge
     | GraphNode
     | NodeBadge
@@ -95,16 +117,20 @@ type EveryPublicType =
     | NodeRendererMap
     | NodeRendererProps
     | NodeTypePayload
+    | NodeIconName
+    | NodeLibraryProps
     | OverlaySnapshot
     | PublishErrorBody
     | RunSubjectRow
     | RunSummary
     | RunUrls
     | TriggerPayload
+    | TriggerNodeTypePayload
+    | TriggerSourcePayload
+    | TriggerSourcesPayload
     | ToolbarSlots
-    | UseEditorControllerOptions
-    | UseEditorControllerResult
     | ValidationOutcome
+    | WebhookMetadata
 
 type IsNever<T> = [T] extends [never] ? true : false
 const everyPublicTypeIsNotNever: IsNever<EveryPublicType> = false
@@ -123,10 +149,14 @@ describe('package public surface', () => {
             FlowEditor,
             mergeControls,
             rendererFor,
+            categoryPresentation,
+            nodeSummary,
+            NodeflowIcon,
             Unregistered,
         ]).not.toContain(undefined)
         expect(everyPublicTypeIsNotNever).toBe(false)
         expect(flowEditorPropsHasUrls).toBe(true)
+        expect('WebhookDetails' in PublicSurface).toBe(false)
     })
 
     // Counterfactual: ship FlowRun but forget the export and a host's run page

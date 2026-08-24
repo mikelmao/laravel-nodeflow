@@ -31,13 +31,13 @@ beforeEach(function () {
 it('propagates test mode into the node context so nodes can suppress side effects', function () {
     Nodeflow::register([\Tests\Support\RecordingSendNode::class]);
 
-    $flow = Flow::create(['name' => 'F', 'trigger_type' => 'manual', 'status' => 'draft']);
+    $flow = Flow::create(['name' => 'F', 'status' => 'draft']);
 
-    $graph = [
+    $graph = triggeredGraph([
         'start' => 'n1',
         'nodes' => [['id' => 'n1', 'type' => 'test.recording', 'config' => []]],
         'edges' => [],
-    ];
+    ]);
 
     app(PublishFlow::class)->publish($flow, $graph);
 
@@ -55,13 +55,13 @@ it('records a real send for a run that is not a test', function () {
     // that fails if it ever is.
     Nodeflow::register([\Tests\Support\RecordingSendNode::class]);
 
-    $flow = Flow::create(['name' => 'F', 'trigger_type' => 'manual', 'status' => 'draft']);
+    $flow = Flow::create(['name' => 'F', 'status' => 'draft']);
 
-    $graph = [
+    $graph = triggeredGraph([
         'start' => 'n1',
         'nodes' => [['id' => 'n1', 'type' => 'test.recording', 'config' => []]],
         'edges' => [],
-    ];
+    ]);
 
     app(PublishFlow::class)->publish($flow, $graph);
 
@@ -79,13 +79,13 @@ it('does not suppress sends merely because is_test was omitted from the options'
     // Guards the default: an absent is_test must mean "live", not "unknown".
     Nodeflow::register([\Tests\Support\RecordingSendNode::class]);
 
-    $flow = Flow::create(['name' => 'F', 'trigger_type' => 'manual', 'status' => 'draft']);
+    $flow = Flow::create(['name' => 'F', 'status' => 'draft']);
 
-    $graph = [
+    $graph = triggeredGraph([
         'start' => 'n1',
         'nodes' => [['id' => 'n1', 'type' => 'test.recording', 'config' => []]],
         'edges' => [],
-    ];
+    ]);
 
     app(PublishFlow::class)->publish($flow, $graph);
 

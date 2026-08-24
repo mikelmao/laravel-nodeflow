@@ -1,23 +1,40 @@
-import { useEffect, useId, useRef, useState } from 'react'
+import { useEffect, useId, useMemo, useRef, useState } from 'react'
 import type { KeyboardEvent } from 'react'
 import type { ControlMap } from '../controls'
-import type { NodeCardData, NodeErrorEntry, NodeTypePayload } from '../graph/types'
+import type { FieldOptionsSource } from '../controls/useFieldOptions'
+import { cloneGraphConfig } from '../graph/json'
+import type { GraphComponentPayload, NodeCardData, NodeErrorEntry, TriggerSourcePayload, TriggerSourcesPayload, WebhookMetadata } from '../graph/types'
+import { triggerSourceOptionsTemplate } from '../http'
 import { ConfigPanel } from './ConfigPanel'
+import { WebhookDetails } from './WebhookDetails'
 
 type InspectorTab = 'configure' | 'advanced'
 
 export type NodeInspectorProps = {
     node: NodeCardData
-    def?: NodeTypePayload
+    def?: GraphComponentPayload
     controls: ControlMap
     errors: NodeErrorEntry[]
     /** An issue chosen in FlowOverview; field issues switch back to Configure and focus their control. */
     issueToFocus?: NodeErrorEntry | null
-    isStart: boolean
     onConfigChange: (key: string, value: unknown) => void
     onConfigBlur?: () => void
-    onMakeStart: () => void
+    triggerSources?: TriggerSourcesPayload
+    triggerOptionsTemplate?: string
+    triggerSourceOptionsTemplate?: string
+    onTriggerSourceChange?: (source: string | null) => void
+    webhook?: WebhookMetadata | null
+    webhookSecret?: string | null
+    webhookPublishing?: boolean
+    webhookRotating?: boolean
+    webhookRotationError?: string | null
+    onAcknowledgeWebhookSecret?: () => void
+    onRotateWebhookSecret?: () => void
     onDelete: () => void
+}
+
+function ownSources(sources: TriggerSourcesPayload, driver: string): TriggerSourcePayload[] {
+    return Object.prototype.hasOwnProperty.call(sources, driver) ? sources[driver] ?? [] : []
 }
 
 function empty(values: string[]): string {
@@ -34,10 +51,19 @@ export function NodeInspector({
     controls,
     errors,
     issueToFocus = null,
-    isStart,
     onConfigChange,
     onConfigBlur,
-    onMakeStart,
+    triggerSources = {},
+    triggerOptionsTemplate,
+    triggerSourceOptionsTemplate: sourceOptionsTemplate,
+    onTriggerSourceChange,
+    webhook = null,
+    webhookSecret = null,
+    webhookPublishing = false,
+    webhookRotating = false,
+    webhookRotationError = null,
+    onAcknowledgeWebhookSecret = () => {},
+    onRotateWebhookSecret = () => {},
     onDelete,
 }: NodeInspectorProps) {
     const generatedId = useId().replace(/:/g, '')
@@ -48,6 +74,92 @@ export function NodeInspector({
     const configureTabId = `node-inspector-${generatedId}-configure-tab`
     const advancedTabId = `node-inspector-${generatedId}-advanced-tab`
     const selectedIssue = issueToFocus?.node === node.id && issueToFocus.field !== null ? issueToFocus : null
+    const optionCaches = useRef(new Map<string, Map<string, Record<string, string>>>())
+    const compatibleSources = useMemo(() => {
+        if (def?.kind !== 'trigger') return []
+        const keys = new Set(def.compatible_source_keys)
+        return ownSources(triggerSources, def.driver).filter((source) => source.driver === def.driver && keys.has(source.key))
+    }, [def, triggerSources])
+    const selectedSourceKey = typeof node.config.source === 'string' ? node.config.source : null
+    const selectedSource = selectedSourceKey === null
+        ? undefined
+        : compatibleSources.find((source) => source.key === selectedSourceKey)
+    const baseFieldKeys = useMemo(
+        () => new Set(def?.kind === 'trigger' ? def.fields.map((field) => field.key) : []),
+        [def],
+    )
+    const sourceFieldCollisions = useMemo(
+        () => selectedSource?.fields.filter((field) => baseFieldKeys.has(field.key)) ?? [],
+        [baseFieldKeys, selectedSource],
+    )
+    const selectedSourceFields = useMemo(
+        () => selectedSource?.fields.filter((field) => !baseFieldKeys.has(field.key)) ?? [],
+        [baseFieldKeys, selectedSource],
+    )
+    const composedDef = useMemo((): GraphComponentPayload | undefined => {
+        if (def?.kind !== 'trigger') return def
+        const sourceOptions = Object.fromEntries(compatibleSources.map((source) => [source.key, source.label]))
+        const baseFields = def.fields.map((field) => field.key === 'source'
+            ? { ...field, options: sourceOptions, dynamic_options: false }
+            : field)
+        return { ...def, fields: [...baseFields, ...selectedSourceFields] }
+    }, [compatibleSources, def, selectedSourceFields])
+    const localErrors = useMemo(() => {
+        if (def?.kind !== 'trigger') return errors
+        if (selectedSourceKey !== null && selectedSource === undefined) {
+            return [...errors, { node: node.id, field: 'source', message: 'The selected trigger source is not compatible with this trigger.' }]
+        }
+        if (compatibleSources.length === 0) {
+            return [...errors, { node: node.id, field: 'source', message: 'No compatible trigger source is registered by this application.' }]
+        }
+        return [
+            ...errors,
+            ...sourceFieldCollisions.map((field) => ({
+                node: node.id,
+                field: field.key,
+                message: `The source field [${field.key}] collides with a reserved trigger field.`,
+            })),
+        ]
+    }, [compatibleSources.length, def, errors, node.id, selectedSource, selectedSourceKey, sourceFieldCollisions])
+    const fieldOptionsSources = useMemo(() => {
+        const result: Record<string, FieldOptionsSource> = {}
+        if (def?.kind !== 'trigger') return result
+        const sourceFor = (template: string) => {
+            let cache = optionCaches.current.get(template)
+            if (cache === undefined) {
+                cache = new Map()
+                optionCaches.current.set(template, cache)
+            }
+            return { template, cache }
+        }
+        if (triggerOptionsTemplate !== undefined) {
+            for (const field of def.fields) result[field.key] = sourceFor(triggerOptionsTemplate)
+        }
+        if (selectedSource !== undefined && sourceOptionsTemplate !== undefined) {
+            const template = triggerSourceOptionsTemplate(sourceOptionsTemplate, selectedSource.key)
+            for (const field of selectedSourceFields) result[field.key] = sourceFor(template)
+        }
+        return result
+    }, [def, selectedSource, selectedSourceFields, sourceOptionsTemplate, triggerOptionsTemplate])
+
+    function changeConfig(key: string, value: unknown): void {
+        if (def?.kind !== 'trigger' || key !== 'source') {
+            onConfigChange(key, value)
+            return
+        }
+        const nextKey = typeof value === 'string' && value !== '' ? value : null
+        const next = compatibleSources.find((source) => source.key === nextKey)
+        const rawDefaults = next === undefined ? {} : cloneGraphConfig(next.default_config)
+        const nextBaseKeys = new Set(def.fields.map((field) => field.key))
+        const nextSourceFieldKeys = new Set(next?.fields.filter((field) => !nextBaseKeys.has(field.key)).map((field) => field.key) ?? [])
+        const defaults = Object.fromEntries(Object.entries(rawDefaults).filter(([defaultKey]) => nextSourceFieldKeys.has(defaultKey)))
+        if (onTriggerSourceChange !== undefined) {
+            onTriggerSourceChange(nextKey)
+            return
+        }
+        onConfigChange('source', nextKey)
+        for (const [defaultKey, defaultValue] of Object.entries(defaults)) onConfigChange(defaultKey, defaultValue)
+    }
 
     useEffect(() => {
         setActiveTab('configure')
@@ -92,7 +204,7 @@ export function NodeInspector({
         <aside ref={rootRef} aria-label="Node inspector" className="flex min-h-0 flex-col gap-4 rounded-lg border border-border bg-card p-4 text-card-foreground">
             <header className="space-y-1">
                 <h2 className="text-base font-semibold">{def?.label ?? 'Unregistered node'}</h2>
-                <p className="text-sm text-muted-foreground">{def?.group || 'Unregistered node type'}</p>
+                <p className="text-sm text-muted-foreground">{def === undefined ? 'Unregistered node type' : def.kind === 'trigger' ? 'Trigger' : def.group || 'Unregistered node type'}</p>
                 {def?.description && <p className="text-sm text-muted-foreground">{def.description}</p>}
             </header>
 
@@ -128,20 +240,33 @@ export function NodeInspector({
             </div>
 
             <div id={tabPanelId(generatedId, 'configure')} role="tabpanel" aria-labelledby={configureTabId} hidden={activeTab !== 'configure'} className="min-h-0 overflow-y-auto">
-                <ConfigPanel node={node} def={def} controls={controls} errors={errors} onConfigChange={onConfigChange} onFieldBlur={onConfigBlur} />
+                <div className="space-y-5">
+                    {def?.kind === 'trigger' && compatibleSources.length === 0 && (
+                        <p className="rounded-md border border-border bg-muted p-3 text-sm text-muted-foreground">Register a compatible trigger source in the host application before this trigger can be published.</p>
+                    )}
+                    <ConfigPanel node={node} def={composedDef} controls={controls} errors={localErrors} onConfigChange={changeConfig} onFieldBlur={onConfigBlur} fieldOptionsSources={fieldOptionsSources} />
+                    {def?.kind === 'trigger' && def.driver === 'webhook' && (
+                        <WebhookDetails
+                            metadata={webhook}
+                            oneTimeSecret={webhookSecret}
+                            publishing={webhookPublishing}
+                            rotating={webhookRotating}
+                            rotationError={webhookRotationError}
+                            onAcknowledgeSecret={onAcknowledgeWebhookSecret}
+                            onRotate={onRotateWebhookSecret}
+                        />
+                    )}
+                </div>
             </div>
             <div id={tabPanelId(generatedId, 'advanced')} role="tabpanel" aria-labelledby={advancedTabId} hidden={activeTab !== 'advanced'} className="space-y-5">
                 <dl className="space-y-3 text-sm">
                     <div><dt className="font-medium text-muted-foreground">Node ID</dt><dd className="break-all font-mono">{node.id}</dd></div>
                     <div><dt className="font-medium text-muted-foreground">Registered type</dt><dd className="break-all font-mono">{node.type}</dd></div>
-                    <div><dt className="font-medium text-muted-foreground">Group</dt><dd>{def?.group || 'None'}</dd></div>
-                    <div><dt className="font-medium text-muted-foreground">Cardinality</dt><dd>{empty(def?.cardinality ?? [])}</dd></div>
+                    <div><dt className="font-medium text-muted-foreground">Group</dt><dd>{def?.kind === 'executable' ? def.group || 'None' : def?.kind === 'trigger' ? 'Trigger' : 'None'}</dd></div>
+                    <div><dt className="font-medium text-muted-foreground">Cardinality</dt><dd>{empty(def?.kind === 'executable' ? def.cardinality : [])}</dd></div>
                     <div><dt className="font-medium text-muted-foreground">Declared outputs</dt><dd>{empty(def?.outputs ?? [])}</dd></div>
                 </dl>
                 <div className="space-y-2 border-t border-border pt-4">
-                    <button type="button" disabled={isStart} onClick={onMakeStart} className="w-full rounded-md border border-input px-3 py-2 text-sm disabled:cursor-not-allowed disabled:opacity-60">
-                        {isStart ? 'Start node' : 'Make start node'}
-                    </button>
                     <button type="button" onClick={onDelete} className="w-full rounded-md border border-destructive bg-destructive px-3 py-2 text-sm text-destructive-foreground hover:opacity-90">
                         Delete node
                     </button>

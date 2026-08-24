@@ -22,6 +22,7 @@ function field(overrides: Partial<FieldPayload> = {}): FieldPayload {
 
 function definition(overrides: Partial<NodeTypePayload> = {}): NodeTypePayload {
     return {
+        kind: 'executable',
         type: 'app.send',
         label: 'Send message',
         group: 'Messaging',
@@ -38,6 +39,7 @@ function definition(overrides: Partial<NodeTypePayload> = {}): NodeTypePayload {
 const node: NodeCardData = {
     id: 'send1',
     type: 'app.send',
+    kind: 'executable',
     config: { template: 'welcome' },
     isStart: false,
 }

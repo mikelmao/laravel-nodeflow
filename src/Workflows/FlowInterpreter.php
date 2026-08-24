@@ -8,9 +8,11 @@ use Nodeflow\Execution\Steps\WaitStep;
 use Nodeflow\Graph\Graph;
 use Nodeflow\Workflows\Activities\CompleteRunActivity;
 use Nodeflow\Workflows\Activities\LoadGraphActivity;
+use Nodeflow\Workflows\Activities\ResolveRunEntryNodeActivity;
 use Nodeflow\Workflows\Activities\RunNodeActivity;
 use Workflow\V2\Attributes\Signal;
 use Workflow\V2\Workflow;
+use Workflow\V2\WorkflowStub;
 
 /**
  * Control flow only. No DB, no HTTP, no clock reads: the engine's boot-time
@@ -43,11 +45,28 @@ use Workflow\V2\Workflow;
 #[Signal('audienceEmptied')]
 class FlowInterpreter extends Workflow
 {
-    public function handle(int $runId, int $maxSteps = 1000): void
+    public function handle(int $runId, int $maxSteps = 1000, ?string $entryNodeId = null): void
     {
         $graph = Graph::fromArray(self::activity(LoadGraphActivity::class, $runId));
 
-        $loop = (new InterpreterLoop)->steps($graph, $maxSteps);
+        if ($entryNodeId === null) {
+            $entryVersion = self::getVersion(
+                'nodeflow.resolve-missing-entry',
+                WorkflowStub::DEFAULT_VERSION,
+                1,
+            );
+
+            if ($entryVersion === 1) {
+                $entryNodeId = self::activity(ResolveRunEntryNodeActivity::class, $runId);
+            } else {
+                $legacyTargets = $graph->targetsFor($graph->startNodeId(), 'started');
+                $entryNodeId = count($legacyTargets) === 1
+                    ? $legacyTargets[0]
+                    : $graph->startNodeId();
+            }
+        }
+
+        $loop = (new InterpreterLoop)->steps($graph, $maxSteps, $entryNodeId);
         $send = null;
 
         while ($loop->valid()) {

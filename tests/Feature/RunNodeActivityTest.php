@@ -18,7 +18,6 @@ beforeEach(function () {
             $flow = Flow::withoutTenancy()->create([
                 'tenant_id' => $tenantId,
                 'name' => "{$tenantId} flow",
-                'trigger_type' => 'manual',
                 'status' => 'active',
             ]);
 
@@ -26,11 +25,11 @@ beforeEach(function () {
                 'tenant_id' => $tenantId,
                 'flow_id' => $flow->id,
                 'version' => 1,
-                'graph' => [
+                'graph' => triggeredGraph([
                     'start' => 'n1',
                     'nodes' => [['id' => 'n1', 'type' => 'core.exit', 'config' => []]],
                     'edges' => [],
-                ],
+                ]),
                 'content_hash' => "hash-{$tenantId}",
             ]);
         });
@@ -40,6 +39,9 @@ beforeEach(function () {
         return DB::table('nodeflow_runs')->insertGetId([
             'flow_version_id' => $versionId,
             'tenant_id' => $tenantId,
+            'started_via' => 'manual',
+            'trigger_node_id' => 'trigger',
+            'trigger_data' => null,
             'strategy' => 'cohort',
             'status' => 'running',
             'is_test' => false,

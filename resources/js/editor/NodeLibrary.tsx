@@ -1,11 +1,17 @@
-import { useCallback, useId, useState, type DragEvent } from 'react'
-import type { NodeTypePayload } from '../graph/types'
+import { useCallback, useId, useRef, useState, type DragEvent } from 'react'
+import type { GraphComponentPayload, NodeTypePayload, TriggerNodeTypePayload, TriggerSourcesPayload } from '../graph/types'
 import { NodeflowIcon } from '../presentation/icons'
 import { categoryClasses, categoryPresentation } from '../presentation/node'
+import { ConfirmationDialog } from './ConfirmationDialog'
 
 export type NodeLibraryProps = {
     palette: NodeTypePayload[]
+    triggers?: TriggerNodeTypePayload[]
+    triggerSources?: TriggerSourcesPayload
+    hasTrigger?: boolean
     onAdd: (definition: NodeTypePayload) => void
+    onAddTrigger?: (definition: TriggerNodeTypePayload) => void
+    onReplaceTrigger?: (definition: TriggerNodeTypePayload) => void
     onRequestClose?: () => void
     searchInputRef?: CompatibleRef<HTMLInputElement>
 }
@@ -32,7 +38,7 @@ function attachRef<T>(ref: CompatibleRef<T> | undefined, instance: T | null): vo
     }
 }
 
-type IndexedDefinition = { definition: NodeTypePayload; index: number }
+type IndexedDefinition = { definition: GraphComponentPayload; index: number }
 
 function normalizeSearch(value: string): string {
     return value.trim().toLocaleLowerCase()
@@ -43,7 +49,9 @@ function normalizeSort(value: string): string {
 }
 
 function sortDefinitions(left: IndexedDefinition, right: IndexedDefinition): number {
-    const byGroup = normalizeSort(left.definition.group).localeCompare(normalizeSort(right.definition.group), 'en', {
+    const leftGroup = left.definition.kind === 'trigger' ? 'Triggers' : left.definition.group
+    const rightGroup = right.definition.kind === 'trigger' ? 'Triggers' : right.definition.group
+    const byGroup = normalizeSort(leftGroup).localeCompare(normalizeSort(rightGroup), 'en', {
         sensitivity: 'base',
         numeric: true,
     })
@@ -58,8 +66,8 @@ function sortDefinitions(left: IndexedDefinition, right: IndexedDefinition): num
     return left.index - right.index
 }
 
-function searchableText(definition: NodeTypePayload): string {
-    return [definition.label, definition.group, definition.description ?? '', definition.type]
+function searchableText(definition: GraphComponentPayload): string {
+    return [definition.label, definition.kind === 'trigger' ? 'Triggers' : definition.group, definition.description ?? '', definition.type]
         .map(normalizeSearch)
         .join(' ')
 }
@@ -96,23 +104,52 @@ function conciseDescription(description: string | null): string {
         : text
 }
 
-function groupLabel(definition: NodeTypePayload): string {
-    return definition.group.trim() || 'Other'
+function groupLabel(definition: GraphComponentPayload): string {
+    return definition.kind === 'trigger' ? 'Triggers' : definition.group.trim() || 'Other'
 }
 
-export function NodeLibrary({ palette, onAdd, onRequestClose, searchInputRef }: NodeLibraryProps) {
+function hasCompatibleSource(definition: TriggerNodeTypePayload, sources: TriggerSourcesPayload | undefined): boolean {
+    if (sources === undefined) return definition.compatible_source_keys.length > 0
+    const allowed = new Set(definition.compatible_source_keys)
+    const registered = Object.prototype.hasOwnProperty.call(sources, definition.driver) ? sources[definition.driver] ?? [] : []
+    return registered.some((source) => source.driver === definition.driver && allowed.has(source.key))
+}
+
+export function NodeLibrary({
+    palette,
+    triggers = [],
+    triggerSources,
+    hasTrigger = false,
+    onAdd,
+    onAddTrigger,
+    onReplaceTrigger,
+    onRequestClose,
+    searchInputRef,
+}: NodeLibraryProps) {
     const [query, setQuery] = useState('')
+    const [replacement, setReplacement] = useState<TriggerNodeTypePayload | null>(null)
     const searchId = `node-library-search-${useId().replace(/:/g, '')}`
+    const replacementOpener = useRef<HTMLButtonElement | null>(null)
     const attachSearchInputRef = useCallback(
         (instance: HTMLInputElement | null) => attachRef(searchInputRef, instance),
         [searchInputRef],
     )
+    const terms = normalizeSearch(query).split(/\s+/).filter(Boolean)
+    const matches = (definition: GraphComponentPayload) => {
+        const haystack = searchableText(definition)
+        return terms.every((term) => haystack.includes(term))
+    }
+    const triggerDefinitions = triggers.filter(matches)
     const definitions = filterNodeDefinitions(palette, query)
-    const groups = new Map<string, { label: string; definitions: NodeTypePayload[] }>()
+    const groups = new Map<string, { label: string; definitions: GraphComponentPayload[] }>()
+
+    if (triggerDefinitions.length > 0) {
+        groups.set('triggers', { label: 'Triggers', definitions: triggerDefinitions })
+    }
 
     for (const definition of definitions) {
         const label = groupLabel(definition)
-        const key = normalizeSort(label)
+        const key = `executable:${normalizeSort(label)}`
         const group = groups.get(key)
         if (group === undefined) {
             groups.set(key, { label, definitions: [definition] })
@@ -121,11 +158,30 @@ export function NodeLibrary({ palette, onAdd, onRequestClose, searchInputRef }: 
         }
     }
 
-    const resultLabel = `${definitions.length} node type${definitions.length === 1 ? '' : 's'} found`
+    const resultCount = definitions.length + triggerDefinitions.length
+    const resultLabel = `${resultCount} node type${resultCount === 1 ? '' : 's'} found`
 
-    function startDrag(event: DragEvent<HTMLButtonElement>, definition: NodeTypePayload): void {
+    function startDrag(event: DragEvent<HTMLButtonElement>, definition: GraphComponentPayload): void {
         event.dataTransfer.effectAllowed = 'copy'
         event.dataTransfer.setData('application/x-nodeflow-node-type', definition.type)
+    }
+
+    function closeReplacement(): void {
+        setReplacement(null)
+    }
+
+    function choose(definition: GraphComponentPayload, opener: HTMLButtonElement): void {
+        if (definition.kind === 'executable') {
+            onAdd(definition)
+            return
+        }
+        if (!hasCompatibleSource(definition, triggerSources)) return
+        if (hasTrigger) {
+            replacementOpener.current = opener
+            setReplacement(definition)
+            return
+        }
+        onAddTrigger?.(definition)
     }
 
     return (
@@ -162,47 +218,66 @@ export function NodeLibrary({ palette, onAdd, onRequestClose, searchInputRef }: 
                 <p aria-live="polite" className="text-xs text-muted-foreground">{resultLabel}</p>
             </div>
 
-            {palette.length === 0 ? (
+            {palette.length + triggers.length === 0 ? (
                 <p className="text-sm text-muted-foreground">
                     No node types are registered. Register definitions with <code>Nodeflow::register([...])</code>.
                 </p>
-            ) : definitions.length === 0 ? (
+            ) : resultCount === 0 ? (
                 <p className="text-sm text-muted-foreground">No nodes match “{query.trim()}”.</p>
             ) : (
                 <div className="min-h-0 space-y-4 overflow-y-auto">
-                    {[...groups.values()].map((group) => {
+                    {[...groups.entries()].map(([groupKey, group]) => {
                         const presentation = categoryPresentation(group.label)
                         return (
-                            <section key={normalizeSort(group.label)} className="space-y-2" aria-label={group.label}>
+                            <section key={groupKey} className="space-y-2" aria-label={group.label}>
                                 <h3 className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">{group.label}</h3>
                                 <div className="space-y-1.5">
-                                    {group.definitions.map((definition) => (
-                                        <button
-                                            key={definition.type}
-                                            type="button"
-                                            draggable
-                                            aria-label={`Add ${definition.label}`}
-                                            title={definition.description ?? undefined}
-                                            onClick={() => onAdd(definition)}
-                                            onDragStart={(event) => startDrag(event, definition)}
-                                            className="flex w-full items-start gap-3 rounded-md border border-border bg-background p-3 text-left transition-colors hover:bg-muted focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
-                                        >
-                                            <span className={`mt-0.5 inline-flex size-7 shrink-0 items-center justify-center rounded ${categoryClasses[presentation.accent]}`} aria-hidden="true">
-                                                {definition.icon ? <span className="text-sm leading-none">{definition.icon}</span> : <NodeflowIcon name={presentation.icon} className="size-4" />}
-                                            </span>
-                                            <span className="min-w-0 space-y-0.5">
-                                                <span className="block truncate text-sm font-medium">{definition.label}</span>
-                                                <span className="block text-xs leading-5 text-muted-foreground">{conciseDescription(definition.description)}</span>
-                                                <span className="block truncate font-mono text-[11px] text-muted-foreground">{definition.type}</span>
-                                            </span>
-                                        </button>
-                                    ))}
+                                    {group.definitions.map((definition) => {
+                                        const unavailable = definition.kind === 'trigger' && !hasCompatibleSource(definition, triggerSources)
+                                        const disabled = unavailable || (definition.kind === 'trigger' && onAddTrigger === undefined)
+                                        return (
+                                            <button
+                                                key={definition.type}
+                                                type="button"
+                                                draggable={!disabled && !(definition.kind === 'trigger' && hasTrigger)}
+                                                disabled={disabled}
+                                                aria-label={`Add ${definition.label}`}
+                                                title={unavailable ? 'No compatible trigger source is registered.' : definition.description ?? undefined}
+                                                onClick={(event) => choose(definition, event.currentTarget)}
+                                                onDragStart={(event) => startDrag(event, definition)}
+                                                className="flex w-full items-start gap-3 rounded-md border border-border bg-background p-3 text-left transition-colors hover:bg-muted disabled:cursor-not-allowed disabled:opacity-60 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                                            >
+                                                <span className={`mt-0.5 inline-flex size-7 shrink-0 items-center justify-center rounded ${categoryClasses[presentation.accent]}`} aria-hidden="true">
+                                                    {definition.icon ? <span className="text-sm leading-none">{definition.icon}</span> : <NodeflowIcon name={presentation.icon} className="size-4" />}
+                                                </span>
+                                                <span className="min-w-0 space-y-0.5">
+                                                    <span className="block truncate text-sm font-medium">{definition.label}</span>
+                                                    <span className="block text-xs leading-5 text-muted-foreground">{conciseDescription(definition.description)}</span>
+                                                    <span className="block truncate font-mono text-[11px] text-muted-foreground">{definition.type}</span>
+                                                    {unavailable && <span className="block text-[11px] font-medium text-destructive">No compatible trigger source is registered.</span>}
+                                                </span>
+                                            </button>
+                                        )
+                                    })}
                                 </div>
                             </section>
                         )
                     })}
                 </div>
             )}
+            <ConfirmationDialog
+                open={replacement !== null}
+                title="Replace trigger"
+                description="Replacing the existing trigger resets its configuration. Its single connected target is preserved when possible."
+                confirmLabel="Replace trigger"
+                openerRef={replacementOpener}
+                onCancel={closeReplacement}
+                onConfirm={() => {
+                    const selected = replacement
+                    closeReplacement()
+                    if (selected !== null) onReplaceTrigger?.(selected)
+                }}
+            />
         </aside>
     )
 }

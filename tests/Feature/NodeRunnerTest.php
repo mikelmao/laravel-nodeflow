@@ -44,9 +44,9 @@ beforeEach(function () {
         ],
     ]);
 
-    $flow = Flow::create(['name' => 'F', 'trigger_type' => 'manual', 'status' => 'active']);
+    $flow = Flow::create(['name' => 'F', 'status' => 'active']);
     $version = FlowVersion::create(['flow_id' => $flow->id, 'version' => 1, 'graph' => $this->graph->toArray(), 'content_hash' => 'h']);
-    $this->run = Run::create(['flow_version_id' => $version->id, 'tenant_id' => 'org-1', 'strategy' => 'cohort', 'status' => 'running']);
+    $this->run = Run::create(['flow_version_id' => $version->id, 'tenant_id' => 'org-1', 'started_via' => 'manual', 'trigger_node_id' => 'trigger', 'trigger_data' => null, 'strategy' => 'cohort', 'status' => 'running']);
 
     foreach (['1', '2', '3'] as $id) {
         RunSubject::create(['run_id' => $this->run->id, 'subject_type' => 'user', 'subject_id' => $id, 'current_node_id' => 'n1', 'status' => 'active']);

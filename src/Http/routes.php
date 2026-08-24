@@ -5,15 +5,18 @@ use Nodeflow\Http\Controllers\FieldOptionsController;
 use Nodeflow\Http\Controllers\FlowEditorController;
 use Nodeflow\Http\Controllers\RunSubjectsController;
 use Nodeflow\Http\Controllers\RunViewController;
+use Nodeflow\Http\Controllers\WebhookSecretController;
 
 /*
  * Loaded by Nodeflow::routes(), which a host calls inside its own Route::group —
  * so prefix, middleware and domain are the host's choice, not ours. Nothing here
  * declares middleware for that reason.
  *
- * {flow} binds through the tenant-scoped Flow model, so a cross-tenant id is a 404
- * before any controller code runs. That is deliberate: a 403 would confirm the row
- * exists.
+ * Flow-taking editor controllers resolve {flow} through the tenant-scoped Flow
+ * route-binding query before authorization, so a cross-tenant id is a 404. They
+ * do that explicitly rather than relying on positional implicit binding because
+ * a host may prepend its own route/domain parameters (for example {workspace}).
+ * A 403 would confirm the foreign row exists.
  */
 
 Route::get('flows/{flow}/edit', [FlowEditorController::class, 'edit'])->name('nodeflow.flows.edit');
@@ -21,6 +24,8 @@ Route::put('flows/{flow}/draft', [FlowEditorController::class, 'draft'])->name('
 Route::post('flows/{flow}/validate', [FlowEditorController::class, 'validate'])
     ->name('nodeflow.flows.validate');
 Route::post('flows/{flow}/publish', [FlowEditorController::class, 'publish'])->name('nodeflow.flows.publish');
+Route::post('flows/{flow}/webhook-secret/rotate', WebhookSecretController::class)
+    ->name('nodeflow.webhooks.secret.rotate');
 
 /*
  * Keyed by node type and field key, never by a class name. The source is read from
@@ -29,6 +34,12 @@ Route::post('flows/{flow}/publish', [FlowEditorController::class, 'publish'])->n
  */
 Route::get('flows/{flow}/nodes/{type}/fields/{field}/options', FieldOptionsController::class)
     ->name('nodeflow.fields.options');
+Route::get('flows/{flow}/trigger-nodes/{type}/fields/{field}/options', [FieldOptionsController::class, 'trigger'])
+    ->name('nodeflow.trigger-fields.options');
+Route::get(
+    'flows/{flow}/trigger-nodes/{type}/sources/{source}/fields/{field}/options',
+    [FieldOptionsController::class, 'triggerSource'],
+)->name('nodeflow.trigger-source-fields.options');
 
 /*
  * The run view (spec §6, plan 4). Read-only: there is no write path here at all.

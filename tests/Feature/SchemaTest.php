@@ -9,7 +9,6 @@ it('persists a flow with an immutable version and a run', function () {
     $flow = Flow::create([
         'tenant_id' => 'org-1',
         'name' => 'Flood alert journey',
-        'trigger_type' => 'rada.alert',
         'status' => 'draft',
     ]);
 
@@ -23,6 +22,9 @@ it('persists a flow with an immutable version and a run', function () {
     $run = Run::create([
         'flow_version_id' => $version->id,
         'tenant_id' => 'org-1',
+        'started_via' => 'manual',
+        'trigger_node_id' => 'trigger',
+        'trigger_data' => null,
         'strategy' => 'cohort',
         'status' => 'pending',
     ]);

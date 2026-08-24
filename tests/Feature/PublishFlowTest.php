@@ -18,20 +18,20 @@ beforeEach(function () {
 
     Nodeflow::register([FakeSendNode::class]);
 
-    $this->flow = Flow::create(['name' => 'F', 'trigger_type' => 'manual', 'status' => 'draft']);
+    $this->flow = Flow::create(['name' => 'F', 'status' => 'draft']);
 
-    $this->validGraph = [
+    $this->validGraph = triggeredGraph([
         'start' => 'n1',
         'nodes' => [
             ['id' => 'n1', 'type' => 'test.send', 'config' => ['channel' => 'sms']],
             ['id' => 'n2', 'type' => 'core.exit', 'config' => []],
         ],
         'edges' => [['from' => 'n1', 'output' => 'sent', 'to' => 'n2']],
-    ];
+    ]);
 });
 
 it('freezes version 1 and points the flow at it', function () {
-    $version = app(PublishFlow::class)->publish($this->flow, $this->validGraph, 'user-9');
+    $version = app(PublishFlow::class)->publish($this->flow, $this->validGraph, 'user-9')->version;
 
     expect($version->version)->toBe(1)
         ->and($version->published_at)->not->toBeNull()
@@ -40,8 +40,8 @@ it('freezes version 1 and points the flow at it', function () {
 });
 
 it('increments the version on each publish and leaves earlier versions untouched', function () {
-    $first = app(PublishFlow::class)->publish($this->flow, $this->validGraph);
-    $second = app(PublishFlow::class)->publish($this->flow, $this->validGraph);
+    $first = app(PublishFlow::class)->publish($this->flow, $this->validGraph)->version;
+    $second = app(PublishFlow::class)->publish($this->flow, $this->validGraph)->version;
 
     expect($second->version)->toBe(2)
         ->and($first->fresh()->graph)->toBe($this->validGraph)
@@ -58,10 +58,13 @@ it('refuses to publish an invalid graph', function () {
 });
 
 it('leaves runs on the previous version untouched when a new one is published', function () {
-    $v1 = app(PublishFlow::class)->publish($this->flow, $this->validGraph);
+    $v1 = app(PublishFlow::class)->publish($this->flow, $this->validGraph)->version;
 
     $run = Run::create([
         'flow_version_id' => $v1->id, 'tenant_id' => 'org-1',
+        'started_via' => 'manual',
+        'trigger_node_id' => 'trigger',
+        'trigger_data' => null,
         'strategy' => 'cohort', 'status' => 'waiting',
     ]);
 
@@ -72,7 +75,7 @@ it('leaves runs on the previous version untouched when a new one is published', 
 });
 
 it('publishes a graph with concurrent branch waits despite the warning', function () {
-    $graphWithConcurrentWaits = [
+    $graphWithConcurrentWaits = triggeredGraph([
         'start' => 'n1',
         'nodes' => [
             ['id' => 'n1', 'type' => 'test.send', 'config' => ['channel' => 'sms']],
@@ -86,7 +89,7 @@ it('publishes a graph with concurrent branch waits despite the warning', functio
             ['from' => 'w1', 'output' => 'default', 'to' => 'n2'],
             ['from' => 'w2', 'output' => 'default', 'to' => 'n2'],
         ],
-    ];
+    ]);
 
     // Assert that this graph genuinely emits a warning
     $validationResult = app(GraphValidator::class)->validate(Graph::fromArray($graphWithConcurrentWaits));
@@ -94,7 +97,7 @@ it('publishes a graph with concurrent branch waits despite the warning', functio
         ->and(implode(' ', $validationResult->warnings()))->toContain('sequentially');
 
     // Assert that publishing succeeds despite the warning
-    $version = app(PublishFlow::class)->publish($this->flow, $graphWithConcurrentWaits);
+    $version = app(PublishFlow::class)->publish($this->flow, $graphWithConcurrentWaits)->version;
 
     expect($version->version)->toBe(1)
         ->and($version->published_at)->not->toBeNull()
@@ -104,14 +107,14 @@ it('publishes a graph with concurrent branch waits despite the warning', functio
 it('refuses to publish a wait whose duration the engine cannot parse', function () {
     // The error must reach the person who can fix it: the author at publish
     // time, not a real customer at send time.
-    $graph = [
+    $graph = triggeredGraph([
         'start' => 'w1',
         'nodes' => [
             ['id' => 'w1', 'type' => 'core.wait', 'config' => ['duration' => '1 dya']],
             ['id' => 'n2', 'type' => 'core.exit', 'config' => []],
         ],
         'edges' => [['from' => 'w1', 'output' => 'default', 'to' => 'n2']],
-    ];
+    ]);
 
     expect(fn () => app(PublishFlow::class)->publish($this->flow, $graph))
         ->toThrow(GraphInvalidException::class);
@@ -122,14 +125,14 @@ it('refuses to publish a wait whose duration the engine cannot parse', function 
 it('refuses to publish a wait whose duration resolves to zero seconds', function () {
     // "banana" parses without an exception and yields 0 seconds, which would make
     // a day-2 message send immediately.
-    $graph = [
+    $graph = triggeredGraph([
         'start' => 'w1',
         'nodes' => [
             ['id' => 'w1', 'type' => 'core.wait', 'config' => ['duration' => 'banana']],
             ['id' => 'n2', 'type' => 'core.exit', 'config' => []],
         ],
         'edges' => [['from' => 'w1', 'output' => 'default', 'to' => 'n2']],
-    ];
+    ]);
 
     try {
         app(PublishFlow::class)->publish($this->flow, $graph);
@@ -142,14 +145,14 @@ it('refuses to publish a wait whose duration resolves to zero seconds', function
 });
 
 it('publishes a wait with a duration the engine can parse', function () {
-    $graph = [
+    $graph = triggeredGraph([
         'start' => 'w1',
         'nodes' => [
             ['id' => 'w1', 'type' => 'core.wait', 'config' => ['duration' => '2 days']],
             ['id' => 'n2', 'type' => 'core.exit', 'config' => []],
         ],
         'edges' => [['from' => 'w1', 'output' => 'default', 'to' => 'n2']],
-    ];
+    ]);
 
-    expect(app(PublishFlow::class)->publish($this->flow, $graph)->version)->toBe(1);
+    expect(app(PublishFlow::class)->publish($this->flow, $graph)->version->version)->toBe(1);
 });

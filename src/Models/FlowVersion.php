@@ -5,6 +5,8 @@ namespace Nodeflow\Models;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
 use Illuminate\Database\Eloquent\Relations\HasMany;
+use Illuminate\Database\Eloquent\Relations\HasOne;
+use LogicException;
 use Nodeflow\Models\Concerns\BelongsToTenant;
 
 class FlowVersion extends Model
@@ -76,6 +78,24 @@ class FlowVersion extends Model
                 );
             }
         });
+
+        // Versions are immutable snapshots of a particular flow. Activations
+        // persist both references as one routing tuple, so moving a version
+        // would make that tuple contradictory even though both foreign keys
+        // still point to valid rows. This protects ordinary Eloquent writes;
+        // query-builder updates bypass model events, like the package-wide
+        // tenant immutability guard documented by BelongsToTenant.
+        static::updating(function (self $version) {
+            if (! $version->isDirty('flow_id')) {
+                return;
+            }
+
+            $originalFlowId = $version->getOriginal('flow_id');
+
+            throw new LogicException(
+                "Flow version ownership is immutable after creation; flow_id may not change from [{$originalFlowId}] to [{$version->flow_id}]. Publish a new version for the target flow instead."
+            );
+        });
     }
 
     public function flow(): BelongsTo
@@ -86,6 +106,11 @@ class FlowVersion extends Model
     public function runs(): HasMany
     {
         return $this->hasMany(Run::class);
+    }
+
+    public function activation(): HasOne
+    {
+        return $this->hasOne(TriggerActivation::class);
     }
 
     /**

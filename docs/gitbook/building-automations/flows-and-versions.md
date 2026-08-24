@@ -1,100 +1,80 @@
 # Flows and versions
 
-> **Experimental:** Nodeflow is pre-release software. Test flows and their side effects carefully before relying on them in production.
+> **Experimental:** Nodeflow is pre-release software. Test flow changes and side effects before production use.
 
-A flow is the editable container for an automation. Publishing creates an immutable version of its graph; a run is pinned to that version for its entire lifetime.
+A `Flow` is the editable container. Publishing creates an immutable `FlowVersion` graph and an immutable `TriggerActivation` routing snapshot. Every run remains pinned to its own version even after another publication.
 
 ```mermaid
 flowchart LR
-    D[Flow draft\neditable graph + draft_revision] -->|publish| V1[Flow version 1\nimmutable graph + content_hash]
-    V1 --> R1[Run A\npinned to version 1]
-    D -->|edit and publish again| V2[Flow version 2\nimmutable graph + content_hash]
-    V2 --> R2[Run B\npinned to version 2]
+    D[Editable Flow draft] -->|publish| V[Immutable FlowVersion]
+    V --> A[Immutable TriggerActivation]
+    V --> R[Runs pinned to this version]
 ```
 
-The flow records the latest published version in `current_version_id`. A run stores its own `flow_version_id`, not `current_version_id`; publishing version 2 therefore does not change a run that is waiting or already executing version 1. Older versions must remain available for those runs. Never edit a published graph in place—make a new draft and publish a new version instead.
+## Draft concurrency
 
-## Work with drafts
-
-`draft_graph` is deliberately separate from a flow version. It may contain a partially connected or otherwise unpublishable graph so that autosave can preserve work in progress. `draft_updated_at` is display information, not a concurrency token.
-
-The concurrency token is the integer `draft_revision`. It starts at zero, increases by one for every accepted save, and is never reset, including after publishing. A client sends the revision it last received; `SaveDraft` compares it atomically with the stored revision. If it is stale, the save is refused with `StaleDraftException`, which carries the winning `graph()` and `revision()`.
-
-The current service signature is:
+`draft_graph` may be incomplete; draft saves perform structural checks, not full publication validation. `draft_updated_at` is display metadata. `draft_revision` is the monotonic compare-and-swap token: it increments on each accepted save and is not reset by publication.
 
 ```php
 public function save(Flow $flow, array $graph, ?int $lastSeenRevision): int
 ```
 
-It returns the new revision. A `null` last-seen revision means revision zero; it does not bypass the check. See [Editor](../editor-and-run-view/editor.md) for the autosave request and conflict response contract.
+A stale save throws `StaleDraftException`, which exposes the winning `graph()` and `revision()`. A `null` revision means zero; it is not an override.
 
-## Create and save without trusting identifiers
+## Create a flow safely
 
-The models allow mass assignment, so application code must set structural identifiers itself. Do not accept `tenant_id`, `current_version_id`, a version ID, `flow_id`, or a version's `flow_id` from request input. Authorize creation and each direct mutation in the host application.
-
-**File: `app/Http/Controllers/FlowController.php`**
+Models allow mass assignment, so the host must own structural identifiers and authorization. Tenant identity is supplied by `TenantResolver`; never accept it, a version ID, or a parent foreign key directly from request data.
 
 ```php
-<?php
-
-namespace App\Http\Controllers;
-
-use Illuminate\Http\JsonResponse;
-use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Gate;
 use Nodeflow\Editor\SaveDraft;
 use Nodeflow\Models\Flow;
 
-final class FlowController
-{
-    public function store(Request $request): JsonResponse
-    {
-        $data = $request->validate([
-            'name' => ['required', 'string', 'max:255'],
-            'graph' => ['required', 'array'],
-        ]);
+[$flow, $revision] = DB::transaction(function () use ($graph): array {
+    Gate::authorize('nodeflow.createFlow');
 
-        // This is an application-defined ability for creating flows.
-        Gate::authorize('nodeflow.createFlow');
+    $flow = Flow::create([
+        'name' => 'Renewal reminder',
+        'status' => 'draft',
+    ]);
 
-        [$flow, $revision] = DB::transaction(function () use ($data): array {
-            $flow = Flow::create([
-                'name' => (string) $data['name'],
-                'trigger_type' => 'manual',
-                'trigger_config' => [],
-                'status' => 'draft',
-            ]);
+    Gate::authorize('update', $flow);
+    $revision = app(SaveDraft::class)->save($flow, $graph, null);
 
-            // For an existing, tenant-scoped flow, use the supplied per-flow policy.
-            Gate::authorize('update', $flow);
-
-            $revision = app(SaveDraft::class)->save(
-                $flow,
-                $data['graph'],
-                null, // The first save always compares against revision zero.
-            );
-
-            return [$flow, $revision];
-        });
-
-        return response()->json(['id' => $flow->id, 'draft_revision' => $revision], 201);
-    }
-}
+    return [$flow, $revision];
+});
 ```
 
-The tenant trait supplies the new flow's tenant from the trusted request context. The transaction rolls back the newly created flow if per-flow authorization or the initial draft save fails, so it does not leave an orphan. Publishing derives the version's `flow_id` and `tenant_id` from this authorized flow, then alone updates `current_version_id`.
+## Publish immutable routing
 
-## Publish snapshots, not edits
+`PublishFlow::publish()` validates the graph, locks the trusted flow row, verifies `expectedDraftRevision`, creates the next numbered version, compiles one activation, updates `current_version_id`, marks the flow `active`, and clears the saved draft in one transaction.
 
-Each publish creates the next per-flow integer version and stores the submitted graph. `content_hash` is exactly `hash('sha256', json_encode($graph))`: it hashes the raw PHP-array JSON encoding. It is insertion-order sensitive and non-canonical, so it does not establish semantic graph equality or deduplicate versions.
+```php
+$result = app(\Nodeflow\Publishing\PublishFlow::class)->publish(
+    $flow,
+    $graph,
+    publishedBy: (string) auth()->id(),
+    expectedDraftRevision: $revision,
+);
+```
 
-Publishing is transactional: Nodeflow creates the `FlowVersion`, points `current_version_id` at it, marks the flow active, and clears `draft_graph` and `draft_updated_at` together. It intentionally leaves `draft_revision` unchanged so an editor that remains open can continue from its current token without reusing an old revision.
+The activation stores driver, source, optional qualifier, trigger node ID, descriptor metadata, tenant, flow, and exact version. A later occurrence uses that immutable snapshot; a later publish replaces the flow's one current activation but does not rewrite old versions or existing runs.
 
-Nodeflow treats published versions as immutable, and package services never update their graph rows. The `FlowVersion` model and database do not prevent host code from updating or deleting a version, however. Never mutate or delete versions that existing runs require.
+For a webhook activation, first publication also creates a stable endpoint token and encrypted signing secret. `PublishResult::$webhookUrl` is null if the host did not mount a resolvable public route. `PublishResult::$webhookSecret` is plaintext only for credential creation; later publications return null. Rotation is the only supported way to replace the secret.
 
-Draft saving uses compare-and-swap, but `PublishFlow::publish()` accepts no draft revision. A second author can save a newer draft after the final draft `PUT` and before the publish `POST`; the publish transaction can then clear that newer draft. The transaction makes one publish atomic, not serialized against other requests. Until publish revision checking exists, serialize every draft-save and publish request per flow in the application, or restrict the flow to one editor/author at a time. Restricting only publishers does not prevent another updater from creating this race.
+`content_hash` is `hash('sha256', json_encode($graph))`. It detects the exact stored encoding, not semantic graph equality, and does not deduplicate publications.
 
-## Next step
+## Graph publication rules
 
-Build the reusable capabilities that graphs reference in [Writing nodes](writing-nodes.md).
+Publication requires exactly one trigger node, with `graph.start` pointing to it, no incoming edges, and exactly one `started` edge to an executable node. It also validates every registered node definition, selected allowlisted source, driver descriptor, edge output, cycle, and single-target output rule. Publishing compiles source routing data once; trigger runtime revalidates that pinned representation before extension code runs.
+
+The editor supports replacing the single trigger with another server-palette trigger. It does not add a second trigger. If a driver has no registered source, authors see an empty state and cannot publish a made-up source.
+
+## Immutability and foreign-key discipline
+
+Package services never mutate published graphs. `FlowVersion` prevents moving `flow_id` through event-firing model writes, and `TriggerActivation` prevents all routing-field updates; publication replaces the activation row. Database/query-builder writes can bypass model events, so host code must not mutate or delete versions/activations used by live runs.
+
+`Flow.current_version_id`, `FlowVersion.flow_id`, `TriggerActivation.flow_id`, `TriggerActivation.flow_version_id`, and `Run.flow_version_id` are structural package-owned references. Their Eloquent guards verify parent, tenant, and flow/version consistency. Do not accept these identifiers from authors or request input.
+
+Next, define executable capabilities in [Writing nodes](writing-nodes.md), or review run origins in [Starting runs](starting-runs.md).

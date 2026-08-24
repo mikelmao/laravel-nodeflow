@@ -1,8 +1,9 @@
-import type { CanvasEdge, CanvasNode, Graph, NodeTypePayload } from './types'
+import type { CanvasEdge, CanvasNode, Graph, GraphComponentPayload } from './types'
+import { cloneGraphConfig } from './json'
 
 /** The palette as a lookup. One place builds it, so one place decides what a missing type means. */
-export function defsByType(palette: NodeTypePayload[]): Record<string, NodeTypePayload> {
-  const defs: Record<string, NodeTypePayload> = Object.create(null)
+export function defsByType(palette: GraphComponentPayload[]): Record<string, GraphComponentPayload> {
+  const defs: Record<string, GraphComponentPayload> = Object.create(null)
 
   for (const entry of palette) {
     defs[entry.type] = entry
@@ -28,7 +29,7 @@ export function defsByType(palette: NodeTypePayload[]): Record<string, NodeTypeP
  */
 export function resolveOutput(
   sourceHandle: string | null | undefined,
-  def: NodeTypePayload | undefined,
+  def: GraphComponentPayload | undefined,
 ): string | null {
   if (sourceHandle !== null && sourceHandle !== undefined && sourceHandle !== '') {
     return sourceHandle
@@ -50,7 +51,7 @@ export function resolveOutput(
 export function toGraph(
   canvas: { nodes: CanvasNode[]; edges: CanvasEdge[] },
   start: string,
-  defs: Record<string, NodeTypePayload>,
+  defs: Record<string, GraphComponentPayload>,
 ): { graph: Graph; unresolved: CanvasEdge[] } {
   const typeOf = new Map(canvas.nodes.map((node) => [node.id, node.data.type]))
   const unresolved: CanvasEdge[] = []
@@ -75,7 +76,7 @@ export function toGraph(
       nodes: canvas.nodes.map((node) => ({
         id: node.id,
         type: node.data.type,
-        config: node.data.config,
+        config: cloneGraphConfig(node.data.config),
         // Positions are a stored client concern that the package promises
         // to round-trip untouched. A fractional coordinate is data, not
         // noise to normalise away.

@@ -5,6 +5,7 @@ namespace Nodeflow\Models;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
 use Illuminate\Database\Eloquent\Relations\HasMany;
+use LogicException;
 use Nodeflow\Models\Concerns\BelongsToTenant;
 
 class Run extends Model
@@ -17,6 +18,10 @@ class Run extends Model
 
     protected $casts = [
         'is_test' => 'boolean',
+        'trigger_data' => 'array',
+        'engine_entry_node_id' => 'string',
+        'engine_dispatch_status' => 'string',
+        'engine_dispatch_error' => 'string',
         'started_at' => 'datetime',
         'ended_at' => 'datetime',
     ];
@@ -26,6 +31,12 @@ class Run extends Model
         static::creating(fn (self $run) => $run->assertFlowVersionReference());
 
         static::updating(function (self $run) {
+            if ($run->isDirty('engine_entry_node_id')) {
+                throw new LogicException(
+                    'Run engine entry intent is immutable after creation; engine_entry_node_id may not change.'
+                );
+            }
+
             if ($run->isDirty(['flow_version_id', 'tenant_id'])) {
                 $run->assertFlowVersionReference();
             }

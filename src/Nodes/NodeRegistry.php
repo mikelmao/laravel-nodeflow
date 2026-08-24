@@ -2,6 +2,9 @@
 
 namespace Nodeflow\Nodes;
 
+use Nodeflow\Graph\GraphTypeCatalog;
+use Nodeflow\Support\StableKey;
+
 class NodeRegistry
 {
     /** @var array<string, class-string<Node>> */
@@ -9,6 +12,10 @@ class NodeRegistry
 
     /** @var array<string, string> */
     private array $aliases = [];
+
+    public function __construct(
+        private readonly GraphTypeCatalog $graphTypes = new GraphTypeCatalog,
+    ) {}
 
     /**
      * Registration is the contract's enforcement point. A node implementing
@@ -34,7 +41,9 @@ class NodeRegistry
                 throw InvalidNodeException::noCardinality($class);
             }
 
-            $this->types[$class::type()] = $class;
+            $type = $class::type();
+            $this->graphTypes->claim($type, 'executable', $class);
+            $this->types[$type] = $class;
         }
 
         return $this;
@@ -42,6 +51,8 @@ class NodeRegistry
 
     public function alias(string $oldType, string $newType): self
     {
+        StableKey::assert($newType, 'graph node type', 255);
+        $this->graphTypes->claim($oldType, 'executable', self::class);
         $this->aliases[$oldType] = $newType;
 
         return $this;

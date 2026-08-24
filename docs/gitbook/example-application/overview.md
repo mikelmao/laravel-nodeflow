@@ -10,21 +10,15 @@ The journey is deliberately small:
 
 ```mermaid
 flowchart LR
-    alert["Flood alert"] --> sendAlert["Send alert\napp.send_message"]
-    sendAlert --> waitOffer["Wait 5 minutes\ncore.wait"]
-    waitOffer --> sendOffer["Send offer\napp.send_message"]
-    sendOffer --> waitResponse["Wait 1 day\ncore.wait"]
-    waitResponse --> clicked{"clicked_offer?\ncore.condition"}
-    clicked -->|yes| done["Exit\ncore.exit"]
-    clicked -->|no| followUp["Send follow-up\napp.send_message"]
-    followUp --> done
+    alert["Flood alert event\ncore.trigger.laravel_event"] -->|started| sendAlert["Send alert\napp.send_message"]
+    sendAlert -->|sent| done["Exit\ncore.exit"]
 ```
 
-In words: **Flood alert → send alert → wait → send offer → wait → clicked?** A `yes` exits; a `no` sends a follow-up and exits. The graph uses trigger type `app.flood_alert`, node type `app.send_message`, and the `clicked_offer` subject attribute throughout.
+In words: **Flood alert event → send alert → exit.** The graph uses the built-in `core.trigger.laravel_event` node with allowlisted source `flood.alert_dispatched`, executable node type `app.send_message`, and `core.exit`. The host event snapshot supplies tenant audiences and alert data.
 
 ## What this teaches
 
-You will define the host models and resolvers, turn `FloodAlertDispatched` into tenant-specific audiences, make a safe message node, publish a graph, and test its important boundaries. The example assumes that every `User` belongs to exactly one `Organization`, that an alert already identifies affected users by organization, and that an application event is dispatched only after the alert has been recorded.
+You will define the host models and resolvers, turn `FloodAlertDispatched` into tenant-specific audiences through a `LaravelEventTriggerSource`, register a safe message node, publish a trigger-first graph, and test its important boundaries. The example assumes that every `User` belongs to exactly one `Organization`, that an alert already identifies affected users by organization, and that the event is dispatched only after the alert has been recorded and committed.
 
 Messaging is intentionally host-owned. `DemoMessage` is an application record used here to stand in for a real delivery service; the node's idempotency key and test-mode branch are the same boundaries a notification, email, SMS, or API integration needs. Nodeflow does not create `Organization`, `User`, `FloodAlert`, or `DemoMessage` tables, and it does not decide who may send messages.
 
@@ -33,7 +27,7 @@ An alert can include users from more than one organization. The trigger returns 
 ## Page map
 
 - [Application setup](application-setup.md) establishes host data, tenancy, registration, authorization, and routes.
-- [Flood-alert workflow](flood-alert-workflow.md) implements the node, trigger, graph, publishing, dispatch, and conversion cancellation.
+- [Flood-alert workflow](flood-alert-workflow.md) implements the allowlisted event source, trigger-first graph, publishing, and dispatch.
 - [Testing the workflow](testing-the-workflow.md) supplies focused Pest tests for the application boundary and package behavior.
 
 ## Next step

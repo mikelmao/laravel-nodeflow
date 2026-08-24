@@ -1,5 +1,5 @@
 import { createContext, type ReactElement } from 'react'
-import type { NodeCardData, NodeTypePayload } from '../graph/types'
+import type { GraphComponentPayload, NodeCardData } from '../graph/types'
 
 /**
  * A renderer supplies only the node body. NodeCard deliberately retains every
@@ -10,7 +10,7 @@ import type { NodeCardData, NodeTypePayload } from '../graph/types'
  */
 export type NodeRendererProps = {
     data: NodeCardData
-    def: NodeTypePayload | undefined
+    def: GraphComponentPayload | undefined
     selected: boolean
     errors: string[]
 }
@@ -23,7 +23,7 @@ export type NodeRendererMap = Record<string, NodeRenderer>
  * graph edits to the autosave layer.
  */
 export type CanvasContextValue = {
-    defs: Record<string, NodeTypePayload>
+    defs: Record<string, GraphComponentPayload>
     renderers: NodeRendererMap
     nodeErrors: Record<string, string[]>
     decorations: NodeDecorationMap

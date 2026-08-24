@@ -1,12 +1,13 @@
-import { fireEvent, render, screen } from '@testing-library/react'
+import { fireEvent, render, screen, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { createRef, StrictMode } from 'react'
 import { describe, expect, it, vi } from 'vitest'
-import type { NodeTypePayload } from '../graph/types'
+import type { NodeTypePayload, TriggerNodeTypePayload } from '../graph/types'
 import { filterNodeDefinitions, NodeLibrary } from './NodeLibrary'
 
 function entry(overrides: Partial<NodeTypePayload> = {}): NodeTypePayload {
     return {
+        kind: 'executable',
         type: 'app.send',
         label: 'Send message',
         group: 'Messaging',
@@ -16,6 +17,22 @@ function entry(overrides: Partial<NodeTypePayload> = {}): NodeTypePayload {
         fields: [],
         default_config: {},
         cardinality: ['subject'],
+        ...overrides,
+    }
+}
+
+function trigger(overrides: Partial<TriggerNodeTypePayload> = {}): TriggerNodeTypePayload {
+    return {
+        kind: 'trigger',
+        type: 'custom.trigger',
+        driver: 'custom',
+        label: 'Custom trigger',
+        icon: null,
+        description: 'Starts through a registered custom driver.',
+        outputs: ['started'],
+        fields: [],
+        default_config: {},
+        compatible_source_keys: ['custom.source'],
         ...overrides,
     }
 }
@@ -57,6 +74,77 @@ describe('filterNodeDefinitions', () => {
 })
 
 describe('NodeLibrary', () => {
+    it('shows server-authored custom triggers before executable groups', () => {
+        render(<NodeLibrary palette={[entry()]} triggers={[trigger()]} onAdd={vi.fn()} onAddTrigger={vi.fn()} />)
+
+        expect(screen.getAllByRole('heading', { level: 3 }).map((heading) => heading.textContent)).toEqual([
+            'Triggers',
+            'Messaging',
+        ])
+        expect(screen.getByRole('button', { name: 'Add Custom trigger' })).toBeInTheDocument()
+    })
+
+    it('does not merge an executable group named Triggers into the trigger palette', () => {
+        render(<NodeLibrary palette={[entry({ group: 'Triggers' })]} triggers={[trigger()]} onAdd={vi.fn()} onAddTrigger={vi.fn()} />)
+
+        const sections = screen.getAllByRole('region', { name: 'Triggers' })
+        expect(sections).toHaveLength(2)
+        expect(within(sections[0]!).getByRole('button', { name: 'Add Custom trigger' })).toBeInTheDocument()
+        expect(within(sections[1]!).getByRole('button', { name: 'Add Send message' })).toBeInTheDocument()
+    })
+
+    it('asks before replacing a trigger and cancellation performs no mutation', async () => {
+        const user = userEvent.setup()
+        const onAddTrigger = vi.fn()
+        const onReplaceTrigger = vi.fn()
+        render(
+            <NodeLibrary
+                palette={[]}
+                triggers={[trigger()]}
+                hasTrigger
+                onAdd={vi.fn()}
+                onAddTrigger={onAddTrigger}
+                onReplaceTrigger={onReplaceTrigger}
+            />,
+        )
+
+        await user.click(screen.getByRole('button', { name: 'Add Custom trigger' }))
+        const dialog = screen.getByRole('dialog', { name: 'Replace trigger' })
+        expect(dialog).toHaveTextContent(/existing trigger/i)
+        expect(onAddTrigger).not.toHaveBeenCalled()
+        expect(onReplaceTrigger).not.toHaveBeenCalled()
+        expect(screen.getByRole('button', { name: 'Replace trigger' })).toHaveFocus()
+        await user.tab()
+        expect(screen.getByRole('button', { name: 'Cancel' })).toHaveFocus()
+        await user.tab({ shift: true })
+        expect(screen.getByRole('button', { name: 'Replace trigger' })).toHaveFocus()
+
+        await user.click(screen.getByRole('button', { name: 'Cancel' }))
+        expect(screen.queryByRole('dialog', { name: 'Replace trigger' })).toBeNull()
+        expect(screen.getByRole('button', { name: 'Add Custom trigger' })).toHaveFocus()
+        expect(onReplaceTrigger).not.toHaveBeenCalled()
+
+        await user.click(screen.getByRole('button', { name: 'Add Custom trigger' }))
+        await user.click(screen.getByRole('button', { name: 'Replace trigger' }))
+        expect(onReplaceTrigger).toHaveBeenCalledOnce()
+        expect(onReplaceTrigger).toHaveBeenCalledWith(expect.objectContaining({ kind: 'trigger', type: 'custom.trigger' }))
+    })
+
+    it('keeps a trigger visible but disabled when no compatible source is registered', () => {
+        render(
+            <NodeLibrary
+                palette={[]}
+                triggers={[trigger()]}
+                triggerSources={{ custom: [] }}
+                onAdd={vi.fn()}
+                onAddTrigger={vi.fn()}
+            />,
+        )
+
+        expect(screen.getByRole('button', { name: 'Add Custom trigger' })).toBeDisabled()
+        expect(screen.getByText(/no compatible trigger source is registered/i)).toBeInTheDocument()
+    })
+
     it('reports the filtered result count through a polite live status', async () => {
         const user = userEvent.setup()
         render(<NodeLibrary palette={[entry(), entry({ type: 'app.wait', label: 'Wait', group: 'Timing' })]} onAdd={vi.fn()} />)

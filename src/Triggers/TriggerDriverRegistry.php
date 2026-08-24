@@ -1,0 +1,66 @@
+<?php
+
+namespace Nodeflow\Triggers;
+
+use InvalidArgumentException;
+use Nodeflow\Contracts\TriggerDriver;
+use Nodeflow\Support\StableKey;
+use RuntimeException;
+
+class TriggerDriverRegistry
+{
+    /** @var array<string, class-string<TriggerDriver>> */
+    private array $drivers = [];
+
+    /** @var array<string, TriggerDriver> */
+    private array $instances = [];
+
+    public function register(string ...$classes): self
+    {
+        foreach ($classes as $class) {
+            if (! is_a($class, TriggerDriver::class, true)) {
+                throw new InvalidArgumentException(
+                    "[{$class}] cannot be registered as a trigger driver: it does not implement ".TriggerDriver::class.'.'
+                );
+            }
+
+            $key = StableKey::assert($class::key(), 'trigger driver key', 191);
+
+            if (in_array($key, ['manual', 'subflow'], true)) {
+                throw new InvalidArgumentException(
+                    "Trigger driver key [{$key}] is reserved for a run origin."
+                );
+            }
+
+            if (isset($this->drivers[$key]) && $this->drivers[$key] !== $class) {
+                throw new InvalidArgumentException(
+                    "Trigger driver key [{$key}] is already registered by [{$this->drivers[$key]}]."
+                );
+            }
+
+            $this->drivers[$key] = $class;
+        }
+
+        return $this;
+    }
+
+    public function has(string $key): bool
+    {
+        return isset($this->drivers[$key]);
+    }
+
+    public function resolve(string $key): TriggerDriver
+    {
+        if (! isset($this->drivers[$key])) {
+            throw new RuntimeException("Unknown nodeflow trigger driver [{$key}].");
+        }
+
+        return $this->instances[$key] ??= app($this->drivers[$key]);
+    }
+
+    /** @return array<string, class-string<TriggerDriver>> */
+    public function all(): array
+    {
+        return $this->drivers;
+    }
+}

@@ -32,7 +32,7 @@ beforeEach(function () {
     //   segment — reached, released NOBODY down 'unmatched' (a zero-count row)
     //   parked  — never executed, but 3 subjects are sitting on it right now
     //   nobody  — never touched at all
-    $this->graph = Graph::fromArray([
+    $this->graph = Graph::fromArray(triggeredGraph([
         'start' => 'sent',
         'nodes' => [
             ['id' => 'sent', 'type' => 'core.exit', 'config' => []],
@@ -41,15 +41,18 @@ beforeEach(function () {
             ['id' => 'nobody', 'type' => 'core.exit', 'config' => []],
         ],
         'edges' => [],
-    ]);
+    ]));
 
-    $flow = Flow::create(['name' => 'F', 'trigger_type' => 'manual', 'status' => 'active']);
+    $flow = Flow::create(['name' => 'F', 'status' => 'active']);
     $version = FlowVersion::create([
         'flow_id' => $flow->id, 'version' => 1,
         'graph' => $this->graph->toArray(), 'content_hash' => 'h',
     ]);
     $this->run = Run::create([
         'flow_version_id' => $version->id, 'tenant_id' => 'org-1',
+        'started_via' => 'manual',
+        'trigger_node_id' => 'trigger',
+        'trigger_data' => null,
         'strategy' => 'cohort', 'status' => 'running',
     ]);
 
@@ -86,6 +89,36 @@ it('distinguishes a never-reached node from a node reached with zero subjects', 
         // precisely why `reached` cannot be derived from them.
         ->and(array_sum((array) $nodes['segment']['byOutput']))
         ->toBe(array_sum((array) $nodes['nobody']['byOutput']));
+});
+
+it('decorates the trigger as bypassed for manual and subflow runs and triggered for driver runs', function () {
+    $manual = (array) ($this->snapshot)()['nodes'];
+
+    $this->run->update(['started_via' => 'subflow']);
+    $subflow = (array) ($this->snapshot)()['nodes'];
+
+    $this->run->update(['started_via' => 'test.fake']);
+    $triggered = (array) ($this->snapshot)()['nodes'];
+
+    expect($manual['trigger']['reached'])->toBeTrue()
+        ->and((array) $manual['trigger']['byOutput'])->toBe(['bypassed' => 1])
+        ->and((array) $subflow['trigger']['byOutput'])->toBe(['bypassed' => 1])
+        ->and((array) $triggered['trigger']['byOutput'])->toBe(['triggered' => 1])
+        ->and($this->run->nodeExecutions()->where('node_id', 'trigger')->count())->toBe(0);
+});
+
+it('preserves real execution output when a legacy run names an executable start as its trigger origin', function () {
+    $this->run->update([
+        'trigger_node_id' => 'sent',
+        'started_via' => 'manual',
+    ]);
+
+    $nodes = (array) ($this->snapshot)()['nodes'];
+
+    expect($nodes['sent']['reached'])->toBeTrue()
+        ->and((array) $nodes['sent']['byOutput'])->toBe(['sent' => 2])
+        ->and($nodes['sent']['failed'])->toBe(0)
+        ->and($nodes['sent']['error'])->toBeNull();
 });
 
 /**
@@ -148,7 +181,7 @@ it('ignores execution rows for a node id that is not in the pinned graph', funct
     NodeExecution::create(['run_id' => $this->run->id, 'node_id' => 'ghost', 'output' => 'default', 'subject_count' => 9]);
 
     expect(array_keys((array) ($this->snapshot)()['nodes']))
-        ->toBe(['sent', 'segment', 'parked', 'nobody']);
+        ->toBe(['trigger', 'sent', 'segment', 'parked', 'nobody']);
 });
 
 it('marks only a completed run terminal', function () {
@@ -187,7 +220,7 @@ it('four-oh-fours another tenants overlay rather than forbidding it', function (
 
     $theirs = TenancyGuardSuspension::run(function () {
         $flow = Flow::withoutTenancy()->create([
-            'tenant_id' => 'org-2', 'name' => 'T', 'trigger_type' => 'manual', 'status' => 'active',
+            'tenant_id' => 'org-2', 'name' => 'T', 'status' => 'active',
         ]);
         $version = FlowVersion::withoutTenancy()->create([
             'flow_id' => $flow->id, 'tenant_id' => 'org-2', 'version' => 1, 'content_hash' => 'h',
@@ -196,6 +229,9 @@ it('four-oh-fours another tenants overlay rather than forbidding it', function (
 
         return Run::withoutTenancy()->create([
             'flow_version_id' => $version->id, 'tenant_id' => 'org-2',
+            'started_via' => 'manual',
+            'trigger_node_id' => 'trigger',
+            'trigger_data' => null,
             'strategy' => 'cohort', 'status' => 'running',
         ]);
     });
@@ -218,7 +254,7 @@ it('four-oh-fours another tenants overlay rather than forbidding it', function (
 it('encodes nodes and byOutput as JSON objects even when every key is a numeric string', function () {
     Gate::define('nodeflow.viewAny', fn ($user, $subject = null) => true);
 
-    $graph = Graph::fromArray([
+    $graph = Graph::fromArray(triggeredGraph([
         'start' => '0',
         'nodes' => [
             ['id' => '0', 'type' => 'core.exit', 'config' => []],
@@ -226,15 +262,18 @@ it('encodes nodes and byOutput as JSON objects even when every key is a numeric 
             ['id' => '2', 'type' => 'core.exit', 'config' => []],
         ],
         'edges' => [],
-    ]);
+    ]));
 
-    $flow = Flow::create(['name' => 'Numeric', 'trigger_type' => 'manual', 'status' => 'active']);
+    $flow = Flow::create(['name' => 'Numeric', 'status' => 'active']);
     $version = FlowVersion::create([
         'flow_id' => $flow->id, 'version' => 1,
         'graph' => $graph->toArray(), 'content_hash' => 'h-numeric',
     ]);
     $run = Run::create([
         'flow_version_id' => $version->id, 'tenant_id' => 'org-1',
+        'started_via' => 'manual',
+        'trigger_node_id' => 'trigger',
+        'trigger_data' => null,
         'strategy' => 'cohort', 'status' => 'running',
     ]);
 

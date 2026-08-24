@@ -1,17 +1,132 @@
 <?php
 
 use Illuminate\Foundation\Auth\User;
+use Illuminate\Routing\RouteCollection;
 use Illuminate\Support\Facades\Gate;
 use Illuminate\Support\Facades\Route;
 use Nodeflow\Contracts\TenantResolver;
+use Nodeflow\Contracts\TriggerSource;
+use Nodeflow\Models\Concerns\TenancyGuardSuspension;
 use Nodeflow\Models\Flow;
 use Nodeflow\Nodeflow;
 use Nodeflow\Nodes\NodeRegistry;
+use Nodeflow\Schema\Field;
 use Nodeflow\Schema\SubjectAttribute;
 use Nodeflow\Schema\SubjectAttributeRegistry;
+use Nodeflow\Schema\TriggerDefinition;
+use Nodeflow\Triggers\AbstractTriggerNode;
+use Nodeflow\Triggers\TriggerActivationDescriptor;
+use Nodeflow\Triggers\TriggerMatch;
+use Nodeflow\Triggers\TriggerOccurrence;
+use Nodeflow\Triggers\Webhook\WebhookTriggerSource;
 use Tests\Support\BadSourceNode;
 use Tests\Support\DynamicOptionNode;
+use Tests\Support\FakeOptionSource;
+use Tests\Support\FakeTriggerDriver;
+use Tests\Support\FakeTriggerSource;
 use Tests\Support\NotAnOptionSource;
+
+class FieldOptionsWebhookTriggerNode extends AbstractTriggerNode
+{
+    public static function type(): string
+    {
+        return 'test.field-options-trigger';
+    }
+
+    public function definition(): TriggerDefinition
+    {
+        return TriggerDefinition::make('Field options trigger')->fields([
+            Field::select('source')->required(),
+            Field::select('account')->optionsFrom(FakeOptionSource::class),
+        ]);
+    }
+
+    public function driver(): string
+    {
+        return 'webhook';
+    }
+
+    public function compile(array $config): TriggerActivationDescriptor
+    {
+        return new TriggerActivationDescriptor('webhook', (string) $config['source'], null, []);
+    }
+}
+
+class FieldOptionsWebhookSource implements WebhookTriggerSource
+{
+    public static function key(): string
+    {
+        return 'test.field-options-source';
+    }
+
+    public static function driver(): string
+    {
+        return 'webhook';
+    }
+
+    public function definition(): TriggerDefinition
+    {
+        return TriggerDefinition::make('Field options source')->fields([
+            Field::select('template')->optionsFrom(FakeOptionSource::class),
+            Field::select('template.variant')->optionsFrom(FakeOptionSource::class),
+        ]);
+    }
+
+    public function resolve(TriggerOccurrence $occurrence, array $config): TriggerMatch
+    {
+        return TriggerMatch::make();
+    }
+}
+
+class FieldOptionsCollidingWebhookSource implements WebhookTriggerSource
+{
+    public static function key(): string
+    {
+        return 'test.field-options-collision';
+    }
+
+    public static function driver(): string
+    {
+        return 'webhook';
+    }
+
+    public function definition(): TriggerDefinition
+    {
+        return TriggerDefinition::make('Field options collision')->fields([
+            Field::select('source')->optionsFrom(FakeOptionSource::class),
+        ]);
+    }
+
+    public function resolve(TriggerOccurrence $occurrence, array $config): TriggerMatch
+    {
+        return TriggerMatch::make();
+    }
+}
+
+class FieldOptionsIncompatibleWebhookSource implements TriggerSource
+{
+    public static function key(): string
+    {
+        return 'test.field-options-incompatible';
+    }
+
+    public static function driver(): string
+    {
+        return 'webhook';
+    }
+
+    public function definition(): TriggerDefinition
+    {
+        return TriggerDefinition::make('Field options incompatible')->fields([
+            Field::select('template')->optionsFrom(FakeOptionSource::class),
+        ]);
+    }
+
+    public function resolve(TriggerOccurrence $occurrence, array $config): TriggerMatch
+    {
+        return TriggerMatch::make();
+    }
+}
 
 beforeEach(function () {
     app()->bind(TenantResolver::class, fn () => new class implements TenantResolver
@@ -34,9 +149,17 @@ beforeEach(function () {
     $this->user = new User;
     $this->user->id = 1;
 
-    $this->flow = Flow::create(['name' => 'A', 'trigger_type' => 'manual', 'status' => 'draft']);
+    $this->flow = Flow::create(['name' => 'A', 'status' => 'draft']);
 
     app(NodeRegistry::class)->register(DynamicOptionNode::class, BadSourceNode::class);
+    Nodeflow::registerTriggerDrivers([FakeTriggerDriver::class]);
+    Nodeflow::registerTriggerNodes([FieldOptionsWebhookTriggerNode::class]);
+    Nodeflow::registerTriggerSources([
+        FakeTriggerSource::class,
+        FieldOptionsWebhookSource::class,
+        FieldOptionsCollidingWebhookSource::class,
+        FieldOptionsIncompatibleWebhookSource::class,
+    ]);
 });
 
 it('resolves options declared by the node', function () {
@@ -45,6 +168,55 @@ it('resolves options declared by the node', function () {
         ->assertOk()
         ->assertJsonPath('options.welcome', 'Welcome message');
 });
+
+it('resolves options declared by a trigger reserved field', function () {
+    $this->actingAs($this->user)
+        ->getJson("/nodeflow/flows/{$this->flow->id}/trigger-nodes/test.field-options-trigger/fields/account/options")
+        ->assertOk()
+        ->assertJsonPath('options.welcome', 'Welcome message');
+});
+
+it('resolves options contributed by a compatible trigger source', function () {
+    $this->actingAs($this->user)
+        ->getJson("/nodeflow/flows/{$this->flow->id}/trigger-nodes/test.field-options-trigger/sources/test.field-options-source/fields/template/options")
+        ->assertOk()
+        ->assertJsonPath('options.reminder', 'Reminder');
+});
+
+it('keeps stable dotted field keys addressable through the options route', function () {
+    $this->actingAs($this->user)
+        ->getJson("/nodeflow/flows/{$this->flow->id}/trigger-nodes/test.field-options-trigger/sources/test.field-options-source/fields/template.variant/options")
+        ->assertOk()
+        ->assertJsonPath('options.welcome', 'Welcome message');
+});
+
+it('resolves trigger options inside a host parameterized domain group', function () {
+    Route::setRoutes(new RouteCollection);
+    Route::middleware('web')
+        ->domain('{workspace}.example.test')
+        ->prefix('admin')
+        ->name('tenant.')
+        ->group(fn () => Nodeflow::routes());
+
+    $this->actingAs($this->user)
+        ->getJson("http://acme.example.test/admin/flows/{$this->flow->id}/trigger-nodes/test.field-options-trigger/fields/account/options")
+        ->assertOk()
+        ->assertJsonPath('options.welcome', 'Welcome message');
+});
+
+it('rejects incompatible unknown and colliding trigger source option identities', function (string $path) {
+    $this->actingAs($this->user)
+        ->getJson("/nodeflow/flows/{$this->flow->id}{$path}")
+        ->assertNotFound();
+})->with([
+    'source registered for another driver' => '/trigger-nodes/test.field-options-trigger/sources/test.orders/fields/template/options',
+    'unknown trigger node' => '/trigger-nodes/nope.trigger/fields/account/options',
+    'unknown trigger field' => '/trigger-nodes/test.field-options-trigger/fields/nope/options',
+    'unknown source' => '/trigger-nodes/test.field-options-trigger/sources/nope.source/fields/template/options',
+    'unknown source field' => '/trigger-nodes/test.field-options-trigger/sources/test.field-options-source/fields/nope/options',
+    'source is incompatible with the trigger node' => '/trigger-nodes/core.trigger.webhook/sources/test.field-options-incompatible/fields/template/options',
+    'source field collides with reserved field' => '/trigger-nodes/test.field-options-trigger/sources/test.field-options-collision/fields/source/options',
+]);
 
 it('ignores a class name smuggled in the query string', function () {
     // THE test for this task. Counterfactual: read the class from the request and
@@ -132,4 +304,20 @@ it('denies when the update gate refuses', function () {
     $this->actingAs($this->user)
         ->getJson("/nodeflow/flows/{$this->flow->id}/nodes/test.dynamic_options/fields/template/options")
         ->assertForbidden();
+
+    $this->actingAs($this->user)
+        ->getJson("/nodeflow/flows/{$this->flow->id}/trigger-nodes/test.field-options-trigger/fields/account/options")
+        ->assertForbidden();
+});
+
+it('four-oh-fours trigger options for another tenants flow', function () {
+    $foreign = TenancyGuardSuspension::run(fn () => Flow::withoutTenancy()->create([
+        'tenant_id' => 'org-2',
+        'name' => 'Foreign',
+        'status' => 'draft',
+    ]));
+
+    $this->actingAs($this->user)
+        ->getJson("/nodeflow/flows/{$foreign->id}/trigger-nodes/test.field-options-trigger/fields/account/options")
+        ->assertNotFound();
 });

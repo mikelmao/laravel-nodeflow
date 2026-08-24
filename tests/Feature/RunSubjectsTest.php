@@ -24,14 +24,17 @@ beforeEach(function () {
     $this->user = new User;
     $this->user->id = 1;
 
-    $flow = Flow::create(['name' => 'F', 'trigger_type' => 'manual', 'status' => 'active']);
+    $flow = Flow::create(['name' => 'F', 'status' => 'active']);
     $version = FlowVersion::create([
         'flow_id' => $flow->id, 'version' => 1,
-        'graph' => ['start' => 'wait', 'nodes' => [['id' => 'wait', 'type' => 'core.exit', 'config' => []]], 'edges' => []],
+        'graph' => triggeredGraph(['start' => 'wait', 'nodes' => [['id' => 'wait', 'type' => 'core.exit', 'config' => []]], 'edges' => []]),
         'content_hash' => 'h',
     ]);
     $this->run = Run::create([
         'flow_version_id' => $version->id, 'tenant_id' => 'org-1',
+        'started_via' => 'manual',
+        'trigger_node_id' => 'trigger',
+        'trigger_data' => null,
         'strategy' => 'cohort', 'status' => 'waiting',
     ]);
 
@@ -187,10 +190,13 @@ it('four-oh-fours a node id that is only valid in another runs graph', function 
 
     $otherVersion = FlowVersion::create([
         'flow_id' => $this->run->flowVersion->flow_id, 'version' => 2, 'content_hash' => 'h2',
-        'graph' => ['start' => 'other', 'nodes' => [['id' => 'other', 'type' => 'core.exit', 'config' => []]], 'edges' => []],
+        'graph' => triggeredGraph(['start' => 'other', 'nodes' => [['id' => 'other', 'type' => 'core.exit', 'config' => []]], 'edges' => []]),
     ]);
     $otherRun = Run::create([
         'flow_version_id' => $otherVersion->id, 'tenant_id' => 'org-1',
+        'started_via' => 'manual',
+        'trigger_node_id' => 'trigger',
+        'trigger_data' => null,
         'strategy' => 'cohort', 'status' => 'running',
     ]);
     RunSubject::create([

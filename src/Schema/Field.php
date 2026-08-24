@@ -4,6 +4,7 @@ namespace Nodeflow\Schema;
 
 use Illuminate\Support\Str;
 use Nodeflow\Schema\Rules\ValidDuration;
+use Nodeflow\Support\StableKey;
 
 class Field
 {
@@ -26,7 +27,10 @@ class Field
     private function __construct(
         public readonly string $key,
         public readonly FieldType $type,
-    ) {}
+    )
+    {
+        StableKey::assert($key, 'field key', 191);
+    }
 
     public static function text(string $key): self
     {
@@ -189,6 +193,9 @@ class Field
             $rules[] = new ValidDuration;
         }
 
-        return [$this->key => $rules];
+        // Config is deliberately a flat map. Laravel treats dots in rule keys as
+        // nested array traversal unless they are escaped, while its error bag
+        // still reports the original literal key for the editor contract.
+        return [str_replace('.', '\\.', $this->key) => $rules];
     }
 }

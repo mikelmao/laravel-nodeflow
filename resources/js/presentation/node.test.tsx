@@ -1,9 +1,10 @@
 import { describe, expect, it, vi } from 'vitest'
-import type { NodeCardData, NodeTypePayload } from '../graph/types'
+import type { NodeCardData, NodeTypePayload, TriggerNodeTypePayload } from '../graph/types'
 import { categoryPresentation, categoryClasses, nodeSummary } from './node'
 
 function definition(overrides: Partial<NodeTypePayload> = {}): NodeTypePayload {
     return {
+        kind: 'executable',
         type: 'app.send',
         label: 'Send message',
         group: 'Messaging',
@@ -21,7 +22,7 @@ function definition(overrides: Partial<NodeTypePayload> = {}): NodeTypePayload {
 }
 
 function node(config: Record<string, unknown>): NodeCardData {
-    return { id: 'internal-node-id', type: 'app.send', config, isStart: false }
+    return { id: 'internal-node-id', type: 'app.send', kind: 'executable', config, isStart: false }
 }
 
 describe('categoryPresentation', () => {
@@ -51,6 +52,15 @@ describe('categoryPresentation', () => {
 })
 
 describe('nodeSummary', () => {
+    it('summarizes custom triggers through their server-authored driver and source', () => {
+        const trigger: TriggerNodeTypePayload = {
+            kind: 'trigger', type: 'host.custom', driver: 'host-driver', label: 'Custom', icon: null,
+            description: null, outputs: ['started'], fields: [], default_config: {}, compatible_source_keys: ['host.source'],
+        }
+        expect(nodeSummary({ id: 'trigger', type: trigger.type, kind: 'trigger', config: { source: 'host.source' }, isStart: true }, trigger))
+            .toBe('host-driver · host.source')
+    })
+
     it('uses field definition order rather than configuration insertion order', () => {
         expect(nodeSummary(node({ audiences: 'Everyone', subject: 'Welcome' }), definition())).toBe('Subject: Welcome')
     })

@@ -82,3 +82,33 @@ it('never lets the request-context trees be exempted from the RunSubject rule', 
         expect(Tests\Support\RequestContextScanner::violations($tree, []))->toBe([]);
     }
 });
+
+it('scaffolds trigger extensions only through the public trigger contracts', function () {
+    $root = __DIR__.'/../../';
+    $stubs = [
+        file_get_contents($root.'stubs/trigger-node.stub'),
+        file_get_contents($root.'stubs/trigger-source.stub'),
+        file_get_contents($root.'stubs/trigger-driver.stub'),
+        file_get_contents($root.'stubs/trigger-driver.test.stub'),
+    ];
+
+    expect($stubs[0])->toContain('AbstractTriggerNode')
+        ->not->toContain('extends WebhookTriggerNode')
+        ->not->toContain('extends ModelObserverTriggerNode')
+        ->not->toContain('extends LaravelEventTriggerNode');
+    expect($stubs[1])->toContain('Nodeflow\Contracts\TriggerSource');
+    expect($stubs[2])->toContain('Nodeflow\Contracts\TriggerDriver')
+        ->toContain('Nodeflow\Triggers\TriggerOccurrence');
+    expect($stubs[3])->toContain('TriggerDriverRegistry')
+        ->toContain('TriggerNodeRegistry');
+
+    foreach (['MakeTriggerCommand.php', 'MakeTriggerSourceCommand.php', 'MakeTriggerDriverCommand.php'] as $command) {
+        expect(file_get_contents($root.'src/Console/'.$command))->toContain('new VerifiedGeneratorWriter');
+    }
+    expect(file_get_contents($root.'src/Console/Install/ProviderStep.php'))
+        ->toContain('ProviderStructureInspector::valid');
+
+    foreach (glob($root.'src/*.php') ?: [] as $file) {
+        expect(file_get_contents($file))->not->toContain('TriggerRegistry');
+    }
+});

@@ -2,15 +2,22 @@
 
 namespace Nodeflow\Triggers;
 
-use Nodeflow\Execution\StartRun;
+use Nodeflow\Execution\CreateRun;
+use Nodeflow\Execution\CrossTenantExecutionException;
+use Nodeflow\Graph\Graph;
+use Nodeflow\Graph\GraphTypeCatalog;
 use Nodeflow\Models\Flow;
+use Nodeflow\Models\InvalidFlowVersionReferenceException;
 use Nodeflow\Models\Run;
 
 class SubFlowStarter
 {
     public const MAX_DEPTH = 5;
 
-    public function __construct(private StartRun $startRun) {}
+    public function __construct(
+        private CreateRun $createRun,
+        private GraphTypeCatalog $types,
+    ) {}
 
     public function start(Run $parentRun, int $flowId, string $subjectType, array $subjectIds): ?Run
     {
@@ -25,9 +32,45 @@ class SubFlowStarter
             ->where('tenant_id', $parentRun->tenant_id)
             ->firstOrFail();
 
-        return $this->startRun->forFlow($flow, $subjectType, $subjectIds, [
-            'correlation_id' => trim(($parentRun->correlation_id ?? '').'>'.$parentRun->id, '>'),
-            'is_test' => $parentRun->is_test,
-        ]);
+        if ($flow->current_version_id === null) {
+            throw new \RuntimeException("Flow [{$flow->id}] has no published version.");
+        }
+
+        $version = $flow->currentVersion()->firstOrFail();
+
+        if ((string) $version->tenant_id !== (string) $flow->tenant_id) {
+            throw CrossTenantExecutionException::forFlowVersion($flow, $version);
+        }
+
+        if ((string) $version->flow_id !== (string) $flow->id) {
+            throw InvalidFlowVersionReferenceException::forFlowMismatch(
+                $flow::class,
+                'current_version_id',
+                $version->id,
+                $version->flow_id,
+                $flow->id,
+            );
+        }
+
+        $graph = Graph::fromArray($version->graph);
+        $triggerNodeId = $graph->startNodeId();
+
+        if ($this->types->family($graph->node($triggerNodeId)['type'] ?? '') !== 'trigger') {
+            throw new \RuntimeException("Graph start node [{$triggerNodeId}] must be a trigger node.");
+        }
+
+        return $this->createRun->forVersion(
+            $version,
+            $subjectType,
+            $subjectIds,
+            $graph->entryNodeId($this->types),
+            [
+                'correlation_id' => trim(($parentRun->correlation_id ?? '').'>'.$parentRun->id, '>'),
+                'is_test' => $parentRun->is_test,
+                'started_via' => 'subflow',
+                'trigger_node_id' => $triggerNodeId,
+                'trigger_data' => $parentRun->trigger_data,
+            ],
+        );
     }
 }

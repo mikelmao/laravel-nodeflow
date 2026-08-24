@@ -19,16 +19,16 @@ beforeEach(function () {
         }
     });
 
-    $this->flow = Flow::create(['name' => 'A', 'trigger_type' => 'manual', 'status' => 'draft']);
+    $this->flow = Flow::create(['name' => 'A', 'status' => 'draft']);
 });
 
 function graphWith(string $nodeId): array
 {
-    return [
+    return triggeredGraph([
         'start' => $nodeId,
         'nodes' => [['id' => $nodeId, 'type' => 'core.exit', 'config' => []]],
         'edges' => [],
-    ];
+    ]);
 }
 
 it('saves a first draft when nothing has been saved yet', function () {

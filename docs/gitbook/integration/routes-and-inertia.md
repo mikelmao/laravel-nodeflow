@@ -21,7 +21,7 @@ Route::middleware(['web', 'auth'])
 
 The `auth` middleware is intentionally host-owned: package controllers authorize an already authenticated actor, but do not choose how your application authenticates one. Define the Nodeflow gates described in [Authorization](authorization.md) before exposing this group.
 
-The call registers these eight routes. Their canonical names are shown below; the controller authorizes the model before it sends any page or JSON payload.
+The call registers these eleven authenticated routes. Their canonical names are shown below; the controller authorizes the model before it sends any page or JSON payload.
 
 | Method | URI relative to the group | Canonical name | Controller purpose | Required policy gate |
 | --- | --- | --- | --- | --- |
@@ -29,12 +29,25 @@ The call registers these eight routes. Their canonical names are shown below; th
 | `PUT` | `flows/{flow}/draft` | `nodeflow.flows.draft` | Saves a structurally valid draft. | `update` (`nodeflow.update`) |
 | `POST` | `flows/{flow}/validate` | `nodeflow.flows.validate` | Validates a graph without saving or publishing it. | `publish` (`nodeflow.publish`) |
 | `POST` | `flows/{flow}/publish` | `nodeflow.flows.publish` | Publishes a graph and returns validation errors when needed. | `publish` (`nodeflow.publish`) |
+| `POST` | `flows/{flow}/webhook-secret/rotate` | `nodeflow.webhooks.secret.rotate` | Rotates and returns a webhook signing secret once. | `update` (`nodeflow.update`) |
 | `GET` | `flows/{flow}/nodes/{type}/fields/{field}/options` | `nodeflow.fields.options` | Resolves a declared dynamic field's options. | `update` (`nodeflow.update`) |
+| `GET` | `flows/{flow}/trigger-nodes/{type}/fields/{field}/options` | `nodeflow.trigger-fields.options` | Resolves a trigger-node field's dynamic options. | `update` (`nodeflow.update`) |
+| `GET` | `flows/{flow}/trigger-nodes/{type}/sources/{source}/fields/{field}/options` | `nodeflow.trigger-source-fields.options` | Resolves a compatible source field's dynamic options. | `update` (`nodeflow.update`) |
 | `GET` | `runs/{run}` | `nodeflow.runs.show` | Renders the read-only run view's Inertia props. | `view` (`nodeflow.viewAny`) |
 | `GET` | `runs/{run}/overlay` | `nodeflow.runs.overlay` | Returns the current run-overlay snapshot for polling. | `view` (`nodeflow.viewAny`) |
 | `GET` | `runs/{run}/nodes/{node}/subjects` | `nodeflow.runs.subjects` | Returns active subjects at a pinned-graph node. | `view` (`nodeflow.viewAny`) |
 
 Use the unprefixed canonical route names as the simplest integration. Do not add a host route-name prefix merely to namespace Nodeflow: the package already owns its canonical `nodeflow.*` names. A containing `Route::name('admin.')` group is supported when you need it; controllers recover that prefix from the matched route and use it for their sibling URLs. Apply it consistently to the group containing `Nodeflow::routes()`.
+
+Mount the one separate public webhook route independently. It must not inherit the authenticated editor group's CSRF assumptions accidentally:
+
+```php
+Route::middleware(['api', 'throttle:webhooks'])
+    ->domain('hooks.example.com')
+    ->group(fn () => Nodeflow::webhookRoutes());
+```
+
+This registers `POST hooks/{token}` as `nodeflow.webhooks.receive`. The token plus timestamped HMAC authenticate the delivery; host middleware still owns rate limiting, domain policy, proxies, and network controls. See [Route reference](../reference/routes.md) for the webhook response contract.
 
 > **Warning:** Do not hand-write or reconstruct a package URL in JavaScript. The controllers resolve the URLs after the host prefix and any supported route-name prefix have been applied, then send them in `urls` props.
 

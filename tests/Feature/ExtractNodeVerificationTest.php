@@ -2184,7 +2184,7 @@ it('refuses mutable host files whose symlink targets escape before M1', function
 
             use {$class};
 
-            class NodeflowServiceProvider
+            class NodeflowServiceProvider extends \Illuminate\Support\ServiceProvider
             {
                 protected array \$nodes = [
                     {$shortClass}::class,

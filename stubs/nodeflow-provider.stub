@@ -1,0 +1,47 @@
+<?php
+
+namespace {{ namespace }};
+
+use Illuminate\Support\ServiceProvider;
+use Nodeflow\Nodeflow;
+use Nodeflow\Schema\SubjectAttributeRegistry;
+
+class NodeflowServiceProvider extends ServiceProvider
+{
+    /** @var class-string[] */
+    protected array $nodes = [
+    ];
+
+    /** @var class-string[] Drivers must register before nodes and sources. */
+    protected array $triggerDrivers = [
+    ];
+
+    /** @var class-string[] */
+    protected array $triggerNodes = [
+    ];
+
+    /** @var class-string[] */
+    protected array $triggerSources = [
+    ];
+
+    public function register(): void
+    {
+        // Bind TenantResolver and SubjectResolver here, unconditionally.
+    }
+
+    public function boot(): void
+    {
+        Nodeflow::register($this->nodes);
+        Nodeflow::registerTriggerDrivers($this->triggerDrivers);
+        Nodeflow::registerTriggerNodes($this->triggerNodes);
+        Nodeflow::registerTriggerSources($this->triggerSources);
+        app(SubjectAttributeRegistry::class)->register(...$this->subjectAttributes());
+    }
+
+    /** @return \Nodeflow\Schema\SubjectAttribute[] */
+    protected function subjectAttributes(): array
+    {
+        return [
+        ];
+    }
+}

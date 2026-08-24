@@ -13,11 +13,14 @@ use Nodeflow\Console\MakeNodeCommand;
 use Nodeflow\Console\MakeNodePackageCommand;
 use Nodeflow\Console\MakeSubjectAttributeCommand;
 use Nodeflow\Console\MakeTriggerCommand;
+use Nodeflow\Console\MakeTriggerDriverCommand;
+use Nodeflow\Console\MakeTriggerSourceCommand;
 use Nodeflow\Console\PruneCommand;
 use Nodeflow\Contracts\SubjectResolver;
 use Nodeflow\Contracts\TenantResolver;
 use Nodeflow\Engine\DurableWorkflowEngine;
 use Nodeflow\Engine\WorkflowEngine;
+use Nodeflow\Graph\GraphTypeCatalog;
 use Nodeflow\Models\Flow;
 use Nodeflow\Models\Run;
 use Nodeflow\Nodes\Core\ConditionNode;
@@ -30,7 +33,15 @@ use Nodeflow\Policies\RunPolicy;
 use Nodeflow\Schema\SubjectAttributeRegistry;
 use Nodeflow\Tenancy\NoTenancyResolver;
 use Nodeflow\Tenancy\TenancyDecisionResolver;
-use Nodeflow\Triggers\TriggerRegistry;
+use Nodeflow\Triggers\LaravelEvent\LaravelEventTriggerDriver;
+use Nodeflow\Triggers\LaravelEvent\LaravelEventTriggerNode;
+use Nodeflow\Triggers\ModelObserver\ModelObserverTriggerDriver;
+use Nodeflow\Triggers\ModelObserver\ModelObserverTriggerNode;
+use Nodeflow\Triggers\TriggerDriverRegistry;
+use Nodeflow\Triggers\TriggerNodeRegistry;
+use Nodeflow\Triggers\TriggerSourceRegistry;
+use Nodeflow\Triggers\Webhook\WebhookTriggerDriver;
+use Nodeflow\Triggers\Webhook\WebhookTriggerNode;
 
 class NodeflowServiceProvider extends ServiceProvider
 {
@@ -40,10 +51,27 @@ class NodeflowServiceProvider extends ServiceProvider
     {
         $this->mergeConfigFrom(__DIR__.'/../config/nodeflow.php', 'nodeflow');
 
+        $this->app->singleton(GraphTypeCatalog::class);
         $this->app->singleton(NodeRegistry::class);
         $this->app->singleton(SubjectAttributeRegistry::class);
-        $this->app->singleton(TriggerRegistry::class);
+        $this->app->singleton(TriggerDriverRegistry::class);
+        $this->app->singleton(TriggerNodeRegistry::class);
+        $this->app->singleton(TriggerSourceRegistry::class);
         $this->app->singleton(TenancyDecisionResolver::class);
+
+        // Drivers must exist before a host provider registers its allowlisted
+        // sources. Register the built-in graph types in the same phase so host
+        // extensions see the complete package catalog without replacing it.
+        $this->app->make(TriggerDriverRegistry::class)->register(
+            WebhookTriggerDriver::class,
+            ModelObserverTriggerDriver::class,
+            LaravelEventTriggerDriver::class,
+        );
+        $this->app->make(TriggerNodeRegistry::class)->register(
+            WebhookTriggerNode::class,
+            ModelObserverTriggerNode::class,
+            LaravelEventTriggerNode::class,
+        );
 
         $this->app->bind(WorkflowEngine::class, DurableWorkflowEngine::class);
 
@@ -94,6 +122,8 @@ class NodeflowServiceProvider extends ServiceProvider
                 MakeNodePackageCommand::class,
                 MakeSubjectAttributeCommand::class,
                 MakeTriggerCommand::class,
+                MakeTriggerDriverCommand::class,
+                MakeTriggerSourceCommand::class,
                 PruneCommand::class,
             ]);
         }
@@ -107,7 +137,10 @@ class NodeflowServiceProvider extends ServiceProvider
             StartFlowNode::class,
         ]);
 
-        $this->checkNodeTypesOnBoot();
+        // Host providers register custom components in their boot() methods.
+        // Resolve health only after every provider has booted, regardless of
+        // package-provider ordering, while retaining the once-per-process guard.
+        $this->app->booted(fn () => $this->checkNodeTypesOnBoot());
     }
 
     public function checkNodeTypesOnBoot(): void
@@ -120,7 +153,10 @@ class NodeflowServiceProvider extends ServiceProvider
 
         try {
             $missing = CheckNodeTypesResolver::findMissingTypes(
-                $this->app->make(NodeRegistry::class)
+                $this->app->make(NodeRegistry::class),
+                $this->app->make(TriggerNodeRegistry::class),
+                $this->app->make(TriggerDriverRegistry::class),
+                $this->app->make(TriggerSourceRegistry::class),
             );
 
             if ($missing !== []) {

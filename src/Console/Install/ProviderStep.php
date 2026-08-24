@@ -3,6 +3,7 @@
 namespace Nodeflow\Console\Install;
 
 use Illuminate\Filesystem\Filesystem;
+use Nodeflow\Console\AtomicFileWriter;
 use Nodeflow\Console\NodeRegistrationWriter;
 use Nodeflow\Console\SourceText;
 
@@ -34,14 +35,59 @@ final class ProviderStep implements InstallStep
     private const BOOT_ANCHOR = 'public function boot(): void';
 
     /**
-     * The three homes, each with the anchor it is inserted after, the text
+     * The registration homes, each with the anchor it is inserted after, the text
      * inserted, and how its presence is recognised.
      *
      * @return array<int, array{anchor: string, needle: string, insert: string}>
      */
     private function homes(): array
     {
+        // Homes sharing an anchor are inserted in reverse display order because
+        // each splice lands immediately after that anchor. The resulting trigger
+        // portion is always drivers, nodes, then sources; executable nodes are
+        // registered before that dependency chain.
         return [
+            [
+                'anchor' => self::BOOT_ANCHOR,
+                'needle' => '->register(...$this->subjectAttributes());',
+                'insert' => PHP_EOL.'        app(\Nodeflow\Schema\SubjectAttributeRegistry::class)->register(...$this->subjectAttributes());'.PHP_EOL,
+            ],
+            [
+                'anchor' => self::CLASS_ANCHOR,
+                'needle' => NodeRegistrationWriter::TRIGGER_SOURCE_ANCHOR,
+                'insert' => PHP_EOL.'    /** @var class-string[] */'
+                    .PHP_EOL.'    '.NodeRegistrationWriter::TRIGGER_SOURCE_ANCHOR
+                    .PHP_EOL.'    ];'.PHP_EOL,
+            ],
+            [
+                'anchor' => self::CLASS_ANCHOR,
+                'needle' => NodeRegistrationWriter::TRIGGER_NODE_ANCHOR,
+                'insert' => PHP_EOL.'    /** @var class-string[] */'
+                    .PHP_EOL.'    '.NodeRegistrationWriter::TRIGGER_NODE_ANCHOR
+                    .PHP_EOL.'    ];'.PHP_EOL,
+            ],
+            [
+                'anchor' => self::CLASS_ANCHOR,
+                'needle' => NodeRegistrationWriter::TRIGGER_DRIVER_ANCHOR,
+                'insert' => PHP_EOL.'    /** @var class-string[] */'
+                    .PHP_EOL.'    '.NodeRegistrationWriter::TRIGGER_DRIVER_ANCHOR
+                    .PHP_EOL.'    ];'.PHP_EOL,
+            ],
+            [
+                'anchor' => self::BOOT_ANCHOR,
+                'needle' => 'Nodeflow::registerTriggerSources($this->triggerSources);',
+                'insert' => PHP_EOL.'        \Nodeflow\Nodeflow::registerTriggerSources($this->triggerSources);'.PHP_EOL,
+            ],
+            [
+                'anchor' => self::BOOT_ANCHOR,
+                'needle' => 'Nodeflow::registerTriggerNodes($this->triggerNodes);',
+                'insert' => PHP_EOL.'        \Nodeflow\Nodeflow::registerTriggerNodes($this->triggerNodes);'.PHP_EOL,
+            ],
+            [
+                'anchor' => self::BOOT_ANCHOR,
+                'needle' => 'Nodeflow::registerTriggerDrivers($this->triggerDrivers);',
+                'insert' => PHP_EOL.'        \Nodeflow\Nodeflow::registerTriggerDrivers($this->triggerDrivers);'.PHP_EOL,
+            ],
             [
                 'anchor' => self::CLASS_ANCHOR,
                 'needle' => NodeRegistrationWriter::ANCHOR,
@@ -50,11 +96,9 @@ final class ProviderStep implements InstallStep
                     .PHP_EOL.'    ];'.PHP_EOL,
             ],
             [
-                'anchor' => self::CLASS_ANCHOR,
-                'needle' => NodeRegistrationWriter::TRIGGER_ANCHOR,
-                'insert' => PHP_EOL.'    /** @var class-string[] */'
-                    .PHP_EOL.'    '.NodeRegistrationWriter::TRIGGER_ANCHOR
-                    .PHP_EOL.'    ];'.PHP_EOL,
+                'anchor' => self::BOOT_ANCHOR,
+                'needle' => 'Nodeflow::register($this->nodes);',
+                'insert' => PHP_EOL.'        \Nodeflow\Nodeflow::register($this->nodes);'.PHP_EOL,
             ],
             [
                 'anchor' => self::CLASS_ANCHOR,
@@ -65,21 +109,6 @@ final class ProviderStep implements InstallStep
                     .PHP_EOL.'        return ['
                     .PHP_EOL.'        ];'
                     .PHP_EOL.'    }'.PHP_EOL,
-            ],
-            [
-                'anchor' => self::BOOT_ANCHOR,
-                'needle' => 'Nodeflow::register($this->nodes);',
-                'insert' => PHP_EOL.'        \Nodeflow\Nodeflow::register($this->nodes);'.PHP_EOL,
-            ],
-            [
-                'anchor' => self::BOOT_ANCHOR,
-                'needle' => '->register(...$this->triggers);',
-                'insert' => PHP_EOL.'        app(\Nodeflow\Triggers\TriggerRegistry::class)->register(...$this->triggers);'.PHP_EOL,
-            ],
-            [
-                'anchor' => self::BOOT_ANCHOR,
-                'needle' => '->register(...$this->subjectAttributes());',
-                'insert' => PHP_EOL.'        app(\Nodeflow\Schema\SubjectAttributeRegistry::class)->register(...$this->subjectAttributes());'.PHP_EOL,
             ],
         ];
     }
@@ -99,13 +128,38 @@ final class ProviderStep implements InstallStep
         // stay on the RAW bytes; only the needle match is stripped.
         $stripped = SourceText::withoutPhpComments($contents);
 
+        if (! $this->hasSafeTopology($contents)) {
+            return InstallOutcome::CannotWire;
+        }
+
         $missing = array_filter(
             $this->homes(),
             fn (array $home) => ! str_contains($stripped, $home['needle']),
         );
 
         if ($missing === []) {
-            return InstallOutcome::AlreadyPresent;
+            return $this->isCompleteProvider($contents)
+                ? InstallOutcome::AlreadyPresent
+                : InstallOutcome::CannotWire;
+        }
+
+        // A differently formatted declaration is host code, not an absent
+        // home. Inserting our exact anchor alongside it would create a duplicate
+        // property/method and can make the provider unloadable. Refuse the
+        // automatic upgrade and show the manual shape instead.
+        $declarationPatterns = [
+            NodeRegistrationWriter::ANCHOR => '/\$nodes\b/',
+            NodeRegistrationWriter::TRIGGER_DRIVER_ANCHOR => '/\$triggerDrivers\b/',
+            NodeRegistrationWriter::TRIGGER_NODE_ANCHOR => '/\$triggerNodes\b/',
+            NodeRegistrationWriter::TRIGGER_SOURCE_ANCHOR => '/\$triggerSources\b/',
+            NodeRegistrationWriter::ATTRIBUTE_ANCHOR => '/\bfunction\s+subjectAttributes\s*\(/',
+        ];
+
+        foreach ($missing as $home) {
+            $pattern = $declarationPatterns[$home['needle']] ?? null;
+            if ($pattern !== null && preg_match($pattern, $stripped) === 1) {
+                return InstallOutcome::CannotWire;
+            }
         }
 
         // Every anchor a missing home needs must be present exactly once, or this
@@ -131,12 +185,11 @@ final class ProviderStep implements InstallStep
             return $this->check();
         }
 
-        // Re-read between insertions rather than batching: each insertion shifts
-        // every later offset, and each one asserts its own anchor against the file
-        // as it now stands.
-        foreach ($this->homes() as $home) {
-            $contents = $this->files->get($this->path());
+        // Build the complete edit in memory and write once. A later unsafe home
+        // can therefore never leave an earlier partial insertion behind.
+        $contents = $this->files->get($this->path());
 
+        foreach ($this->homes() as $home) {
             // Same comment-stripped needle match as check(): otherwise a home
             // commented out is read as already there and this step skips it,
             // leaving the commented-out call the only one in the file.
@@ -144,22 +197,90 @@ final class ProviderStep implements InstallStep
                 continue;
             }
 
+            $propertyOrder = [
+                NodeRegistrationWriter::ANCHOR,
+                NodeRegistrationWriter::TRIGGER_DRIVER_ANCHOR,
+                NodeRegistrationWriter::TRIGGER_NODE_ANCHOR,
+                NodeRegistrationWriter::TRIGGER_SOURCE_ANCHOR,
+            ];
+            $propertyIndex = array_search($home['needle'], $propertyOrder, true);
+            if ($propertyIndex !== false) {
+                $position = false;
+                foreach (array_slice($propertyOrder, $propertyIndex + 1) as $next) {
+                    $position = strpos($contents, $next);
+                    if ($position !== false) {
+                        break;
+                    }
+                }
+                if ($position === false) {
+                    $position = strpos($contents, self::BOOT_ANCHOR);
+                }
+                if ($position === false) {
+                    return InstallOutcome::CannotWire;
+                }
+                $position = strrpos(substr($contents, 0, $position), "\n") + 1;
+                $newline = str_contains($contents, "\r\n") ? "\r\n" : "\n";
+                $insert = str_replace("\n", $newline, str_replace("\r\n", "\n", $home['insert']));
+                $contents = substr_replace($contents, $insert, $position, 0);
+                continue;
+            }
+
             if (substr_count($contents, $home['anchor']) !== 1) {
                 return InstallOutcome::CannotWire;
             }
 
-            $position = strpos($contents, $home['anchor']) + strlen($home['anchor']);
+            if ($home['needle'] === NodeRegistrationWriter::ATTRIBUTE_ANCHOR) {
+                $position = strrpos($contents, '}');
+                if ($position === false) {
+                    return InstallOutcome::CannotWire;
+                }
+                $newline = str_contains($contents, "\r\n") ? "\r\n" : "\n";
+                $insert = str_replace("\n", $newline, str_replace("\r\n", "\n", $home['insert']));
+                $contents = substr_replace($contents, $insert, $position, 0);
+                continue;
+            }
+
+            $anchorPosition = strpos($contents, $home['anchor']);
+            if ($anchorPosition === false) {
+                return InstallOutcome::CannotWire;
+            }
+
+            $position = $anchorPosition + strlen($home['anchor']);
 
             // Past the anchor line's own opening brace, so the insertion lands
             // inside the class or the method rather than on its signature line.
-            $position = strpos($contents, '{', $position) + 1;
+            $brace = strpos($contents, '{', $position);
+            if ($brace === false) {
+                return InstallOutcome::CannotWire;
+            }
+            $position = $brace + 1;
 
-            $this->files->put($this->path(), substr_replace($contents, $home['insert'], $position, 0));
+            $newline = str_contains($contents, "\r\n") ? "\r\n" : "\n";
+            $insert = str_replace("\n", $newline, str_replace("\r\n", "\n", $home['insert']));
+
+            $contents = substr_replace($contents, $insert, $position, 0);
         }
 
-        return $this->check() === InstallOutcome::AlreadyPresent
-            ? InstallOutcome::Wired
-            : InstallOutcome::CannotWire;
+        if (! $this->isCompleteProvider($contents)) {
+            return InstallOutcome::CannotWire;
+        }
+
+        try {
+            $this->atomicWriter()->write(
+                [$this->path() => $contents],
+                [$this->basePath.'/app'],
+                true,
+                function (string $written): void {
+                    if (! $this->isCompleteProvider($written)) {
+                        throw new \InvalidArgumentException('The upgraded provider is incomplete.');
+                    }
+                },
+            );
+        } catch (\Throwable) {
+            return InstallOutcome::CannotWire;
+        }
+
+        return InstallOutcome::Wired;
     }
 
     public function snippet(): ?string
@@ -169,8 +290,8 @@ final class ProviderStep implements InstallStep
         }
 
         return <<<'PHP'
-        // Add these three registration homes to your NodeflowServiceProvider, and
-        // the three calls in boot(). The generators match the property and method
+        // Add these registration homes to your NodeflowServiceProvider, and
+        // the calls in boot(). The generators match the property and method
         // lines literally, so keep them exactly as written.
 
             /** @var class-string[] */
@@ -178,13 +299,23 @@ final class ProviderStep implements InstallStep
             ];
 
             /** @var class-string[] */
-            protected array $triggers = [
+            protected array $triggerDrivers = [
+            ];
+
+            /** @var class-string[] */
+            protected array $triggerNodes = [
+            ];
+
+            /** @var class-string[] */
+            protected array $triggerSources = [
             ];
 
             public function boot(): void
             {
                 \Nodeflow\Nodeflow::register($this->nodes);
-                app(\Nodeflow\Triggers\TriggerRegistry::class)->register(...$this->triggers);
+                \Nodeflow\Nodeflow::registerTriggerDrivers($this->triggerDrivers);
+                \Nodeflow\Nodeflow::registerTriggerNodes($this->triggerNodes);
+                \Nodeflow\Nodeflow::registerTriggerSources($this->triggerSources);
                 app(\Nodeflow\Schema\SubjectAttributeRegistry::class)->register(...$this->subjectAttributes());
             }
 
@@ -199,26 +330,29 @@ final class ProviderStep implements InstallStep
 
     private function create(): InstallOutcome
     {
+        $rendered = strtr($this->stub(), [
+            '{{ namespace }}' => rtrim($this->rootNamespace, '\\').'\\Providers',
+        ]);
+
+        if (! $this->isCompleteProvider($rendered)) {
+            return InstallOutcome::CannotWire;
+        }
+
         $this->files->ensureDirectoryExists(dirname($this->path()));
 
-        $this->files->put($this->path(), strtr($this->stub(), [
-            '{{ namespace }}' => rtrim($this->rootNamespace, '\\').'\\Providers',
-        ]));
-
-        // E11: re-read and prove the anchors are there. A stub edited past
-        // recognition would otherwise ship a provider no generator can write to,
-        // and nothing would say so until a host ran make-node and got a paste
-        // instruction it could not explain.
-        $written = $this->files->get($this->path());
-
-        foreach ([
-            NodeRegistrationWriter::ANCHOR,
-            NodeRegistrationWriter::TRIGGER_ANCHOR,
-            NodeRegistrationWriter::ATTRIBUTE_ANCHOR,
-        ] as $anchor) {
-            if (substr_count($written, $anchor) !== 1) {
-                return InstallOutcome::CannotWire;
-            }
+        try {
+            $this->atomicWriter()->write(
+                [$this->path() => $rendered],
+                [$this->basePath.'/app'],
+                false,
+                function (string $written): void {
+                    if (! $this->isCompleteProvider($written)) {
+                        throw new \InvalidArgumentException('The created provider is incomplete.');
+                    }
+                },
+            );
+        } catch (\Throwable) {
+            return InstallOutcome::CannotWire;
         }
 
         return InstallOutcome::Wired;
@@ -229,13 +363,90 @@ final class ProviderStep implements InstallStep
         return $this->basePath.'/'.self::PATH;
     }
 
+    private function atomicWriter(): AtomicFileWriter
+    {
+        return new AtomicFileWriter($this->files);
+    }
+
     /** Host stub overrides, the same convention MakeNodeCommand::resolveStubPath() follows. */
     private function stub(): string
     {
-        $custom = $this->basePath.'/stubs/provider.stub';
+        $custom = $this->basePath.'/stubs/nodeflow-provider.stub';
 
         return $this->files->get(
-            $this->files->exists($custom) ? $custom : __DIR__.'/../../../stubs/provider.stub'
+            $this->files->exists($custom) ? $custom : __DIR__.'/../../../stubs/nodeflow-provider.stub'
         );
+    }
+
+    private function parses(string $contents): bool
+    {
+        try {
+            token_get_all($contents, TOKEN_PARSE);
+
+            return true;
+        } catch (\Throwable) {
+            return false;
+        }
+    }
+
+    private function isCompleteProvider(string $contents): bool
+    {
+        if (! $this->parses($contents) || ! $this->hasSafeTopology($contents)) {
+            return false;
+        }
+
+        $stripped = SourceText::withoutPhpComments($contents);
+        foreach ($this->homes() as $home) {
+            if (substr_count($stripped, $home['needle']) !== 1) {
+                return false;
+            }
+        }
+
+        return ProviderStructureInspector::valid(
+            $contents,
+            rtrim($this->rootNamespace, '\\').'\\Providers',
+        );
+    }
+
+    private function hasSafeTopology(string $contents): bool
+    {
+        $stripped = SourceText::withoutPhpComments($contents);
+        $groups = [
+            [
+                NodeRegistrationWriter::ANCHOR,
+                NodeRegistrationWriter::TRIGGER_DRIVER_ANCHOR,
+                NodeRegistrationWriter::TRIGGER_NODE_ANCHOR,
+                NodeRegistrationWriter::TRIGGER_SOURCE_ANCHOR,
+                NodeRegistrationWriter::ATTRIBUTE_ANCHOR,
+            ],
+            [
+                'Nodeflow::register($this->nodes);',
+                'Nodeflow::registerTriggerDrivers($this->triggerDrivers);',
+                'Nodeflow::registerTriggerNodes($this->triggerNodes);',
+                'Nodeflow::registerTriggerSources($this->triggerSources);',
+                '->register(...$this->subjectAttributes());',
+            ],
+        ];
+
+        foreach ($groups as $groupIndex => $needles) {
+            $haystack = $groupIndex === 0 ? $contents : $stripped;
+            $last = -1;
+            foreach ($needles as $needle) {
+                $count = substr_count($haystack, $needle);
+                if ($count > 1) {
+                    return false;
+                }
+                if ($count === 0) {
+                    continue;
+                }
+                $position = strpos($haystack, $needle);
+                if ($position === false || $position <= $last) {
+                    return false;
+                }
+                $last = $position;
+            }
+        }
+
+        return true;
     }
 }

@@ -1,122 +1,91 @@
 # Graph format reference
 
-A graph is the JSON document saved as a draft and used by a published flow version. Node IDs, node types, and output names are stable identifiers: changing one changes the graph contract, so preserve them when editing or migrating a flow. The package publishes a new version rather than mutating its graph, but the model and database do not enforce version update or delete immutability; hosts must not change or delete a version required by a run. See [Publishing flows](../building-automations/publishing-flows.md#know-what-publishing-changes).
+A graph is saved as editable draft JSON and copied into each immutable published `FlowVersion`. Node IDs, graph types, source keys, field keys, and output names are durable identifiers.
 
-## Complete example
+## Publishable example
 
-This is a publishable graph using the built-in wait and exit nodes.
+This example assumes the host registered webhook source `shop.order_webhook`:
 
 ```json
 {
-  "start": "wait-for-window",
+  "start": "incoming-order",
   "nodes": [
+    {
+      "id": "incoming-order",
+      "type": "core.trigger.webhook",
+      "config": {"source": "shop.order_webhook"},
+      "position": {"x": 180, "y": 80}
+    },
     {
       "id": "wait-for-window",
       "type": "core.wait",
-      "config": {
-        "duration": "15 minutes"
-      },
-      "position": {
-        "x": 180,
-        "y": 80
-      }
+      "config": {"duration": "15 minutes"},
+      "position": {"x": 520, "y": 80}
     },
     {
       "id": "finish",
       "type": "core.exit",
       "config": {},
-      "position": {
-        "x": 520,
-        "y": 80
-      }
+      "position": {"x": 860, "y": 80}
     }
   ],
   "edges": [
-    {
-      "from": "wait-for-window",
-      "output": "default",
-      "to": "finish"
-    }
+    {"from": "incoming-order", "output": "started", "to": "wait-for-window"},
+    {"from": "wait-for-window", "output": "default", "to": "finish"}
   ]
 }
 ```
 
-`position` is not interpreted by the runtime. It is editor layout data: Stored finite positions win on hydration, and a topology placement fills only missing positions. Auto layout is the only action that repositions every node. The draft and publish endpoints use the original request array rather than the stripped validation result, so unlisted root, node, and edge data is normally retained through decode and re-encode. This is semantic round-tripping, not byte-for-byte or JSON-container preservation: for example, an empty JSON object can later serialize as `[]`. Only the keys below have package graph semantics.
+`position` is editor layout data, not runtime behavior. Stored finite positions win on hydration, and topology placement fills only missing positions. Auto layout is the only action that repositions every node. Additional JSON properties normally round-trip semantically, but Nodeflow does not promise byte-for-byte or object-versus-empty-array preservation.
 
 ## Shape
 
-| Root key | JSON type | Draft request | Publish request and runtime meaning |
-| --- | --- | --- | --- |
-| `start` | string | Optional and nullable. Omission is retained in a saved draft response; send `""` instead for a stable client shape. | Must name an existing node; an empty or missing start is a publish error. |
-| `nodes` | Laravel array value | Optional and nullable. Omission is retained in a saved draft response; send `[]` instead for a stable client shape. | Each node requires `id` and `type`; `config` is optional/nullable. |
-| `edges` | Laravel array value | Optional and nullable. Omission is retained in a saved draft response; send `[]` instead for a stable client shape. | Each edge requires `from`, `to`, and `output`. |
-
-| Node key | JSON type | Requirement |
+| Root key | Draft | Publish/runtime |
 | --- | --- | --- |
-| `id` | string | Required. It is the graph-local node identifier, used by `start`, edges, runtime cursors, and overlay keys. It must be unique when publishing. |
-| `type` | string | Required. It is the registered node type, such as `core.wait`, not a PHP class name. It must resolve to an executable registered node when publishing. |
-| `config` | Laravel array value | Optional and nullable. The request rule does not distinguish a JSON object from a JSON array; if omitted or null, node validation receives `[]`. Its keys and values are defined by that node's `definition()` and `validate()` methods. |
-| `position` | Any JSON value; commonly `{ "x": number, "y": number }` | Not package-validated and not runtime-interpreted; preserved for editor layout. |
+| `start` | Optional/nullable string; use `""` for the stable empty shape. | Must name the graph's one trigger node. |
+| `nodes` | Optional/nullable Laravel array; use `[]` for empty. | Every item requires string `id` and `type`; `config` is optional/nullable array. |
+| `edges` | Optional/nullable Laravel array; use `[]` for empty. | Every item requires string `from`, `to`, and `output`. |
 
-| Edge key | JSON type | Requirement |
-| --- | --- | --- |
-| `from` | string | Required. Source node ID. |
-| `output` | string | Required for publish. Nullable for draft autosave only, so a half-dragged connection can be saved. It must be an output declared by the source node when that source exists and resolves. |
-| `to` | string | Required. Target node ID. It must exist when publishing. |
+| Node key | Meaning |
+| --- | --- |
+| `id` | Unique graph-local ID used by `start`, edges, overlays, and run origin/entry intent. |
+| `type` | Registered executable or trigger graph type, never a PHP class name. |
+| `config` | Flat authoring data validated by the registered definition. Source fields join trigger-node fields in the same array. A dotted field name is a literal key. |
+| `position` | Preserved editor layout value; commonly finite `{x, y}` numbers. |
 
-The HTTP validation accepts strings and Laravel array values at these structural boundaries. It deliberately leaves graph meaning to publishing and does not remove additional properties from the request array. Send the complete skeleton below for every draft save; do not depend on a partial draft being normalized in the editor or stale-draft response.
+| Edge key | Meaning |
+| --- | --- |
+| `from` | Source node ID. |
+| `output` | Source output; nullable only during draft autosave. Trigger definitions expose only `started`. |
+| `to` | Existing target node ID at publication. |
 
-```json
-{ "start": "", "nodes": [], "edges": [] }
-```
+Send `{ "start": "", "nodes": [], "edges": [] }` as the stable empty graph. Draft validation is structural and permits semantic incompleteness. Validate/Publish use stricter edge shape and semantic graph rules.
 
-## Validate and publish validation
+## Trigger start invariant
 
-Publishing checks all of the following:
+Publishing requires exactly one trigger node. `start` equals its ID, it has no incoming edges, and it has exactly one `started` edge to a registered executable node. Trigger nodes are declarative and are never executed. `StartRun`, trigger starts, and sub-flow starts persist and execute the `started` target as `engine_entry_node_id`.
 
-- `start` is present and names an existing node.
-- Node IDs are unique.
-- Every node type is registered and implements `HandlesSubject`, `HandlesAudience`, or both.
-- Each node's own configuration validation passes.
-- Every edge target exists.
-- For an existing, registered source node, `output` is one of that node's declared outputs.
-- Each `(from, output)` pair has at most one edge. A subject cannot fan out down parallel paths from one output.
-- The graph is acyclic.
+The three built-in trigger graph types are `core.trigger.webhook`, `core.trigger.model_observer`, and `core.trigger.laravel_event`. Their `source` values must come from the compatible server-authored source palette; arbitrary PHP classes are invalid.
 
-The current validator does **not** require every node to be reachable from `start`, and it does **not** reject an edge whose `from` ID is absent. An absent source consequently has no source-output check; its edge can still participate in the duplicate-output and cycle scans. Do not rely on either omission as a supported modelling feature.
+## Other publication validation
 
-The sole current warning is emitted when one source has at least two distinct outputs whose immediate target nodes are `core.wait`: those waits run sequentially in the interpreter, so elapsed time is the sum rather than the maximum. Warnings do not block publication. The non-mutating Validate endpoint returns them both on valid results and alongside semantic errors; Publish performs the same validation again before creating a version.
+Publishing also checks:
 
-## Drafts, publishing, and errors
+- unique node IDs and registered graph types;
+- executable cardinality (`HandlesSubject`, `HandlesAudience`, or both);
+- trigger node/source combined field validation and deterministic driver descriptor validation;
+- existing edge targets and declared source outputs;
+- at most one outgoing edge per `(from, output)` pair;
+- no directed cycle.
 
-**Outcome:** a draft can be structurally incomplete, while publication validates it and creates a new version. The package treats that version graph as immutable, but host updates or deletes are not blocked by the model or database; do not alter a version needed by a run. See [Publishing flows](../building-automations/publishing-flows.md#know-what-publishing-changes).
+The validator currently does not require every executable node to be reachable and does not independently reject every absent edge `from` ID. Keep graphs connected and source IDs valid; these are limitations, not supported modeling techniques.
 
-`PUT` to the draft route checks the structural request rules above, with `edges.*.output` nullable, then saves the supplied graph and increments `draft_revision`. It does not run graph semantic validation. This permits a graph mid-edit, but not a malformed node without a string `id` or `type`, nor an edge without string `from` and `to`.
+Two immediate branches that both target waits produce a warning because waits execute sequentially. Warnings do not block publication.
 
-`POST` to the validate route requires the same structural graph shape as Publish and then runs the semantic rules without changing the flow. Success is `{"valid":true,"warnings":[]}` (where `warnings` can contain non-blocking warnings). A semantic failure returns HTTP 422 with `valid: false`, `message: "The flow is not ready to publish."`, `errors`, `node_errors`, and `warnings`. It requires publish authorization and does not save a draft or create a version.
+## HTTP responses
 
-`POST` to the publish route requires a non-null string `edges.*.output`, then runs the semantic rules again. On success it creates the next version, makes it current, sets the flow status to `active`, and clears the draft. It returns integer `version` and `draft_revision` fields, for example `{ "version": 2, "draft_revision": 1 }`; use that returned revision on the next autosave. The revision remains monotonic rather than resetting.
+`PUT` draft accepts nullable edge output, saves the original graph array, and increments `draft_revision`. `POST` validate is non-mutating. A valid response is `{"valid":true,"warnings":[]}`; semantic failure is `422` with `The flow is not ready to publish.`, flat `errors`, structured `node_errors`, and warnings.
 
-A semantic publish failure is a `422` response in this shape:
+`POST` publish requires a nonnegative `draft_revision`, validates again, and returns the new `version` plus the unchanged monotonic revision. Semantic failure is `422`; stale revision is `409` with the winning graph/revision. First webhook publication may additionally return `webhook_url` and a one-time secret with no-store headers.
 
-```json
-{
-  "message": "The flow could not be published.",
-  "errors": [
-    "Node [wait-for-window] field [duration]: The duration field is required."
-  ],
-  "node_errors": [
-    {
-      "node": "wait-for-window",
-      "field": "duration",
-      "message": "The duration field is required."
-    }
-  ]
-}
-```
-
-`node_errors` entries use `node`, `field`, and `message`; `node` and `field` can be `null` for graph-wide errors such as a missing start or a cycle. Structural request failures use Laravel's normal validation-error response. A stale draft is instead a `409` containing `message`, the persisted winning `graph`, and `draft_revision`; the graph can be partial when the stored draft was partial, while an absent or empty draft uses the skeleton fallback. See [Routes](routes.md#error-responses) for the endpoints and authorization boundary.
-
-## Next step
-
-Read [Publishing flows](../building-automations/publishing-flows.md) for version lifecycle, and [Core nodes](core-nodes.md) for the supplied node configurations and outputs.
+See [Publishing flows](../building-automations/publishing-flows.md) and [Routes](routes.md).

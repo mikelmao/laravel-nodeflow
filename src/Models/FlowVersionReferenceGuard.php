@@ -6,7 +6,13 @@ use Illuminate\Database\Eloquent\Model;
 
 final class FlowVersionReferenceGuard
 {
-    public static function assert(Model $model, string $attribute, bool $nullable): void
+    public static function assert(
+        Model $model,
+        string $attribute,
+        bool $nullable,
+        mixed $expectedFlowId = null,
+        bool $requireFlowOwnership = false,
+    ): void
     {
         $referenceId = $model->getAttribute($attribute);
 
@@ -39,6 +45,16 @@ final class FlowVersionReferenceGuard
                 $version->id,
                 $model->getAttribute('tenant_id'),
                 $version->tenant_id,
+            );
+        }
+
+        if ($requireFlowOwnership && (string) $version->flow_id !== (string) $expectedFlowId) {
+            throw InvalidFlowVersionReferenceException::forFlowMismatch(
+                $model::class,
+                $attribute,
+                $version->id,
+                $version->flow_id,
+                $expectedFlowId,
             );
         }
     }

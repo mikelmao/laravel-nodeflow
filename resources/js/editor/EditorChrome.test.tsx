@@ -93,6 +93,21 @@ describe('EditorToolbar', () => {
         expect(screen.getByRole('button', { name: 'Publish' })).toBeDisabled()
     })
 
+    it('describes disabled publish readiness through a live region and announces becoming ready', () => {
+        const { props, rerender } = toolbar({ publishDisabledReason: 'Add a trigger before publishing this flow.' })
+        const publish = screen.getByRole('button', { name: 'Publish' })
+        const readiness = screen.getByRole('status', { name: 'Publish readiness' })
+        expect(publish).toBeDisabled()
+        expect(publish).toHaveAccessibleDescription('Add a trigger before publishing this flow.')
+        expect(readiness).toHaveAttribute('aria-live', 'polite')
+
+        rerender(<EditorToolbar {...props} publishDisabledReason={null} />)
+
+        expect(publish).toBeEnabled()
+        expect(publish).toHaveAccessibleDescription('Flow is ready to publish.')
+        expect(readiness).toHaveTextContent('Flow is ready to publish.')
+    })
+
     it('keeps secondary actions in a named narrow overflow without duplicating primary actions', () => {
         toolbar()
         const overflow = screen.getByRole('group', { name: 'More workflow actions' })
