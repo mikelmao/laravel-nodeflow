@@ -178,6 +178,21 @@ final class InterfaceEventSource extends OrderPlacedEventSource
     }
 }
 
+abstract class AbstractOrderPlacedEvent {}
+
+final class AbstractEventSource extends OrderPlacedEventSource
+{
+    public static function key(): string
+    {
+        return 'test.abstract_event';
+    }
+
+    public static function eventClass(): string
+    {
+        return AbstractOrderPlacedEvent::class;
+    }
+}
+
 final class RecordingEventTriggerExceptionHandler implements ExceptionHandler
 {
     /** @var Throwable[] */
@@ -475,6 +490,26 @@ it('rejects occurrence snapshots containing mutable object state', function () {
         ->and($handler->reported[0])->toBeInstanceOf(InvalidArgumentException::class);
 });
 
+it('stops a cyclic source snapshot before it reaches resolution or dispatch', function () {
+    publishOrderPlacedFlow('org-1');
+    OrderPlacedEventSource::$snapshotter = function (OrderPlacedAcrossTenants $event): LaravelEventOccurrence {
+        $data = [];
+        $data['self'] =& $data;
+
+        return new LaravelEventOccurrence($event::class, $data);
+    };
+    $handler = new RecordingEventTriggerExceptionHandler;
+    app()->instance(ExceptionHandler::class, $handler);
+
+    Event::dispatch(orderPlacedEvent());
+
+    expect(Run::withoutTenancy()->count())->toBe(0)
+        ->and(OrderPlacedEventSource::$occurrences)->toBe([])
+        ->and($handler->reported)->toHaveCount(1)
+        ->and($handler->reported[0])->toBeInstanceOf(InvalidArgumentException::class)
+        ->and($handler->reported[0]->getMessage())->toContain('recursive reference');
+});
+
 it('preserves normal synchronous Laravel event timing', function () {
     publishOrderPlacedFlow('org-1');
 
@@ -498,6 +533,75 @@ it('requires a concrete allowlisted event class rather than an interface listene
         ->toThrow(InvalidArgumentException::class, 'event class');
 
     expect(app(TriggerSourceRegistry::class)->has('event', InterfaceEventSource::key()))->toBeFalse();
+});
+
+it('rejects an abstract allowlisted event class that can never be dispatched directly', function () {
+    expect(fn () => Nodeflow::registerTriggerSources([AbstractEventSource::class]))
+        ->toThrow(InvalidArgumentException::class, 'event class');
+
+    expect(app(TriggerSourceRegistry::class)->has('event', AbstractEventSource::key()))->toBeFalse();
+});
+
+it('deep-copies referenced scalar and array values out of an event occurrence', function () {
+    $status = 'before';
+    $nested = ['value' => 'nested-before'];
+    $data = [
+        'status' => &$status,
+        'nested' => &$nested,
+    ];
+
+    $occurrence = new LaravelEventOccurrence(OrderPlacedAcrossTenants::class, $data);
+    $status = 'after';
+    $nested['value'] = 'nested-after';
+
+    expect($occurrence->data)->toBe([
+        'status' => 'before',
+        'nested' => ['value' => 'nested-before'],
+    ]);
+});
+
+it('rejects excessively deep event value trees at a deterministic boundary', function () {
+    $data = 'leaf';
+
+    for ($depth = 0; $depth < 70; $depth++) {
+        $data = ['next' => $data];
+    }
+
+    expect(fn () => new LaravelEventOccurrence(OrderPlacedAcrossTenants::class, ['root' => $data]))
+        ->toThrow(InvalidArgumentException::class, 'maximum depth');
+});
+
+it('rejects oversized event value trees at a deterministic boundary', function () {
+    expect(fn () => new LaravelEventOccurrence(
+        OrderPlacedAcrossTenants::class,
+        array_fill(0, 10001, 'value'),
+    ))->toThrow(InvalidArgumentException::class, 'maximum value count');
+});
+
+it('rejects self-referential event value trees without exhausting the PHP process', function () {
+    $autoload = realpath(__DIR__.'/../../vendor/autoload.php');
+    $code = sprintf(<<<'PHP'
+    require %s;
+
+    $data = [];
+    $data['self'] =& $data;
+
+    try {
+        new \Nodeflow\Triggers\LaravelEvent\LaravelEventOccurrence(\stdClass::class, $data);
+    } catch (\InvalidArgumentException $e) {
+        echo $e->getMessage();
+        exit(0);
+    }
+
+    exit(2);
+    PHP, var_export($autoload, true));
+    $output = [];
+    $exitCode = 0;
+
+    exec(escapeshellarg(PHP_BINARY).' -d memory_limit=32M -r '.escapeshellarg($code).' 2>&1', $output, $exitCode);
+
+    expect($exitCode)->toBe(0)
+        ->and(implode(PHP_EOL, $output))->toContain('recursive reference');
 });
 
 function publishOrderPlacedFlow(

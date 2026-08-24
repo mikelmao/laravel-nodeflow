@@ -12,6 +12,7 @@ use Nodeflow\Triggers\TriggerActivationSnapshot;
 use Nodeflow\Triggers\TriggerOccurrence;
 use Nodeflow\Triggers\TriggerOccurrenceDispatcher;
 use Nodeflow\Triggers\TriggerSourceRegistry;
+use ReflectionClass;
 use Throwable;
 
 class LaravelEventTriggerDriver implements TriggerDriver
@@ -39,7 +40,9 @@ class LaravelEventTriggerDriver implements TriggerDriver
 
         $eventClass = $source::eventClass();
 
-        if (trim($eventClass) === '' || ! class_exists($eventClass)) {
+        if (trim($eventClass) === ''
+            || ! class_exists($eventClass)
+            || ! (new ReflectionClass($eventClass))->isInstantiable()) {
             throw new InvalidArgumentException(
                 "Laravel event trigger source [{$source::key()}] declared invalid event class [{$eventClass}]."
             );
