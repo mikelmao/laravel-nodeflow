@@ -1,63 +1,114 @@
-import { useEffect, useId, useRef, useState, type KeyboardEvent as ReactKeyboardEvent } from 'react'
+import { useEffect, useId, useRef, useState } from 'react'
 import type { WebhookMetadata } from '../graph/types'
 import { NodeflowIcon } from '../presentation/icons'
-import { containDialogFocus } from './dialogFocus'
+import { ConfirmationDialog } from './ConfirmationDialog'
 
 export type WebhookDetailsProps = {
     metadata: WebhookMetadata | null
     oneTimeSecret: string | null
+    publishing?: boolean
     rotating: boolean
     rotationError: string | null
     onAcknowledgeSecret: () => void
     onRotate: () => void
 }
 
-async function copyText(value: string): Promise<boolean> {
-    try {
-        await navigator.clipboard.writeText(value)
-        return true
-    } catch {
-        return false
-    }
-}
-
 /** Secret-aware webhook UI. Plaintext exists only in the parent/component React state. */
 export function WebhookDetails({
     metadata,
     oneTimeSecret,
+    publishing = false,
     rotating,
     rotationError,
     onAcknowledgeSecret,
     onRotate,
 }: WebhookDetailsProps) {
     const [confirming, setConfirming] = useState(false)
-    const [copied, setCopied] = useState<'endpoint' | 'secret' | null>(null)
-    const titleId = `nodeflow-rotate-webhook-${useId().replace(/:/g, '')}`
+    const [endpointCopy, setEndpointCopy] = useState<'copied' | 'failed' | null>(null)
+    const [secretCopy, setSecretCopy] = useState<'copied' | 'failed' | null>(null)
+    const rotationDescriptionId = `nodeflow-rotate-description-${useId().replace(/:/g, '')}`
     const rotateButton = useRef<HTMLButtonElement>(null)
+    const mounted = useRef(true)
+    const secretIdentity = useRef(oneTimeSecret)
+    const secretGeneration = useRef(0)
+    const secretCopyRequest = useRef(0)
+    const endpointIdentity = useRef(metadata?.endpoint_url ?? null)
+    const endpointGeneration = useRef(0)
+    const endpointCopyRequest = useRef(0)
+    if (secretIdentity.current !== oneTimeSecret) {
+        secretIdentity.current = oneTimeSecret
+        secretGeneration.current += 1
+    }
+    if (endpointIdentity.current !== (metadata?.endpoint_url ?? null)) {
+        endpointIdentity.current = metadata?.endpoint_url ?? null
+        endpointGeneration.current += 1
+    }
+    const rotationDescription = rotating
+        ? 'Webhook secret rotation is in progress.'
+        : publishing ? 'Publishing is in progress.' : 'Rotate the webhook signing secret.'
 
-    useEffect(() => setCopied(null), [oneTimeSecret, metadata?.endpoint_url])
+    useEffect(() => {
+        mounted.current = true
+        return () => {
+            mounted.current = false
+            secretCopyRequest.current += 1
+            endpointCopyRequest.current += 1
+        }
+    }, [])
+
+    useEffect(() => {
+        secretCopyRequest.current += 1
+        setSecretCopy(null)
+    }, [oneTimeSecret])
+
+    useEffect(() => {
+        endpointCopyRequest.current += 1
+        setEndpointCopy(null)
+    }, [metadata?.endpoint_url])
+
+    async function copyEndpoint(): Promise<void> {
+        const value = metadata?.endpoint_url
+        if (value === null || value === undefined) return
+        const generation = endpointGeneration.current
+        const request = ++endpointCopyRequest.current
+        let result: 'copied' | 'failed'
+        try {
+            await navigator.clipboard.writeText(value)
+            result = 'copied'
+        } catch {
+            result = 'failed'
+        }
+        if (!mounted.current || request !== endpointCopyRequest.current || generation !== endpointGeneration.current || endpointIdentity.current !== value) return
+        setEndpointCopy(result)
+    }
+
+    async function copySecret(): Promise<void> {
+        const value = oneTimeSecret
+        if (value === null) return
+        const generation = secretGeneration.current
+        const request = ++secretCopyRequest.current
+        let result: 'copied' | 'failed'
+        try {
+            await navigator.clipboard.writeText(value)
+            result = 'copied'
+        } catch {
+            result = 'failed'
+        }
+        if (!mounted.current || request !== secretCopyRequest.current || generation !== secretGeneration.current || secretIdentity.current !== value) return
+        setSecretCopy(result)
+    }
+
+    function acknowledgeSecret(): void {
+        secretGeneration.current += 1
+        secretCopyRequest.current += 1
+        secretIdentity.current = null
+        setSecretCopy(null)
+        onAcknowledgeSecret()
+    }
 
     function closeConfirmation(): void {
         setConfirming(false)
-        rotateButton.current?.focus()
     }
-
-    function handleConfirmationKeyDown(event: ReactKeyboardEvent<HTMLDivElement>): void {
-        containDialogFocus(event)
-        if (event.key !== 'Escape') return
-        event.preventDefault()
-        event.stopPropagation()
-        closeConfirmation()
-    }
-
-    useEffect(() => {
-        if (!confirming) return
-        const close = (event: KeyboardEvent) => {
-            if (event.key === 'Escape') closeConfirmation()
-        }
-        document.addEventListener('keydown', close)
-        return () => document.removeEventListener('keydown', close)
-    }, [confirming])
 
     if (metadata === null && oneTimeSecret === null) return null
 
@@ -72,8 +123,8 @@ export function WebhookDetails({
                             {metadata.endpoint_url === null
                                 ? <span>Endpoint URL unavailable</span>
                                 : <>
-                                    <a aria-label="Webhook endpoint" href={metadata.endpoint_url} target="_blank" rel="noreferrer" className="min-w-0 truncate font-mono text-xs underline">{metadata.endpoint_url}</a>
-                                    <button type="button" aria-label="Copy webhook endpoint" onClick={() => { void copyText(metadata.endpoint_url!).then((ok) => setCopied(ok ? 'endpoint' : null)) }} className="rounded border border-border p-1"><NodeflowIcon name="copy" className="size-3.5" /></button>
+                                    <span aria-label="Webhook endpoint" className="min-w-0 truncate font-mono text-xs">{metadata.endpoint_url}</span>
+                                    <button type="button" aria-label="Copy webhook endpoint" onClick={() => { void copyEndpoint() }} className="rounded border border-border p-1"><NodeflowIcon name="copy" className="size-3.5" /></button>
                                 </>}
                         </dd>
                     </div>
@@ -81,36 +132,37 @@ export function WebhookDetails({
                     <div><dt className="text-xs font-medium text-muted-foreground">Secret last rotated</dt><dd>{metadata.secret_rotated_at ?? 'Never'}</dd></div>
                 </dl>
             )}
-            {copied === 'endpoint' && <p role="status">Endpoint copied.</p>}
+            {endpointCopy === 'copied' && <p role="status">Endpoint copied.</p>}
+            {endpointCopy === 'failed' && <p role="alert" aria-label="Webhook endpoint copy status">Could not copy the webhook endpoint. Copy it manually.</p>}
             {oneTimeSecret !== null && (
                 <div role="alert" className="space-y-2 rounded-md border border-amber-500/50 bg-amber-500/10 p-3">
                     <p className="font-semibold">Save this signing secret now. It is shown only once.</p>
                     <code className="block break-all select-all rounded bg-background p-2">{oneTimeSecret}</code>
                     <div className="flex flex-wrap gap-2">
-                        <button type="button" aria-label="Copy webhook secret" onClick={() => { void copyText(oneTimeSecret).then((ok) => setCopied(ok ? 'secret' : null)) }} className="rounded-md border border-border px-2 py-1">Copy</button>
-                        <button type="button" aria-label="Acknowledge webhook secret" onClick={onAcknowledgeSecret} className="rounded-md bg-primary px-2 py-1 text-primary-foreground">Acknowledge</button>
+                        <button type="button" aria-label="Copy webhook secret" onClick={() => { void copySecret() }} className="rounded-md border border-border px-2 py-1">Copy</button>
+                        <button type="button" aria-label="Acknowledge webhook secret" onClick={acknowledgeSecret} className="rounded-md bg-primary px-2 py-1 text-primary-foreground">Acknowledge</button>
                     </div>
-                    {copied === 'secret' && <p role="status">Secret copied.</p>}
+                    {secretCopy === 'copied' && <p role="status">Secret copied.</p>}
+                    {secretCopy === 'failed' && <p role="alert" aria-label="Webhook secret copy status">Could not copy the webhook secret. Copy it manually.</p>}
                 </div>
             )}
             {metadata !== null && (
-                <button ref={rotateButton} type="button" aria-label="Rotate webhook secret" disabled={rotating} onClick={() => setConfirming(true)} className="w-full rounded-md border border-border px-3 py-2 font-medium disabled:opacity-50">
+                <button ref={rotateButton} type="button" aria-label="Rotate webhook secret" aria-describedby={rotationDescriptionId} aria-busy={rotating || publishing} disabled={rotating || publishing} onClick={() => setConfirming(true)} className="w-full rounded-md border border-border px-3 py-2 font-medium disabled:opacity-50">
                     {rotating ? 'Rotating secret' : 'Rotate secret'}
                 </button>
             )}
+            <span id={rotationDescriptionId} role="status" aria-live="polite" aria-label="Webhook credential operation" className="sr-only">{rotationDescription}</span>
             {rotationError !== null && <p role="alert" aria-label="Webhook rotation error" className="text-destructive">{rotationError}</p>}
-            {confirming && (
-                <div role="dialog" aria-modal="true" aria-labelledby={titleId} onKeyDown={handleConfirmationKeyDown} className="fixed inset-0 z-50 grid place-items-center bg-background/70 p-4">
-                    <div className="w-full max-w-md space-y-4 rounded-lg border border-border bg-card p-5 shadow-lg">
-                        <h3 id={titleId} className="text-base font-semibold">Rotate webhook secret</h3>
-                        <p className="text-sm text-muted-foreground">The current signing secret stops working immediately. Update the webhook sender before its next request.</p>
-                        <div className="flex justify-end gap-2">
-                            <button type="button" onClick={closeConfirmation} className="rounded-md border border-border px-3 py-2">Cancel</button>
-                            <button type="button" autoFocus onClick={() => { closeConfirmation(); onRotate() }} className="rounded-md bg-destructive px-3 py-2 text-destructive-foreground">Confirm rotation</button>
-                        </div>
-                    </div>
-                </div>
-            )}
+            <ConfirmationDialog
+                open={confirming}
+                title="Rotate webhook secret"
+                description="The current signing secret stops working immediately. Update the webhook sender before its next request."
+                confirmLabel="Confirm rotation"
+                openerRef={rotateButton}
+                destructive
+                onCancel={closeConfirmation}
+                onConfirm={() => { closeConfirmation(); onRotate() }}
+            />
         </section>
     )
 }

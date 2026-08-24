@@ -22,9 +22,10 @@ export type NodeInspectorProps = {
     triggerSources?: TriggerSourcesPayload
     triggerOptionsTemplate?: string
     triggerSourceOptionsTemplate?: string
-    onTriggerSourceChange?: (source: string | null, defaults: Record<string, unknown>, priorFieldKeys: string[]) => void
+    onTriggerSourceChange?: (source: string | null) => void
     webhook?: WebhookMetadata | null
     webhookSecret?: string | null
+    webhookPublishing?: boolean
     webhookRotating?: boolean
     webhookRotationError?: string | null
     onAcknowledgeWebhookSecret?: () => void
@@ -58,6 +59,7 @@ export function NodeInspector({
     onTriggerSourceChange,
     webhook = null,
     webhookSecret = null,
+    webhookPublishing = false,
     webhookRotating = false,
     webhookRotationError = null,
     onAcknowledgeWebhookSecret = () => {},
@@ -94,9 +96,6 @@ export function NodeInspector({
         () => selectedSource?.fields.filter((field) => !baseFieldKeys.has(field.key)) ?? [],
         [baseFieldKeys, selectedSource],
     )
-    const contributedFieldKeys = useMemo(() => [...new Set(compatibleSources.flatMap((source) =>
-        source.fields.filter((field) => !baseFieldKeys.has(field.key)).map((field) => field.key),
-    ))], [baseFieldKeys, compatibleSources])
     const composedDef = useMemo((): GraphComponentPayload | undefined => {
         if (def?.kind !== 'trigger') return def
         const sourceOptions = Object.fromEntries(compatibleSources.map((source) => [source.key, source.label]))
@@ -154,11 +153,8 @@ export function NodeInspector({
         const nextBaseKeys = new Set(def.fields.map((field) => field.key))
         const nextSourceFieldKeys = new Set(next?.fields.filter((field) => !nextBaseKeys.has(field.key)).map((field) => field.key) ?? [])
         const defaults = Object.fromEntries(Object.entries(rawDefaults).filter(([defaultKey]) => nextSourceFieldKeys.has(defaultKey)))
-        // Clean every registered source-owned key so recovery from an invalid
-        // persisted selection cannot leave another source's stale config.
-        const priorFieldKeys = contributedFieldKeys
         if (onTriggerSourceChange !== undefined) {
-            onTriggerSourceChange(nextKey, defaults, priorFieldKeys)
+            onTriggerSourceChange(nextKey)
             return
         }
         onConfigChange('source', nextKey)
@@ -253,6 +249,7 @@ export function NodeInspector({
                         <WebhookDetails
                             metadata={webhook}
                             oneTimeSecret={webhookSecret}
+                            publishing={webhookPublishing}
                             rotating={webhookRotating}
                             rotationError={webhookRotationError}
                             onAcknowledgeSecret={onAcknowledgeWebhookSecret}

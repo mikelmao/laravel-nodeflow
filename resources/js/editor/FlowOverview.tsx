@@ -97,7 +97,7 @@ export function FlowOverview({
                 <div><dt className="text-muted-foreground">Connections</dt><dd>{plural(connectionCount, 'connection')}</dd></div>
             </dl>
 
-            <section aria-label="Validation" className="rounded-md bg-muted p-3 text-sm">
+            <section role="status" aria-live="polite" aria-label="Flow readiness" className="rounded-md bg-muted p-3 text-sm">
                 <p className={`font-medium${triggerReadiness === null ? '' : ' text-destructive'}`}>
                     {triggerReadiness ?? readinessCopy[validation.status]}
                 </p>

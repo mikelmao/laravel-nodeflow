@@ -1,8 +1,8 @@
-import { useCallback, useEffect, useId, useRef, useState, type DragEvent, type KeyboardEvent as ReactKeyboardEvent } from 'react'
+import { useCallback, useId, useRef, useState, type DragEvent } from 'react'
 import type { GraphComponentPayload, NodeTypePayload, TriggerNodeTypePayload, TriggerSourcesPayload } from '../graph/types'
 import { NodeflowIcon } from '../presentation/icons'
 import { categoryClasses, categoryPresentation } from '../presentation/node'
-import { containDialogFocus } from './dialogFocus'
+import { ConfirmationDialog } from './ConfirmationDialog'
 
 export type NodeLibraryProps = {
     palette: NodeTypePayload[]
@@ -129,7 +129,6 @@ export function NodeLibrary({
     const [query, setQuery] = useState('')
     const [replacement, setReplacement] = useState<TriggerNodeTypePayload | null>(null)
     const searchId = `node-library-search-${useId().replace(/:/g, '')}`
-    const dialogTitleId = `node-library-replace-${useId().replace(/:/g, '')}`
     const replacementOpener = useRef<HTMLButtonElement | null>(null)
     const attachSearchInputRef = useCallback(
         (instance: HTMLInputElement | null) => attachRef(searchInputRef, instance),
@@ -167,26 +166,8 @@ export function NodeLibrary({
         event.dataTransfer.setData('application/x-nodeflow-node-type', definition.type)
     }
 
-    useEffect(() => {
-        if (replacement === null) return
-        const close = (event: KeyboardEvent) => {
-            if (event.key === 'Escape') closeReplacement()
-        }
-        document.addEventListener('keydown', close)
-        return () => document.removeEventListener('keydown', close)
-    }, [replacement])
-
     function closeReplacement(): void {
         setReplacement(null)
-        replacementOpener.current?.focus()
-    }
-
-    function handleReplacementKeyDown(event: ReactKeyboardEvent<HTMLDivElement>): void {
-        containDialogFocus(event)
-        if (event.key !== 'Escape') return
-        event.preventDefault()
-        event.stopPropagation()
-        closeReplacement()
     }
 
     function choose(definition: GraphComponentPayload, opener: HTMLButtonElement): void {
@@ -284,24 +265,19 @@ export function NodeLibrary({
                     })}
                 </div>
             )}
-            {replacement !== null && (
-                <div role="dialog" aria-modal="true" aria-labelledby={dialogTitleId} onKeyDown={handleReplacementKeyDown} className="fixed inset-0 z-50 grid place-items-center bg-background/70 p-4">
-                    <div className="w-full max-w-md space-y-4 rounded-lg border border-border bg-card p-5 shadow-lg">
-                        <h3 id={dialogTitleId} className="text-base font-semibold">Replace trigger</h3>
-                        <p className="text-sm text-muted-foreground">
-                            Replacing the existing trigger resets its configuration. Its single connected target is preserved when possible.
-                        </p>
-                        <div className="flex justify-end gap-2">
-                            <button type="button" onClick={closeReplacement} className="rounded-md border border-border px-3 py-2 text-sm">Cancel</button>
-                            <button type="button" autoFocus onClick={() => {
-                                const selected = replacement
-                                closeReplacement()
-                                onReplaceTrigger?.(selected)
-                            }} className="rounded-md bg-primary px-3 py-2 text-sm text-primary-foreground">Replace trigger</button>
-                        </div>
-                    </div>
-                </div>
-            )}
+            <ConfirmationDialog
+                open={replacement !== null}
+                title="Replace trigger"
+                description="Replacing the existing trigger resets its configuration. Its single connected target is preserved when possible."
+                confirmLabel="Replace trigger"
+                openerRef={replacementOpener}
+                onCancel={closeReplacement}
+                onConfirm={() => {
+                    const selected = replacement
+                    closeReplacement()
+                    if (selected !== null) onReplaceTrigger?.(selected)
+                }}
+            />
         </aside>
     )
 }

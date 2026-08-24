@@ -54,7 +54,7 @@ export type EditorActions = {
     selectNode: (id: string | null) => void
     selectEdge: (id: string | null) => void
     configure: (id: string, key: string, value: unknown) => void
-    configureTriggerSource: (id: string, source: string | null, defaults: Record<string, unknown>, priorFieldKeys: string[]) => void
+    configureTriggerSource: (id: string, source: string | null) => void
     closeConfigTransaction: () => void
     deleteNode: (id: string) => void
     deleteSelection: () => void
@@ -236,6 +236,8 @@ export function useEditorController(options: UseEditorControllerOptions): UseEdi
     const committedCredentialSequence = useRef(0)
     const activePublish = useRef<number | null>(null)
     const activeRotation = useRef<number | null>(null)
+    const activeCredentialOperation = useRef<{ kind: 'publish' | 'rotation'; attempt: number } | null>(null)
+    const pendingWebhookMetadata = useRef<{ value: WebhookMetadata | null } | null>(null)
     const mounted = useRef(true)
     const validateUrl = useRef(options.urls.validate)
     const publishUrl = useRef(options.urls.publish)
@@ -248,6 +250,11 @@ export function useEditorController(options: UseEditorControllerOptions): UseEdi
     const builtRef = useRef(built)
     builtRef.current = built
     const autosave = useAutosave({ url: options.urls.draft, sessionIdentity: options.urls.publish, initialRevision: options.flow.draft_revision, graph: built.graph, debounceMs: options.autosaveDebounceMs })
+    const applyPendingWebhookMetadata = useCallback(() => {
+        const pending = pendingWebhookMetadata.current
+        pendingWebhookMetadata.current = null
+        if (pending !== null) setWebhookMetadata(pending.value)
+    }, [])
 
     useEffect(() => {
         mounted.current = true
@@ -257,6 +264,8 @@ export function useEditorController(options: UseEditorControllerOptions): UseEdi
             publishSequence.current += 1
             activePublish.current = null
             activeRotation.current = null
+            activeCredentialOperation.current = null
+            pendingWebhookMetadata.current = null
         }
     }, [])
 
@@ -276,6 +285,8 @@ export function useEditorController(options: UseEditorControllerOptions): UseEdi
         activePublish.current = null
         committedCredentialSequence.current = ++credentialSequence.current
         activeRotation.current = null
+        activeCredentialOperation.current = null
+        pendingWebhookMetadata.current = null
         setPublishing(false)
         setPublishOutcome(null)
         setWebhookRotating(false)
@@ -285,11 +296,28 @@ export function useEditorController(options: UseEditorControllerOptions): UseEdi
     useEffect(() => {
         if (rotationUrl.current === options.urls.rotate_webhook_secret) return
         rotationUrl.current = options.urls.rotate_webhook_secret
-        committedCredentialSequence.current = ++credentialSequence.current
-        activeRotation.current = null
-        setWebhookRotating(false)
-        setWebhookRotationError(null)
-    }, [options.urls.rotate_webhook_secret])
+        // A rotation endpoint can be refreshed independently. Invalidate only
+        // the rotation that owned the previous URL; never release a publish's
+        // shared credential barrier while its request is still in flight.
+        if (activeCredentialOperation.current?.kind === 'rotation') {
+            committedCredentialSequence.current = ++credentialSequence.current
+            activeRotation.current = null
+            activeCredentialOperation.current = null
+            setWebhookRotating(false)
+            setWebhookRotationError(null)
+            applyPendingWebhookMetadata()
+        }
+    }, [applyPendingWebhookMetadata, options.urls.rotate_webhook_secret])
+
+    useEffect(() => {
+        const value = options.webhook === null ? null : { ...options.webhook }
+        if (activeCredentialOperation.current !== null) {
+            pendingWebhookMetadata.current = { value }
+            return
+        }
+        pendingWebhookMetadata.current = null
+        setWebhookMetadata(value)
+    }, [options.webhook])
 
     const clearValidation = useCallback(() => {
         validationSequence.current += 1
@@ -512,25 +540,45 @@ export function useEditorController(options: UseEditorControllerOptions): UseEdi
         commit({ ...current, nodes: current.nodes.map((node) => node.id === id ? { ...node, data: { ...node.data, config: { ...node.data.config, [key]: copiedValue } } } : node) }, `config:${id}:${key}`)
     }, [commit])
 
-    const configureTriggerSource = useCallback((id: string, source: string | null, defaults: Record<string, unknown>, priorFieldKeys: string[]) => {
+    const configureTriggerSource = useCallback((id: string, source: string | null) => {
         const current = documentRef.current
         const target = current.nodes.find((node) => node.id === id)
-        if (target === undefined || defs[target.data.type]?.kind !== 'trigger') return
-        let copiedDefaults: Record<string, unknown>
+        const definition = target === undefined ? undefined : defs[target.data.type]
+        if (target === undefined || definition?.kind !== 'trigger') return
+        const registered = Object.prototype.hasOwnProperty.call(options.trigger_sources, definition.driver)
+            ? options.trigger_sources[definition.driver] ?? []
+            : []
+        const selectedSource = source === null ? undefined : registered.find((candidate) =>
+            candidate.driver === definition.driver
+            && candidate.key === source
+            && definition.compatible_source_keys.includes(candidate.key),
+        )
+        let currentConfig: Record<string, unknown>
+        let sourceDefaults: Record<string, unknown>
         try {
-            copiedDefaults = cloneGraphConfig(defaults)
+            currentConfig = cloneGraphConfig(target.data.config)
+            sourceDefaults = cloneGraphConfig(selectedSource?.default_config ?? {})
         } catch {
             return
         }
-        const config = cloneGraphConfig(target.data.config)
-        for (const key of priorFieldKeys) delete config[key]
+        const nodeFieldKeys = new Set(definition.fields.map((field) => field.key))
+        const sourceFieldKeys = new Set(selectedSource?.fields
+            .filter((field) => !nodeFieldKeys.has(field.key))
+            .map((field) => field.key) ?? [])
+        const config: Record<string, unknown> = {}
+        for (const key of nodeFieldKeys) {
+            if (key === 'source' || !Object.prototype.hasOwnProperty.call(currentConfig, key)) continue
+            config[key] = currentConfig[key]
+        }
         config.source = source
-        for (const [key, value] of Object.entries(copiedDefaults)) config[key] = value
+        for (const key of sourceFieldKeys) {
+            if (Object.prototype.hasOwnProperty.call(sourceDefaults, key)) config[key] = sourceDefaults[key]
+        }
         commit({
             ...current,
             nodes: current.nodes.map((node) => node.id === id ? { ...node, data: { ...node.data, config } } : node),
         }, `config:${id}:source`)
-    }, [commit, defs])
+    }, [commit, defs, options.trigger_sources])
 
     const deleteSelection = useCallback(() => {
         const current = documentRef.current
@@ -609,7 +657,7 @@ export function useEditorController(options: UseEditorControllerOptions): UseEdi
     }, [options.urls.validate])
 
     const publish = useCallback(async () => {
-        if (!mounted.current || activePublish.current !== null) return
+        if (!mounted.current || activePublish.current !== null || activeCredentialOperation.current !== null) return
         const currentBuilt = builtRef.current
         if (currentBuilt.unresolved.length > 0) {
             setPublishOutcome({ kind: 'failed', message: 'Choose which output each unresolved connection should use before publishing.' })
@@ -619,13 +667,24 @@ export function useEditorController(options: UseEditorControllerOptions): UseEdi
         const credentialAttempt = ++credentialSequence.current
         const publishedGeneration = generation.current
         activePublish.current = attempt
+        activeCredentialOperation.current = { kind: 'publish', attempt: credentialAttempt }
+        let credentialMetadataCommitted = false
         setPublishing(true)
         setPublishOutcome(null)
-        const owns = () => mounted.current && activePublish.current === attempt && publishSequence.current === attempt
+        const owns = () => mounted.current
+            && activePublish.current === attempt
+            && publishSequence.current === attempt
+            && activeCredentialOperation.current?.kind === 'publish'
+            && activeCredentialOperation.current.attempt === credentialAttempt
         const readyRevision = await autosave.preparePublish()
         if (readyRevision === false) {
             if (owns() && publishedGeneration === generation.current) setPublishOutcome({ kind: 'failed', message: autosave.message ?? 'The draft could not be saved before publishing.' })
-            if (owns()) { activePublish.current = null; setPublishing(false) }
+            if (owns()) {
+                applyPendingWebhookMetadata()
+                activePublish.current = null
+                activeCredentialOperation.current = null
+                setPublishing(false)
+            }
             return
         }
         try {
@@ -641,25 +700,31 @@ export function useEditorController(options: UseEditorControllerOptions): UseEdi
             const next = interpretPublish(result, new Set(documentRef.current.nodes.map((node) => node.id)))
             autosave.finishPublish(next.kind === 'published' ? next.revision : undefined)
             if (!owns()) return
-            if (next.kind === 'published' && credentialAttempt > committedCredentialSequence.current) {
-                committedCredentialSequence.current = credentialAttempt
-                // Every successful publication supersedes a previous plaintext
-                // disclosure, including a success that returns no new secret.
-                // Credential metadata belongs to the still-owned editor session,
-                // not to the graph generation used for outcome presentation.
-                setWebhookSecret(next.webhookSecret ?? null)
-                const publishedTrigger = currentBuilt.graph.nodes?.find((node) => defs[node.type]?.kind === 'trigger')
-                const publishedDef = publishedTrigger === undefined ? undefined : defs[publishedTrigger.type]
-                setWebhookMetadata((current) => {
-                    const endpointUrl = next.webhookUrl ?? current?.endpoint_url ?? null
-                    const webhookPublished = publishedDef?.kind === 'trigger' && publishedDef.driver === 'webhook'
-                    if (endpointUrl === null && current === null && !webhookPublished) return null
-                    return {
-                        endpoint_url: endpointUrl,
-                        active: webhookPublished,
-                        secret_rotated_at: current?.secret_rotated_at ?? null,
-                    }
-                })
+            if (next.kind === 'published') {
+                const pending = pendingWebhookMetadata.current
+                pendingWebhookMetadata.current = null
+                credentialMetadataCommitted = true
+                if (credentialAttempt > committedCredentialSequence.current) {
+                    committedCredentialSequence.current = credentialAttempt
+                    // Every successful publication supersedes a previous plaintext
+                    // disclosure, including a success that returns no new secret.
+                    // Credential metadata belongs to the still-owned editor session,
+                    // not to the graph generation used for outcome presentation.
+                    setWebhookSecret(next.webhookSecret ?? null)
+                    const publishedTrigger = currentBuilt.graph.nodes?.find((node) => defs[node.type]?.kind === 'trigger')
+                    const publishedDef = publishedTrigger === undefined ? undefined : defs[publishedTrigger.type]
+                    setWebhookMetadata((current) => {
+                        const base = pending === null ? current : pending.value
+                        const endpointUrl = next.webhookUrl ?? base?.endpoint_url ?? null
+                        const webhookPublished = publishedDef?.kind === 'trigger' && publishedDef.driver === 'webhook'
+                        if (endpointUrl === null && base === null && !webhookPublished) return null
+                        return {
+                            endpoint_url: endpointUrl,
+                            active: webhookPublished,
+                            secret_rotated_at: base?.secret_rotated_at ?? null,
+                        }
+                    })
+                }
             }
             if (publishedGeneration !== generation.current) return
             if (next.kind === 'published') setPublishedVersion(next.version)
@@ -670,15 +735,25 @@ export function useEditorController(options: UseEditorControllerOptions): UseEdi
             autosave.finishPublish()
             if (owns() && publishedGeneration === generation.current) setPublishOutcome({ kind: 'failed', message: `Could not reach server to publish this flow: ${String(reason)}` })
         } finally {
-            if (owns()) { activePublish.current = null; setPublishing(false) }
+            if (owns()) {
+                if (!credentialMetadataCommitted) applyPendingWebhookMetadata()
+                activePublish.current = null
+                activeCredentialOperation.current = null
+                setPublishing(false)
+            }
         }
-    }, [autosave, defs, options.urls.publish])
+    }, [applyPendingWebhookMetadata, autosave, defs, options.urls.publish])
 
     const rotateWebhookSecret = useCallback(async () => {
-        if (!mounted.current || activeRotation.current !== null) return
+        if (!mounted.current || activeRotation.current !== null || activeCredentialOperation.current !== null) return
         const credentialAttempt = ++credentialSequence.current
         activeRotation.current = credentialAttempt
-        const owns = () => mounted.current && activeRotation.current === credentialAttempt
+        activeCredentialOperation.current = { kind: 'rotation', attempt: credentialAttempt }
+        let credentialMetadataCommitted = false
+        const owns = () => mounted.current
+            && activeRotation.current === credentialAttempt
+            && activeCredentialOperation.current?.kind === 'rotation'
+            && activeCredentialOperation.current.attempt === credentialAttempt
         setWebhookRotating(true)
         setWebhookRotationError(null)
         try {
@@ -697,17 +772,25 @@ export function useEditorController(options: UseEditorControllerOptions): UseEdi
             }
             if (credentialAttempt <= committedCredentialSequence.current) return
             committedCredentialSequence.current = credentialAttempt
+            const pending = pendingWebhookMetadata.current
+            pendingWebhookMetadata.current = null
+            credentialMetadataCommitted = true
             setWebhookSecret(rotated.secret)
-            setWebhookMetadata((current) => current === null ? null : { ...current, secret_rotated_at: rotated.rotatedAt })
+            setWebhookMetadata((current) => {
+                const base = pending === null ? current : pending.value
+                return base === null ? null : { ...base, secret_rotated_at: rotated.rotatedAt }
+            })
         } catch {
             if (owns()) setWebhookRotationError('Could not rotate the webhook secret. Check your connection and try again.')
         } finally {
             if (owns()) {
+                if (!credentialMetadataCommitted) applyPendingWebhookMetadata()
                 activeRotation.current = null
+                activeCredentialOperation.current = null
                 setWebhookRotating(false)
             }
         }
-    }, [options.urls.rotate_webhook_secret])
+    }, [applyPendingWebhookMetadata, options.urls.rotate_webhook_secret])
 
     const focusIssue = useCallback((nodeId: string | null, field: string | null) => {
         if (nodeId === null || !documentRef.current.nodes.some((node) => node.id === nodeId)) return
@@ -746,7 +829,7 @@ export function useEditorController(options: UseEditorControllerOptions): UseEdi
     const selectedSourceKey = triggerNode !== undefined && typeof triggerNode.data.config.source === 'string'
         ? triggerNode.data.config.source
         : null
-    const publishDisabledReason = options.trigger_nodes.length > 0 && availableTriggerDefinitions.length === 0 && triggerNode === undefined
+    const triggerPublishDisabledReason = options.trigger_nodes.length > 0 && availableTriggerDefinitions.length === 0 && triggerNode === undefined
         ? 'No compatible trigger source is registered by this application.'
         : availableTriggerDefinitions.length > 0 && triggerNode === undefined
             ? 'Add a trigger before publishing this flow.'
@@ -755,6 +838,9 @@ export function useEditorController(options: UseEditorControllerOptions): UseEdi
             : trigger?.kind === 'trigger' && (selectedSourceKey === null || !registeredCompatibleSources.some((source) => source.key === selectedSourceKey))
                 ? 'The selected trigger source is not compatible with this trigger.'
                 : null
+    const publishDisabledReason = webhookRotating
+        ? 'Webhook secret rotation is in progress.'
+        : triggerPublishDisabledReason
     const message = outcomeMessages(activeOutcome)
     const save = { status: autosave.status, message: autosave.message ?? undefined } as EditorToolbarProps['save']
     const publishIndicator: PublishIndicator = publishOutcome?.kind === 'published'
@@ -779,9 +865,9 @@ export function useEditorController(options: UseEditorControllerOptions): UseEdi
         optionsSource,
         canvasProps: { nodes: canvasNodes, edges: canvasEdges, defs, renderers: options.nodeRenderers, nodeErrors, onNodesChange: nodesChange, onEdgesChange: edgesChange, onConnect: connect, onNodeClick: selectNode, onEdgeClick: selectEdge, onPaneClick: () => { selectNode(null) }, onDropNodeType: (type, point) => { const definition = Object.prototype.hasOwnProperty.call(defs, type) ? defs[type] : undefined; if (definition?.kind === 'executable') addNode(definition, point); else if (definition?.kind === 'trigger') addTrigger(definition, point) }, onReady: (next) => { canvas.current = next }, onDispose: (old) => { if (canvas.current === old) canvas.current = null }, interactive: true, deleteKeyCode: null },
         canvasHudProps: { nodeCount: document.nodes.length, connectionCount: document.edges.length, validation: validationState },
-        toolbarProps: { flowName: options.flow.name, triggerLabel: trigger?.label ?? 'No trigger', publishedVersion, save, validation: validationState, publish: publishIndicator, publishDisabledReason, canUndo: history.past.length > 0, canRedo: history.future.length > 0, hasSelection: selected.nodeId !== null || selected.edgeId !== null, onUndo: () => moveHistory('undo'), onRedo: () => moveHistory('redo'), onAutoLayout: autoLayout, onFit: () => canvas.current?.fit(), onDeleteSelected: deleteSelection, onValidate: () => { void validate() }, onPublish: () => { if (publishDisabledReason === null) void publish() } },
+        toolbarProps: { flowName: options.flow.name, triggerLabel: trigger?.label ?? 'No trigger', publishedVersion, save, validation: validationState, publish: publishIndicator, publishDisabledReason, credentialBusy: publishing || webhookRotating, canUndo: history.past.length > 0, canRedo: history.future.length > 0, hasSelection: selected.nodeId !== null || selected.edgeId !== null, onUndo: () => moveHistory('undo'), onRedo: () => moveHistory('redo'), onAutoLayout: autoLayout, onFit: () => canvas.current?.fit(), onDeleteSelected: deleteSelection, onValidate: () => { void validate() }, onPublish: () => { if (publishDisabledReason === null) void publish() } },
         noticeProps: { save, publish: publishIndicator, validation: validationState, structuralError: message.structural, graphMessages: [...message.graph, ...(message.failed === undefined ? [] : [message.failed])], validationMessage: validation?.kind === 'failed' ? validation.message : undefined, onKeepMine: () => resolveConflict('mine'), onUseTheirs: () => resolveConflict('theirs') },
         flowOverviewProps: { flow: { name: options.flow.name }, trigger: trigger === null ? null : { label: trigger.label, type: trigger.type }, triggerReadiness: publishDisabledReason, publishedVersion, nodeCount: document.nodes.length, connectionCount: document.edges.length, startNodeId: document.startId || null, validation: validationState, issues: graphIssues(activeOutcome), warnings: validation?.kind === 'valid' ? validation.warnings : validation?.kind === 'invalid' ? validation.warnings : [], errors: message.graph, unknownTypes, unresolvedOutputs: built.unresolved.map((edge) => ({ from: edge.source, to: edge.target })), onIssueSelect: (issue) => focusIssue(issue.node, issue.field) },
-        nodeInspectorProps: selectedNode === undefined ? null : { node: selectedNode.data, def: defs[selectedNode.data.type], controls, errors: fieldErrors, issueToFocus, triggerSources: options.trigger_sources, triggerOptionsTemplate: options.urls.trigger_options, triggerSourceOptionsTemplate: options.urls.trigger_source_options, onConfigChange: (key, value) => configure(selectedNode.id, key, value), onTriggerSourceChange: (source, defaults, priorFieldKeys) => configureTriggerSource(selectedNode.id, source, defaults, priorFieldKeys), onConfigBlur: closeConfigTransaction, webhook: webhookMetadata, webhookSecret, webhookRotating, webhookRotationError, onAcknowledgeWebhookSecret: () => setWebhookSecret(null), onRotateWebhookSecret: () => { void rotateWebhookSecret() }, onDelete: () => deleteNode(selectedNode.id) },
+        nodeInspectorProps: selectedNode === undefined ? null : { node: selectedNode.data, def: defs[selectedNode.data.type], controls, errors: fieldErrors, issueToFocus, triggerSources: options.trigger_sources, triggerOptionsTemplate: options.urls.trigger_options, triggerSourceOptionsTemplate: options.urls.trigger_source_options, onConfigChange: (key, value) => configure(selectedNode.id, key, value), onTriggerSourceChange: (source) => configureTriggerSource(selectedNode.id, source), onConfigBlur: closeConfigTransaction, webhook: webhookMetadata, webhookSecret, webhookPublishing: publishing, webhookRotating, webhookRotationError, onAcknowledgeWebhookSecret: () => setWebhookSecret(null), onRotateWebhookSecret: () => { void rotateWebhookSecret() }, onDelete: () => deleteNode(selectedNode.id) },
     }
 }

@@ -1123,6 +1123,30 @@ describe('FlowEditor', () => {
         expect(screen.queryByRole('dialog', { name: 'Node Library' })).toBeNull()
     })
 
+    it('makes the replacement confirmation behaviorally modal against editor shortcuts and background clicks', async () => {
+        const user = userEvent.setup()
+        renderEditor({ graph: triggeredGraph, trigger_nodes: [webhookTrigger, eventTrigger], trigger_sources: authorableSources })
+        const selected = canvasNode('send1')
+        fireEvent.click(selected)
+        const backgroundAdd = screen.getByRole('button', { name: 'Add Send message' })
+        await user.click(screen.getByRole('button', { name: 'Add Laravel event' }))
+        const confirm = screen.getByRole('button', { name: 'Replace trigger' })
+        const shell = screen.getByTestId('editor-shell')
+
+        expect(shell).toHaveAttribute('inert')
+        expect(shell).toHaveAttribute('aria-hidden', 'true')
+        fireEvent.keyDown(document, { key: 'Delete' })
+        fireEvent.keyDown(document, { key: 'k', ctrlKey: true })
+        fireEvent.click(backgroundAdd)
+        backgroundAdd.focus()
+        fireEvent.focusIn(backgroundAdd)
+
+        expect(selected).toBeInTheDocument()
+        expect(screen.getByRole('dialog', { name: 'Replace trigger' })).toBeInTheDocument()
+        expect(confirm).toHaveFocus()
+        expect(screen.getByText('2 nodes')).toBeInTheDocument()
+    })
+
     it('deletes a trigger through the inspector and clears graph start', async () => {
         renderEditor({ graph: triggeredGraph, trigger_nodes: [webhookTrigger], trigger_sources: authorableSources })
         fireEvent.click(canvasNode('trigger'))
@@ -1149,7 +1173,7 @@ describe('FlowEditor', () => {
             trigger_sources: authorableSources,
         })
         expect(screen.getByRole('button', { name: 'Publish' })).toBeDisabled()
-        expect(screen.getByText(/selected trigger source is not compatible/i)).toBeInTheDocument()
+        expect(screen.getByRole('button', { name: 'Publish' })).toHaveAccessibleDescription(/selected trigger source is not compatible/i)
         incompatible.unmount()
 
         const unavailable = renderEditor({ trigger_nodes: [{ ...webhookTrigger, compatible_source_keys: [] }], trigger_sources: { webhook: [] } })
@@ -1200,7 +1224,7 @@ describe('FlowEditor', () => {
         })
         fireEvent.click(canvasNode('trigger'))
 
-        expect(screen.getByRole('link', { name: /webhook endpoint/i })).toHaveAttribute('href', 'https://example.test/hooks/token')
+        expect(screen.getByLabelText('Webhook endpoint', { selector: 'span' })).toHaveTextContent('https://example.test/hooks/token')
         expect(screen.getByText(/active/i)).toBeInTheDocument()
         expect(screen.queryByText('publish-secret')).toBeNull()
         await user.click(screen.getByRole('button', { name: 'Publish' }))
@@ -1246,7 +1270,7 @@ describe('FlowEditor', () => {
         fireEvent.click(canvasNode('trigger'))
 
         expect(await screen.findByText('same-session-secret')).toBeInTheDocument()
-        expect(screen.getByRole('link', { name: /webhook endpoint/i })).toHaveAttribute('href', 'https://example.test/hooks/stale-generation')
+        expect(screen.getByLabelText('Webhook endpoint', { selector: 'span' })).toHaveTextContent('https://example.test/hooks/stale-generation')
         expect(screen.getByRole('region', { name: 'Webhook details' })).toHaveTextContent('Active')
         expect(screen.getByText('2026-08-24T12:00:00Z')).toBeInTheDocument()
         expect(screen.queryByText(/Published v4/i)).toBeNull()
@@ -1326,7 +1350,7 @@ describe('FlowEditor', () => {
         if (exit === 'switch') fireEvent.click(canvasNode('trigger'))
 
         expect(screen.queryByText('abandoned-secret')).toBeNull()
-        expect(screen.queryByRole('link', { name: /webhook endpoint/i })).toBeNull()
+        expect(screen.queryByLabelText('Webhook endpoint', { selector: 'span' })).toBeNull()
         expect(consoleError.mock.calls.flat().join(' ')).not.toMatch(/unmounted|state update/i)
         consoleError.mockRestore()
     })
@@ -1416,6 +1440,46 @@ describe('FlowEditor', () => {
         expect(screen.getByText('rotated-secret')).toBeInTheDocument()
     })
 
+    it('disables both credential actions with accessible reasons while either operation is active', async () => {
+        const user = userEvent.setup()
+        let resolveRotation!: (response: Response) => void
+        let resolvePublish!: (response: Response) => void
+        vi.stubGlobal('fetch', vi.fn((url: string) => {
+            if (url === urls.rotate_webhook_secret) return new Promise<Response>((resolve) => { resolveRotation = resolve })
+            if (url === urls.publish) return new Promise<Response>((resolve) => { resolvePublish = resolve })
+            return Promise.resolve(Response.json({ draft_revision: 8 }))
+        }))
+        renderEditor({
+            graph: triggeredGraph,
+            trigger_nodes: [webhookTrigger],
+            trigger_sources: authorableSources,
+            webhook: { endpoint_url: 'https://example.test/hooks/token', active: true, secret_rotated_at: null },
+        })
+        fireEvent.click(canvasNode('trigger'))
+
+        await user.click(screen.getByRole('button', { name: 'Rotate webhook secret' }))
+        await user.click(screen.getByRole('button', { name: 'Confirm rotation' }))
+        await waitFor(() => expect(resolveRotation).toBeTypeOf('function'))
+
+        const publishWhileRotating = screen.getByRole('button', { name: 'Publish' })
+        const rotateWhileRotating = screen.getByRole('button', { name: 'Rotate webhook secret' })
+        expect(publishWhileRotating).toBeDisabled()
+        expect(publishWhileRotating).toHaveAccessibleDescription(/webhook secret rotation is in progress/i)
+        expect(publishWhileRotating).toHaveAttribute('aria-busy', 'true')
+        expect(rotateWhileRotating).toBeDisabled()
+        expect(rotateWhileRotating).toHaveAttribute('aria-busy', 'true')
+
+        await act(async () => resolveRotation(Response.json({ secret: 'rotation-secret', rotated_at: '2026-08-24T15:00:00Z' })))
+        await user.click(screen.getByRole('button', { name: 'Publish' }))
+        await waitFor(() => expect(resolvePublish).toBeTypeOf('function'))
+
+        const rotateWhilePublishing = screen.getByRole('button', { name: 'Rotate webhook secret' })
+        expect(rotateWhilePublishing).toBeDisabled()
+        expect(rotateWhilePublishing).toHaveAccessibleDescription(/publishing is in progress/i)
+        expect(rotateWhilePublishing).toHaveAttribute('aria-busy', 'true')
+        await act(async () => resolvePublish(Response.json({ version: 4, draft_revision: 8, webhook_url: 'https://example.test/hooks/token' })))
+    })
+
     it('contains rotation Escape inside the narrow inspector drawer', async () => {
         const user = userEvent.setup()
         installMediaQuery(true)
@@ -1441,6 +1505,37 @@ describe('FlowEditor', () => {
 
         fireEvent.keyDown(document, { key: 'Escape' })
         expect(screen.queryByRole('dialog', { name: 'Inspector' })).toBeNull()
+    })
+
+    it('makes the rotation confirmation behaviorally modal against editor shortcuts and background controls', async () => {
+        const user = userEvent.setup()
+        const fetchMock = vi.fn(async (_url: string, _init?: RequestInit) => Response.json({ version: 4, draft_revision: 8 }))
+        vi.stubGlobal('fetch', fetchMock)
+        renderEditor({
+            graph: triggeredGraph,
+            trigger_nodes: [webhookTrigger],
+            trigger_sources: authorableSources,
+            webhook: { endpoint_url: 'https://example.test/hooks/token', active: true, secret_rotated_at: null },
+        })
+        const selected = canvasNode('trigger')
+        fireEvent.click(selected)
+        const backgroundPublish = screen.getByRole('button', { name: 'Publish' })
+        await user.click(screen.getByRole('button', { name: 'Rotate webhook secret' }))
+        const confirm = screen.getByRole('button', { name: 'Confirm rotation' })
+        const shell = screen.getByTestId('editor-shell')
+
+        expect(shell).toHaveAttribute('inert')
+        expect(shell).toHaveAttribute('aria-hidden', 'true')
+        fireEvent.keyDown(document, { key: 'Delete' })
+        fireEvent.keyDown(document, { key: 'z', metaKey: true })
+        fireEvent.click(backgroundPublish)
+        backgroundPublish.focus()
+        fireEvent.focusIn(backgroundPublish)
+
+        expect(selected).toBeInTheDocument()
+        expect(fetchMock.mock.calls.filter(([url]) => url === urls.publish)).toHaveLength(0)
+        expect(screen.getByRole('dialog', { name: 'Rotate webhook secret' })).toBeInTheDocument()
+        expect(confirm).toHaveFocus()
     })
 
     // The composed surface keeps validation separate from saving/publishing while preserving the author journey.

@@ -55,31 +55,71 @@ function controller(overrides: Partial<Parameters<typeof useEditorController>[0]
 }
 
 describe('useEditorController', () => {
-    it('changes trigger source and contributed defaults as one undoable graph mutation', () => {
+    it.each([
+        ['an unknown persisted source', 'source.missing'],
+        ['a valid registered source', 'source.a'],
+    ])('rebuilds %s from registry-owned node fields and the selected source only', async (_label, initialSource) => {
+        const trigger: TriggerNodeTypePayload = {
+            kind: 'trigger', type: 'custom.source-cleanup', driver: 'host', label: 'Source cleanup', icon: null, description: null,
+            outputs: ['started'], compatible_source_keys: ['source.a', 'source.b'],
+            fields: [
+                { key: 'source', type: 'select', label: 'Source', help: null, default: null, required: true, options: {}, dynamic_options: false },
+                { key: 'node.mode', type: 'text', label: 'Mode', help: null, default: 'created', required: false, options: {}, dynamic_options: false },
+            ],
+            default_config: { source: null, 'node.mode': 'created' },
+        }
+        const sources = {
+            host: [
+                { key: 'source.a', driver: 'host', label: 'A', icon: null, description: null, fields: [{ key: 'a.only', type: 'text', label: 'A only', help: null, default: null, required: false, options: {}, dynamic_options: false }], default_config: { 'a.only': 'a' } },
+                { key: 'source.b', driver: 'host', label: 'B', icon: null, description: null, fields: [
+                    { key: 'filters.status', type: 'select', label: 'Status', help: null, default: 'open', required: false, options: {}, dynamic_options: true },
+                    { key: 'b.only', type: 'text', label: 'B only', help: null, default: null, required: false, options: {}, dynamic_options: false },
+                ], default_config: { 'filters.status': 'open', 'b.only': { nested: ['fresh'] }, injected: 'drop-me' } },
+            ],
+        } satisfies Parameters<typeof useEditorController>[0]['trigger_sources']
         const configuredGraph: Graph = {
             start: 'hook',
-            nodes: [{ id: 'hook', type: webhook.type, config: { source: 'orders', old_filter: { nested: ['old'] }, retained: true }, position: { x: 0, y: 0 } }],
+            nodes: [{ id: 'hook', type: trigger.type, config: {
+                source: initialSource,
+                'node.mode': 'updated',
+                'a.only': 'stale-a',
+                'filters.status': 'stale-or-unknown',
+                orphan: { secret: 'stale' },
+            }, position: { x: 31, y: 47 } }],
             edges: [],
         }
-        const view = controller({ graph: configuredGraph })
-        const defaults = { new_filter: { nested: ['new'] } }
+        const fetchMock = vi.fn(async (url: string, _init?: RequestInit) => url === urls.publish
+            ? Response.json({ version: 4, draft_revision: 8 })
+            : Response.json({ draft_revision: 8 }))
+        vi.stubGlobal('fetch', fetchMock)
+        const view = controller({ graph: configuredGraph, trigger_nodes: [trigger], trigger_sources: sources })
 
-        act(() => view.result.current.actions.configureTriggerSource('hook', 'customers', defaults, ['old_filter']))
+        act(() => view.result.current.actions.configureTriggerSource('hook', 'source.b'))
         act(() => view.result.current.actions.closeConfigTransaction())
-        defaults.new_filter.nested.push('outside')
+        const sourceDefault = sources.host[1]!.default_config['b.only'] as { nested: string[] }
+        sourceDefault.nested.push('outside')
 
-        expect(view.result.current.document.nodes[0]?.data.config).toEqual({
-            source: 'customers',
-            retained: true,
-            new_filter: { nested: ['new'] },
-        })
+        const expected = {
+            source: 'source.b',
+            'node.mode': 'updated',
+            'filters.status': 'open',
+            'b.only': { nested: ['fresh'] },
+        }
+        expect(view.result.current.document.nodes[0]).toMatchObject({ position: { x: 31, y: 47 }, data: { config: expected } })
         act(() => view.result.current.actions.undo())
-        expect(view.result.current.document.nodes[0]?.data.config).toEqual({
-            source: 'orders',
-            old_filter: { nested: ['old'] },
-            retained: true,
-        })
-        expect(view.result.current.document.nodes[0]?.data.config).not.toBe(configuredGraph.nodes?.[0]?.config)
+        expect(view.result.current.document.nodes[0]?.data.config).toEqual(configuredGraph.nodes?.[0]?.config)
+        act(() => view.result.current.actions.redo())
+        expect(view.result.current.document.nodes[0]?.data.config).toEqual(expected)
+
+        await act(async () => view.result.current.actions.publish())
+        const publishCall = fetchMock.mock.calls.find(([url]) => url === urls.publish)
+        expect(publishCall).toBeDefined()
+        const body = JSON.parse(String(publishCall?.[1]?.body)) as { graph: Graph }
+        expect(body.graph.nodes?.[0]?.config).toEqual(expected)
+        const draftPayloads = fetchMock.mock.calls
+            .filter(([url]) => url === urls.draft)
+            .map(([, init]) => JSON.parse(String(init?.body)) as { graph: Graph })
+        expect(draftPayloads.map((payload) => payload.graph.nodes?.[0]?.config)).toContainEqual(expected)
     })
 
     it('adds exactly one trigger as start and requires explicit replacement', () => {
@@ -798,14 +838,99 @@ describe('useEditorController', () => {
         expect(view.result.current.nodeInspectorProps?.webhook?.endpoint_url).toBe('https://example.test/hooks/new')
     })
 
-    it('does not let an older publish response overwrite a later successful rotation', async () => {
+    it('syncs same-session webhook metadata prop changes without clearing a newer disclosed secret', async () => {
+        let currentWebhook = { endpoint_url: 'https://example.test/hooks/old', active: false, secret_rotated_at: null as string | null }
+        vi.stubGlobal('fetch', vi.fn((url: string) => url === urls.publish
+            ? Promise.resolve(Response.json({
+                version: 4,
+                draft_revision: 8,
+                webhook_url: 'https://example.test/hooks/published',
+                webhook_secret: 'transient-secret',
+            }))
+            : Promise.resolve(Response.json({ draft_revision: 8 }))))
+        const triggered: Graph = {
+            start: 'hook',
+            nodes: [{ id: 'hook', type: webhook.type, config: { source: 'orders' }, position: { x: 0, y: 0 } }],
+            edges: [],
+        }
+        const view = renderHook(() => useEditorController({
+            flow,
+            graph: triggered,
+            palette: [send, exit],
+            trigger_nodes: [webhook],
+            trigger_sources: { webhook: [{ key: 'orders', driver: 'webhook', label: 'Orders', icon: null, description: null, fields: [], default_config: {} }] },
+            webhook: currentWebhook,
+            urls,
+            autosaveDebounceMs: 1,
+        }))
+        act(() => view.result.current.actions.selectNode('hook'))
+        await act(async () => view.result.current.actions.publish())
+        expect(view.result.current.nodeInspectorProps?.webhookSecret).toBe('transient-secret')
+
+        currentWebhook = {
+            endpoint_url: 'https://example.test/hooks/refreshed',
+            active: true,
+            secret_rotated_at: '2026-08-24T16:00:00Z',
+        }
+        view.rerender()
+
+        expect(view.result.current.nodeInspectorProps?.webhook).toEqual(currentWebhook)
+        expect(view.result.current.nodeInspectorProps?.webhookSecret).toBe('transient-secret')
+    })
+
+    it('reconciles metadata props received during rotation without clobbering the newer rotation result', async () => {
+        let resolveRotation!: (response: Response) => void
+        let currentWebhook = { endpoint_url: 'https://example.test/hooks/old', active: false, secret_rotated_at: null as string | null }
+        vi.stubGlobal('fetch', vi.fn((url: string) => url === urls.rotate_webhook_secret
+            ? new Promise<Response>((resolve) => { resolveRotation = resolve })
+            : Promise.resolve(Response.json({ draft_revision: 8 }))))
+        const triggered: Graph = {
+            start: 'hook',
+            nodes: [{ id: 'hook', type: webhook.type, config: { source: 'orders' }, position: { x: 0, y: 0 } }],
+            edges: [],
+        }
+        const view = renderHook(() => useEditorController({
+            flow,
+            graph: triggered,
+            palette: [send, exit],
+            trigger_nodes: [webhook],
+            trigger_sources: { webhook: [{ key: 'orders', driver: 'webhook', label: 'Orders', icon: null, description: null, fields: [], default_config: {} }] },
+            webhook: currentWebhook,
+            urls,
+            autosaveDebounceMs: 1,
+        }))
+        act(() => view.result.current.actions.selectNode('hook'))
+        act(() => view.result.current.nodeInspectorProps?.onRotateWebhookSecret?.())
+        await waitFor(() => expect(resolveRotation).toBeTypeOf('function'))
+
+        currentWebhook = {
+            endpoint_url: 'https://example.test/hooks/refreshed',
+            active: true,
+            secret_rotated_at: '2026-08-24T15:30:00Z',
+        }
+        view.rerender()
+        await act(async () => resolveRotation(Response.json({
+            secret: 'new-secret',
+            rotated_at: '2026-08-24T16:00:00Z',
+        })))
+
+        expect(view.result.current.nodeInspectorProps?.webhook).toEqual({
+            endpoint_url: 'https://example.test/hooks/refreshed',
+            active: true,
+            secret_rotated_at: '2026-08-24T16:00:00Z',
+        })
+        expect(view.result.current.nodeInspectorProps?.webhookSecret).toBe('new-secret')
+    })
+
+    it('blocks publish while rotation owns the credential operation and still displays the rotation secret', async () => {
         let resolvePublish!: (response: Response) => void
         let resolveRotation!: (response: Response) => void
-        vi.stubGlobal('fetch', vi.fn((url: string) => {
+        const fetchMock = vi.fn((url: string) => {
             if (url === urls.publish) return new Promise<Response>((resolve) => { resolvePublish = resolve })
             if (url === urls.rotate_webhook_secret) return new Promise<Response>((resolve) => { resolveRotation = resolve })
             return Promise.resolve(Response.json({ draft_revision: 8 }))
-        }))
+        })
+        vi.stubGlobal('fetch', fetchMock)
         const triggered: Graph = {
             start: 'hook',
             nodes: [{ id: 'hook', type: webhook.type, config: { source: 'orders' }, position: { x: 0, y: 0 } }],
@@ -817,33 +942,71 @@ describe('useEditorController', () => {
         })
         act(() => view.result.current.actions.selectNode('hook'))
 
-        act(() => { void view.result.current.actions.publish() })
-        await waitFor(() => expect(resolvePublish).toBeTypeOf('function'))
         act(() => view.result.current.nodeInspectorProps?.onRotateWebhookSecret?.())
         await waitFor(() => expect(resolveRotation).toBeTypeOf('function'))
+        act(() => { void view.result.current.actions.publish() })
+        await act(async () => { await Promise.resolve() })
+
+        expect(fetchMock.mock.calls.filter(([url]) => url === urls.publish)).toHaveLength(0)
+        expect(resolvePublish).toBeUndefined()
         await act(async () => resolveRotation(Response.json({
             secret: 'rotated-secret',
             rotated_at: '2026-08-24T15:00:00Z',
-        })))
-        await act(async () => resolvePublish(Response.json({
-            version: 4,
-            draft_revision: 8,
-            webhook_url: 'https://example.test/hooks/current',
-            webhook_secret: 'older-publish-secret',
         })))
 
         expect(view.result.current.nodeInspectorProps?.webhookSecret).toBe('rotated-secret')
         expect(view.result.current.nodeInspectorProps?.webhook?.secret_rotated_at).toBe('2026-08-24T15:00:00Z')
     })
 
-    it('does not let an older rotation response overwrite a later successful publish', async () => {
+    it('blocks rotation while publish owns the credential operation', async () => {
         let resolvePublish!: (response: Response) => void
         let resolveRotation!: (response: Response) => void
-        vi.stubGlobal('fetch', vi.fn((url: string) => {
+        const fetchMock = vi.fn((url: string) => {
             if (url === urls.publish) return new Promise<Response>((resolve) => { resolvePublish = resolve })
             if (url === urls.rotate_webhook_secret) return new Promise<Response>((resolve) => { resolveRotation = resolve })
             return Promise.resolve(Response.json({ draft_revision: 8 }))
-        }))
+        })
+        vi.stubGlobal('fetch', fetchMock)
+        const triggered: Graph = {
+            start: 'hook',
+            nodes: [{ id: 'hook', type: webhook.type, config: { source: 'orders' }, position: { x: 0, y: 0 } }],
+            edges: [],
+        }
+        const view = controller({
+            graph: triggered,
+            webhook: { endpoint_url: 'https://example.test/hooks/current', active: true, secret_rotated_at: null },
+        })
+        act(() => view.result.current.actions.selectNode('hook'))
+
+        act(() => { void view.result.current.actions.publish() })
+        await waitFor(() => expect(resolvePublish).toBeTypeOf('function'))
+        act(() => view.result.current.nodeInspectorProps?.onRotateWebhookSecret?.())
+
+        expect(fetchMock.mock.calls.filter(([url]) => url === urls.rotate_webhook_secret)).toHaveLength(0)
+        expect(resolveRotation).toBeUndefined()
+        await act(async () => resolvePublish(Response.json({
+            version: 4,
+            draft_revision: 8,
+            webhook_url: 'https://example.test/hooks/current',
+        })))
+
+        expect(view.result.current.nodeInspectorProps?.webhookSecret).toBeNull()
+        expect(view.result.current.nodeInspectorProps?.webhook?.secret_rotated_at).toBeNull()
+    })
+
+    it('releases the shared credential barrier after rotation and publish failures', async () => {
+        let rotations = 0
+        const fetchMock = vi.fn(async (url: string) => {
+            if (url === urls.rotate_webhook_secret) {
+                rotations += 1
+                return rotations === 1
+                    ? Response.json({ message: 'private failure details' }, { status: 500 })
+                    : Response.json({ secret: 'recovered-secret', rotated_at: '2026-08-24T16:30:00Z' })
+            }
+            if (url === urls.publish) return Response.json({ message: 'publish failed' }, { status: 500 })
+            return Response.json({ draft_revision: 8 })
+        })
+        vi.stubGlobal('fetch', fetchMock)
         const triggered: Graph = {
             start: 'hook',
             nodes: [{ id: 'hook', type: webhook.type, config: { source: 'orders' }, position: { x: 0, y: 0 } }],
@@ -856,21 +1019,12 @@ describe('useEditorController', () => {
         act(() => view.result.current.actions.selectNode('hook'))
 
         act(() => view.result.current.nodeInspectorProps?.onRotateWebhookSecret?.())
-        await waitFor(() => expect(resolveRotation).toBeTypeOf('function'))
-        act(() => { void view.result.current.actions.publish() })
-        await waitFor(() => expect(resolvePublish).toBeTypeOf('function'))
-        await act(async () => resolvePublish(Response.json({
-            version: 4,
-            draft_revision: 8,
-            webhook_url: 'https://example.test/hooks/current',
-            webhook_secret: 'newer-publish-secret',
-        })))
-        await act(async () => resolveRotation(Response.json({
-            secret: 'older-rotation-secret',
-            rotated_at: '2026-08-24T15:00:00Z',
-        })))
+        await waitFor(() => expect(view.result.current.nodeInspectorProps?.webhookRotationError).toMatch(/could not rotate/i))
+        await act(async () => view.result.current.actions.publish())
+        expect(fetchMock.mock.calls.filter(([url]) => url === urls.publish)).toHaveLength(1)
 
-        expect(view.result.current.nodeInspectorProps?.webhookSecret).toBe('newer-publish-secret')
-        expect(view.result.current.nodeInspectorProps?.webhook?.secret_rotated_at).toBeNull()
+        act(() => view.result.current.nodeInspectorProps?.onRotateWebhookSecret?.())
+        await waitFor(() => expect(view.result.current.nodeInspectorProps?.webhookSecret).toBe('recovered-secret'))
+        expect(fetchMock.mock.calls.filter(([url]) => url === urls.rotate_webhook_secret)).toHaveLength(2)
     })
 })

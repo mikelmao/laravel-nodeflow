@@ -1,4 +1,4 @@
-import type { ReactNode } from 'react'
+import { useId, type ReactNode } from 'react'
 import { NodeflowIcon } from '../presentation/icons'
 
 export type SaveIndicator = {
@@ -25,6 +25,7 @@ export type EditorToolbarProps = {
     validation: ValidationIndicator
     publish: PublishIndicator
     publishDisabledReason?: string | null
+    credentialBusy?: boolean
     canUndo: boolean
     canRedo: boolean
     hasSelection: boolean
@@ -78,12 +79,15 @@ function SecondaryActions({ props, compact = false }: { props: EditorToolbarProp
 
 /** Package-owned workflow context and command controls; server/controller state stays outside. */
 export function EditorToolbar(props: EditorToolbarProps) {
+    const publishDescriptionId = `nodeflow-publish-description-${useId().replace(/:/g, '')}`
     const saveText = saveCopy(props.save)
     const validationText = validationCopy(props.validation)
     const publishedContext = props.publishedVersion === null ? 'Not published' : `Published v${props.publishedVersion}`
     const publishText = props.publish.status === 'published'
         ? `Published v${props.publish.version ?? props.publishedVersion ?? ''}`.trim()
         : props.publish.status === 'publishing' ? 'Publishing' : 'Publish'
+    const publishDescription = props.publishDisabledReason
+        ?? (props.publish.status === 'publishing' ? 'Publishing is in progress.' : 'Flow is ready to publish.')
 
     return <header className="flex flex-wrap items-center gap-3 border-b border-border bg-background px-4 py-3 text-foreground">
         {props.slots?.leading}
@@ -114,7 +118,8 @@ export function EditorToolbar(props: EditorToolbarProps) {
                 <span>Validate</span>
                 <span className="text-xs">{validationText}</span>
             </button>
-            <button type="button" aria-label="Publish" title={props.publishDisabledReason ?? props.publish.message ?? publishText} disabled={props.publish.status === 'publishing' || props.publishDisabledReason != null} onClick={props.onPublish} className="inline-flex items-center gap-1.5 rounded-md bg-primary px-3 py-1.5 text-sm font-medium text-primary-foreground hover:bg-primary/90 disabled:cursor-not-allowed disabled:opacity-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring">
+            <span id={publishDescriptionId} role="status" aria-live="polite" aria-label="Publish readiness" className="sr-only">{publishDescription}</span>
+            <button type="button" aria-label="Publish" aria-describedby={publishDescriptionId} aria-busy={props.credentialBusy ?? props.publish.status === 'publishing'} title={props.publishDisabledReason ?? props.publish.message ?? publishText} disabled={props.publish.status === 'publishing' || props.publishDisabledReason != null} onClick={props.onPublish} className="inline-flex items-center gap-1.5 rounded-md bg-primary px-3 py-1.5 text-sm font-medium text-primary-foreground hover:bg-primary/90 disabled:cursor-not-allowed disabled:opacity-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring">
                 <NodeflowIcon name={props.publish.status === 'error' ? 'alert' : 'play'} className="size-4" />
                 <span>{publishText}</span>
             </button>

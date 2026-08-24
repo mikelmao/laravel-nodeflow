@@ -109,6 +109,26 @@ describe('FlowOverview', () => {
         expect(screen.getByText(copy)).toBeInTheDocument()
     })
 
+    it('announces trigger readiness changes as a polite status', () => {
+        const view = overview({ triggerReadiness: 'The selected trigger source is not compatible with this trigger.' })
+        const readiness = screen.getByRole('status', { name: 'Flow readiness' })
+        expect(readiness).toHaveAttribute('aria-live', 'polite')
+        expect(readiness).toHaveTextContent(/not compatible/i)
+
+        view.rerender(<FlowOverview {...{
+            flow: { name: 'Welcome sequence' },
+            trigger: { label: 'Order placed', type: 'orders.placed' },
+            triggerReadiness: null,
+            publishedVersion: 4,
+            nodeCount: 3,
+            connectionCount: 2,
+            startNodeId: 'send1',
+            validation: { status: 'valid' as const },
+            issues: [], warnings: [], errors: [], unknownTypes: [], unresolvedOutputs: [],
+        }} />)
+        expect(readiness).toHaveTextContent('Ready to publish')
+    })
+
     it('keeps local diagnostics and ordered graph issues visible regardless of server validation', () => {
         const onIssueSelect = vi.fn()
         const placeable = { node: 'send1', field: 'template', message: 'Template is required', placeable: true }
