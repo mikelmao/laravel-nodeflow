@@ -83,7 +83,6 @@ On creation, an event-firing tenant-scoped model receives the current tenant ID 
 
 $flow = \Nodeflow\Models\Flow::create([
     'name' => 'Renewal reminder',
-    'trigger_type' => 'manual',
     'status' => 'draft',
 ]);
 
@@ -101,13 +100,19 @@ Some relations intentionally remove their own tenant scope after their parent wa
 
 On event-firing Eloquent model-instance writes, `Flow` validates `current_version_id` in its `creating` hook and whenever `current_version_id` or `tenant_id` changes in its `updating` hook. `Run` applies the corresponding `creating` and invariant-changing `updating` hooks to `flow_version_id`. `Flow.current_version_id` may be null; `Run.flow_version_id` may not. Each guard resolves the referenced `FlowVersion` without the tenant scope, rejects a missing reference with `InvalidFlowVersionReferenceException`, and rejects a tenant mismatch with `CrossTenantWriteException`.
 
-The `Flow` guard proves that a referenced version exists and has the Flow's tenant; it does not prove that the version belongs to that same Flow. These guards apply to new or updated event-firing model instances and do not audit existing rows.
+The `Flow` guard proves that a referenced version exists, has the Flow's tenant, and belongs to that same Flow. `FlowVersion` creation inherits and verifies the parent flow tenant and freezes `flow_id` on later event-firing writes. `TriggerActivation` creation verifies that its flow, version, and tenant form one tuple, then treats all routing fields as immutable. These guards apply to new or updated event-firing model instances and do not audit existing rows.
 
 `TenancyGuardSuspension` does not bypass these structural version-reference guards. Durable `RunNodeActivity` independently compares the persisted run and version tenants and throws `CrossTenantExecutionException` before it increments `steps_taken` or invokes a node.
 
 Do not accept `flow_id`, `current_version_id`, or `flow_version_id` from untrusted request input. A flow version must inherit its flow’s tenant, and a run must point to a version from the same tenant. Query-builder updates, raw SQL, and event-suppressed writes—including `saveQuietly()`, `updateQuietly()`, and `Model::withoutEvents()`—bypass Eloquent model events, including these guards. Keep version and tenant foreign-key writes on event-firing model instances; when a trusted service suppresses events, it must perform equivalent explicit existence and tenant checks. Do not treat `withoutTenancy()` as write authorization.
 
 `RunSubject` and `NodeExecution` have no `tenant_id`. Reach them through `Run::subjects()` and `Run::nodeExecutions()` after the `Run` itself was tenant-scoped, rather than starting from an unscoped child query. Their isolation depends on the scoped parent run remaining correct.
+
+## Trigger fan-out and tenant audiences
+
+Trigger activation discovery is intentionally a tenant-neutral system read across active flows. Isolation is restored at the source boundary: each `TriggerActivationSnapshot` carries its persisted tenant, `TriggerOccurrenceDispatcher` selects only that tenant's `TriggerMatch`, and `TriggerRunStarter` verifies every subject with `TenantResolver::ownsSubject()` before creating a run. A source that returns audiences for several tenants therefore cannot move one activation into another tenant.
+
+Model and Laravel-event listeners can fan out across active tenant activations. They snapshot the matching activation rows before source extension code runs. Webhook delivery resolves one token to one active activation and requires exactly one non-empty audience for its tenant. Do not use ambient request tenancy to narrow a system trigger listener; return explicit tenant IDs from trusted, value-only source data instead.
 
 ## Next step
 

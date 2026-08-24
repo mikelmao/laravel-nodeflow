@@ -17,14 +17,18 @@ import type {
     NodeRendererMap,
     NodeTypePayload,
     ToolbarSlots,
-    TriggerPayload,
+    TriggerNodeTypePayload,
+    TriggerSourcesPayload,
+    WebhookMetadata,
 } from '@nodeflow/editor'
 
 export type FlowEditorProps = {
     flow: FlowSummary
     graph: Graph
     palette: NodeTypePayload[]
-    triggers: TriggerPayload[]
+    trigger_nodes: TriggerNodeTypePayload[]
+    trigger_sources: TriggerSourcesPayload
+    webhook: WebhookMetadata | null
     urls: EditorUrls
     controls?: ControlMap
     nodeRenderers?: NodeRendererMap
@@ -68,7 +72,7 @@ For a page, dialog, or panel that provides its own constrained frame, choose the
 
 The editor inherits the host's semantic theme tokens in either mode. It requires no new dependency and no CSS installation step.
 
-`urls.draft`, `urls.validate`, `urls.publish`, and `urls.options` are server-owned. The options URL is a template containing `__NODEFLOW_TYPE__` and `__NODEFLOW_FIELD__`; the package replaces those sentinels with encoded values. Never reconstruct these URLs from a flow ID or a route string in the browser—your host's prefix, domain, and route-name configuration have already been resolved on the server.
+`urls.draft`, `urls.validate`, `urls.publish`, and `urls.options` are server-owned, as are `rotate_webhook_secret`, `trigger_options`, and `trigger_source_options`. Option URLs are templates containing encoded type/source/field sentinels. Never reconstruct these URLs from a flow ID or route string in the browser—your host's prefix, domain, and route-name configuration have already been resolved on the server.
 
 The package's HTTP helper sends same-origin requests with JSON, `Accept: application/json`, and `X-Requested-With: XMLHttpRequest`. It reads Laravel's decoded `XSRF-TOKEN` cookie first and falls back to a `meta[name="csrf-token"]` tag. Keep normal Laravel session/CSRF middleware on the containing route group; a 419 from a draft save stops autosave and tells the author to reload. The later publish-results table describes the separate behavior of a publish `POST` 419.
 
@@ -84,7 +88,9 @@ The flow's `version` reports the current published version even while the draft 
 
 ## Build and navigate a graph
 
-Use the **Node Library** to search node labels, groups, descriptions, and type names. Click a result to add it at a sensible open canvas position, or drag it onto the canvas to place it at the drop point, nudged only when needed to avoid overlap. Select a card to configure fields in **Configure**; use **Advanced** for node metadata, making a node the start, or deletion. With no selection, the inspector shows **Flow Overview** and its readiness issues.
+Use the **Node Library** to search executable labels, groups, descriptions, and type names. Its **Trigger Library** lists the server-authored trigger palette separately. A graph can contain only one trigger: choosing another asks for confirmation and replaces the existing trigger while preserving the one-trigger invariant. A trigger is disabled with “No compatible trigger source is registered” until the host registers an allowlisted source for its driver.
+
+Click an executable result to add it at a sensible open canvas position, or drag it onto the canvas to place it at the drop point, nudged only when needed to avoid overlap. Select a card to configure fields in **Configure**; source fields are merged into the trigger's flat config after `source` is selected. With no selection, the inspector shows **Flow Overview**, trigger readiness, and webhook details when applicable.
 
 The package toolbar and canvas expose the same actions for pointer and keyboard users:
 
@@ -131,6 +137,12 @@ The publish results are intentionally separate:
 | Other HTTP status or network failure | Shows a publish-request failure without discarding the local graph. The failed `POST` releases the barrier; later graph changes can autosave. |
 
 > **Note:** A valid draft is not necessarily publishable. Publishing is the point at which graph meaning, node types, and field values are validated.
+
+## Handle webhook credentials
+
+Publishing a webhook flow for the first time can return an endpoint and one-time signing secret. The editor keeps that plaintext only in component state, offers copy controls, and requires explicit acknowledgement before hiding it. It is not present when the editor is reloaded and cannot be recovered; rotate it if it was not stored safely.
+
+Rotation uses `urls.rotate_webhook_secret`, asks for confirmation, and replaces the secret immediately. The old secret stops authenticating as soon as rotation succeeds. The page displays endpoint availability, activation status, and the last rotation timestamp, but server props never contain the encrypted or plaintext stored secret.
 
 ## Next step
 

@@ -2,6 +2,6 @@
 
 namespace Nodeflow\Triggers\Webhook;
 
-use Nodeflow\Contracts\TriggerSource;
+use Nodeflow\Contracts\TriggerSource as SourceContract;
 
-interface WebhookTriggerSource extends TriggerSource {}
+interface WebhookTriggerSource extends SourceContract {}

@@ -81,7 +81,7 @@ public function start(\Illuminate\Http\Request $request, \Nodeflow\Models\Flow $
 }
 ```
 
-`PublishFlow` and `StartRun` are direct actions: neither authorizes itself. Put them behind an authenticated host route or service boundary and use `authorize()` or `Gate::authorize()` before invoking them. The [Quick start](../getting-started/quick-start.md#publish-and-start-a-flow) shows a fuller controller that also validates subject ownership.
+`PublishFlow` and `StartRun` are direct actions: neither authorizes itself. Put them behind an authenticated host route or service boundary and use `authorize()` or `Gate::authorize()` before invoking them. The [Quick start](../getting-started/quick-start.md#create-and-publish-the-graph) shows a publication call; direct manual-start code must also validate subject ownership.
 
 ## Use Gate::before carefully
 

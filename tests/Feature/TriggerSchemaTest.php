@@ -89,8 +89,8 @@ it('stores trigger activations, webhook endpoints, and run origins in the base s
             'started_via', 'trigger_node_id', 'trigger_data', 'engine_entry_node_id',
             'engine_dispatch_status', 'engine_dispatch_error',
         ]))->toBeTrue()
-        ->and(Schema::hasColumn('nodeflow_flows', 'trigger_type'))->toBeFalse()
-        ->and(Schema::hasColumn('nodeflow_flows', 'trigger_config'))->toBeFalse();
+        ->and(Schema::hasColumn('nodeflow_flows', 'trigger'.'_type'))->toBeFalse()
+        ->and(Schema::hasColumn('nodeflow_flows', 'trigger'.'_config'))->toBeFalse();
 
     $activationIndexes = collect(Schema::getIndexes('nodeflow_trigger_activations'));
     $endpointIndexes = collect(Schema::getIndexes('nodeflow_webhook_endpoints'));

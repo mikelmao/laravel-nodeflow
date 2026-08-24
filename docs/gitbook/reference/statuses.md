@@ -15,7 +15,7 @@ No package lifecycle transition writes a flow back to `draft`, and the schema ac
 
 | Value | Current writer | Current use |
 | --- | --- | --- |
-| `pending` | `StartRun` (also the database default). | Run and subjects were persisted; the engine workflow has not yet loaded the graph. |
+| `pending` | `CreateRun` (also the database default). | Run and subjects were persisted; the engine workflow has not yet loaded the graph. |
 | `running` | `LoadGraphActivity`. | The engine loaded the pinned graph and recorded `started_at`. |
 | `completed` | `CompleteRunActivity`. | The interpreter loop ended and recorded `ended_at`. This is the only status the overlay currently treats as terminal. |
 
@@ -32,13 +32,27 @@ The schema allows every value in the next table, but the package currently has n
 
 There is no lifecycle reconciler between the durable engine and `nodeflow_runs`. An engine activity failure, an engine cancellation, or an interpreter stop at `nodeflow.limits.max_steps_per_run` can therefore leave a run as `pending` or `running` (or leave active subjects) rather than writing a terminal failure status. The max-steps guard ends the loop normally, so the completion activity can mark the run `completed` while subjects remain at an unprocessed node.
 
+## Engine dispatch status and run origin
+
+`engine_dispatch_status` is distinct from run `status`:
+
+| Value | Meaning |
+| --- | --- |
+| `pending` | Run, audience, exact `engine_entry_node_id`, and dispatch intent are persisted; engine start is not yet confirmed. |
+| `dispatched` | `engine_workflow_id` is persisted for the deterministic workflow identity. |
+| `failed` | Initial dispatch failed; `engine_dispatch_error` contains only `Workflow dispatch failed; recovery required.` and retry/recovery may resume it. |
+
+`RetryRunDispatch` tries recovery three times with 10- and 60-second backoffs. A recovered run moves to `dispatched` without changing its audience, pinned version, trigger origin, or entry node.
+
+`started_via` records `manual`, `subflow`, or the stable trigger driver key (`webhook`, `model`, `event`, or an extension key). `trigger_node_id` always records the published graph trigger even though trigger nodes are declarative and are never executed. `trigger_data` is the source-owned value snapshot for a trigger start, null for manual starts, and inherited from the parent for sub-flow starts.
+
 ## Run-subject status
 
 Each `nodeflow_run_subjects` row is the current state of one unique `(run_id, subject_type, subject_id)` pair, not a visit history.
 
 | Value | Current writer | Cursor, timestamp, and error semantics |
 | --- | --- | --- |
-| `active` | `AudienceMaterialiser`. | Starts at the graph start node. It remains active while waiting at or moving between nodes; `current_node_id` names its current node. |
+| `active` | `AudienceMaterialiser`. | Starts at the executable target of the trigger's `started` edge. It remains active while waiting at or moving between executable nodes; `current_node_id` names its current node. |
 | `completed` | `NodeRunner` when an output has no target, or when a processed subject returns no output/failure. | `current_node_id` is set to `null`. No completion timestamp is stored. |
 | `failed` | `NodeRunner` when a node returns a subject failure or throws during subject execution. | `current_node_id` is set to `null`; `last_error` stores the failure message. No failure timestamp is stored. |
 | `exited` | `SubjectExiter`. | `current_node_id` is set to `null` and `exited_at` is set. |

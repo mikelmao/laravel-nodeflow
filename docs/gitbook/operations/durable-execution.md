@@ -14,7 +14,7 @@ Node authors should keep all externally visible work in `HandlesSubject::forSubj
 
 ## Follow the cursor
 
-`InterpreterLoop` begins with the graph start node. For each cursor node it emits a `RunNodeStep`; a `core.wait` emits a `WaitStep` immediately before its node step. The node activity returns the IDs of target nodes that now contain subjects. The next cursor is the merged target list with duplicate node IDs removed.
+`InterpreterLoop` begins with the persisted `engine_entry_node_id`: the executable target of the declarative trigger node's one `started` edge. It never executes the trigger node. For each cursor node it emits a `RunNodeStep`; a `core.wait` emits a `WaitStep` immediately before its node step. The node activity returns the IDs of target nodes that now contain subjects. The next cursor is the merged target list with duplicate node IDs removed.
 
 That deduplication means a convergent branch executes the shared node once per cursor round, even if two outputs point to it. Subjects are still advanced by the node runner; the interpreter only deduplicates the node work item.
 

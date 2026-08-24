@@ -1,52 +1,82 @@
 # Laravel Nodeflow
 
-Laravel Nodeflow is a visual workflow builder and durable execution engine that lets your application users compose approved, long-running automations while your application retains control of its tenants, subjects, authorization rules, and domain-specific actions.
+Laravel Nodeflow is a visual workflow builder and durable Laravel execution engine. Applications own tenants, subjects, authorization, trigger sources, and domain nodes; Nodeflow owns graph authoring, immutable publication, idempotent run creation, durable dispatch, and inspection.
 
-> **Experimental:** Nodeflow is pre-release software. Review the [experimental project status](docs/gitbook/experimental/project-status.md) and [known limitations](docs/gitbook/experimental/known-limitations.md), then test it carefully before relying on it for production automations.
+> **Experimental:** the package is pre-release. Test every workflow and side effect before production use.
 
-The current release-readiness record includes a completed
-[real-browser demo acceptance pass](docs/superpowers/plans/2026-08-22-plan-7-release-readiness-execution-record.md#post-plan-8-g-5-closure-rerun-pass),
-including the editor, durable click/convert branches, run inspection, request and console
-cleanliness, and logout protection. This evidence does not change the experimental status above.
+## What a flow starts with
 
-## Requirements
+Every publishable graph contains exactly one trigger node. `graph.start` names that trigger, the trigger has no incoming edges, and it has exactly one `started` edge to an executable node. Trigger nodes are declarative and are never executed by the interpreter.
 
-Nodeflow requires PHP `^8.3`, Laravel 12 or 13 (`illuminate/console`, `filesystem`, `support`, and `database` `^12.0|^13.0`), and `durable-workflow/workflow ^2.0@rc`. Editor routes additionally need `inertiajs/inertia-laravel ^2.0`; durable execution needs a queue connection other than `sync`.
+Three trigger node types ship by default:
+
+| Type | Driver | Starts from |
+| --- | --- | --- |
+| `core.trigger.webhook` | `webhook` | An authenticated public webhook request |
+| `core.trigger.model_observer` | `model` | An allowlisted Eloquent `created`, `updated`, `deleted`, or `restored` event |
+| `core.trigger.laravel_event` | `event` | An allowlisted concrete Laravel event class |
+
+The built-in drivers and graph nodes are registered unconditionally. A host registers only explicit, application-owned source classes. This prevents authors from entering arbitrary model names, event names, or service classes.
 
 ## Install
 
 ```bash
 composer require atram/laravel-nodeflow
 php artisan nodeflow:install
-php artisan migrate
+php artisan nodeflow:install --check
 ```
 
-## Capabilities
+Mount authenticated editor routes in a host-owned group. Mount the webhook route separately so its domain, rate limiting, and public middleware are deliberate:
 
-- Durable waits, resumption, and subject cancellation for long-running workflows.
-- Package-managed published-version snapshots that keep existing runs on their original graphs.
-- Custom nodes, triggers, and subject attributes for application-defined behavior.
-- Opt-in Inertia editor and run-inspection clients.
-- Health checks, pruning, package scaffolding, and node extraction tooling.
+```php
+use Illuminate\Support\Facades\Route;
+use Nodeflow\Nodeflow;
 
-## Tenancy safety
+Route::middleware(['web', 'auth'])
+    ->prefix('admin/nodeflow')
+    ->group(fn () => Nodeflow::routes());
 
-`nodeflow.tenancy=auto` inspects the bound `TenantResolver`: Nodeflow's fallback permits unscoped
-reads when the host has no tenancy, while a host resolver returning null fails closed. Inspect the
-effective decision with `app(\Nodeflow\Tenancy\TenancyDecisionResolver::class)->decision()` or run
-`php artisan nodeflow:install --check`.
+Route::middleware(['api', 'throttle:webhooks'])
+    ->domain('hooks.example.com')
+    ->group(fn () => Nodeflow::webhookRoutes());
+```
 
-Event-firing Eloquent model-instance writes reject missing or cross-tenant
-`Flow.current_version_id` and `Run.flow_version_id` references. Durable node execution
-independently refuses a persisted run/version tenant mismatch before incrementing or invoking a node.
-Query-builder, raw-SQL, and event-suppressed writes—including `saveQuietly()`, `updateQuietly()`,
-and `Model::withoutEvents()`—bypass Eloquent model guards, so keep version and tenant foreign-key
-writes on event-firing model instances or in equivalently validated trusted services.
+Register host trigger sources after Nodeflow's provider has registered the built-in drivers and nodes:
 
-For mode details and integration guidance, see [Tenancy](docs/gitbook/integration/tenancy.md).
+```php
+public function boot(): void
+{
+    Nodeflow::registerTriggerSources($this->triggerSources);
+}
+```
+
+The editor shows an empty-state explanation until a compatible source is registered. Publishing compiles the selected source and routing metadata into an immutable activation pinned to the new flow version.
+
+## Extensible by contract
+
+Applications can implement `TriggerSource` for an existing driver, subclass `AbstractTriggerNode` to give an existing driver a new authoring shape, or implement `TriggerDriver` and pair it with a reference trigger node. Register dependencies in driver → node → source order:
+
+```php
+Nodeflow::registerTriggerDrivers($this->triggerDrivers);
+Nodeflow::registerTriggerNodes($this->triggerNodes);
+Nodeflow::registerTriggerSources($this->triggerSources);
+```
+
+Generate the corresponding starting points with `nodeflow:make-trigger`, `nodeflow:make-trigger-source`, and `nodeflow:make-trigger-driver`.
 
 ## Documentation
 
-The [GitBook documentation](docs/gitbook/README.md) is the canonical guide. Start with the [quick start](docs/gitbook/getting-started/quick-start.md), follow the [flood-alert example application](docs/gitbook/example-application/overview.md), review the [experimental status](docs/gitbook/experimental/project-status.md), or see [contributing](docs/gitbook/contributing/architecture.md).
+- [Quick start](docs/gitbook/getting-started/quick-start.md)
+- [Writing triggers](docs/gitbook/building-automations/writing-triggers.md)
+- [Starting runs](docs/gitbook/building-automations/starting-runs.md)
+- [Route reference](docs/gitbook/reference/routes.md)
+- [Database schema](docs/gitbook/reference/database-schema.md)
+- [Testing](docs/gitbook/contributing/testing.md)
 
-The numbered guides in `docs/01-*.md` through `docs/09-*.md` remain as legacy references; use the GitBook for current documentation.
+## Deliberate limits
+
+Schedules are not supported. Unsigned webhooks are not supported. Authors cannot enter arbitrary model or event class names. Expression interpolation is not supported. Multiple trigger nodes are not supported. Eloquent query-builder bulk updates are not observed.
+
+## License
+
+MIT.

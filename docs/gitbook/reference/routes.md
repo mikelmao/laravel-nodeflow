@@ -1,101 +1,76 @@
 # Route reference
 
-Nodeflow registers eight routes when the host calls `Nodeflow::routes()`. The package declares neither a URL prefix, middleware, domain, nor authentication; the containing host route group owns all of those choices.
+Nodeflow registers eleven authenticated routes when the host calls `Nodeflow::routes()` and one separate public webhook route when the host calls `Nodeflow::webhookRoutes()`. Neither method declares a prefix, domain, or middleware; the host owns those boundaries.
 
-## Register the routes
-
-**Outcome:** this simple, unprefixed-name setup exposes the editor and run view below `/nodeflow` while leaving the canonical names unchanged.
+## Mount routes
 
 ```php
 use Illuminate\Support\Facades\Route;
 use Nodeflow\Nodeflow;
 
 Route::middleware(['web', 'auth'])
-    ->prefix('nodeflow')
+    ->prefix('admin/nodeflow')
     ->group(fn () => Nodeflow::routes());
+
+Route::middleware(['api', 'throttle:webhooks'])
+    ->domain('hooks.example.com')
+    ->group(fn () => Nodeflow::webhookRoutes());
 ```
 
-Use middleware appropriate to the host; the package policies do not authenticate a request on their own. Define the required host gates as described in [Authorization](../integration/authorization.md). The host also owns the page shell required by the returned Inertia pages.
+The authenticated group requires the host's Inertia page shell and authorization gates. The public webhook group should use an API/CSRF-appropriate middleware stack, strict domain, host rate limiting, trusted proxy configuration, and any network controls the application needs. HMAC authentication remains mandatory regardless of middleware.
 
-## Routes
+Hosts may apply route-name prefixes. Nodeflow resolves authenticated URLs by canonical suffix, and a uniquely prefixed public webhook name can still produce an endpoint URL. If a domain group has unresolved parameters, publication succeeds but returns a null URL; the host can supply its own resolved URL later.
 
-The names below are the canonical, unprefixed names registered by the package. `FlowPolicy` delegates `update` and `publish` to the similarly named host gates. `RunPolicy::view` delegates to `nodeflow.viewAny`. An undefined gate denies access.
+## Authenticated editor and run routes
 
-| Method | Relative URI | Canonical name | Response | Controller purpose | Policy ability / host gate |
-| --- | --- | --- | --- | --- | --- |
-| `GET` | `flows/{flow}/edit` | `nodeflow.flows.edit` | Inertia `nodeflow/editor` page | Supplies the flow, draft-or-current graph, palette, triggers, and server-authored URLs. | `update` / `nodeflow.update` |
-| `PUT` | `flows/{flow}/draft` | `nodeflow.flows.draft` | JSON | Structurally validates and saves a draft with its revision token. | `update` / `nodeflow.update` |
-| `POST` | `flows/{flow}/validate` | `nodeflow.flows.validate` | JSON | Runs semantic graph validation without mutating the flow. | `publish` / `nodeflow.publish` |
-| `POST` | `flows/{flow}/publish` | `nodeflow.flows.publish` | JSON | Validates and creates the next published flow version. | `publish` / `nodeflow.publish` |
-| `GET` | `flows/{flow}/nodes/{type}/fields/{field}/options` | `nodeflow.fields.options` | JSON | Resolves a registered node field's dynamic options. | `update` / `nodeflow.update` |
-| `GET` | `runs/{run}` | `nodeflow.runs.show` | Inertia `nodeflow/run` page | Supplies a run's pinned graph, overlay, palette, and server-authored URLs. | `view` / `nodeflow.viewAny` |
-| `GET` | `runs/{run}/overlay` | `nodeflow.runs.overlay` | JSON | Returns only the current overlay snapshot. | `view` / `nodeflow.viewAny` |
-| `GET` | `runs/{run}/nodes/{node}/subjects` | `nodeflow.runs.subjects` | JSON | Cursor-paginates active subjects at one node of the pinned graph. | `view` / `nodeflow.viewAny` |
+| Method | Relative URI | Canonical name | Ability |
+| --- | --- | --- | --- |
+| `GET` | `flows/{flow}/edit` | `nodeflow.flows.edit` | `update` / `nodeflow.update` |
+| `PUT` | `flows/{flow}/draft` | `nodeflow.flows.draft` | `update` / `nodeflow.update` |
+| `POST` | `flows/{flow}/validate` | `nodeflow.flows.validate` | `publish` / `nodeflow.publish` |
+| `POST` | `flows/{flow}/publish` | `nodeflow.flows.publish` | `publish` / `nodeflow.publish` |
+| `POST` | `flows/{flow}/webhook-secret/rotate` | `nodeflow.webhooks.secret.rotate` | `update` / `nodeflow.update` |
+| `GET` | `flows/{flow}/nodes/{type}/fields/{field}/options` | `nodeflow.fields.options` | `update` / `nodeflow.update` |
+| `GET` | `flows/{flow}/trigger-nodes/{type}/fields/{field}/options` | `nodeflow.trigger-fields.options` | `update` / `nodeflow.update` |
+| `GET` | `flows/{flow}/trigger-nodes/{type}/sources/{source}/fields/{field}/options` | `nodeflow.trigger-source-fields.options` | `update` / `nodeflow.update` |
+| `GET` | `runs/{run}` | `nodeflow.runs.show` | `view` / `nodeflow.viewAny` |
+| `GET` | `runs/{run}/overlay` | `nodeflow.runs.overlay` | `view` / `nodeflow.viewAny` |
+| `GET` | `runs/{run}/nodes/{node}/subjects` | `nodeflow.runs.subjects` | `view` / `nodeflow.viewAny` |
 
-The options route accepts a node *type* and field *key*, never a class name. Unknown types, undeclared fields, and fields without a dynamic option source return `404`; an options response is `{"options": {}}` when the source has no options.
+Tenant-scoped route binding returns `404` before authorization for foreign flow/run IDs. Undefined host gates deny access. Option routes accept stable registered type/source/field keys, never PHP class names. Unknown, incompatible, non-dynamic, or undeclared choices return `404`; an empty dynamic source returns `{"options":{}}`.
 
-## Draft, validation, and publish responses
+## Authoring responses
 
-`PUT` draft returns the revision that must be sent with the next draft save:
+Draft save returns the next revision:
 
 ```json
-{ "draft_revision": 1 }
+{"draft_revision": 3}
 ```
 
-`POST` publish returns the new per-flow version and the current draft revision:
+Validation is non-mutating. Success is `{"valid":true,"warnings":[]}`. Semantic failure is `422` with `message` set to `The flow is not ready to publish.`, plus `errors` and structured `node_errors`; it does not save a draft or create a version. Publish always validates again.
+
+Publish requires `graph` and nonnegative `draft_revision`. Normal success returns:
 
 ```json
-{ "version": 2, "draft_revision": 1 }
+{"version": 2, "draft_revision": 3}
 ```
 
-Treat either returned `draft_revision` as authoritative. In particular, adopt the publish response's value before the next autosave; publishing does not reset the revision.
+First webhook publication may additionally include `webhook_url` and the one-time `webhook_secret`. When a secret is present the response is `no-store`/`no-cache`. A later publication never reveals the existing secret. Stale draft/publish requests return `409` with the winning graph and revision.
 
-`POST` validate is authorized with `publish` / `nodeflow.publish`, but it does not save a draft or create a version, change `draft_revision`, or publish. A valid graph responds exactly:
+Secret rotation returns only the new `secret` and `rotated_at`, with no-store headers. It requires an existing webhook endpoint and the flow `update` ability.
 
-```json
-{"valid":true,"warnings":[]}
-```
+## Public webhook route
 
-Warnings can be non-empty without invalidating the graph. A semantic failure is HTTP 422 and includes the boolean result, human message, graph messages, node/field messages, and warnings:
+| Method | Relative URI | Canonical name | Authentication |
+| --- | --- | --- | --- |
+| `POST` | `hooks/{token}` | `nodeflow.webhooks.receive` | Token lookup plus required timestamped HMAC |
 
-```json
-{
-  "valid": false,
-  "message": "The flow is not ready to publish.",
-  "errors": ["A start node is required."],
-  "node_errors": [{ "node": null, "field": null, "message": "A start node is required." }],
-  "warnings": []
-}
-```
+Required headers are `X-Nodeflow-Timestamp`, `X-Nodeflow-Signature`, and `Idempotency-Key`. The signature is HMAC-SHA256 over the exact timestamp, a dot, and the exact raw request body. See [Writing triggers](../building-automations/writing-triggers.md#sign-and-send-the-request) for construction and limits.
 
-Malformed request shapes still receive Laravel's normal validation 422 response. Validate is a feedback action, not a publish approval: Publish revalidates the submitted graph before it can create a version.
+The protocol returns `202 Accepted` with `run_id` and `duplicate`; `404` for unknown/inactive/non-webhook tokens; `401` for signature/replay failure; `413` for body size; `422` for idempotency, JSON, or source-audience rejection; and `503` for verification/source/dispatch infrastructure failure. Retry `503` using the identical delivery identity. Public responses never include raw source errors, bodies, tokens, signatures, or secrets.
 
-## Host URL and name prefixes
+## Server-authored editor URLs
 
-The host may add a URI prefix, middleware, domain, and a consistent route-name prefix on the same containing group. For example:
+The editor receives resolved `draft`, `validate`, `publish`, `rotate_webhook_secret`, executable `options`, trigger `trigger_options`, and `trigger_source_options` URLs. Host wrappers must consume these props; do not hardcode package paths or assume an unprefixed route name.
 
-```php
-Route::middleware(['web', 'auth'])
-    ->domain('{account}.example.test')
-    ->prefix('admin')
-    ->name('admin.')
-    ->group(fn () => Nodeflow::routes());
-```
-
-That group registers names such as `admin.nodeflow.flows.edit` and `admin.nodeflow.runs.show`. A request to either Inertia page recovers its own leading name prefix and uses it for sibling URLs, so its `urls` properties continue to point at the host's routes. This support requires the package routes to be registered together under one consistent prefix; do not generate client URLs from the canonical names or hard-code a `/nodeflow` path. Consume the `urls` sent by the editor or run page, including the `__NODEFLOW_TYPE__`, `__NODEFLOW_FIELD__`, and `__NODEFLOW_NODE__` replacement sentinels.
-
-## Binding and authorization behavior
-
-`{flow}` binds through `Flow` and `{run}` through `Run`. With a non-null resolved tenant, both models are tenant-scoped before controller authorization runs. A row from another tenant therefore gives `404`, not `403`, so the response does not reveal that it exists. A same-tenant row which fails the policy gives `403`.
-
-The meaning of a null tenant depends on `nodeflow.tenancy`: the default `auto` mode is unscoped only while the package fallback resolver is installed; `disabled` is unscoped; and `resolver` refuses the scoped read. A non-null tenant always scopes. See [Tenancy](../integration/tenancy.md) for the resolver and mode contract.
-
-`{node}` is a graph node ID, not a database record ID. The subjects endpoint authorizes the route-bound run, then checks that the ID exists in that run's pinned graph before querying. An absent node, including one that exists only in another run's graph, returns `404`; an existing node with no active subjects returns an empty page.
-
-## Error responses
-
-Malformed draft, validate, and publish payloads use Laravel validation responses. A stale draft returns `409` with `message`, `graph`, and `draft_revision`. `graph` is the current persisted draft when one exists, so it can be a raw partial graph; only an absent or empty persisted draft is replaced with the `{ "start": "", "nodes": [], "edges": [] }` skeleton. A semantic validate failure returns `422` with `valid`, `message`, `errors`, `node_errors`, and `warnings`; a semantic publish failure returns `422` with `message`, `errors`, and `node_errors`. See [Graph format](graph-format.md#drafts-publishing-and-errors) for the payload rules and error shape.
-
-## Next step
-
-Use [Graph format](graph-format.md) to build draft and publish payloads, then [Inspecting runs](../editor-and-run-view/inspecting-runs.md) for the run-view response model.
+See [Routes and Inertia](../integration/routes-and-inertia.md) for the host page setup and [Authorization](../integration/authorization.md) for gate signatures.

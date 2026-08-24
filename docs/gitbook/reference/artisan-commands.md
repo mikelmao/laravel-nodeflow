@@ -1,6 +1,6 @@
 # Artisan command reference
 
-These eight commands are registered when Laravel runs in the console. They have no alternate command aliases; `-f` is the only option shortcut.
+These ten commands are registered when Laravel runs in the console. They have no alternate command aliases; `-f` is the only option shortcut.
 
 ## `nodeflow:install`
 
@@ -50,18 +50,49 @@ See [Writing nodes](../building-automations/writing-nodes.md).
 
 ```text
 nodeflow:make-trigger {name}
-    {--event= : The host event class this trigger listens to}
-    {--type= : The stable type identifier, e.g. shop.order_placed}
-    {--force|-f : Overwrite the trigger if it already exists}
+    {--driver= : Registered trigger driver key}
+    {--type= : Stable graph node type}
+    {--force|-f : Overwrite the trigger node if it exists}
 ```
 
-**Outcome:** generates `app/Nodeflow/Triggers/{Name}.php` by default, using a host `stubs/trigger.stub` override when present. It appends the trigger to the host Nodeflow provider when possible; otherwise it prints the exact registry call. A manual-registration outcome exits `0`; invalid input or generator refusal exits `1`.
-
-`--event` is required in non-interactive use and is prompted for interactively. A class that does not yet exist only produces a warning: PHP can render `::class`, but a wrong event class creates a silent trigger. `--type` is prompted or derived from the class name when omitted, with the same lowercase identifier, reserved `core.` prefix, and collision rules as generated nodes. It is not an event alias.
+**Outcome:** generates a `TriggerNode` subclass in `app/Nodeflow/Triggers`, using `stubs/trigger-node.stub` when the host supplies it. The required driver must already be registered. The type defaults from the name when omitted, must use the stable graph-key grammar, must not use the reserved `core.` prefix, and cannot collide with executable or trigger types. Safe provider editing appends it to `$triggerNodes`; otherwise the command prints `Nodeflow::registerTriggerNodes(...)` for manual registration.
 
 ```bash
-php artisan nodeflow:make-trigger StartFloodAlert \
-  --event='App\Events\FloodAlertRaised' --type=flood.alert_raised
+php artisan nodeflow:make-trigger PartnerWebhook \
+  --driver=webhook --type=shop.trigger.partner_webhook
+```
+
+## `nodeflow:make-trigger-source`
+
+```text
+nodeflow:make-trigger-source {name}
+    {--driver= : Registered trigger driver key}
+    {--key= : Stable source key}
+    {--model= : Allowlisted Eloquent model class for the model driver}
+    {--event= : Allowlisted event class for the event driver}
+    {--force|-f : Overwrite the source if it exists}
+```
+
+**Outcome:** generates a host allowlist source, selects the specialized interface and typed payload guard for each built-in driver, and appends it to `$triggerSources` when safe. `--model` is required for `model`; `--event` is required for `event`; those two options are rejected for nonmatching drivers. A source key is unique within its driver and uses the 191-byte stable-key grammar.
+
+```bash
+php artisan nodeflow:make-trigger-source FloodAlertSource \
+  --driver=event --key=flood.alert \
+  --event='App\Events\FloodAlertRaised'
+```
+
+## `nodeflow:make-trigger-driver`
+
+```text
+nodeflow:make-trigger-driver {name}
+    {--key= : Stable trigger driver key}
+    {--force|-f : Overwrite the complete extension kit}
+```
+
+**Outcome:** atomically generates a driver, a reference trigger node, and a Pest registration test. The reference node type is `{key}.trigger`. Provider editing registers driver then node; a manual fallback prints those two facade calls in the same order. `--force` applies to the complete kit, not one file.
+
+```bash
+php artisan nodeflow:make-trigger-driver QueueTriggerDriver --key=queue
 ```
 
 See [Writing triggers](../building-automations/writing-triggers.md).
@@ -139,7 +170,7 @@ See [Extracting nodes](../node-packages/extracting-nodes.md).
 nodeflow:check-node-types
 ```
 
-**Outcome:** read-only check of every node type referenced by a flow version with live runs. It exits `0` when all types resolve and `1` after listing each unresolved type. Re-register the class or add a `NodeRegistry::alias()` for a renamed type.
+**Outcome:** read-only check of executable types referenced by flow versions with live runs and trigger node/driver/source registrations referenced by active flow activations. It exits `0` with `All active trigger and live-run component registrations resolve.` or exits `1` after listing each missing registration and the relevant `Nodeflow::register...` remedy. Executable aliases can repair renamed executable node types; trigger components have no alias API.
 
 ```bash
 php artisan nodeflow:check-node-types

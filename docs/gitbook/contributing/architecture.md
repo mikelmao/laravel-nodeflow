@@ -10,10 +10,10 @@ After reading this page, you can choose the right subsystem for a change without
 
 | Area | Responsibility |
 | --- | --- |
-| Registration | Laravel service providers register nodes, triggers, and subject attributes with singleton registries. |
+| Registration | Laravel service providers register executable nodes, trigger drivers, trigger nodes, allowlisted trigger sources, and subject attributes with singleton registries. |
 | Authoring | The editor receives server-authored palettes, saves an intentionally incomplete draft, and asks the server to publish a valid graph. |
-| Publishing | Graph validation creates a numbered flow-version snapshot that package services treat as immutable and updates the flow's current version. |
-| Starts and audiences | Manual and event starts select a published version, materialize an authorized audience, and create a durable run. |
+| Publishing | Graph validation creates a numbered flow-version plus immutable compiled trigger activation and updates the flow's current version. |
+| Starts and audiences | Webhook, model, Laravel-event, manual, and sub-flow starts select an exact published version/entry, materialize an authorized audience, and create a durable run. |
 | Execution | The interpreter owns deterministic control flow; activities and the node runner read and write application state. |
 | Inspection | Run records become a read-only overlay and a cursor-paginated subject drill-down for the run's pinned graph. |
 
@@ -21,12 +21,14 @@ The public integration surface is registration, including the registry registrat
 
 ## From registration to the editor
 
-Node and trigger classes are registered with their registries. A registry resolves each class, converts its definition to a serializable palette entry, and gives the editor the palette it needs to render and configure a graph. Subject attributes follow the same pattern for condition-field options.
+Executable and trigger node classes are registered with separate registries backed by one graph-type catalog. Trigger drivers own occurrence transport; trigger sources are explicit host allowlists. Registries resolve definitions into server-authored executable, trigger, and compatible-source palettes. Subject attributes follow the same pattern for condition-field options.
 
 ```mermaid
 flowchart LR
-    R[Host provider registration] --> N[Node, trigger, and attribute registries]
-    N --> P[Server-authored palettes]
+    R[Host provider registration] --> D[Driver → trigger node → source registries]
+    R --> N[Executable node and attribute registries]
+    D --> P[Server-authored trigger/source palettes]
+    N --> P
     P --> E[Flow editor]
 ```
 
@@ -43,22 +45,25 @@ flowchart LR
     V --> I[Immutable flow-version snapshot]
 ```
 
-On a successful publish, the package creates the next numbered version, makes it the flow's current version, and clears the saved draft. Runs retain their own version reference, so a later publish cannot change an existing run. The package treats version graphs as immutable, but neither the model nor the database prevents host code from updating or deleting a version; do not alter versions that runs may still require. See [Flows and versions](../building-automations/flows-and-versions.md) and [Publishing flows](../building-automations/publishing-flows.md) for the API and validation contract.
+On a successful publish, the package creates the next numbered version, compiles exactly one immutable activation, makes the version current, and clears the saved draft. The activation carries tenant, driver, source, qualifier, trigger node, descriptor, and exact version. Runs and already-captured occurrences retain their version reference, so a later publish cannot move them. See [Flows and versions](../building-automations/flows-and-versions.md) and [Publishing flows](../building-automations/publishing-flows.md) for the API and validation contract.
 
 ## Starts become durable execution
 
-A trigger listener or an authorized manual action calls the same start service. It selects the flow's current published version, checks and materializes the audience before inserting its run subjects, then starts the durable interpreter after the database work commits.
+A built-in/custom driver wraps input in a typed occurrence. The shared dispatcher validates pinned activation state before extension code, resolves a tenant `TriggerMatch`, and calls the trigger run starter. Manual and sub-flow starts bypass matching but still skip the declarative graph trigger to its executable `started` target. Every path checks and materializes the audience before durable dispatch.
 
 ```mermaid
 flowchart LR
-    T[Trigger or manual start] --> A[Audience materialization]
-    A --> D[Durable interpreter]
+    T[Typed occurrence or manual/sub-flow start] --> A[Exact version and executable entry]
+    A --> M[Tenant audience materialization]
+    M --> D[Durable interpreter]
     D --> X[Activities]
     X --> N[Node runner]
     N --> S[Subject advancement]
 ```
 
 The interpreter is deliberately deterministic: it owns graph traversal and waits, but performs no database, HTTP, clock, or other side-effecting work itself. Durable engines may replay workflow code, so non-deterministic reads and effects there could run differently or more than once. Activities form the bridge into ordinary Laravel code; the node runner invokes subject or audience nodes and advances subject records according to each node result.
+
+Run creation persists `started_via`, `trigger_node_id`, source-controlled `trigger_data`, exact `engine_entry_node_id`, and dispatch state with the audience. Engine dispatch waits for an outer transaction commit, uses a deterministic workflow identity, and can recover a failed start without creating another run. Trigger nodes never enter the interpreter.
 
 Put domain effects in node implementations, reached through activities, and make those effects safe for the delivery and retry semantics your host requires. Learn the execution model in [Durable execution](../operations/durable-execution.md) and the node contracts in [Writing nodes](../building-automations/writing-nodes.md).
 

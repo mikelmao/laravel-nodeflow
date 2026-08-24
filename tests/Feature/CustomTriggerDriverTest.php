@@ -9,6 +9,7 @@ use Nodeflow\Models\Run;
 use Nodeflow\Publishing\PublishFlow;
 use Nodeflow\Schema\TriggerDefinition;
 use Nodeflow\Triggers\TriggerActivationRepository;
+use Nodeflow\Triggers\TriggerActivationRepository as BaseTriggerActivationRepository;
 use Nodeflow\Triggers\TriggerActivationSnapshot;
 use Nodeflow\Triggers\TriggerMatch;
 use Nodeflow\Triggers\TriggerOccurrence;
@@ -173,7 +174,7 @@ it('uses supplied snapshots without repository lookup and enforces their routing
     publishCustomTriggerFlow('org-1', 'Supplied activation');
     $snapshot = app(TriggerActivationRepository::class)
         ->forDriverSource('test.fake', 'test.orders')[0];
-    app()->instance(TriggerActivationRepository::class, new class extends TriggerActivationRepository
+    app()->instance(TriggerActivationRepository::class, new class extends BaseTriggerActivationRepository
     {
         public function forDriverSource(string $driver, string $source, ?string $qualifier = null): array
         {
@@ -496,7 +497,7 @@ it('reports and rethrows an unknown source at the occurrence boundary', function
 
 it('reports and rethrows the original repository failure even when reporting fails', function () {
     $failure = new RuntimeException('activation repository unavailable');
-    app()->instance(TriggerActivationRepository::class, new class($failure) extends TriggerActivationRepository
+    app()->instance(TriggerActivationRepository::class, new class($failure) extends BaseTriggerActivationRepository
     {
         public function __construct(private readonly Throwable $failure) {}
 

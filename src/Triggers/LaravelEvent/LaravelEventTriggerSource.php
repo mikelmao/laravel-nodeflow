@@ -2,9 +2,9 @@
 
 namespace Nodeflow\Triggers\LaravelEvent;
 
-use Nodeflow\Contracts\TriggerSource;
+use Nodeflow\Contracts\TriggerSource as SourceContract;
 
-interface LaravelEventTriggerSource extends TriggerSource
+interface LaravelEventTriggerSource extends SourceContract
 {
     /** @return class-string */
     public static function eventClass(): string;

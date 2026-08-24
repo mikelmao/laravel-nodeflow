@@ -389,7 +389,7 @@ namespace App\Providers;
 use App\Models\User;
 use App\Nodeflow\Nodes\SendMessage;
 use App\Nodeflow\OrganizationTenantResolver;
-use App\Nodeflow\Triggers\FloodAlertFires;
+use App\Nodeflow\Triggers\FloodAlertSource;
 use App\Nodeflow\UserSubjectResolver;
 use Illuminate\Support\Facades\Gate;
 use Illuminate\Support\ServiceProvider;
@@ -398,7 +398,6 @@ use Nodeflow\Contracts\TenantResolver;
 use Nodeflow\Nodeflow;
 use Nodeflow\Schema\SubjectAttribute;
 use Nodeflow\Schema\SubjectAttributeRegistry;
-use Nodeflow\Triggers\TriggerRegistry;
 
 class NodeflowServiceProvider extends ServiceProvider
 {
@@ -408,8 +407,14 @@ class NodeflowServiceProvider extends ServiceProvider
     ];
 
     /** @var class-string[] */
-    protected array $triggers = [
-        FloodAlertFires::class,
+    protected array $triggerDrivers = [];
+
+    /** @var class-string[] */
+    protected array $triggerNodes = [];
+
+    /** @var class-string[] */
+    protected array $triggerSources = [
+        FloodAlertSource::class,
     ];
 
     public function register(): void
@@ -421,7 +426,9 @@ class NodeflowServiceProvider extends ServiceProvider
     public function boot(): void
     {
         Nodeflow::register($this->nodes);
-        app(TriggerRegistry::class)->register(...$this->triggers);
+        Nodeflow::registerTriggerDrivers($this->triggerDrivers);
+        Nodeflow::registerTriggerNodes($this->triggerNodes);
+        Nodeflow::registerTriggerSources($this->triggerSources);
         app(SubjectAttributeRegistry::class)->register(...$this->subjectAttributes());
 
         Gate::define('nodeflow.viewAny', fn (?User $user, mixed $resource = null): bool =>

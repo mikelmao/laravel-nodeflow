@@ -384,7 +384,10 @@ it('renders the editor props the client is written against', function () {
             'model' => [],
             'event' => [],
         ])
-        ->and($response->json('props.flow'))->not->toHaveKeys(['trigger_type', 'trigger_config']);
+        ->and($response->json('props.flow'))->not->toHaveKeys([
+            'trigger'.'_type',
+            'trigger'.'_config',
+        ]);
 });
 
 it('exposes custom trigger nodes and allowlisted sources without class names', function () {

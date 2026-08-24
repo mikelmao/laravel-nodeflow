@@ -1,29 +1,26 @@
-# PHP contracts reference
+# Public contracts
 
-These are the public host-facing methods in the current contracts, nodes, triggers, schema builders, registries, contexts, and orchestration services. Constructors are omitted below when Nodeflow owns construction; do not instantiate runtime contexts, results, or orchestration services yourself unless a method provides a factory.
+This page lists the host integration surface. Classes outside these contracts, facades, models, authoring/start services, and documented value objects are package implementation details unless another reference page explicitly exposes them.
 
-## Required host implementations
-
-Bind these interfaces in a service provider. `TenantResolver` and `SubjectResolver` are required for a real host integration.
+## Host resolvers
 
 ```php
 interface TenantResolver
 {
     public function currentTenantId(): ?string;
-    public function ownsSubject(string $tenantId, string $subjectType, string $subjectId): bool;
+    public function ownsSubject(
+        string $tenantId,
+        string $subjectType,
+        string $subjectId,
+    ): bool;
 }
 
 interface SubjectResolver
 {
+    /** @return array<string, mixed> keyed by subject ID */
     public function resolve(string $subjectType, array $subjectIds): array;
 }
-```
 
-`ownsSubject()` must reject a subject outside the supplied tenant. `resolve()` returns a map keyed by subject ID; an absent map entry becomes `null` in a subject-node context.
-
-`AudienceResolver` is public but the current runtime never resolves or calls it. Binding it has no runtime effect today.
-
-```php
 interface AudienceResolver
 {
     public function subjectType(): string;
@@ -31,17 +28,17 @@ interface AudienceResolver
 }
 ```
 
-See [Required contracts](../integration/required-contracts.md) and [Tenancy](../integration/tenancy.md).
+`TenantResolver::ownsSubject()` is a mandatory security boundary for every subject materialized by trigger starts. Bind resolvers unconditionally in a provider's `register()` method so requests, listeners, queue workers, and console commands share the same behavior.
 
-## Nodes
+## Executable nodes
 
-Extend `Node` and implement one or both cardinality interfaces. `NodeRegistry::register()` rejects a class that does not extend `Node` or implements neither interface.
+Subclass `Nodeflow\Nodes\Node` and implement `HandlesSubject`, `HandlesAudience`, or both:
 
 ```php
 abstract class Node
 {
-    abstract public static function type(): string;
-    abstract public function definition(): NodeDefinition;
+    public static function type(): string;
+    public function definition(): NodeDefinition;
     public function defaultConfig(): array;
     public function validate(array $config): array;
     public int $tries = 3;
@@ -58,228 +55,159 @@ interface HandlesAudience
 }
 ```
 
-`type()` is the stable graph identifier. `definition()` supplies editor metadata and publish-time rules. `defaultConfig()` returns `[]` unless overridden. `$tries = 3` is currently not read by `NodeRunner`, so it provides no retry behavior or delivery guarantee; make every external side effect idempotent. A node implementing both interfaces must give equivalent outcomes for the same subjects, but the current runner chooses `HandlesAudience` first whenever both are implemented and never calls `forSubject()` for that node.
+`SubjectContext` exposes `runId()`, `correlationId()`, `nodeId()`, `subject()`, `subjectId()`, `config()`, `triggerData()`, `isTest()`, `continue()`, and `fail()`. `AudienceContext` exposes the corresponding run/config/trigger methods plus `subjectIds()`, `subjectType()`, `subjects()`, `partition()`, and `all()`. Contexts do not expose the mutable `Run` model.
 
-## Schema builders and option sources
+`NodeResult` factories are `forSubject()`, `partition()`, `failed()`, `empty()`, and `merge()`. Its read methods are `outputs()`, `failures()`, and `subjectCount()`.
 
-`Field` and definitions have private constructors; use their factories.
+## Trigger contracts
 
 ```php
-class Field
+namespace Nodeflow\Contracts;
+
+interface TriggerDriver
 {
-    public static function text(string $key): self;
-    public static function number(string $key): self;
-    public static function boolean(string $key): self;
-    public static function select(string $key): self;
-    public static function multiselect(string $key): self;
-    public static function duration(string $key): self;
-    public static function custom(string $key, string $type, string $baseRule = 'string'): self;
-    public function label(string $label): self;
-    public function help(string $help): self;
-    public function required(bool $required = true): self;
-    public function default(mixed $default): self;
-    public function options(array $options): self;
-    public function optionsFrom(string $sourceClass): self;
-    public function optionsSourceClass(): ?string;
-    public function toArray(): array;
-    public function toWireArray(): array;
-    public function rules(): array;
+    public static function key(): string;
+    public function sourceRegistered(TriggerSource $source): void;
+    public function validate(TriggerActivationDescriptor $descriptor): array;
 }
 
-class NodeDefinition
+interface TriggerNode
 {
-    public static function make(string $label): self;
-    public function group(string $group): self;
-    public function icon(string $icon): self;
-    public function description(string $description): self;
-    public function outputs(array $outputs): self;
-    public function fields(array $fields): self;
-    public function fieldObjects(): array;
-    public function outputNames(): array;
-    public function toArray(): array;
-    public function rules(): array;
+    public static function type(): string;
+    public function definition(): TriggerDefinition;
+    public function driver(): string;
+    public function defaultConfig(): array;
+    public function source(array $config): string;
+    public function supportsSource(TriggerSource $source): bool;
+    public function validate(array $config, TriggerSourceRegistry $sources): array;
+    public function compile(array $config): TriggerActivationDescriptor;
 }
 
-interface OptionSource
+interface TriggerSource
 {
-    public function options(): array;
+    public static function key(): string;
+    public static function driver(): string;
+    public function definition(): TriggerDefinition;
+    public function resolve(TriggerOccurrence $occurrence, array $config): TriggerMatch;
 }
 ```
 
-Built-in `FieldType` cases are `Text`, `Number`, `Boolean`, `Select`, `Multiselect`, and `Duration`; its public helper is `public function baseRule(): string;`. `optionsFrom()` names an `OptionSource`; the editor receives that options are dynamic, not the backing class. `toWireArray()` is the HTTP shape.
+`AbstractTriggerNode` is the recommended base for host nodes. It implements empty defaults, reads the flat `source` key, checks driver/source compatibility, and validates combined node/source fields. Subclasses provide a stable type, definition, driver, optional narrower `sourceType()`, and pure deterministic `compile()`.
+
+The stable-key grammar is `[a-z][a-z0-9._-]*`. Driver/source keys are limited to 191 bytes; trigger node types are limited to 255 bytes. A trigger definition has exactly one output, `started`.
+
+### Built-in source contracts
 
 ```php
-class SubjectAttribute
+use Nodeflow\Contracts\TriggerSource as SourceContract;
+
+interface WebhookTriggerSource extends SourceContract
 {
-    public static function make(string $key, string $label, string $type, callable $resolver): self;
-    public function value(mixed $subject): mixed;
 }
 
-class SubjectAttributeRegistry implements OptionSource
+interface ModelObserverTriggerSource extends SourceContract
 {
-    public function register(SubjectAttribute ...$attributes): self;
-    public function options(): array;
-    public function has(string $key): bool;
-    public function value(string $key, mixed $subject): mixed;
-    public function get(string $key): ?SubjectAttribute;
+    /** @return class-string<\Illuminate\Database\Eloquent\Model> */
+    public static function modelClass(): string;
+}
+
+interface LaravelEventTriggerSource extends SourceContract
+{
+    /** @return class-string */
+    public static function eventClass(): string;
+    public function snapshot(object $event): LaravelEventOccurrence;
 }
 ```
 
-Register attributes through the singleton registry. `value()` throws for an unknown key. See [Subject attributes](../building-automations/subject-attributes.md).
+The built-in source interfaces are marker/narrowing contracts for their drivers. A class that declares the right driver key but not the matching interface is incompatible and cannot publish.
 
-## Registries and facade
-
-Use `Nodeflow::register()` from a host or package provider, or obtain the same singleton through `Nodeflow::nodes()`.
+### Occurrences and matches
 
 ```php
-class Nodeflow
-{
-    public static function nodes(): NodeRegistry;
-    public static function register(array $nodeClasses): void;
-    public static function routes(): void;
-}
+new TriggerOccurrence(
+    string $driver,
+    string $source,
+    mixed $payload,
+    ?string $qualifier = null,
+    ?array $activations = null,
+);
 
-class NodeRegistry
-{
-    public function register(string ...$classes): self;
-    public function alias(string $oldType, string $newType): self;
-    public function has(string $type): bool;
-    public function resolve(string $type): Node;
-    public function all(): array;
-    public function palette(): array;
-}
+TriggerMatch::make()->forTenant(
+    string $tenantId,
+    string $subjectType,
+    iterable $subjectIds,
+    array $triggerData = [],
+    ?string $occurrenceId = null,
+);
 ```
 
-An alias maps an old graph type to a registered new type. `resolve()` throws `UnknownNodeTypeException` for an unknown type. `routes()` registers routes only; it does not authorize callers.
+`forTenant()` is immutable: each call returns a new match. Reusing a tenant key replaces that tenant's previous value. `tenants()` returns `TriggerTenantMatch[]`. Tenant ID and subject type must be nonblank, every subject ID must be nonblank, and occurrence identity is null or nonblank.
 
-## Triggers
+The `array $config` passed to `TriggerSource::resolve()` is the pinned activation descriptor metadata emitted by `TriggerNode::compile()`. It is not the raw request body or automatically the full graph-node config.
 
-Extend `Trigger`, register it through `TriggerRegistry`, and return a `TriggerMatch` for an event. Trigger construction is runtime-owned.
+The optional `TriggerOccurrence::$activations` accepts only trusted snapshots from `TriggerActivationRepository`; never deserialize it from a request or event. It pins the versions active at emission time.
+
+Built-in typed payloads are:
 
 ```php
-abstract class Trigger
-{
-    abstract public static function type(): string;
-    abstract public static function event(): string;
-    abstract public function definition(): TriggerDefinition;
-    abstract public function resolve(object $event): TriggerMatch;
-    public function idempotencyKey(object $event): ?string;
-    public function matchesConfig(object $event, array $config): bool;
-}
+new WebhookOccurrence(array $payload, string $deliveryId, int $timestamp);
 
-class TriggerMatch
-{
-    public static function make(): self;
-    public function forTenant(string $tenantId, string $subjectType, iterable $subjectIds): self;
-    public function tenants(): array;
-}
+new ModelOccurrence(
+    string $modelClass,
+    string $modelKey,
+    string $connectionName,
+    string $event,
+    array $attributes,
+    array $original,
+    array $changedFields,
+);
 
-class TriggerDefinition
-{
-    public static function make(string $label): self;
-    public function description(string $description): self;
-    public function fields(array $fields): self;
-    public function toArray(): array;
-    public function rules(): array;
-}
-
-class TriggerRegistry
-{
-    public function register(string ...$classes): self;
-    public function has(string $type): bool;
-    public function resolve(string $type): Trigger;
-    public function all(): array;
-    public function forEvent(string $eventClass): array;
-    public function palette(): array;
-}
+new LaravelEventOccurrence(string $eventClass, array $data);
 ```
 
-The base `idempotencyKey()` returns `null`; override it for a stable event identity. The base `matchesConfig()` returns `true`. First registration for an event class attaches its listener. See [Writing triggers](../building-automations/writing-triggers.md).
+`LaravelEventOccurrence` validates immutable JSON-safe values. `ModelOccurrence` is created by the model driver from a normalized snapshot. Complete source examples are in [Writing triggers](../building-automations/writing-triggers.md).
 
-## Contexts and results
-
-The runtime constructs contexts. Nodes should use their accessors and result helpers, rather than construct contexts or mutate run rows.
+## Trigger activation descriptor
 
 ```php
-class SubjectContext
-{
-    public function runId(): int;
-    public function correlationId(): ?string;
-    public function nodeId(): string;
-    public function subject(): mixed;
-    public function subjectId(): string;
-    public function config(?string $key = null, mixed $default = null): mixed;
-    public function isTest(): bool;
-    public function continue(string $output = 'default'): NodeResult;
-    public function fail(string $message): NodeResult;
-}
-
-class AudienceContext
-{
-    public function runId(): int;
-    public function correlationId(): ?string;
-    public function nodeId(): string;
-    public function subjectIds(): array;
-    public function subjectType(): string;
-    public function subjects(): array;
-    public function config(?string $key = null, mixed $default = null): mixed;
-    public function isTest(): bool;
-    public function partition(array $outputToSubjectIds): NodeResult;
-    public function all(string $output = 'default'): NodeResult;
-}
-
-class NodeResult
-{
-    public static function forSubject(string $subjectId, string $output = 'default'): self;
-    public static function partition(array $outputToSubjectIds): self;
-    public static function failed(string $subjectId, string $message): self;
-    public static function empty(): self;
-    public static function merge(self ...$results): self;
-    public function outputs(): array;
-    public function failures(): array;
-    public function subjectCount(): int;
-}
+new TriggerActivationDescriptor(
+    string $driver,
+    string $source,
+    ?string $qualifier,
+    array $metadata,
+);
 ```
 
-`AudienceContext::subjects()` calls the bound `SubjectResolver`. `isTest()` tells a host node that the run is test mode; Nodeflow does not suppress or enforce external work, so the node itself must avoid sends, charges, and other visible side effects. `NodeResult` has a private constructor; use its factories or a context helper.
+`toArray()` returns those four keys. `TriggerNode::compile()` must return the same descriptor for the same validated config. Publication stores `metadata` as the activation's `descriptor`; runtime repeats compilation and driver validation against the pinned graph before source code can run.
 
-> **Result safety invariant:** A subject or audience node must return only IDs from its current context, and name each current ID at most once across all outputs and failures. `NodeResult` does not validate this. An omitted processed ID is completed by reconciliation only if it remains active at the current node. An extraneous active ID of the same run and subject type can be advanced from another branch because output and failure updates do not constrain `current_node_id`; duplicated IDs create ambiguous accounting. Do not reuse IDs across outputs or mix an ID into both an output and a failure.
-
-## Workflow and direct services
-
-These are public container services, but their constructors depend on runtime collaborators and are not host construction APIs.
+## Facade methods
 
 ```php
-class StartRun
-{
-    public function forFlow(Flow $flow, string $subjectType, iterable $subjectIds, array $options = []): Run;
-}
-
-class PublishFlow
-{
-    public function publish(Flow $flow, array $graph, ?string $publishedBy = null): FlowVersion;
-}
-
-class GraphInvalidException extends RuntimeException
-{
-    public function errors(): array;
-    public function nodeErrors(): array;
-}
-
-class SubjectExiter
-{
-    public function exit(Run $run, array $subjectIds): void;
-}
+Nodeflow::nodes(): NodeRegistry;
+Nodeflow::register(array $nodeClasses): void;
+Nodeflow::triggerNodes(): TriggerNodeRegistry;
+Nodeflow::triggerDrivers(): TriggerDriverRegistry;
+Nodeflow::triggerSources(): TriggerSourceRegistry;
+Nodeflow::registerTriggerNodes(array $classes): void;
+Nodeflow::registerTriggerDrivers(array $classes): void;
+Nodeflow::registerTriggerSources(array $classes): void;
+Nodeflow::routes(): void;
+Nodeflow::webhookRoutes(): void;
 ```
 
-`StartRun::forFlow()` accepts optional `idempotency_key`, `correlation_id`, `strategy`, and `is_test` entries. It throws when a flow has no published version and returns the existing run for a matching non-null idempotency key and flow version. `PublishFlow::publish()` validates its graph and throws `GraphInvalidException` when invalid. `errors()` returns `string[]` general graph failures. `nodeErrors()` returns `array<int, array{node: ?string, field: ?string, message: string}>`, so an editor can attach a failure to a node or field when known. `SubjectExiter::exit()` removes active listed subjects and signals an emptied live audience where applicable.
+Drivers must be registered before nodes/sources that name them, and nodes before flows using their graph types are validated. Source registration invokes the resolved driver's `sourceRegistered()` hook.
 
-These methods do not authorize a caller. Keep them behind application policies, gates, and tenant checks; a public direct action is not permission to expose it.
+## Start and authoring services
 
-### Deliberate exclusions
+- `StartRun::forFlow(Flow $flow, string $subjectType, iterable $subjectIds, array $options = []): Run` performs a manual start and bypasses source matching.
+- `PublishFlow::publish(Flow $flow, array $graph, ?string $publishedBy = null, ?int $expectedDraftRevision = null): PublishResult` creates a version and activation.
+- `SaveDraft::save(Flow $flow, array $graph, ?int $lastSeenRevision): int` performs compare-and-swap draft persistence.
+- `CreateRun::resume(int|string $runId): Run` retries durable dispatch from persisted run intent.
 
-The mechanical public-method scan also finds exception factories (`InvalidNodeException` and `UnknownOptionSourceException`), the `UnknownNodeTypeException` constructor, `ValidDuration::validate(string $attribute, mixed $value, Closure $fail): void`, `ValidDuration::seconds(string $value): ?int`, `EventTriggerListener::handle()`, `SubFlowStarter::start()`, and the runtime `WorkflowEngine` methods `start()`, `signal()`, `cancel()`, and `isRunning()`. They are package error, validation parsing, listener, core-node, or durable-workflow infrastructure support rather than host integration surfaces. Do not construct or call them as host integration APIs: direct engine control bypasses Nodeflow's lifecycle, authorization, and run-state handling. `core.start_flow` is the supported graph-level entry to the sub-flow starter and is documented in [Core nodes](core-nodes.md).
+Use the higher-level trigger dispatcher/starter path for occurrence starts; constructing activation snapshots from untrusted values would bypass the repository's publication authority.
 
-## Next step
+## React/TypeScript exports
 
-Follow [Writing nodes](../building-automations/writing-nodes.md), [Writing triggers](../building-automations/writing-triggers.md), and [Starting runs](../building-automations/starting-runs.md) for lifecycle and authorization context.
+The package root exports `FlowEditor`, `FlowRun`, `Canvas`, editor/controller types, renderer/control extension types, and server wire types including `Graph`, `GraphNode`, `GraphEdge`, `GraphComponentKind`, `TriggerNodeTypePayload`, `TriggerSourcePayload`, `TriggerSourcesPayload`, `WebhookMetadata`, `EditorUrls`, `RunSummary`, and overlay types. `TriggerPayload` remains a deprecated type alias for `TriggerNodeTypePayload`.
+
+Only these wire types are public frontend contracts. PHP registry instances, activation descriptors, and trigger occurrences are server runtime objects and are not TypeScript exports.
