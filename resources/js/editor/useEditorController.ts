@@ -220,6 +220,12 @@ type WebhookClientState = {
     disclosure: WebhookSecretDisclosure | null
 }
 
+type PendingWebhookMetadata = {
+    credential: WebhookMetadata | null
+    invalidated: boolean
+    latestActive: boolean | null
+}
+
 type CredentialRelation = 'same' | 'older' | 'newer' | 'different' | 'unknown'
 
 function parsedTimestamp(value: string | null): number | null {
@@ -268,6 +274,55 @@ function reconcileWebhookMetadata(current: WebhookClientState, incoming: Webhook
     return { metadata: incoming, disclosure: null }
 }
 
+function coalescePendingWebhookMetadata(current: PendingWebhookMetadata | null, incoming: WebhookMetadata | null): PendingWebhookMetadata {
+    const copied = incoming === null ? null : { ...incoming }
+    if (current === null) {
+        return {
+            credential: copied,
+            invalidated: copied === null || (copied.secret_rotated_at !== null && parsedTimestamp(copied.secret_rotated_at) === null),
+            latestActive: copied?.active ?? null,
+        }
+    }
+    if (current.credential === null || copied === null) {
+        return {
+            credential: current.credential ?? copied,
+            invalidated: true,
+            latestActive: current.credential === null ? copied?.active ?? current.latestActive : current.latestActive,
+        }
+    }
+    const currentIdentity = metadataIdentity(current.credential)
+    const incomingIdentity = metadataIdentity(copied)
+    if (currentIdentity === null || incomingIdentity === null) return { ...current, invalidated: true }
+    const relation = credentialRelation(currentIdentity, incomingIdentity)
+    if (relation === 'newer') return { credential: copied, invalidated: current.invalidated, latestActive: copied.active }
+    if (relation === 'same' || relation === 'older') return { ...current, latestActive: copied.active }
+    if (relation === 'different') return { ...current, invalidated: true }
+
+    const currentTime = parsedTimestamp(current.credential.secret_rotated_at)
+    const incomingTime = parsedTimestamp(copied.secret_rotated_at)
+    const preferIncoming = current.credential.endpoint_url === copied.endpoint_url && currentTime === null && incomingTime !== null
+    return {
+        credential: preferIncoming ? copied : current.credential,
+        invalidated: true,
+        latestActive: current.credential.endpoint_url === copied.endpoint_url ? copied.active : current.latestActive,
+    }
+}
+
+function reconcilePendingWebhookMetadata(current: WebhookClientState, pending: PendingWebhookMetadata | null): WebhookClientState {
+    if (pending === null) return current
+    const reconciled = reconcileWebhookMetadata(current, pending.credential)
+    let metadata = reconciled.metadata
+    if (metadata !== null
+        && pending.credential !== null
+        && metadata.endpoint_url === pending.credential.endpoint_url
+        && pending.latestActive !== null
+    ) metadata = { ...metadata, active: pending.latestActive }
+    return {
+        metadata,
+        disclosure: pending.invalidated ? null : reconciled.disclosure,
+    }
+}
+
 /** Controller boundary: graph history is canonical; panels, selection and requests are deliberately not undoable. */
 export function useEditorController(options: UseEditorControllerOptions): UseEditorControllerResult {
     const defs = useMemo(
@@ -302,7 +357,7 @@ export function useEditorController(options: UseEditorControllerOptions): UseEdi
     const activePublish = useRef<number | null>(null)
     const activeRotation = useRef<number | null>(null)
     const activeCredentialOperation = useRef<{ kind: 'publish' | 'rotation'; attempt: number } | null>(null)
-    const pendingWebhookMetadata = useRef<{ value: WebhookMetadata | null } | null>(null)
+    const pendingWebhookMetadata = useRef<PendingWebhookMetadata | null>(null)
     const mounted = useRef(true)
     const validateUrl = useRef(options.urls.validate)
     const publishUrl = useRef(options.urls.publish)
@@ -318,7 +373,7 @@ export function useEditorController(options: UseEditorControllerOptions): UseEdi
     const applyPendingWebhookMetadata = useCallback(() => {
         const pending = pendingWebhookMetadata.current
         pendingWebhookMetadata.current = null
-        if (pending !== null) setWebhookState((current) => reconcileWebhookMetadata(current, pending.value))
+        if (pending !== null) setWebhookState((current) => reconcilePendingWebhookMetadata(current, pending))
     }, [])
 
     useEffect(() => {
@@ -377,7 +432,7 @@ export function useEditorController(options: UseEditorControllerOptions): UseEdi
     useLayoutEffect(() => {
         const value = options.webhook === null ? null : { ...options.webhook }
         if (activeCredentialOperation.current !== null) {
-            pendingWebhookMetadata.current = { value }
+            pendingWebhookMetadata.current = coalescePendingWebhookMetadata(pendingWebhookMetadata.current, value)
             return
         }
         pendingWebhookMetadata.current = null
@@ -733,6 +788,7 @@ export function useEditorController(options: UseEditorControllerOptions): UseEdi
         const publishedGeneration = generation.current
         activePublish.current = attempt
         activeCredentialOperation.current = { kind: 'publish', attempt: credentialAttempt }
+        pendingWebhookMetadata.current = null
         let credentialMetadataCommitted = false
         setPublishing(true)
         setPublishOutcome(null)
@@ -798,7 +854,7 @@ export function useEditorController(options: UseEditorControllerOptions): UseEdi
                                 },
                             },
                         }
-                        return pending === null ? operation : reconcileWebhookMetadata(operation, pending.value)
+                        return reconcilePendingWebhookMetadata(operation, pending)
                     })
                 }
             }
@@ -825,6 +881,7 @@ export function useEditorController(options: UseEditorControllerOptions): UseEdi
         const credentialAttempt = ++credentialSequence.current
         activeRotation.current = credentialAttempt
         activeCredentialOperation.current = { kind: 'rotation', attempt: credentialAttempt }
+        pendingWebhookMetadata.current = null
         let credentialMetadataCommitted = false
         const owns = () => mounted.current
             && activeRotation.current === credentialAttempt
@@ -864,7 +921,7 @@ export function useEditorController(options: UseEditorControllerOptions): UseEdi
                         },
                     },
                 }
-                return pending === null ? operation : reconcileWebhookMetadata(operation, pending.value)
+                return reconcilePendingWebhookMetadata(operation, pending)
             })
         } catch {
             if (owns()) setWebhookRotationError('Could not rotate the webhook secret. Check your connection and try again.')
