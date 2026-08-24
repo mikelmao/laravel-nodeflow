@@ -103,6 +103,9 @@ class InstallCommand extends Command
 
         $force = (bool) $this->option('force-migrations');
 
+        // ProviderStep owns the complete host registration shape, including the
+        // trigger driver -> node -> source dependency order. Keeping it one step
+        // makes the install table stable while its edit remains atomic.
         // Three default writers, one opt-in migration writer, four verifiers and
         // one optional-config report make up the stable nine-step install list.
         return [

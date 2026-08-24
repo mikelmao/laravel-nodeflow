@@ -1,0 +1,32 @@
+<?php
+
+namespace {{ namespace }};
+
+use Nodeflow\Contracts\TriggerDriver;
+use Nodeflow\Contracts\TriggerSource;
+use Nodeflow\Triggers\TriggerActivationDescriptor;
+
+class {{ class }} implements TriggerDriver
+{
+    public static function key(): string
+    {
+        return '{{ key }}';
+    }
+
+    /** Hook extension-owned listeners here after a compatible source registers. */
+    public function sourceRegistered(TriggerSource $source): void
+    {
+        // TODO: install one deduplicated listener for this source family.
+    }
+
+    public function validate(TriggerActivationDescriptor $descriptor): array
+    {
+        if ($descriptor->driver !== self::key()) {
+            return ['driver' => ['The activation descriptor uses another trigger driver.']];
+        }
+
+        // TODO: validate driver-specific routing metadata without executing
+        // author-controlled class names or service selectors.
+        return [];
+    }
+}

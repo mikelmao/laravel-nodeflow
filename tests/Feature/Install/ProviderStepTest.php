@@ -39,7 +39,7 @@ it('reports the provider as writable when it does not exist', function () {
     expect($this->step->check())->toBe(InstallOutcome::Writable);
 });
 
-it('creates a provider whose three anchors each appear exactly once', function () {
+it('creates a provider whose trigger extension anchors each appear exactly once', function () {
     // Counterfactual: put `protected array $nodes = [];` on one line twice in the
     // stub, or omit it, and this fails — NodeRegistrationWriter refuses on zero
     // matches and on more than one, so nodeflow:make-node could never register
@@ -49,7 +49,9 @@ it('creates a provider whose three anchors each appear exactly once', function (
     $contents = file_get_contents($this->path);
 
     expect(substr_count($contents, NodeRegistrationWriter::ANCHOR))->toBe(1);
-    expect(substr_count($contents, NodeRegistrationWriter::TRIGGER_ANCHOR))->toBe(1);
+    expect(substr_count($contents, NodeRegistrationWriter::TRIGGER_DRIVER_ANCHOR))->toBe(1);
+    expect(substr_count($contents, NodeRegistrationWriter::TRIGGER_NODE_ANCHOR))->toBe(1);
+    expect(substr_count($contents, NodeRegistrationWriter::TRIGGER_SOURCE_ANCHOR))->toBe(1);
     expect(substr_count($contents, NodeRegistrationWriter::ATTRIBUTE_ANCHOR))->toBe(1);
 });
 
@@ -64,7 +66,29 @@ it('creates a provider in the host root namespace that parses', function () {
     expectParseablePhp($this->path);
 });
 
-it('creates a provider the three generators can each append into', function () {
+it('registers host trigger extensions in driver node source order', function () {
+    $this->step->apply();
+    $contents = file_get_contents($this->path);
+
+    $driver = strpos($contents, 'registerTriggerDrivers($this->triggerDrivers)');
+    $node = strpos($contents, 'registerTriggerNodes($this->triggerNodes)');
+    $source = strpos($contents, 'registerTriggerSources($this->triggerSources)');
+
+    expect($driver)->toBeInt()->and($node)->toBeInt()->and($source)->toBeInt()
+        ->and($driver)->toBeLessThan($node)
+        ->and($node)->toBeLessThan($source);
+});
+
+it('upgrades a CRLF host provider without introducing bare line feeds', function () {
+    file_put_contents($this->path, str_replace("\n", "\r\n", handWrittenProvider()));
+
+    expect($this->step->apply())->toBe(InstallOutcome::Wired);
+    $contents = file_get_contents($this->path);
+
+    expect(preg_match('/(?<!\r)\n/', $contents))->toBe(0);
+});
+
+it('creates a provider all extension generators can append into', function () {
     // The composition test. Counterfactual: change the stub's empty arrays to
     // `= [];` on one line and the node/trigger appends still work but render
     // valid-and-ugly; change the attribute method's body shape and the attribute
@@ -78,9 +102,23 @@ it('creates a provider the three generators can each append into', function () {
 
     expect($writer->appendTo(
         $this->path,
-        NodeRegistrationWriter::TRIGGER_ANCHOR,
+        NodeRegistrationWriter::TRIGGER_DRIVER_ANCHOR,
+        'App\Nodeflow\TriggerDrivers\CustomDriver::class',
+        '\App\Nodeflow\TriggerDrivers\CustomDriver::class',
+    ))->toBe(\Nodeflow\Console\NodeRegistrationOutcome::Appended);
+
+    expect($writer->appendTo(
+        $this->path,
+        NodeRegistrationWriter::TRIGGER_NODE_ANCHOR,
         'App\Nodeflow\Triggers\OrderPlaced::class',
         '\App\Nodeflow\Triggers\OrderPlaced::class',
+    ))->toBe(\Nodeflow\Console\NodeRegistrationOutcome::Appended);
+
+    expect($writer->appendTo(
+        $this->path,
+        NodeRegistrationWriter::TRIGGER_SOURCE_ANCHOR,
+        'App\Nodeflow\TriggerSources\OrderPlaced::class',
+        '\App\Nodeflow\TriggerSources\OrderPlaced::class',
     ))->toBe(\Nodeflow\Console\NodeRegistrationOutcome::Appended);
 
     expect($writer->appendTo(
@@ -152,7 +190,9 @@ it('adds all three homes to a hand-written provider without touching its registe
     $contents = file_get_contents($this->path);
 
     expect(substr_count($contents, NodeRegistrationWriter::ANCHOR))->toBe(1);
-    expect(substr_count($contents, NodeRegistrationWriter::TRIGGER_ANCHOR))->toBe(1);
+    expect(substr_count($contents, NodeRegistrationWriter::TRIGGER_DRIVER_ANCHOR))->toBe(1);
+    expect(substr_count($contents, NodeRegistrationWriter::TRIGGER_NODE_ANCHOR))->toBe(1);
+    expect(substr_count($contents, NodeRegistrationWriter::TRIGGER_SOURCE_ANCHOR))->toBe(1);
     expect(substr_count($contents, NodeRegistrationWriter::ATTRIBUTE_ANCHOR))->toBe(1);
 
     // The host's own registration survives verbatim. Counterfactual: rewrite the
@@ -162,7 +202,9 @@ it('adds all three homes to a hand-written provider without touching its registe
     // Fully-qualified, unlike the stub's own use-imported form: this file's
     // existing imports are unknown, so the insertion cannot rely on one.
     expect($contents)->toContain('\Nodeflow\Nodeflow::register($this->nodes);')
-        ->toContain('\Nodeflow\Nodeflow::registerTriggerSources($this->triggers);')
+        ->toContain('\Nodeflow\Nodeflow::registerTriggerDrivers($this->triggerDrivers);')
+        ->toContain('\Nodeflow\Nodeflow::registerTriggerNodes($this->triggerNodes);')
+        ->toContain('\Nodeflow\Nodeflow::registerTriggerSources($this->triggerSources);')
         ->toContain('app(\Nodeflow\Schema\SubjectAttributeRegistry::class)->register(...$this->subjectAttributes());');
 
     expectParseablePhp($this->path);
@@ -183,7 +225,9 @@ it('adds only the missing home when one is already there', function () {
     $contents = file_get_contents($this->path);
 
     expect(substr_count($contents, NodeRegistrationWriter::ANCHOR))->toBe(1);
-    expect(substr_count($contents, NodeRegistrationWriter::TRIGGER_ANCHOR))->toBe(1);
+    expect(substr_count($contents, NodeRegistrationWriter::TRIGGER_DRIVER_ANCHOR))->toBe(1);
+    expect(substr_count($contents, NodeRegistrationWriter::TRIGGER_NODE_ANCHOR))->toBe(1);
+    expect(substr_count($contents, NodeRegistrationWriter::TRIGGER_SOURCE_ANCHOR))->toBe(1);
 });
 
 it('is idempotent on a provider it already wired', function () {
@@ -220,6 +264,20 @@ it('refuses a provider with no boot method and offers the snippet', function () 
     expect(file_get_contents($this->path))->toBe($before);
 });
 
+it('refuses a differently formatted trigger home instead of creating a duplicate property', function () {
+    file_put_contents($this->path, str_replace(
+        '    public function boot(): void',
+        "    protected array \$triggerDrivers=[];\n\n    public function boot(): void",
+        handWrittenProvider(),
+    ));
+    $before = file_get_contents($this->path);
+
+    expect($this->step->check())->toBe(InstallOutcome::CannotWire)
+        ->and($this->step->apply())->toBe(InstallOutcome::CannotWire)
+        ->and(file_get_contents($this->path))->toBe($before)
+        ->and($this->step->snippet())->toContain('protected array $triggerDrivers = [');
+});
+
 /**
  * C4. All three registration homes exist, but every boot() call is commented
  * out — the exact host where nothing registers and the palette is empty.
@@ -239,13 +297,21 @@ function providerWithCommentedOutBootCalls(): string
         protected array $nodes = [
         ];
 
-        protected array $triggers = [
+        protected array $triggerDrivers = [
+        ];
+
+        protected array $triggerNodes = [
+        ];
+
+        protected array $triggerSources = [
         ];
 
         public function boot(): void
         {
             // Nodeflow::register($this->nodes);
-            // Nodeflow::registerTriggerSources($this->triggers);
+            // Nodeflow::registerTriggerDrivers($this->triggerDrivers);
+            // Nodeflow::registerTriggerNodes($this->triggerNodes);
+            // Nodeflow::registerTriggerSources($this->triggerSources);
             // app(SubjectAttributeRegistry::class)->register(...$this->subjectAttributes());
         }
 
@@ -277,7 +343,9 @@ it('adds real boot() calls next to the commented-out ones and ends up wired', fu
     $contents = file_get_contents($this->path);
 
     expect($contents)->toContain('\Nodeflow\Nodeflow::register($this->nodes);')
-        ->toContain('\Nodeflow\Nodeflow::registerTriggerSources($this->triggers);')
+        ->toContain('\Nodeflow\Nodeflow::registerTriggerDrivers($this->triggerDrivers);')
+        ->toContain('\Nodeflow\Nodeflow::registerTriggerNodes($this->triggerNodes);')
+        ->toContain('\Nodeflow\Nodeflow::registerTriggerSources($this->triggerSources);')
         ->toContain('app(\Nodeflow\Schema\SubjectAttributeRegistry::class)->register(...$this->subjectAttributes());')
         // The commented-out calls survive untouched alongside the real ones.
         ->toContain('// Nodeflow::register($this->nodes);');

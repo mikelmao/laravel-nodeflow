@@ -139,7 +139,7 @@ it('carries no triggers or subjectAttributes anchor', function () {
 
     $contents = file_get_contents($this->packageRoot.'/src/WidgetsServiceProvider.php');
 
-    expect($contents)->not->toContain(NodeRegistrationWriter::TRIGGER_ANCHOR);
+    expect($contents)->not->toContain(NodeRegistrationWriter::TRIGGER_SOURCE_ANCHOR);
     expect($contents)->not->toContain(NodeRegistrationWriter::ATTRIBUTE_ANCHOR);
 });
 

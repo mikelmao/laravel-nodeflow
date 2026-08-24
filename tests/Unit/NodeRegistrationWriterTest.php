@@ -295,14 +295,14 @@ function threeHomesSource(): string
         protected array $nodes = [
         ];
 
-        protected array $triggers = [
+        protected array $triggerSources = [
         ];
 
         public function boot(): void
         {
             Nodeflow::register($this->nodes);
 
-            Nodeflow::registerTriggerSources($this->triggers);
+            Nodeflow::registerTriggerSources($this->triggerSources);
 
             app(SubjectAttributeRegistry::class)->register(...$this->subjectAttributes());
         }
@@ -318,14 +318,14 @@ function threeHomesSource(): string
 }
 
 it('appends a trigger class through the trigger anchor', function () {
-    // Counterfactual: point TRIGGER_ANCHOR at the $nodes anchor and this fails,
+    // Counterfactual: point TRIGGER_SOURCE_ANCHOR at the $nodes anchor and this fails,
     // because the trigger lands in the node array — where NodeRegistry::register()
     // would reject it for implementing neither cardinality interface.
     $path = providerWithThreeHomes();
 
     $outcome = (new NodeRegistrationWriter(new Filesystem))->appendTo(
         $path,
-        NodeRegistrationWriter::TRIGGER_ANCHOR,
+        NodeRegistrationWriter::TRIGGER_SOURCE_ANCHOR,
         'App\Nodeflow\Triggers\OrderPlaced::class',
         '\App\Nodeflow\Triggers\OrderPlaced::class',
     );
@@ -334,8 +334,8 @@ it('appends a trigger class through the trigger anchor', function () {
 
     $contents = file_get_contents($path);
 
-    // In the $triggers array, and provably not in the $nodes one.
-    expect($contents)->toContain("protected array \$triggers = [\n        \\App\Nodeflow\Triggers\OrderPlaced::class,");
+    // In the $triggerSources array, and provably not in the $nodes one.
+    expect($contents)->toContain("protected array \$triggerSources = [\n        \\App\Nodeflow\Triggers\OrderPlaced::class,");
     expect($contents)->toContain("protected array \$nodes = [\n    ];");
 });
 
@@ -414,15 +414,15 @@ it('refuses an attribute method whose body is not a bare return array', function
 });
 
 it('refuses a duplicated trigger anchor and writes nothing', function () {
-    // Counterfactual: drop the >1 check and this fails — two $triggers arrays
+    // Counterfactual: drop the >1 check and this fails — two source arrays
     // means the writer cannot know which one the boot() call spreads.
-    $path = providerWithThreeHomes(threeHomesSource().PHP_EOL.'// protected array $triggers = [');
+    $path = providerWithThreeHomes(threeHomesSource().PHP_EOL.'// protected array $triggerSources = [');
 
     $before = file_get_contents($path);
 
     $outcome = (new NodeRegistrationWriter(new Filesystem))->appendTo(
         $path,
-        NodeRegistrationWriter::TRIGGER_ANCHOR,
+        NodeRegistrationWriter::TRIGGER_SOURCE_ANCHOR,
         'App\Nodeflow\Triggers\OrderPlaced::class',
         '\App\Nodeflow\Triggers\OrderPlaced::class',
     );

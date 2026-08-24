@@ -8,5 +8,8 @@ it('registers the node packaging commands', function () {
     expect(\Illuminate\Support\Facades\Artisan::all())->toHaveKeys([
         'nodeflow:make-node-package',
         'nodeflow:extract-node',
+        'nodeflow:make-trigger',
+        'nodeflow:make-trigger-source',
+        'nodeflow:make-trigger-driver',
     ]);
 });

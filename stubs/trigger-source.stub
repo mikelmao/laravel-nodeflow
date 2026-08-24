@@ -1,0 +1,39 @@
+<?php
+
+namespace {{ namespace }};
+
+use InvalidArgumentException;
+use Nodeflow\Contracts\TriggerSource;
+use Nodeflow\Schema\TriggerDefinition;
+use Nodeflow\Triggers\TriggerMatch;
+use Nodeflow\Triggers\TriggerOccurrence;
+{{ familyImports }}
+
+class {{ class }} implements {{ sourceInterface }}
+{
+    public static function key(): string
+    {
+        return '{{ key }}';
+    }
+
+    public static function driver(): string
+    {
+        return '{{ driver }}';
+    }
+
+{{ familyMethods }}
+    public function definition(): TriggerDefinition
+    {
+        return TriggerDefinition::make('{{ label }}')
+            ->description('TODO: describe this allowlisted trigger source.');
+    }
+
+    public function resolve(TriggerOccurrence $occurrence, array $config): TriggerMatch
+    {
+{{ payloadGuard }}
+
+        // TODO: return tenant-scoped subjects, sanitized trigger data, and a
+        // stable occurrence identity when delivery may repeat.
+        return TriggerMatch::make();
+    }
+}

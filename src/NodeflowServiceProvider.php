@@ -13,6 +13,8 @@ use Nodeflow\Console\MakeNodeCommand;
 use Nodeflow\Console\MakeNodePackageCommand;
 use Nodeflow\Console\MakeSubjectAttributeCommand;
 use Nodeflow\Console\MakeTriggerCommand;
+use Nodeflow\Console\MakeTriggerDriverCommand;
+use Nodeflow\Console\MakeTriggerSourceCommand;
 use Nodeflow\Console\PruneCommand;
 use Nodeflow\Contracts\SubjectResolver;
 use Nodeflow\Contracts\TenantResolver;
@@ -120,6 +122,8 @@ class NodeflowServiceProvider extends ServiceProvider
                 MakeNodePackageCommand::class,
                 MakeSubjectAttributeCommand::class,
                 MakeTriggerCommand::class,
+                MakeTriggerDriverCommand::class,
+                MakeTriggerSourceCommand::class,
                 PruneCommand::class,
             ]);
         }
@@ -146,7 +150,10 @@ class NodeflowServiceProvider extends ServiceProvider
 
         try {
             $missing = CheckNodeTypesResolver::findMissingTypes(
-                $this->app->make(NodeRegistry::class)
+                $this->app->make(NodeRegistry::class),
+                $this->app->make(TriggerNodeRegistry::class),
+                $this->app->make(TriggerDriverRegistry::class),
+                $this->app->make(TriggerSourceRegistry::class),
             );
 
             if ($missing !== []) {

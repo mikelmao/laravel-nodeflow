@@ -12,6 +12,9 @@ import {
     normalizeOverlay,
     overlayFor,
     rendererFor,
+    categoryPresentation,
+    nodeSummary,
+    NodeflowIcon,
     Unregistered,
     useOverlayPolling,
 } from '.'
@@ -21,6 +24,8 @@ import type {
     CanvasEdge,
     CanvasNode,
     CanvasProps,
+    CategoryPresentation,
+    ConfigPanelProps,
     ControlMap,
     EditorUrls,
     EditorMode,
@@ -35,6 +40,9 @@ import type {
     FlowRunProps,
     FlowSummary,
     Graph,
+    GraphComponentKind,
+    GraphComponentPayload,
+    GraphConfig,
     GraphEdge,
     GraphNode,
     NodeBadge,
@@ -49,16 +57,23 @@ import type {
     NodeRendererMap,
     NodeRendererProps,
     NodeTypePayload,
+    NodeIconName,
+    NodeLibraryProps,
     OverlaySnapshot,
     PublishErrorBody,
     RunSubjectRow,
     RunSummary,
     RunUrls,
     TriggerPayload,
+    TriggerNodeTypePayload,
+    TriggerSourcePayload,
+    TriggerSourcesPayload,
     ToolbarSlots,
     UseEditorControllerOptions,
     UseEditorControllerResult,
     ValidationOutcome,
+    WebhookDetailsProps,
+    WebhookMetadata,
 } from '.'
 
 type EveryPublicType =
@@ -67,6 +82,8 @@ type EveryPublicType =
     | CanvasEdge
     | CanvasNode
     | CanvasProps
+    | CategoryPresentation
+    | ConfigPanelProps
     | ControlMap
     | EditorUrls
     | EditorMode
@@ -81,6 +98,9 @@ type EveryPublicType =
     | FlowRunProps
     | FlowSummary
     | Graph
+    | GraphComponentKind
+    | GraphComponentPayload
+    | GraphConfig
     | GraphEdge
     | GraphNode
     | NodeBadge
@@ -95,16 +115,23 @@ type EveryPublicType =
     | NodeRendererMap
     | NodeRendererProps
     | NodeTypePayload
+    | NodeIconName
+    | NodeLibraryProps
     | OverlaySnapshot
     | PublishErrorBody
     | RunSubjectRow
     | RunSummary
     | RunUrls
     | TriggerPayload
+    | TriggerNodeTypePayload
+    | TriggerSourcePayload
+    | TriggerSourcesPayload
     | ToolbarSlots
     | UseEditorControllerOptions
     | UseEditorControllerResult
     | ValidationOutcome
+    | WebhookDetailsProps
+    | WebhookMetadata
 
 type IsNever<T> = [T] extends [never] ? true : false
 const everyPublicTypeIsNotNever: IsNever<EveryPublicType> = false
@@ -123,6 +150,9 @@ describe('package public surface', () => {
             FlowEditor,
             mergeControls,
             rendererFor,
+            categoryPresentation,
+            nodeSummary,
+            NodeflowIcon,
             Unregistered,
         ]).not.toContain(undefined)
         expect(everyPublicTypeIsNotNever).toBe(false)

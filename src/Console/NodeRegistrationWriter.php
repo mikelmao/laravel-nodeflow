@@ -5,7 +5,7 @@ namespace Nodeflow\Console;
 use Illuminate\Filesystem\Filesystem;
 
 /**
- * Appends a node class to the host's NodeflowServiceProvider.
+ * Appends a component class to an exact host NodeflowServiceProvider anchor.
  *
  * Separate from MakeNodeCommand because editing someone else's file is the
  * riskiest thing the generator does and deserves tests that do not involve
@@ -18,7 +18,11 @@ class NodeRegistrationWriter
 {
     public const ANCHOR = 'protected array $nodes = [';
 
-    public const TRIGGER_ANCHOR = 'protected array $triggers = [';
+    public const TRIGGER_DRIVER_ANCHOR = 'protected array $triggerDrivers = [';
+
+    public const TRIGGER_NODE_ANCHOR = 'protected array $triggerNodes = [';
+
+    public const TRIGGER_SOURCE_ANCHOR = 'protected array $triggerSources = [';
 
     /**
      * A method signature, not an array opening, because a SubjectAttribute carries
@@ -123,9 +127,10 @@ class NodeRegistrationWriter
             return NodeRegistrationOutcome::AnchorMissing;
         }
 
+        $newline = str_contains($contents, "\r\n") ? "\r\n" : "\n";
         $updated = substr_replace(
             $contents,
-            PHP_EOL.$indent.$entry.',',
+            $newline.$indent.$entry.',',
             $position,
             0,
         );
