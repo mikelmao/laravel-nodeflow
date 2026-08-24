@@ -174,7 +174,7 @@ it('does not let trigger projections outlive their referenced records', function
         );
 });
 
-it('requires run origins and retains idempotency uniqueness per version', function () {
+it('requires a run started_via origin', function () {
     [$flow, $version] = makeTriggerSchemaFlow();
 
     expect(fn () => DB::table('nodeflow_runs')->insert([
@@ -182,7 +182,24 @@ it('requires run origins and retains idempotency uniqueness per version', functi
         'tenant_id' => 'org-1',
         'strategy' => 'cohort',
         'status' => 'pending',
+        'trigger_node_id' => 'trigger',
     ]))->toThrow(QueryException::class);
+});
+
+it('requires a run trigger_node_id origin', function () {
+    [$flow, $version] = makeTriggerSchemaFlow();
+
+    expect(fn () => DB::table('nodeflow_runs')->insert([
+        'flow_version_id' => $version->id,
+        'tenant_id' => 'org-1',
+        'strategy' => 'cohort',
+        'status' => 'pending',
+        'started_via' => 'manual',
+    ]))->toThrow(QueryException::class);
+});
+
+it('retains run idempotency uniqueness per version', function () {
+    [$flow, $version] = makeTriggerSchemaFlow();
 
     Run::create([
         'flow_version_id' => $version->id,
