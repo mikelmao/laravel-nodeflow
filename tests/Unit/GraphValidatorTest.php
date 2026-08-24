@@ -58,6 +58,30 @@ it('returns structured errors for an unresolved executable alias with an outgoin
         ]);
 });
 
+it('returns structured errors for a catalogued but unregistered trigger with an outgoing edge', function () {
+    app(GraphTypeCatalog::class)->claim(
+        'legacy.trigger',
+        'trigger',
+        'Tests\\Support\\MissingTriggerNode',
+    );
+
+    $result = $this->validator->validate(Graph::fromArray([
+        'start' => 'trigger',
+        'nodes' => [
+            ['id' => 'trigger', 'type' => 'legacy.trigger', 'config' => ['source' => 'test.orders']],
+            ['id' => 'n1', 'type' => 'core.exit', 'config' => []],
+        ],
+        'edges' => [['from' => 'trigger', 'output' => 'started', 'to' => 'n1']],
+    ]));
+
+    expect($result->passes())->toBeFalse()
+        ->and($result->nodeErrors())->toContain([
+            'node' => 'trigger',
+            'field' => null,
+            'message' => 'Node [trigger] uses unknown type [legacy.trigger].',
+        ]);
+});
+
 it('rejects a cycle', function () {
     $result = $this->validator->validate(Graph::fromArray(triggeredGraph([
         'start' => 'n1',

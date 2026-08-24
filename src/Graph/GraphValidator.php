@@ -58,6 +58,13 @@ class GraphValidator
             $family = $this->types->family($type);
 
             if ($family === 'trigger') {
+                if (! $this->triggers->has($type)) {
+                    $errors[] = "Node [{$id}] uses unknown type [{$type}].";
+                    $nodeErrors[] = ['node' => $id, 'field' => null, 'message' => end($errors)];
+
+                    continue;
+                }
+
                 $this->validateTriggerNode($id, $node, $errors, $nodeErrors);
 
                 continue;
