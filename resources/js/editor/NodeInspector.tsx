@@ -1,22 +1,20 @@
 import { useEffect, useId, useRef, useState } from 'react'
 import type { KeyboardEvent } from 'react'
 import type { ControlMap } from '../controls'
-import type { NodeCardData, NodeErrorEntry, NodeTypePayload } from '../graph/types'
+import type { GraphComponentPayload, NodeCardData, NodeErrorEntry } from '../graph/types'
 import { ConfigPanel } from './ConfigPanel'
 
 type InspectorTab = 'configure' | 'advanced'
 
 export type NodeInspectorProps = {
     node: NodeCardData
-    def?: NodeTypePayload
+    def?: GraphComponentPayload
     controls: ControlMap
     errors: NodeErrorEntry[]
     /** An issue chosen in FlowOverview; field issues switch back to Configure and focus their control. */
     issueToFocus?: NodeErrorEntry | null
-    isStart: boolean
     onConfigChange: (key: string, value: unknown) => void
     onConfigBlur?: () => void
-    onMakeStart: () => void
     onDelete: () => void
 }
 
@@ -34,10 +32,8 @@ export function NodeInspector({
     controls,
     errors,
     issueToFocus = null,
-    isStart,
     onConfigChange,
     onConfigBlur,
-    onMakeStart,
     onDelete,
 }: NodeInspectorProps) {
     const generatedId = useId().replace(/:/g, '')
@@ -92,7 +88,7 @@ export function NodeInspector({
         <aside ref={rootRef} aria-label="Node inspector" className="flex min-h-0 flex-col gap-4 rounded-lg border border-border bg-card p-4 text-card-foreground">
             <header className="space-y-1">
                 <h2 className="text-base font-semibold">{def?.label ?? 'Unregistered node'}</h2>
-                <p className="text-sm text-muted-foreground">{def?.group || 'Unregistered node type'}</p>
+                <p className="text-sm text-muted-foreground">{def === undefined ? 'Unregistered node type' : def.kind === 'trigger' ? 'Trigger' : def.group || 'Unregistered node type'}</p>
                 {def?.description && <p className="text-sm text-muted-foreground">{def.description}</p>}
             </header>
 
@@ -134,14 +130,11 @@ export function NodeInspector({
                 <dl className="space-y-3 text-sm">
                     <div><dt className="font-medium text-muted-foreground">Node ID</dt><dd className="break-all font-mono">{node.id}</dd></div>
                     <div><dt className="font-medium text-muted-foreground">Registered type</dt><dd className="break-all font-mono">{node.type}</dd></div>
-                    <div><dt className="font-medium text-muted-foreground">Group</dt><dd>{def?.group || 'None'}</dd></div>
-                    <div><dt className="font-medium text-muted-foreground">Cardinality</dt><dd>{empty(def?.cardinality ?? [])}</dd></div>
+                    <div><dt className="font-medium text-muted-foreground">Group</dt><dd>{def?.kind === 'executable' ? def.group || 'None' : def?.kind === 'trigger' ? 'Trigger' : 'None'}</dd></div>
+                    <div><dt className="font-medium text-muted-foreground">Cardinality</dt><dd>{empty(def?.kind === 'executable' ? def.cardinality : [])}</dd></div>
                     <div><dt className="font-medium text-muted-foreground">Declared outputs</dt><dd>{empty(def?.outputs ?? [])}</dd></div>
                 </dl>
                 <div className="space-y-2 border-t border-border pt-4">
-                    <button type="button" disabled={isStart} onClick={onMakeStart} className="w-full rounded-md border border-input px-3 py-2 text-sm disabled:cursor-not-allowed disabled:opacity-60">
-                        {isStart ? 'Start node' : 'Make start node'}
-                    </button>
                     <button type="button" onClick={onDelete} className="w-full rounded-md border border-destructive bg-destructive px-3 py-2 text-sm text-destructive-foreground hover:opacity-90">
                         Delete node
                     </button>

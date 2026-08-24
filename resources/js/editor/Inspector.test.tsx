@@ -10,11 +10,13 @@ import { NodeInspector } from './NodeInspector'
 const node: NodeCardData = {
     id: 'send1',
     type: 'app.send',
+    kind: 'executable',
     config: { template: 'Welcome' },
     isStart: false,
 }
 
 const definition: NodeTypePayload = {
+    kind: 'executable',
     type: 'app.send',
     label: 'Send message',
     group: 'Messaging',
@@ -60,9 +62,7 @@ function inspector(overrides: Partial<React.ComponentProps<typeof NodeInspector>
         def: definition,
         controls: mergeControls(),
         errors: [],
-        isStart: false,
         onConfigChange: vi.fn(),
-        onMakeStart: vi.fn(),
         onDelete: vi.fn(),
         ...overrides,
     }
@@ -220,7 +220,7 @@ describe('NodeInspector', () => {
         fireEvent.click(advanced)
         rendered.rerender(
             <FieldOptionsContext.Provider value={{ template: '/options/__NODEFLOW_TYPE__/__NODEFLOW_FIELD__', cache: new Map() }}>
-                <NodeInspector node={{ ...node, id: 'send2' }} def={definition} controls={mergeControls()} errors={[]} isStart={false} onConfigChange={vi.fn()} onMakeStart={vi.fn()} onDelete={vi.fn()} />
+                <NodeInspector node={{ ...node, id: 'send2' }} def={definition} controls={mergeControls()} errors={[]} onConfigChange={vi.fn()} onDelete={vi.fn()} />
             </FieldOptionsContext.Provider>,
         )
         expect(screen.getByRole('tab', { name: 'Configure' })).toHaveAttribute('aria-selected', 'true')
@@ -233,7 +233,7 @@ describe('NodeInspector', () => {
         fireEvent.click(screen.getByRole('tab', { name: 'Advanced' }))
         rendered.rerender(
             <FieldOptionsContext.Provider value={{ template: '/options/__NODEFLOW_TYPE__/__NODEFLOW_FIELD__', cache: new Map() }}>
-                <NodeInspector node={node} def={definition} controls={mergeControls()} errors={[{ node: 'send1', field: 'template', message: 'Required' }]} issueToFocus={{ node: 'send1', field: 'template', message: 'Required' }} isStart={false} onConfigChange={vi.fn()} onMakeStart={vi.fn()} onDelete={vi.fn()} />
+                <NodeInspector node={node} def={definition} controls={mergeControls()} errors={[{ node: 'send1', field: 'template', message: 'Required' }]} issueToFocus={{ node: 'send1', field: 'template', message: 'Required' }} onConfigChange={vi.fn()} onDelete={vi.fn()} />
             </FieldOptionsContext.Provider>,
         )
 
@@ -245,8 +245,8 @@ describe('NodeInspector', () => {
         const fieldKey = 'constructor"quoted'
         const selected = { ...node, config: { [fieldKey]: 'Welcome' } }
         const def = { ...definition, fields: [{ ...definition.fields[0]!, key: fieldKey }] }
-        const firstProps = { node: selected, def, controls: mergeControls(), errors: [], isStart: false, onConfigChange: vi.fn(), onMakeStart: vi.fn(), onDelete: vi.fn() }
-        const secondProps = { ...firstProps, onConfigChange: vi.fn(), onMakeStart: vi.fn(), onDelete: vi.fn() }
+        const firstProps = { node: selected, def, controls: mergeControls(), errors: [], onConfigChange: vi.fn(), onDelete: vi.fn() }
+        const secondProps = { ...firstProps, onConfigChange: vi.fn(), onDelete: vi.fn() }
         const rendered = render(
             <FieldOptionsContext.Provider value={{ template: '/options/__NODEFLOW_TYPE__/__NODEFLOW_FIELD__', cache: new Map() }}>
                 <NodeInspector {...firstProps} />
@@ -281,9 +281,8 @@ describe('NodeInspector', () => {
     })
 
     it('places exact developer metadata and destructive actions only in Advanced', () => {
-        const onMakeStart = vi.fn()
         const onDelete = vi.fn()
-        inspector({ onMakeStart, onDelete })
+        inspector({ onDelete })
         fireEvent.click(screen.getByRole('tab', { name: 'Advanced' }))
 
         expect(screen.getByText('Node ID')).toBeInTheDocument()
@@ -293,22 +292,21 @@ describe('NodeInspector', () => {
         expect(screen.getByText('Group')).toBeInTheDocument()
         expect(screen.getByText('subject')).toBeInTheDocument()
         expect(screen.getByText('sent, bounced')).toBeInTheDocument()
-        fireEvent.click(screen.getByRole('button', { name: 'Make start node' }))
+        expect(screen.queryByRole('button', { name: /start node/i })).toBeNull()
         fireEvent.click(screen.getByRole('button', { name: 'Delete node' }))
-        expect(onMakeStart).toHaveBeenCalledOnce()
         expect(onDelete).toHaveBeenCalledOnce()
     })
 
-    it('shows current-start copy and lets an unknown node be deleted from Advanced', () => {
+    it('lets an unknown node be deleted from Advanced without exposing make-start', () => {
         const onDelete = vi.fn()
-        inspector({ def: undefined, isStart: true, onDelete })
+        inspector({ def: undefined, onDelete })
 
         expect(screen.getByRole('alert')).toHaveTextContent('app.send')
         expect(screen.queryByLabelText('Template')).toBeNull()
         fireEvent.click(screen.getByRole('tab', { name: 'Advanced' }))
         expect(screen.getByText('app.send')).toBeInTheDocument()
         expect(screen.getAllByText('None')).toHaveLength(3)
-        expect(screen.getByRole('button', { name: 'Start node' })).toBeDisabled()
+        expect(screen.queryByRole('button', { name: /start node/i })).toBeNull()
         fireEvent.click(screen.getByRole('button', { name: 'Delete node' }))
         expect(onDelete).toHaveBeenCalledOnce()
     })

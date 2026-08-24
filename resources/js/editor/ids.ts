@@ -1,4 +1,4 @@
-import type { NodeTypePayload } from '../graph/types'
+import type { GraphComponentPayload } from '../graph/types'
 
 export function nextNodeId(type: string, taken: Set<string>): string {
     // IDs appear in publish errors; duplicates collapse nodes with last-one-wins behavior.
@@ -16,7 +16,7 @@ export function nextNodeId(type: string, taken: Set<string>): string {
 export function canConnect(
     sourceType: string | undefined,
     sourceHandle: string | null,
-    defs: Record<string, NodeTypePayload>,
+    defs: Record<string, GraphComponentPayload>,
 ): boolean {
     const definition = sourceType !== undefined
         && Object.prototype.hasOwnProperty.call(defs, sourceType)
@@ -33,5 +33,5 @@ export function canConnect(
         return outputs.length === 1 && outputs[0] !== ''
     }
 
-    return outputs.includes(sourceHandle)
+    return outputs.some((output) => output === sourceHandle)
 }

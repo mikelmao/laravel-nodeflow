@@ -1,4 +1,4 @@
-import type { NodeCardData, NodeTypePayload } from '../graph/types'
+import type { GraphComponentPayload, NodeCardData } from '../graph/types'
 import type { NodeIconName } from './icons'
 
 export type CategoryPresentation = {
@@ -51,7 +51,7 @@ function truncate(text: string, maximum = 78): string {
 }
 
 /** A single human-readable configuration hint for the compact node body. */
-export function nodeSummary(data: NodeCardData, def?: NodeTypePayload): string {
+export function nodeSummary(data: NodeCardData, def?: GraphComponentPayload): string {
     if (def === undefined) return ''
 
     for (const field of def.fields) {

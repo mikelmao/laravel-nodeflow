@@ -4,6 +4,7 @@ import { categoryPresentation, categoryClasses, nodeSummary } from './node'
 
 function definition(overrides: Partial<NodeTypePayload> = {}): NodeTypePayload {
     return {
+        kind: 'executable',
         type: 'app.send',
         label: 'Send message',
         group: 'Messaging',
@@ -21,7 +22,7 @@ function definition(overrides: Partial<NodeTypePayload> = {}): NodeTypePayload {
 }
 
 function node(config: Record<string, unknown>): NodeCardData {
-    return { id: 'internal-node-id', type: 'app.send', config, isStart: false }
+    return { id: 'internal-node-id', type: 'app.send', kind: 'executable', config, isStart: false }
 }
 
 describe('categoryPresentation', () => {

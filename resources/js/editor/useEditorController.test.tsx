@@ -1,18 +1,35 @@
 import { act, renderHook, waitFor } from '@testing-library/react'
-import { describe, expect, it, vi } from 'vitest'
+import { afterEach, describe, expect, it, vi } from 'vitest'
 import type { CanvasActions } from '../canvas/Canvas'
-import type { EditorUrls, Graph, NodeTypePayload } from '../graph/types'
+import type { EditorUrls, Graph, NodeTypePayload, TriggerNodeTypePayload } from '../graph/types'
 import { useEditorController } from './useEditorController'
 
-const flow = { id: 1, name: 'Studio', trigger_type: 'app.started', status: 'draft', version: 3, draft_revision: 7, draft_updated_at: null }
-const urls = { draft: '/draft', publish: '/publish', validate: '/validate', options: '/options/__NODEFLOW_TYPE__/__NODEFLOW_FIELD__' }
+afterEach(() => vi.unstubAllGlobals())
+
+const flow = { id: 1, name: 'Studio', status: 'draft', version: 3, draft_revision: 7, draft_updated_at: null }
+const urls = {
+    draft: '/draft', publish: '/publish', validate: '/validate', options: '/options/__NODEFLOW_TYPE__/__NODEFLOW_FIELD__',
+    trigger_options: '/trigger-options/__NODEFLOW_TYPE__/__NODEFLOW_FIELD__',
+    trigger_source_options: '/trigger-source-options/__NODEFLOW_TYPE__/__NODEFLOW_SOURCE__/__NODEFLOW_FIELD__',
+    rotate_webhook_secret: '/webhook-secret/rotate',
+}
 const send: NodeTypePayload = {
+    kind: 'executable',
     type: 'app.send', label: 'Send Message', group: 'Messaging', icon: null, description: null,
     outputs: ['sent'], fields: [], default_config: {}, cardinality: ['subject'],
 }
 const exit: NodeTypePayload = {
+    kind: 'executable',
     type: 'core.exit', label: 'Exit', group: 'Core', icon: null, description: null,
     outputs: [], fields: [], default_config: {}, cardinality: ['subject'],
+}
+const webhook: TriggerNodeTypePayload = {
+    kind: 'trigger', type: 'custom.webhook', driver: 'webhook', label: 'Webhook', icon: null, description: null,
+    outputs: ['started'], fields: [], default_config: { source: 'orders' }, compatible_source_keys: ['orders'],
+}
+const event: TriggerNodeTypePayload = {
+    kind: 'trigger', type: 'custom.event', driver: 'event', label: 'Laravel event', icon: null, description: null,
+    outputs: ['started'], fields: [], default_config: { source: 'order.placed' }, compatible_source_keys: ['order.placed'],
 }
 const graph: Graph = {
     start: 'send1',
@@ -25,7 +42,9 @@ function controller(overrides: Partial<Parameters<typeof useEditorController>[0]
         flow,
         graph,
         palette: [send, exit],
-        triggers: [{ type: 'app.started', label: 'Started', description: null, fields: [] }],
+        trigger_nodes: [webhook, event],
+        trigger_sources: { webhook: [], event: [] },
+        webhook: null,
         urls,
         autosaveDebounceMs: 1,
         ...overrides,
@@ -33,11 +52,195 @@ function controller(overrides: Partial<Parameters<typeof useEditorController>[0]
 }
 
 describe('useEditorController', () => {
+    it('adds exactly one trigger as start and requires explicit replacement', () => {
+        const view = controller({ graph: { start: '', nodes: [], edges: [] } })
+
+        act(() => view.result.current.actions.addTrigger(webhook, { x: 20, y: 30 }))
+        const first = view.result.current.document
+        expect(first).toMatchObject({
+            startId: 'webhook1',
+            nodes: [{ id: 'webhook1', position: { x: 20, y: 30 }, data: { kind: 'trigger', type: 'custom.webhook', config: { source: 'orders' } } }],
+        })
+
+        act(() => view.result.current.actions.addTrigger(event, { x: 50, y: 60 }))
+        expect(view.result.current.document).toBe(first)
+        act(() => view.result.current.actions.undo())
+        expect(view.result.current.document).toMatchObject({ startId: '', nodes: [], edges: [] })
+        act(() => view.result.current.actions.redo())
+        expect(view.result.current.document).toEqual(first)
+
+        act(() => view.result.current.actions.replaceTrigger(event))
+        expect(view.result.current.document).toMatchObject({
+            startId: 'webhook1',
+            nodes: [{ id: 'webhook1', position: { x: 20, y: 30 }, data: { kind: 'trigger', type: 'custom.event', config: { source: 'order.placed' } } }],
+        })
+        expect(view.result.current.document.nodes.filter((node) => node.data.kind === 'trigger')).toHaveLength(1)
+    })
+
+    it('replaces a trigger without losing its position or sole outgoing target and undoes once', () => {
+        const view = controller({
+            graph: {
+                start: 'hook',
+                nodes: [
+                    { id: 'hook', type: 'custom.webhook', config: { source: 'orders' }, position: { x: 10, y: 15 } },
+                    { id: 'send1', type: 'app.send', config: {}, position: { x: 300, y: 15 } },
+                ],
+                edges: [{ from: 'hook', to: 'send1', output: 'started' }],
+            },
+        })
+        const before = view.result.current.document
+
+        act(() => view.result.current.actions.replaceTrigger(event))
+        expect(view.result.current.document).toMatchObject({
+            startId: 'hook',
+            nodes: [
+                { id: 'hook', position: { x: 10, y: 15 }, data: { kind: 'trigger', type: 'custom.event' } },
+                { id: 'send1', data: { kind: 'executable', type: 'app.send' } },
+            ],
+            edges: [{ source: 'hook', sourceHandle: 'started', target: 'send1', label: 'started' }],
+        })
+        act(() => view.result.current.actions.undo())
+        expect(view.result.current.document).toEqual(before)
+        act(() => view.result.current.actions.redo())
+        expect(view.result.current.document.nodes[0]?.data.type).toBe('custom.event')
+    })
+
+    it('deletes a trigger with incident edges, clears start, and restores the exact graph through history', () => {
+        const view = controller({
+            graph: {
+                start: 'hook',
+                nodes: [
+                    { id: 'hook', type: 'custom.webhook', config: {}, position: { x: 0, y: 0 } },
+                    { id: 'send1', type: 'app.send', config: {}, position: { x: 200, y: 0 } },
+                ],
+                edges: [{ from: 'hook', to: 'send1', output: 'started' }],
+            },
+        })
+        const before = view.result.current.document
+
+        act(() => view.result.current.actions.deleteNode('hook'))
+        expect(view.result.current.document).toMatchObject({ startId: '', nodes: [{ id: 'send1' }], edges: [] })
+        act(() => view.result.current.actions.undo())
+        expect(view.result.current.document).toEqual(before)
+        act(() => view.result.current.actions.redo())
+        expect(view.result.current.document).toMatchObject({ startId: '', nodes: [{ id: 'send1' }], edges: [] })
+    })
+
+    it('accepts only a trigger started edge to an executable and leaves invalid connections as identity no-ops', () => {
+        const view = controller({
+            graph: {
+                start: 'hook',
+                nodes: [
+                    { id: 'hook', type: 'custom.webhook', config: {}, position: { x: 0, y: 0 } },
+                    { id: 'send1', type: 'app.send', config: {}, position: { x: 200, y: 0 } },
+                    { id: 'unknown1', type: 'not.registered', config: {}, position: { x: 400, y: 0 } },
+                ],
+                edges: [],
+            },
+        })
+
+        for (const connection of [
+            { source: 'send1', sourceHandle: 'sent', target: 'hook', targetHandle: null },
+            { source: 'hook', sourceHandle: 'started', target: 'hook', targetHandle: null },
+            { source: 'hook', sourceHandle: 'wrong', target: 'send1', targetHandle: null },
+            { source: 'hook', sourceHandle: 'started', target: 'unknown1', targetHandle: null },
+        ]) {
+            const before = view.result.current.document
+            act(() => view.result.current.actions.connect(connection))
+            expect(view.result.current.document).toBe(before)
+        }
+
+        act(() => view.result.current.actions.connect({ source: 'hook', sourceHandle: 'started', target: 'send1', targetHandle: null }))
+        const connected = view.result.current.document
+        expect(connected.edges).toHaveLength(1)
+        act(() => view.result.current.actions.undo())
+        expect(view.result.current.document.edges).toEqual([])
+        act(() => view.result.current.actions.redo())
+        expect(view.result.current.document).toEqual(connected)
+    })
+
+    it('keeps max-output and cycle rejection when connecting trigger-aware documents', () => {
+        const view = controller({
+            graph: {
+                start: 'hook',
+                nodes: [
+                    { id: 'hook', type: 'custom.webhook', config: {}, position: { x: 0, y: 0 } },
+                    { id: 'first', type: 'app.send', config: {}, position: { x: 200, y: 0 } },
+                    { id: 'second', type: 'app.send', config: {}, position: { x: 400, y: 0 } },
+                ],
+                edges: [
+                    { from: 'hook', to: 'first', output: 'started' },
+                    { from: 'first', to: 'second', output: 'sent' },
+                ],
+            },
+        })
+
+        for (const connection of [
+            { source: 'hook', sourceHandle: 'started', target: 'second', targetHandle: null },
+            { source: 'second', sourceHandle: 'sent', target: 'first', targetHandle: null },
+        ]) {
+            const before = view.result.current.document
+            act(() => view.result.current.actions.connect(connection))
+            expect(view.result.current.document).toBe(before)
+        }
+        expect(view.result.current.document.edges).toHaveLength(2)
+    })
+
+    it('collapses malformed multiple triggers during explicit replacement and refuses injected extras', () => {
+        const view = controller({
+            graph: {
+                start: 'hook',
+                nodes: [
+                    { id: 'hook', type: 'custom.webhook', config: {}, position: { x: 10, y: 20 } },
+                    { id: 'duplicate', type: 'custom.event', config: {}, position: { x: 20, y: 30 } },
+                    { id: 'send1', type: 'app.send', config: {}, position: { x: 300, y: 20 } },
+                ],
+                edges: [{ from: 'hook', to: 'send1', output: 'malformed' }],
+            },
+        })
+
+        act(() => view.result.current.actions.replaceTrigger(event))
+        expect(view.result.current.document.nodes.filter((node) => node.data.kind === 'trigger')).toHaveLength(1)
+        expect(view.result.current.document).toMatchObject({
+            startId: 'hook',
+            nodes: [{ id: 'hook', position: { x: 10, y: 20 }, data: { type: 'custom.event' } }, { id: 'send1' }],
+            edges: [{ source: 'hook', sourceHandle: 'started', target: 'send1' }],
+        })
+
+        const before = view.result.current.document
+        const injected = { ...before.nodes[0]!, id: 'injected', data: { ...before.nodes[0]!.data, id: 'injected' } }
+        act(() => view.result.current.actions.nodesChange([{ type: 'add', item: injected }]))
+        expect(view.result.current.document).toBe(before)
+        act(() => view.result.current.actions.undo())
+        expect(view.result.current.document.nodes.filter((node) => node.data.kind === 'trigger')).toHaveLength(2)
+    })
+
+    it('does not autosave an invalid connection no-op', async () => {
+        const fetchMock = vi.fn()
+        vi.stubGlobal('fetch', fetchMock)
+        const view = controller({
+            graph: {
+                start: 'hook',
+                nodes: [
+                    { id: 'hook', type: 'custom.webhook', config: {}, position: { x: 0, y: 0 } },
+                    { id: 'send1', type: 'app.send', config: {}, position: { x: 200, y: 0 } },
+                ],
+                edges: [],
+            },
+        })
+        const before = view.result.current.document
+
+        act(() => view.result.current.actions.connect({ source: 'send1', sourceHandle: 'sent', target: 'hook', targetHandle: null }))
+        expect(view.result.current.document).toBe(before)
+        await new Promise((resolve) => setTimeout(resolve, 10))
+        expect(fetchMock).not.toHaveBeenCalled()
+    })
+
     // A regression to node-count ids or a fixed add coordinate makes two rapid adds collide/overlap.
-    it('adds collision-safe nodes at the requested point and makes only the first an empty-document start', () => {
+    it('adds collision-safe executable nodes without promoting one to graph start', () => {
         const empty = controller({ graph: { start: null, nodes: [], edges: [] } })
         act(() => empty.result.current.actions.addNode(send, { x: 20, y: 30 }))
-        expect(empty.result.current.document).toMatchObject({ startId: 'send1', nodes: [{ id: 'send1', position: { x: 20, y: 30 } }] })
+        expect(empty.result.current.document).toMatchObject({ startId: '', nodes: [{ id: 'send1', position: { x: 20, y: 30 }, data: { kind: 'executable', isStart: false } }] })
         act(() => empty.result.current.actions.addNode(send, { x: 20, y: 30 }))
         expect(empty.result.current.document.nodes.map((node) => node.id)).toEqual(['send1', 'send2'])
         expect(empty.result.current.document.nodes[1]!.position).not.toEqual({ x: 20, y: 30 })
@@ -209,7 +412,9 @@ describe('useEditorController', () => {
             flow,
             graph,
             palette: [send, exit],
-            triggers: [{ type: 'app.started', label: 'Started', description: null, fields: [] }],
+            trigger_nodes: [webhook, event],
+            trigger_sources: { webhook: [], event: [] },
+            webhook: null,
             urls: currentUrls,
             autosaveDebounceMs: 1,
         }))
@@ -233,7 +438,7 @@ describe('useEditorController', () => {
             if (url === '/new-publish') return new Promise<Response>((resolve) => { resolveNewPublish = resolve })
             return Promise.resolve(Response.json({ draft_revision: 8 }))
         }))
-        const view = renderHook(() => useEditorController({ flow, graph, palette: [send, exit], triggers: [{ type: 'app.started', label: 'Started', description: null, fields: [] }], urls: currentUrls, autosaveDebounceMs: 1 }))
+        const view = renderHook(() => useEditorController({ flow, graph, palette: [send, exit], trigger_nodes: [webhook, event], trigger_sources: { webhook: [], event: [] }, webhook: null, urls: currentUrls, autosaveDebounceMs: 1 }))
         act(() => { void view.result.current.actions.validate(); void view.result.current.actions.publish() })
         await waitFor(() => expect(resolvePublish).toBeTypeOf('function'))
         currentUrls = { ...urls, validate: '/new-validate', publish: '/new-publish' }

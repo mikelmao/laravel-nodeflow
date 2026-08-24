@@ -5,6 +5,7 @@ import { canConnect, nextNodeId } from './ids'
 
 function def(type: string, outputs: string[]): NodeTypePayload {
     return {
+        kind: 'executable',
         type,
         label: type,
         group: 'G',

@@ -7,6 +7,7 @@ import { filterNodeDefinitions, NodeLibrary } from './NodeLibrary'
 
 function entry(overrides: Partial<NodeTypePayload> = {}): NodeTypePayload {
     return {
+        kind: 'executable',
         type: 'app.send',
         label: 'Send message',
         group: 'Messaging',

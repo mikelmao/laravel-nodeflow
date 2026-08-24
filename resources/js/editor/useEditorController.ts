@@ -14,7 +14,17 @@ import { mergeControls, type ControlMap } from '../controls'
 import { toCanvas } from '../graph/toCanvas'
 import { hierarchicalLayout } from '../graph/layout'
 import { defsByType, toGraph } from '../graph/toGraph'
-import type { EditorUrls, FlowSummary, Graph, NodeErrorEntry, NodeTypePayload, TriggerPayload } from '../graph/types'
+import type {
+    EditorUrls,
+    FlowSummary,
+    Graph,
+    GraphComponentPayload,
+    NodeErrorEntry,
+    NodeTypePayload,
+    TriggerNodeTypePayload,
+    TriggerSourcesPayload,
+    WebhookMetadata,
+} from '../graph/types'
 import { send } from '../http'
 import { canConnect, nextNodeId } from './ids'
 import { closeTransaction, commitHistory, createHistory, redoHistory, resetHistory, undoHistory, type History } from './history'
@@ -35,6 +45,8 @@ export type ToolbarSlots = NonNullable<EditorToolbarProps['slots']>
 export type EditorActions = {
     addNode: (definition: NodeTypePayload, point?: { x: number; y: number }) => void
     addAtViewportCenter: (definition: NodeTypePayload) => void
+    addTrigger: (definition: TriggerNodeTypePayload, point?: { x: number; y: number }) => void
+    replaceTrigger: (definition: TriggerNodeTypePayload) => void
     nodesChange: (changes: NodeChange<NodeflowNode>[]) => void
     edgesChange: (changes: EdgeChange<NodeflowEdge>[]) => void
     connect: (connection: Connection) => void
@@ -42,7 +54,6 @@ export type EditorActions = {
     selectEdge: (id: string | null) => void
     configure: (id: string, key: string, value: unknown) => void
     closeConfigTransaction: () => void
-    makeStart: (id: string) => void
     deleteNode: (id: string) => void
     deleteSelection: () => void
     undo: () => void
@@ -61,7 +72,9 @@ export type UseEditorControllerOptions = {
     flow: FlowSummary
     graph: Graph
     palette: NodeTypePayload[]
-    triggers: TriggerPayload[]
+    trigger_nodes: TriggerNodeTypePayload[]
+    trigger_sources: TriggerSourcesPayload
+    webhook: WebhookMetadata | null
     urls: EditorUrls
     controls?: ControlMap
     nodeRenderers?: NodeRendererMap
@@ -82,7 +95,7 @@ export type UseEditorControllerResult = {
     nodeInspectorProps: NodeInspectorProps | null
 }
 
-function copiedConfig(definition: NodeTypePayload): Record<string, unknown> {
+function copiedConfig(definition: GraphComponentPayload): Record<string, unknown> {
     return Array.isArray(definition.default_config) ? {} : { ...definition.default_config }
 }
 
@@ -90,8 +103,8 @@ function sameDocument(left: EditorDocument, right: EditorDocument): boolean {
     return JSON.stringify(left) === JSON.stringify(right)
 }
 
-function defaultDocument(graph: Graph): EditorDocument {
-    const canvas = toCanvas(graph)
+function defaultDocument(graph: Graph, defs: Record<string, GraphComponentPayload>): EditorDocument {
+    const canvas = toCanvas(graph, defs)
     return { nodes: stripNodeSelection(canvas.nodes as NodeflowNode[]), edges: stripEdgeSelection(canvas.edges as NodeflowEdge[]), startId: graph.start ?? '' }
 }
 
@@ -115,6 +128,26 @@ function availablePoint(point: { x: number; y: number }, nodes: NodeflowNode[]):
     return next
 }
 
+function wouldCreateCycle(edges: NodeflowEdge[], source: string, target: string): boolean {
+    if (source === target) return true
+    const outgoing = new Map<string, string[]>()
+    for (const edge of edges) {
+        const targets = outgoing.get(edge.source) ?? []
+        targets.push(edge.target)
+        outgoing.set(edge.source, targets)
+    }
+    const pending = [target]
+    const visited = new Set<string>()
+    while (pending.length > 0) {
+        const current = pending.pop()!
+        if (current === source) return true
+        if (visited.has(current)) continue
+        visited.add(current)
+        pending.push(...(outgoing.get(current) ?? []))
+    }
+    return false
+}
+
 function graphIssues(outcome: ValidationOutcome | PublishOutcome | null): FlowOverviewIssue[] {
     if (outcome?.kind !== 'invalid' && outcome?.kind !== 'semantic') return []
     const entries = Object.values(outcome.byNode).flat()
@@ -134,7 +167,11 @@ function outcomeMessages(outcome: ValidationOutcome | PublishOutcome | null): { 
 
 /** Controller boundary: graph history is canonical; panels, selection and requests are deliberately not undoable. */
 export function useEditorController(options: UseEditorControllerOptions): UseEditorControllerResult {
-    const initial = useMemo(() => defaultDocument(options.graph), [options.graph])
+    const defs = useMemo(
+        () => defsByType([...options.palette, ...options.trigger_nodes]),
+        [options.palette, options.trigger_nodes],
+    )
+    const initial = useMemo(() => defaultDocument(options.graph, defs), [options.graph, defs])
     const [history, setHistory] = useState<History<EditorDocument>>(() => createHistory(initial))
     const historyRef = useRef(history)
     historyRef.current = history
@@ -158,7 +195,6 @@ export function useEditorController(options: UseEditorControllerOptions): UseEdi
     const publishUrl = useRef(options.urls.publish)
     const canvas = useRef<CanvasActions | null>(null)
     const optionsCache = useRef(new Map<string, Record<string, string>>())
-    const defs = useMemo(() => defsByType(options.palette), [options.palette])
     const controls = useMemo(() => mergeControls(options.controls), [options.controls])
     const optionsSource = useMemo(() => ({ template: options.urls.options, cache: optionsCache.current }), [options.urls.options])
     const built = useMemo(() => toGraph(document, document.startId, defs), [document, defs])
@@ -221,16 +257,85 @@ export function useEditorController(options: UseEditorControllerOptions): UseEdi
     }, [])
 
     const addNode = useCallback((definition: NodeTypePayload, point?: { x: number; y: number }) => {
+        if (definition.kind !== 'executable') return
         const current = documentRef.current
         const id = nextNodeId(definition.type, new Set(current.nodes.map((node) => node.id)))
         const topology = hierarchicalLayout([...current.nodes.map((node) => node.id), id], current.edges.map((edge) => ({ from: edge.source, to: edge.target })), current.startId || id)
         const position = availablePoint(point ?? topology[id] ?? CANVAS_ORIGIN, current.nodes)
-        const next: NodeflowNode = { id, type: 'nodeflowNode', position, data: { id, type: definition.type, config: copiedConfig(definition), isStart: current.nodes.length === 0 } }
-        if (commit({ nodes: [...current.nodes, next], edges: current.edges, startId: current.nodes.length === 0 ? id : current.startId })) {
+        const next: NodeflowNode = { id, type: 'nodeflowNode', position, data: { id, type: definition.type, kind: 'executable', config: copiedConfig(definition), isStart: false } }
+        if (commit({ nodes: [...current.nodes, next], edges: current.edges, startId: current.startId })) {
             setSelected({ nodeId: id, edgeId: null })
             setView((currentView) => ({ ...currentView, inspectorOpen: true }))
         }
     }, [commit])
+
+    const addTrigger = useCallback((definition: TriggerNodeTypePayload, point?: { x: number; y: number }) => {
+        if (definition.kind !== 'trigger') return
+        const current = documentRef.current
+        if (current.nodes.some((node) => defs[node.data.type]?.kind === 'trigger')) return
+        const id = nextNodeId(definition.type, new Set(current.nodes.map((node) => node.id)))
+        const topology = hierarchicalLayout(
+            [...current.nodes.map((node) => node.id), id],
+            current.edges.map((edge) => ({ from: edge.source, to: edge.target })),
+            id,
+        )
+        const position = availablePoint(point ?? topology[id] ?? CANVAS_ORIGIN, current.nodes)
+        const next: NodeflowNode = {
+            id,
+            type: 'nodeflowNode',
+            position,
+            data: { id, type: definition.type, kind: 'trigger', config: copiedConfig(definition), isStart: true },
+        }
+        if (commit({ nodes: [...current.nodes, next], edges: current.edges, startId: id })) {
+            setSelected({ nodeId: id, edgeId: null })
+            setView((currentView) => ({ ...currentView, inspectorOpen: true }))
+        }
+    }, [commit, defs])
+
+    const replaceTrigger = useCallback((definition: TriggerNodeTypePayload) => {
+        if (definition.kind !== 'trigger') return
+        const current = documentRef.current
+        const triggers = current.nodes.filter((node) => defs[node.data.type]?.kind === 'trigger')
+        if (triggers.length === 0) {
+            addTrigger(definition)
+            return
+        }
+
+        const retained = triggers[0]!
+        const removedIds = new Set(triggers.slice(1).map((node) => node.id))
+        const remainingNodes = current.nodes
+            .filter((node) => !removedIds.has(node.id))
+            .map((node): NodeflowNode => node.id === retained.id
+                ? {
+                    ...node,
+                    data: {
+                        id: retained.id,
+                        type: definition.type,
+                        kind: 'trigger',
+                        config: copiedConfig(definition),
+                        isStart: true,
+                    },
+                }
+                : node)
+        const outgoing = current.edges.filter((edge) => edge.source === retained.id)
+        const preserved = outgoing.length === 1
+            && remainingNodes.some((node) => node.id === outgoing[0]!.target && defs[node.data.type]?.kind === 'executable')
+            ? { ...outgoing[0]!, sourceHandle: 'started', label: 'started' }
+            : null
+        const edges = current.edges.flatMap((edge) => {
+            if (removedIds.has(edge.source) || removedIds.has(edge.target) || edge.target === retained.id) return []
+            if (edge.source !== retained.id) return [edge]
+            return preserved?.id === edge.id ? [preserved] : []
+        })
+
+        if (commit({ nodes: remainingNodes, edges, startId: retained.id })) {
+            setSelected((selection) => {
+                if (removedIds.has(selection.nodeId ?? '')) return { nodeId: retained.id, edgeId: null }
+                return { nodeId: selection.nodeId, edgeId: null }
+            })
+            setView((currentView) => ({ ...currentView, selectedEdgeId: null }))
+        }
+    }, [addTrigger, commit, defs])
 
     const addAtViewportCenter = useCallback((definition: NodeTypePayload) => {
         const actions = canvas.current
@@ -281,12 +386,15 @@ export function useEditorController(options: UseEditorControllerOptions): UseEdi
         if (graphChanges.every((change) => change.type === 'dimensions')) return
         const current = documentRef.current
         const nodes = stripNodeSelection(applyNodeChanges(graphChanges, current.nodes))
+        const currentTriggers = current.nodes.filter((node) => defs[node.data.type]?.kind === 'trigger').length
+        const nextTriggers = nodes.filter((node) => defs[node.data.type]?.kind === 'trigger').length
+        if (nextTriggers > 1 && nextTriggers > currentTriggers) return
         const position = graphChanges.find((change) => change.type === 'position')
         const transaction = position?.type === 'position' ? `move:${position.id}` : null
         commit({ nodes, edges: removed.size === 0 ? current.edges : current.edges.filter((edge) => !removed.has(edge.source) && !removed.has(edge.target)), startId: removed.has(current.startId) ? '' : current.startId }, transaction)
         if (position?.type === 'position' && position.dragging === false) closeConfigTransaction()
         if (removed.size > 0) setSelected((selection) => removed.has(selection.nodeId ?? '') || current.edges.some((edge) => edge.id === selection.edgeId && (removed.has(edge.source) || removed.has(edge.target))) ? { nodeId: null, edgeId: null } : selection)
-    }, [closeConfigTransaction, commit, selectNode])
+    }, [closeConfigTransaction, commit, defs, selectNode])
 
     const edgesChange = useCallback((changes: EdgeChange<NodeflowEdge>[]) => {
         const selectionChanges = changes.filter((change) => change.type === 'select')
@@ -311,8 +419,14 @@ export function useEditorController(options: UseEditorControllerOptions): UseEdi
         if (connection.source === null || connection.target === null || connection.sourceHandle === null) return
         const current = documentRef.current
         const source = current.nodes.find((node) => node.id === connection.source)
-        if (source === undefined || !current.nodes.some((node) => node.id === connection.target) || !canConnect(source.data.type, connection.sourceHandle, defs)) return
-        if (current.edges.some((edge) => edge.source === connection.source && edge.target === connection.target && edge.sourceHandle === connection.sourceHandle)) return
+        const target = current.nodes.find((node) => node.id === connection.target)
+        const sourceKind = source === undefined ? undefined : defs[source.data.type]?.kind
+        const targetKind = target === undefined ? undefined : defs[target.data.type]?.kind
+        if (source === undefined || target === undefined || targetKind === 'trigger') return
+        if (sourceKind === 'trigger' && (connection.sourceHandle !== 'started' || targetKind !== 'executable')) return
+        if (!canConnect(source.data.type, connection.sourceHandle, defs)) return
+        if (current.edges.some((edge) => edge.source === connection.source && edge.sourceHandle === connection.sourceHandle)) return
+        if (wouldCreateCycle(current.edges, connection.source, connection.target)) return
         commit({ ...current, edges: addEdge<NodeflowEdge>({ ...connection, label: connection.sourceHandle }, current.edges) })
     }, [commit, defs])
 
@@ -320,11 +434,6 @@ export function useEditorController(options: UseEditorControllerOptions): UseEdi
         const current = documentRef.current
         if (!current.nodes.some((node) => node.id === id)) return
         commit({ ...current, nodes: current.nodes.map((node) => node.id === id ? { ...node, data: { ...node.data, config: { ...node.data.config, [key]: value } } } : node) }, `config:${id}:${key}`)
-    }, [commit])
-
-    const makeStart = useCallback((id: string) => {
-        const current = documentRef.current
-        if (current.nodes.some((node) => node.id === id)) commit({ ...current, startId: id })
     }, [commit])
 
     const deleteSelection = useCallback(() => {
@@ -361,7 +470,7 @@ export function useEditorController(options: UseEditorControllerOptions): UseEdi
         }
         const conflict = autosave.conflict
         if (conflict === null) return
-        const next = defaultDocument(conflict.graph)
+        const next = defaultDocument(conflict.graph, defs)
         const reset = resetHistory(next)
         historyRef.current = reset
         setHistory(reset)
@@ -466,7 +575,8 @@ export function useEditorController(options: UseEditorControllerOptions): UseEdi
     const canvasNodes = useMemo(() => document.nodes.map((node) => ({ ...node, selected: node.id === selected.nodeId, data: { ...node.data, isStart: node.id === document.startId } })), [document.nodes, document.startId, selected.nodeId])
     const canvasEdges = useMemo(() => document.edges.map((edge) => ({ ...edge, selected: edge.id === selected.edgeId })), [document.edges, selected.edgeId])
     const unknownTypes = document.nodes.filter((node) => !Object.prototype.hasOwnProperty.call(defs, node.data.type)).map((node) => ({ nodeId: node.id, type: node.data.type }))
-    const trigger = options.triggers.find((candidate) => candidate.type === options.flow.trigger_type) ?? null
+    const triggerNode = document.nodes.find((node) => defs[node.data.type]?.kind === 'trigger')
+    const trigger = triggerNode === undefined ? null : defs[triggerNode.data.type] ?? null
     const message = outcomeMessages(activeOutcome)
     const save = { status: autosave.status, message: autosave.message ?? undefined } as EditorToolbarProps['save']
     const publishIndicator: PublishIndicator = publishOutcome?.kind === 'published'
@@ -476,12 +586,12 @@ export function useEditorController(options: UseEditorControllerOptions): UseEdi
         : { status: 'idle' }
 
     const actions: EditorActions = useMemo(() => ({
-        addNode, addAtViewportCenter, nodesChange, edgesChange, connect, selectNode, selectEdge, configure, closeConfigTransaction,
-        makeStart, deleteNode, deleteSelection, undo: () => moveHistory('undo'), redo: () => moveHistory('redo'), autoLayout,
+        addNode, addAtViewportCenter, addTrigger, replaceTrigger, nodesChange, edgesChange, connect, selectNode, selectEdge, configure, closeConfigTransaction,
+        deleteNode, deleteSelection, undo: () => moveHistory('undo'), redo: () => moveHistory('redo'), autoLayout,
         validate, publish, resolveConflict, registerCanvas: (next) => { canvas.current = next }, focusIssue,
         setLibraryOpen: (open) => setView((current) => ({ ...current, libraryOpen: open })),
         setInspectorOpen: (open) => setView((current) => ({ ...current, inspectorOpen: open })),
-    }), [addAtViewportCenter, addNode, autoLayout, closeConfigTransaction, configure, connect, deleteNode, deleteSelection, edgesChange, focusIssue, makeStart, moveHistory, nodesChange, publish, resolveConflict, selectEdge, selectNode, validate])
+    }), [addAtViewportCenter, addNode, addTrigger, autoLayout, closeConfigTransaction, configure, connect, deleteNode, deleteSelection, edgesChange, focusIssue, moveHistory, nodesChange, publish, replaceTrigger, resolveConflict, selectEdge, selectNode, validate])
 
     return {
         document,
@@ -489,11 +599,11 @@ export function useEditorController(options: UseEditorControllerOptions): UseEdi
         view,
         actions,
         optionsSource,
-        canvasProps: { nodes: canvasNodes, edges: canvasEdges, defs, renderers: options.nodeRenderers, nodeErrors, onNodesChange: nodesChange, onEdgesChange: edgesChange, onConnect: connect, onNodeClick: selectNode, onEdgeClick: selectEdge, onPaneClick: () => { selectNode(null) }, onDropNodeType: (type, point) => { if (Object.prototype.hasOwnProperty.call(defs, type)) addNode(defs[type]!, point) }, onReady: (next) => { canvas.current = next }, onDispose: (old) => { if (canvas.current === old) canvas.current = null }, interactive: true, deleteKeyCode: null },
+        canvasProps: { nodes: canvasNodes, edges: canvasEdges, defs, renderers: options.nodeRenderers, nodeErrors, onNodesChange: nodesChange, onEdgesChange: edgesChange, onConnect: connect, onNodeClick: selectNode, onEdgeClick: selectEdge, onPaneClick: () => { selectNode(null) }, onDropNodeType: (type, point) => { const definition = Object.prototype.hasOwnProperty.call(defs, type) ? defs[type] : undefined; if (definition?.kind === 'executable') addNode(definition, point) }, onReady: (next) => { canvas.current = next }, onDispose: (old) => { if (canvas.current === old) canvas.current = null }, interactive: true, deleteKeyCode: null },
         canvasHudProps: { nodeCount: document.nodes.length, connectionCount: document.edges.length, validation: validationState },
-        toolbarProps: { flowName: options.flow.name, triggerLabel: trigger?.label ?? options.flow.trigger_type, publishedVersion, save, validation: validationState, publish: publishIndicator, canUndo: history.past.length > 0, canRedo: history.future.length > 0, hasSelection: selected.nodeId !== null || selected.edgeId !== null, onUndo: () => moveHistory('undo'), onRedo: () => moveHistory('redo'), onAutoLayout: autoLayout, onFit: () => canvas.current?.fit(), onDeleteSelected: deleteSelection, onValidate: () => { void validate() }, onPublish: () => { void publish() } },
+        toolbarProps: { flowName: options.flow.name, triggerLabel: trigger?.label ?? 'No trigger', publishedVersion, save, validation: validationState, publish: publishIndicator, canUndo: history.past.length > 0, canRedo: history.future.length > 0, hasSelection: selected.nodeId !== null || selected.edgeId !== null, onUndo: () => moveHistory('undo'), onRedo: () => moveHistory('redo'), onAutoLayout: autoLayout, onFit: () => canvas.current?.fit(), onDeleteSelected: deleteSelection, onValidate: () => { void validate() }, onPublish: () => { void publish() } },
         noticeProps: { save, publish: publishIndicator, validation: validationState, structuralError: message.structural, graphMessages: [...message.graph, ...(message.failed === undefined ? [] : [message.failed])], validationMessage: validation?.kind === 'failed' ? validation.message : undefined, onKeepMine: () => resolveConflict('mine'), onUseTheirs: () => resolveConflict('theirs') },
         flowOverviewProps: { flow: { name: options.flow.name }, trigger: trigger === null ? null : { label: trigger.label, type: trigger.type }, publishedVersion, nodeCount: document.nodes.length, connectionCount: document.edges.length, startNodeId: document.startId || null, validation: validationState, issues: graphIssues(activeOutcome), warnings: validation?.kind === 'valid' ? validation.warnings : validation?.kind === 'invalid' ? validation.warnings : [], errors: message.graph, unknownTypes, unresolvedOutputs: built.unresolved.map((edge) => ({ from: edge.source, to: edge.target })), onIssueSelect: (issue) => focusIssue(issue.node, issue.field) },
-        nodeInspectorProps: selectedNode === undefined ? null : { node: selectedNode.data, def: defs[selectedNode.data.type], controls, errors: fieldErrors, isStart: selectedNode.id === document.startId, issueToFocus, onConfigChange: (key, value) => configure(selectedNode.id, key, value), onConfigBlur: closeConfigTransaction, onMakeStart: () => makeStart(selectedNode.id), onDelete: () => deleteNode(selectedNode.id) },
+        nodeInspectorProps: selectedNode === undefined ? null : { node: selectedNode.data, def: defs[selectedNode.data.type], controls, errors: fieldErrors, issueToFocus, onConfigChange: (key, value) => configure(selectedNode.id, key, value), onConfigBlur: closeConfigTransaction, onDelete: () => deleteNode(selectedNode.id) },
     }
 }

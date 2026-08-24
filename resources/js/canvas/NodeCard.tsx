@@ -37,7 +37,7 @@ export function NodeCard({ id, data, selected, isConnectable }: NodeProps<Nodefl
     const selectionClassName = selected ? 'border-primary ring-1 ring-primary' : 'border-border'
     const decoration = Object.prototype.hasOwnProperty.call(decorations, id) ? decorations[id]! : undefined
     const dimClassName = decoration?.dimmed === true ? ' opacity-40' : ''
-    const presentation = categoryPresentation(def?.group ?? '')
+    const presentation = categoryPresentation(def?.kind === 'executable' ? def.group : 'Trigger')
     const cardClassName = `relative rounded-md border bg-card shadow-sm ${selectionClassName} ${categoryClasses[presentation.accent]}${dimClassName}`
     const label = def?.label ?? data.type
 

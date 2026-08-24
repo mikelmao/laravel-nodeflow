@@ -4,7 +4,7 @@ import userEvent from '@testing-library/user-event'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { CanvasProps } from '../canvas/Canvas'
 import type { FieldControlProps } from '../controls/types'
-import type { Graph, NodeTypePayload } from '../graph/types'
+import type { Graph, NodeTypePayload, TriggerNodeTypePayload } from '../graph/types'
 import { FlowEditor } from './FlowEditor'
 
 const canvasProbe = vi.hoisted(() => ({ current: null as CanvasProps | null }))
@@ -24,7 +24,6 @@ vi.mock('../canvas/Canvas', async (importOriginal) => {
 const flow = {
     id: 12,
     name: 'Welcome journey',
-    trigger_type: 'app.order_placed',
     status: 'draft',
     version: 3,
     draft_revision: 7,
@@ -34,8 +33,12 @@ const urls = {
     draft: '/flows/12/draft',
     publish: '/flows/12/publish',
     options: '/options/__NODEFLOW_TYPE__/__NODEFLOW_FIELD__',
+    trigger_options: '/trigger-options/__NODEFLOW_TYPE__/__NODEFLOW_FIELD__',
+    trigger_source_options: '/trigger-source-options/__NODEFLOW_TYPE__/__NODEFLOW_SOURCE__/__NODEFLOW_FIELD__',
+    rotate_webhook_secret: '/flows/12/webhook-secret/rotate',
 }
 const sendDefinition: NodeTypePayload = {
+    kind: 'executable',
     type: 'app.send',
     label: 'Send message',
     group: 'Messaging',
@@ -56,6 +59,7 @@ const sendDefinition: NodeTypePayload = {
     cardinality: ['subject'],
 }
 const exitDefinition: NodeTypePayload = {
+    kind: 'executable',
     type: 'core.exit',
     label: 'Exit',
     group: 'Core',
@@ -67,11 +71,17 @@ const exitDefinition: NodeTypePayload = {
     cardinality: ['subject'],
 }
 const palette = [sendDefinition, exitDefinition]
-const triggers = [{
+const triggerNodes: TriggerNodeTypePayload[] = [{
+    kind: 'trigger',
     type: 'app.order_placed',
+    driver: 'event',
     label: 'Order placed',
+    icon: null,
     description: 'When a customer places an order.',
+    outputs: ['started'],
     fields: [],
+    default_config: {},
+    compatible_source_keys: [],
 }]
 const graph: Graph = {
     start: 'send1',
@@ -88,7 +98,9 @@ function renderEditor(overrides: Partial<React.ComponentProps<typeof FlowEditor>
             flow={flow}
             graph={graph}
             palette={palette}
-            triggers={triggers}
+            trigger_nodes={triggerNodes}
+            trigger_sources={{ event: [] }}
+            webhook={null}
             urls={urls}
             autosaveDebounceMs={5}
             {...overrides}
@@ -155,6 +167,41 @@ beforeEach(() => {
 afterEach(() => vi.unstubAllGlobals())
 
 describe('FlowEditor', () => {
+    it('accepts the exact Task 11 trigger source, webhook, and URL wire shapes', () => {
+        const props = {
+            flow,
+            graph,
+            palette,
+            trigger_nodes: triggerNodes,
+            trigger_sources: {
+                event: [{
+                    key: 'orders.placed',
+                    driver: 'event',
+                    label: 'Order placed source',
+                    icon: null,
+                    description: 'An allowlisted Laravel event.',
+                    fields: [],
+                    default_config: { channel: 'orders' },
+                }],
+            },
+            webhook: {
+                endpoint_url: 'https://example.test/hooks/token',
+                active: true,
+                secret_rotated_at: '2026-08-24T10:00:00+00:00',
+            },
+            urls,
+        } satisfies React.ComponentProps<typeof FlowEditor>
+
+        expect(props.trigger_nodes[0]?.compatible_source_keys).toEqual([])
+        expect(props.trigger_sources.event[0]?.driver).toBe('event')
+        expect(props.webhook.endpoint_url).toContain('/hooks/')
+        expect(props.urls).toMatchObject({
+            rotate_webhook_secret: '/flows/12/webhook-secret/rotate',
+            trigger_options: expect.stringContaining('__NODEFLOW_TYPE__'),
+            trigger_source_options: expect.stringContaining('__NODEFLOW_SOURCE__'),
+        })
+    })
+
     it('reserves modified F and L shortcuts while accepting only the approved Fit and Auto layout keys', () => {
         const fit = vi.fn()
         renderEditor({ graph: {
@@ -261,8 +308,7 @@ describe('FlowEditor', () => {
         vi.stubGlobal('fetch', fetchMock)
         const view = renderEditor()
         expect(screen.getByRole('heading', { name: 'Welcome journey', level: 1 })).toBeInTheDocument()
-        expect(screen.getByText('Order placed')).toBeInTheDocument()
-        expect(screen.getByText('When a customer places an order.')).toBeInTheDocument()
+        expect(screen.getByText(/Trigger: No trigger/)).toBeInTheDocument()
 
         fireEvent.click(canvasNode('send1'))
         fireEvent.click(screen.getByRole('button', { name: 'Publish' }))
@@ -295,7 +341,9 @@ describe('FlowEditor', () => {
                 flow={nextFlow}
                 graph={nextGraph}
                 palette={palette}
-                triggers={triggers}
+                trigger_nodes={triggerNodes}
+                trigger_sources={{ event: [] }}
+                webhook={null}
                 urls={nextUrls}
                 autosaveDebounceMs={5}
             />,
@@ -320,7 +368,9 @@ describe('FlowEditor', () => {
                 flow={{ ...nextFlow }}
                 graph={{ ...nextGraph, nodes: [...(nextGraph.nodes ?? [])], edges: [] }}
                 palette={[...palette]}
-                triggers={[...triggers]}
+                trigger_nodes={[...triggerNodes]}
+                trigger_sources={{ event: [] }}
+                webhook={null}
                 urls={{ ...nextUrls }}
                 autosaveDebounceMs={5}
             />,
@@ -349,7 +399,7 @@ describe('FlowEditor', () => {
         fireEvent.click(screen.getByRole('button', { name: 'Publish' }))
         await waitFor(() => expect(fetchMock.mock.calls.filter(([url]) => url === urls.publish)).toHaveLength(1))
 
-        view.rerender(<FlowEditor flow={flow} graph={graph} palette={palette} triggers={triggers} urls={nextUrls} autosaveDebounceMs={5} />)
+        view.rerender(<FlowEditor flow={flow} graph={graph} palette={palette} trigger_nodes={triggerNodes} trigger_sources={{ event: [] }} webhook={null} urls={nextUrls} autosaveDebounceMs={5} />)
         fireEvent.click(screen.getByRole('button', { name: 'Publish' }))
         await waitFor(() => expect(fetchMock.mock.calls.filter(([url]) => url === nextUrls.publish)).toHaveLength(1))
         await act(async () => resolveOld(Response.json({ version: 99, draft_revision: 99 })))
@@ -586,7 +636,9 @@ describe('FlowEditor', () => {
                     flow={flow}
                     graph={graph}
                     palette={palette}
-                    triggers={triggers}
+                    trigger_nodes={triggerNodes}
+                    trigger_sources={{ event: [] }}
+                    webhook={null}
                     urls={urls}
                     autosaveDebounceMs={5}
                 />
@@ -609,8 +661,8 @@ describe('FlowEditor', () => {
         const firstGraph: Graph = { start: 'first', nodes: [{ id: 'first', type: 'app.send', config: { template: 'first' }, position: { x: 0, y: 0 } }], edges: [] }
         const secondGraph: Graph = { start: 'second', nodes: [{ id: 'second', type: 'app.send', config: { template: 'second' }, position: { x: 0, y: 0 } }], edges: [] }
         render(<>
-            <FlowEditor flow={{ ...flow, id: 71, name: 'First editor' }} graph={firstGraph} palette={palette} triggers={triggers} urls={urls} autosaveDebounceMs={5} />
-            <FlowEditor flow={{ ...flow, id: 72, name: 'Second editor' }} graph={secondGraph} palette={palette} triggers={triggers} urls={urls} autosaveDebounceMs={5} />
+            <FlowEditor flow={{ ...flow, id: 71, name: 'First editor' }} graph={firstGraph} palette={palette} trigger_nodes={triggerNodes} trigger_sources={{ event: [] }} webhook={null} urls={urls} autosaveDebounceMs={5} />
+            <FlowEditor flow={{ ...flow, id: 72, name: 'Second editor' }} graph={secondGraph} palette={palette} trigger_nodes={triggerNodes} trigger_sources={{ event: [] }} webhook={null} urls={urls} autosaveDebounceMs={5} />
         </>)
         const firstNode = document.querySelector('.react-flow__node[data-id="first"]') as HTMLElement
         const secondNode = document.querySelector('.react-flow__node[data-id="second"]') as HTMLElement
@@ -631,8 +683,8 @@ describe('FlowEditor', () => {
 
     it('promotes shortcut focus to the fallback editor only when the active editor unmounts focused', () => {
         const First = ({ second }: { second: boolean }) => <>
-            <FlowEditor flow={{ ...flow, id: 81, name: 'First editor' }} graph={graph} palette={palette} triggers={triggers} urls={urls} autosaveDebounceMs={5} />
-            {second && <FlowEditor flow={{ ...flow, id: 82, name: 'Second editor' }} graph={graph} palette={palette} triggers={triggers} urls={urls} autosaveDebounceMs={5} />}
+            <FlowEditor flow={{ ...flow, id: 81, name: 'First editor' }} graph={graph} palette={palette} trigger_nodes={triggerNodes} trigger_sources={{ event: [] }} webhook={null} urls={urls} autosaveDebounceMs={5} />
+            {second && <FlowEditor flow={{ ...flow, id: 82, name: 'Second editor' }} graph={graph} palette={palette} trigger_nodes={triggerNodes} trigger_sources={{ event: [] }} webhook={null} urls={urls} autosaveDebounceMs={5} />}
         </>
         const view = render(<First second />)
         const roots = view.container.querySelectorAll<HTMLElement>('.contents[tabindex="-1"]')
@@ -706,23 +758,24 @@ describe('FlowEditor', () => {
         }
     })
 
-    // The first node makes an empty graph runnable; counterfactual leaving start blank creates needless invalid state.
-    it('makes the first added node the start node', async () => {
+    // Trigger identity owns start; adding an executable to an empty draft cannot bypass it.
+    it('does not promote the first executable node to graph start', async () => {
         const fetchMock = successfulFetch()
         vi.stubGlobal('fetch', fetchMock)
         renderEditor({ graph: { start: null, nodes: [], edges: [] } })
         fireEvent.click(screen.getByRole('button', { name: 'Add Exit' }))
-        expect(within(canvasNode('exit1')).getByText('START')).toBeInTheDocument()
-        expect(screen.getByText(/Start: exit1/i)).toBeInTheDocument()
+        expect(within(canvasNode('exit1')).queryByText('START')).toBeNull()
+        expect(screen.getByText(/Start: none/i)).toBeInTheDocument()
         fireEvent.click(screen.getByRole('button', { name: 'Publish' }))
         await waitFor(() => expect(fetchMock.mock.calls.some(([url]) => url === urls.publish)).toBe(true))
-        expect(requestBody(fetchMock, urls.publish).graph).toMatchObject({ start: 'exit1' })
+        expect(requestBody(fetchMock, urls.publish).graph).toMatchObject({ start: '' })
     })
 
     // Explicit start selection and blank control drafts both belong to the selected node. A field-only key leaks
     // between nodes with the same field, while a colon composite collides for [a:b, c] and [a, b:c].
-    it('isolates selected node control state, makes it start and publishes it', async () => {
+    it('isolates selected node control state without exposing executable make-start', async () => {
         const durationDefinition = (type: string, label: string, fieldKey: string): NodeTypePayload => ({
+            kind: 'executable',
             type,
             label,
             group: 'Core',
@@ -795,12 +848,12 @@ describe('FlowEditor', () => {
         expect(screen.getByRole('combobox', { name: 'Duration unit' })).toHaveValue('minutes')
         fireEvent.change(screen.getByRole('spinbutton', { name: 'Duration amount' }), { target: { value: '1' } })
         fireEvent.click(screen.getByRole('tab', { name: 'Advanced' }))
-        fireEvent.click(screen.getByRole('button', { name: 'Make start node' }))
-        expect(screen.getByText(/Start: a$/i)).toBeInTheDocument()
+        expect(screen.queryByRole('button', { name: /start node/i })).toBeNull()
+        expect(screen.getByText(/Start: a:b$/i)).toBeInTheDocument()
         fireEvent.click(screen.getByRole('button', { name: 'Publish' }))
         await waitFor(() => expect(fetchMock.mock.calls.some(([url]) => url === urls.publish)).toBe(true))
         expect(requestBody(fetchMock, urls.publish).graph).toMatchObject({
-            start: 'a',
+            start: 'a:b',
             nodes: expect.arrayContaining([
                 expect.objectContaining({ id: 'a', config: { 'b:c': '1 minute' } }),
             ]),

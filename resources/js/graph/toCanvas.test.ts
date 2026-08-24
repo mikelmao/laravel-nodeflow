@@ -1,7 +1,34 @@
 import { describe, expect, it } from 'vitest'
 
 import { toCanvas } from './toCanvas'
-import type { Graph } from './types'
+import type { Graph, GraphComponentPayload } from './types'
+
+const definitions: Record<string, GraphComponentPayload> = {
+  'custom.trigger': {
+    kind: 'trigger',
+    type: 'custom.trigger',
+    driver: 'custom',
+    label: 'Custom trigger',
+    icon: null,
+    description: null,
+    outputs: ['started'],
+    fields: [],
+    default_config: { source: 'orders' },
+    compatible_source_keys: ['orders'],
+  },
+  'app.send': {
+    kind: 'executable',
+    type: 'app.send',
+    label: 'Send',
+    group: 'Messaging',
+    icon: null,
+    description: null,
+    outputs: ['sent'],
+    fields: [],
+    default_config: {},
+    cardinality: ['subject'],
+  },
+}
 
 const baseGraph: Graph = {
   start: 'n1',
@@ -13,6 +40,27 @@ const baseGraph: Graph = {
 }
 
 describe('toCanvas', () => {
+  it('resolves custom trigger and executable kinds from server definitions', () => {
+    const graph: Graph = {
+      start: 'trigger1',
+      nodes: [
+        { id: 'trigger1', type: 'custom.trigger', config: { source: 'orders' }, position: { x: 1, y: 2 } },
+        { id: 'send1', type: 'app.send', config: {}, position: { x: 3, y: 4 } },
+        { id: 'unknown1', type: 'missing.type', config: {}, position: { x: 5, y: 6 } },
+      ],
+      edges: [{ from: 'trigger1', to: 'send1', output: 'started' }],
+    }
+
+    const canvas = toCanvas(graph, definitions)
+
+    expect(canvas.nodes.map((node) => node.data.kind)).toEqual(['trigger', 'executable', null])
+    expect(canvas.nodes[0]).toMatchObject({
+      position: { x: 1, y: 2 },
+      data: { type: 'custom.trigger', config: { source: 'orders' }, isStart: true },
+    })
+    expect(canvas.edges[0]).toMatchObject({ source: 'trigger1', sourceHandle: 'started', target: 'send1' })
+  })
+
   it('keeps every valid stored node position exactly', () => {
     // Counterfactual: regenerating stored positions would move a saved canvas on reload.
     const graph: Graph = {

@@ -8,11 +8,61 @@ export type FieldPayload = { key: string; type: string; label: string; help: str
 // Empty PHP configuration can arrive as []; editors normalize it before use.
 export type GraphConfig = Record<string, unknown> | unknown[]
 
-// Source: NodeRegistry::palette() over NodeDefinition::toArray().
-export type NodeTypePayload = { type: string; label: string; group: string; icon: string | null; description: string | null; outputs: string[]; fields: FieldPayload[]; default_config: GraphConfig; cardinality: ('subject'|'audience')[] }
+export type GraphComponentKind = 'trigger' | 'executable'
 
-// Source: TriggerRegistry::palette() over TriggerDefinition::toArray().
-export type TriggerPayload = { type: string; label: string; description: string | null; fields: FieldPayload[] }
+// Source: FlowEditorController::edit() palette over NodeDefinition::toArray().
+export type ExecutableNodeTypePayload = {
+  kind: 'executable'
+  type: string
+  label: string
+  group: string
+  icon: string | null
+  description: string | null
+  outputs: string[]
+  fields: FieldPayload[]
+  default_config: GraphConfig
+  cardinality: ('subject'|'audience')[]
+}
+
+// Retained as the concise public name for executable-node definitions.
+export type NodeTypePayload = ExecutableNodeTypePayload
+
+// Source: FlowEditorController::edit() trigger_nodes over TriggerNodeRegistry::palette().
+export type TriggerNodeTypePayload = {
+  kind: 'trigger'
+  type: string
+  driver: string
+  label: string
+  icon: string | null
+  description: string | null
+  outputs: ['started']
+  fields: FieldPayload[]
+  default_config: GraphConfig
+  compatible_source_keys: string[]
+}
+
+export type GraphComponentPayload = ExecutableNodeTypePayload | TriggerNodeTypePayload
+
+// Source: FlowEditorController::triggerSources(), grouped by stable driver key.
+export type TriggerSourcePayload = {
+  key: string
+  driver: string
+  label: string
+  icon: string | null
+  description: string | null
+  fields: FieldPayload[]
+  default_config: GraphConfig
+}
+export type TriggerSourcesPayload = Record<string, TriggerSourcePayload[]>
+
+/** @deprecated Use TriggerNodeTypePayload. */
+export type TriggerPayload = TriggerNodeTypePayload
+
+export type WebhookMetadata = {
+  endpoint_url: string | null
+  active: boolean
+  secret_rotated_at: string | null
+}
 
 /**
  * Draft graph containers and config/output values may be absent or null. Stored
@@ -25,8 +75,16 @@ export type Graph = { start?: string | null; nodes?: GraphNode[] | null; edges?:
 
 // Source: FlowEditorController::edit(). draft_revision is the concurrency token;
 // draft_updated_at is display metadata only.
-export type FlowSummary = { id:number; name:string; trigger_type:string; status:string; version:number|null; draft_revision:number; draft_updated_at:string|null }
-export type EditorUrls = { draft:string; publish:string; options:string; validate?:string }
+export type FlowSummary = { id:number; name:string; status:string; version:number|null; draft_revision:number; draft_updated_at:string|null }
+export type EditorUrls = {
+  draft:string
+  publish:string
+  options:string
+  validate?:string
+  rotate_webhook_secret:string
+  trigger_options:string
+  trigger_source_options:string
+}
 
 // A graph-level error may omit its node id, so node is nullable on the wire.
 export type NodeErrorEntry = { node:string|null; field:string|null; message:string }
@@ -36,7 +94,7 @@ export type NodeErrorEntry = { node:string|null; field:string|null; message:stri
  * node_errors. This type is exported intentionally for host wrappers.
  */
 export type PublishErrorBody = { message?:string; errors?:string[]|Record<string,string[]>; node_errors?:NodeErrorEntry[] }
-export type NodeCardData = { id:string; type:string; config:Record<string,unknown>; isStart:boolean }
+export type NodeCardData = { id:string; type:string; kind:GraphComponentKind|null; config:Record<string,unknown>; isStart:boolean }
 export type CanvasNode = { id:string; type:'nodeflowNode'; position:{x:number;y:number}; data:NodeCardData }
 export type CanvasEdge = { id:string; type?:'nodeflowEdge'; source:string; sourceHandle:string|null; target:string; label?:string }
 

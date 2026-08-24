@@ -10,6 +10,7 @@ import { WorkflowEdge } from './WorkflowEdge'
 
 function def(overrides: Partial<NodeTypePayload> = {}): NodeTypePayload {
     return {
+        kind: 'executable',
         type: 'app.send',
         label: 'Send message',
         group: 'Messaging',
@@ -26,6 +27,7 @@ function def(overrides: Partial<NodeTypePayload> = {}): NodeTypePayload {
 const data: NodeCardData = {
     id: 'n1',
     type: 'app.send',
+    kind: 'executable',
     config: { template: 'welcome' },
     isStart: true,
 }

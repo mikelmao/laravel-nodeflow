@@ -3,7 +3,15 @@ import { Canvas } from '../canvas/Canvas'
 import type { NodeRendererMap } from '../canvas/context'
 import type { ControlMap } from '../controls/types'
 import { FieldOptionsContext } from '../controls/useFieldOptions'
-import type { EditorUrls, FlowSummary, Graph, NodeTypePayload, TriggerPayload } from '../graph/types'
+import type {
+    EditorUrls,
+    FlowSummary,
+    Graph,
+    NodeTypePayload,
+    TriggerNodeTypePayload,
+    TriggerSourcesPayload,
+    WebhookMetadata,
+} from '../graph/types'
 import { CanvasHud } from './CanvasHud'
 import { EditorNotices } from './EditorNotices'
 import { EditorShell, type EditorMode } from './EditorShell'
@@ -53,7 +61,9 @@ export type FlowEditorProps = {
     flow: FlowSummary
     graph: Graph
     palette: NodeTypePayload[]
-    triggers: TriggerPayload[]
+    trigger_nodes: TriggerNodeTypePayload[]
+    trigger_sources: TriggerSourcesPayload
+    webhook: WebhookMetadata | null
     urls: EditorUrls
     controls?: ControlMap
     nodeRenderers?: NodeRendererMap
@@ -167,7 +177,6 @@ function FlowEditorSession({ mode = 'workspace', toolbarSlots, className, ...opt
     return <FieldOptionsContext.Provider value={controller.optionsSource}>
         <div ref={rootRef} tabIndex={-1} className="contents" onPointerDownCapture={claimShortcuts} onClickCapture={claimShortcuts} onFocusCapture={claimShortcuts}>
             <p className="sr-only">Start: {controller.document.startId || 'none'}</p>
-            {options.triggers.find((trigger) => trigger.type === options.flow.trigger_type)?.description && <p className="sr-only">{options.triggers.find((trigger) => trigger.type === options.flow.trigger_type)?.description}</p>}
             <EditorShell
             mode={mode}
             className={className}

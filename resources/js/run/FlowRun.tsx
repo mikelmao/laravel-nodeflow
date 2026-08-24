@@ -11,7 +11,9 @@ import { useOverlayPolling } from './useOverlayPolling'
 export type FlowRunProps = {
     run: RunSummary
     graph: Graph
-    palette: NodeTypePayload[]
+    // RunViewController's pinned executable palette predates the editor's kind
+    // discriminator. This boundary supplies its one known family explicitly.
+    palette: (NodeTypePayload | Omit<NodeTypePayload, 'kind'>)[]
     overlay: OverlaySnapshot
     urls: RunUrls
     nodeRenderers?: NodeRendererMap
@@ -52,8 +54,11 @@ function FlowRunSession({
     const initial = useMemo(() => normalizeOverlay(overlay), [overlay])
     const { snapshot, error } = useOverlayPolling(urls.overlay, initial, pollIntervalMs)
 
-    const canvas = useMemo(() => toCanvas(graph), [graph])
-    const defs = useMemo(() => defsByType(palette), [palette])
+    const defs = useMemo(
+        () => defsByType(palette.map((definition): NodeTypePayload => ({ ...definition, kind: 'executable' }))),
+        [palette],
+    )
+    const canvas = useMemo(() => toCanvas(graph, defs), [defs, graph])
     const [selectedId, setSelectedId] = useState<string | null>(null)
 
     const decorations = useMemo(

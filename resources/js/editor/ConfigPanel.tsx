@@ -3,7 +3,7 @@ import type { ControlMap } from '../controls'
 import { FieldControlIdProvider } from '../controls/FieldControlId'
 import { useFieldOptions } from '../controls/useFieldOptions'
 import { useId, type FocusEvent } from 'react'
-import type { FieldPayload, NodeCardData, NodeErrorEntry, NodeTypePayload } from '../graph/types'
+import type { FieldPayload, GraphComponentPayload, NodeCardData, NodeErrorEntry } from '../graph/types'
 
 type FieldRowProps = {
     id: string
@@ -68,7 +68,7 @@ function nodeConfigFieldId(instanceId: string, nodeId: string, field: string): s
 
 export type ConfigPanelProps = {
     node: NodeCardData
-    def?: NodeTypePayload
+    def?: GraphComponentPayload
     controls: ControlMap
     errors: NodeErrorEntry[]
     onConfigChange: (key: string, value: unknown) => void

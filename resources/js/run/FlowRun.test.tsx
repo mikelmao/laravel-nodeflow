@@ -23,7 +23,7 @@ const graph: Graph = {
     edges: [],
 }
 
-const palette: NodeTypePayload[] = [{
+const palette: Omit<NodeTypePayload, 'kind'>[] = [{
     type: 'app.send', label: 'Send message', group: 'Messaging', icon: null,
     description: null, outputs: ['sent', 'failed'], fields: [], default_config: {}, cardinality: ['audience'],
 }]
