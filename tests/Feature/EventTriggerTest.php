@@ -1,5 +1,7 @@
 <?php
 
+use Illuminate\Contracts\Debug\ExceptionHandler;
+use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Event;
 use Nodeflow\Contracts\TenantResolver;
 use Nodeflow\Models\Flow;
@@ -7,314 +9,536 @@ use Nodeflow\Models\Run;
 use Nodeflow\Nodeflow;
 use Nodeflow\Publishing\PublishFlow;
 use Nodeflow\Schema\TriggerDefinition;
-use Nodeflow\Triggers\Trigger;
+use Nodeflow\Triggers\LaravelEvent\LaravelEventOccurrence;
+use Nodeflow\Triggers\LaravelEvent\LaravelEventTriggerDriver;
+use Nodeflow\Triggers\LaravelEvent\LaravelEventTriggerSource;
 use Nodeflow\Triggers\TriggerMatch;
-use Nodeflow\Triggers\TriggerRegistry;
-use Tests\Support\FakeSendNode;
+use Nodeflow\Triggers\TriggerOccurrence;
+use Nodeflow\Triggers\TriggerSourceRegistry;
+use Tests\Support\OrderPlacedAcrossTenants;
+use Tests\Support\OrderPlacedEventSource;
 
-class FakeAlertEvent
+final class AlternateOrderPlacedEventSource implements LaravelEventTriggerSource
 {
-    public function __construct(public array $userIds) {}
-}
+    public static int $snapshots = 0;
 
-class FakeAlertTrigger extends Trigger
-{
-    public static function type(): string
+    public static int $resolutions = 0;
+
+    public static bool $failSnapshot = false;
+
+    public static function key(): string
     {
-        return 'test.alert';
+        return 'test.alternate_order_placed';
     }
 
-    public static function event(): string
+    public static function driver(): string
     {
-        return FakeAlertEvent::class;
+        return LaravelEventTriggerDriver::key();
+    }
+
+    public static function eventClass(): string
+    {
+        return OrderPlacedAcrossTenants::class;
     }
 
     public function definition(): TriggerDefinition
     {
-        return TriggerDefinition::make('Fake Alert');
+        return TriggerDefinition::make('Alternate order placed');
     }
 
-    public function resolve(object $event): TriggerMatch
+    public function snapshot(object $event): LaravelEventOccurrence
     {
-        return TriggerMatch::make()->forTenant('org-1', 'user', $event->userIds);
-    }
-}
+        self::$snapshots++;
 
-// A flood alert cuts across several tenants at once: one event, one TriggerMatch
-// naming several tenants, one run per tenant. This is the scenario the whole
-// task exists for, so it gets its own event/trigger pair rather than reusing
-// FakeAlertTrigger, which is hard-wired to a single tenant.
-class FakeMultiTenantAlertEvent
-{
-    /** @param  array<string, array<int, string>>  $tenantUserIds */
-    public function __construct(public array $tenantUserIds) {}
-}
-
-class FakeMultiTenantAlertTrigger extends Trigger
-{
-    public static function type(): string
-    {
-        return 'test.multi_alert';
-    }
-
-    public static function event(): string
-    {
-        return FakeMultiTenantAlertEvent::class;
-    }
-
-    public function definition(): TriggerDefinition
-    {
-        return TriggerDefinition::make('Fake Multi-Tenant Alert');
-    }
-
-    public function resolve(object $event): TriggerMatch
-    {
-        $match = TriggerMatch::make();
-
-        foreach ($event->tenantUserIds as $tenantId => $userIds) {
-            $match = $match->forTenant($tenantId, 'user', $userIds);
+        if (self::$failSnapshot) {
+            throw new RuntimeException('alternate snapshot failed');
         }
 
-        return $match;
+        return new LaravelEventOccurrence($event::class, [
+            'event_id' => $event->eventId,
+            'deliveries' => $event->deliveries,
+        ]);
+    }
+
+    public function resolve(TriggerOccurrence $occurrence, array $config): TriggerMatch
+    {
+        self::$resolutions++;
+        $delivery = $occurrence->payload->data['deliveries']['org-2'] ?? null;
+
+        return $delivery === null
+            ? TriggerMatch::make()
+            : TriggerMatch::make()->forTenant(
+                'org-2',
+                'user',
+                $delivery['users'],
+                ['source' => 'alternate'],
+                $occurrence->payload->data['event_id'],
+            );
+    }
+
+    public static function reset(): void
+    {
+        self::$snapshots = 0;
+        self::$resolutions = 0;
+        self::$failSnapshot = false;
     }
 }
 
-// A second trigger sharing FakeAlertEvent, used only to prove that two
-// triggers on one event class attach a single Event::listen, not two.
-class FakeSecondAlertTrigger extends Trigger
+final class ReverseOrderPlacedEvent
 {
-    public static function type(): string
+    public function __construct(public string $eventId = 'reverse-1') {}
+}
+
+abstract class ReverseOrderPlacedSource implements LaravelEventTriggerSource
+{
+    public static function driver(): string
     {
-        return 'test.alert.second';
+        return LaravelEventTriggerDriver::key();
     }
 
-    public static function event(): string
+    public static function eventClass(): string
     {
-        return FakeAlertEvent::class;
+        return ReverseOrderPlacedEvent::class;
     }
 
     public function definition(): TriggerDefinition
     {
-        return TriggerDefinition::make('Fake Second Alert');
+        return TriggerDefinition::make(static::key());
     }
 
-    public function resolve(object $event): TriggerMatch
+    public function snapshot(object $event): LaravelEventOccurrence
     {
-        return TriggerMatch::make()->forTenant('org-1', 'user', $event->userIds);
+        static::$snapshots++;
+
+        return new LaravelEventOccurrence($event::class, ['event_id' => $event->eventId]);
+    }
+
+    public function resolve(TriggerOccurrence $occurrence, array $config): TriggerMatch
+    {
+        static::$resolutions++;
+
+        return TriggerMatch::make();
+    }
+}
+
+final class ReverseFirstOrderPlacedSource extends ReverseOrderPlacedSource
+{
+    public static int $snapshots = 0;
+
+    public static int $resolutions = 0;
+
+    public static function key(): string
+    {
+        return 'test.reverse_first';
+    }
+}
+
+final class ReverseSecondOrderPlacedSource extends ReverseOrderPlacedSource
+{
+    public static int $snapshots = 0;
+
+    public static int $resolutions = 0;
+
+    public static function key(): string
+    {
+        return 'test.reverse_second';
+    }
+}
+
+final class UnregisteredEvent
+{
+    public function __construct(public string $secret = 'must-not-be-read') {}
+}
+
+final class InvalidEventClassSource extends OrderPlacedEventSource
+{
+    public static function key(): string
+    {
+        return 'test.invalid_event_class';
+    }
+
+    public static function eventClass(): string
+    {
+        return 'Missing\\Events\\NeverDefined';
+    }
+}
+
+interface InvalidEventInterface {}
+
+final class InterfaceEventSource extends OrderPlacedEventSource
+{
+    public static function key(): string
+    {
+        return 'test.interface_event';
+    }
+
+    public static function eventClass(): string
+    {
+        return InvalidEventInterface::class;
+    }
+}
+
+final class RecordingEventTriggerExceptionHandler implements ExceptionHandler
+{
+    /** @var Throwable[] */
+    public array $reported = [];
+
+    public bool $throwWhileReporting = false;
+
+    public function report(Throwable $e)
+    {
+        $this->reported[] = $e;
+
+        if ($this->throwWhileReporting) {
+            throw new RuntimeException('reporter failed');
+        }
+    }
+
+    public function shouldReport(Throwable $e)
+    {
+        return true;
+    }
+
+    public function render($request, Throwable $e)
+    {
+        throw $e;
+    }
+
+    public function renderForConsole($output, Throwable $e): void {}
+}
+
+final class ExplosiveEventState implements JsonSerializable
+{
+    public int $serializationAttempts = 0;
+
+    public function __serialize(): array
+    {
+        $this->serializationAttempts++;
+
+        throw new RuntimeException('event object was serialized');
+    }
+
+    public function jsonSerialize(): mixed
+    {
+        $this->serializationAttempts++;
+
+        throw new RuntimeException('event object was JSON serialized');
+    }
+
+    public function __toString(): string
+    {
+        $this->serializationAttempts++;
+
+        throw new RuntimeException('event object was stringified');
     }
 }
 
 beforeEach(function () {
-    app()->bind(TenantResolver::class, fn () => new class implements TenantResolver {
-        public function currentTenantId(): ?string { return null; }
-        public function ownsSubject(string $t, string $ty, string $i): bool { return true; }
-    });
+    $this->tenant = null;
+    $this->unownedSubject = null;
 
-    Nodeflow::register([FakeSendNode::class]);
-    app(TriggerRegistry::class)->register(FakeAlertTrigger::class);
+    app()->bind(TenantResolver::class, fn () => new class($this) implements TenantResolver
+    {
+        public function __construct(private $test) {}
 
-    $flow = Flow::create(['tenant_id' => 'org-1', 'name' => 'F', 'status' => 'draft']);
-
-    app(PublishFlow::class)->publish($flow, triggeredGraph([
-        'start' => 'n1',
-        'nodes' => [['id' => 'n1', 'type' => 'core.exit', 'config' => []]],
-        'edges' => [],
-    ]));
-});
-
-it('starts a run for each active flow matching the fired event', function () {
-    app(\Nodeflow\Triggers\EventTriggerListener::class)->handle(new FakeAlertEvent(['1', '2']));
-
-    expect(Run::withoutTenancy()->count())->toBe(1)
-        ->and(Run::withoutTenancy()->first()->subjects()->count())->toBe(2);
-});
-
-it('ignores flows that are not active', function () {
-    Flow::withoutTenancy()->update(['status' => 'paused']);
-
-    app(\Nodeflow\Triggers\EventTriggerListener::class)->handle(new FakeAlertEvent(['1']));
-
-    expect(Run::withoutTenancy()->count())->toBe(0);
-});
-
-it('starts a run when the trigger event is fired through the real Laravel dispatcher', function () {
-    // Calling EventTriggerListener::handle() directly (as the tests above do)
-    // never proves the listener is actually wired to the event. Registering a
-    // trigger must attach a real Event::listen, or a redelivered production
-    // event would silently do nothing.
-    Event::dispatch(new FakeAlertEvent(['1', '2']));
-
-    expect(Run::withoutTenancy()->count())->toBe(1)
-        ->and(Run::withoutTenancy()->first()->subjects()->count())->toBe(2);
-});
-
-it('does not process a shared event twice when two triggers listen for it', function () {
-    // FakeAlertTrigger is already registered for FakeAlertEvent in beforeEach.
-    // Registering a second trigger for the very same event class must not
-    // attach a second Event::listen — EventTriggerListener::handle() already
-    // fans out across every matching trigger by itself, so a second listener
-    // would run that fan-out twice per firing.
-    app(TriggerRegistry::class)->register(FakeSecondAlertTrigger::class);
-
-    Event::dispatch(new FakeAlertEvent(['1', '2']));
-
-    // Only the flow from beforeEach exists, so only one run should ever be
-    // created — twice would mean the shared event class picked up a duplicate
-    // listener.
-    expect(Run::withoutTenancy()->count())->toBe(1);
-});
-
-it('starts one run per tenant when one event matches flows in different tenants', function () {
-    app(TriggerRegistry::class)->register(FakeMultiTenantAlertTrigger::class);
-
-    $flowOrg1 = Flow::create(['tenant_id' => 'org-1', 'name' => 'F1', 'status' => 'draft']);
-    app(PublishFlow::class)->publish($flowOrg1, triggeredGraph([
-        'start' => 'n1',
-        'nodes' => [['id' => 'n1', 'type' => 'core.exit', 'config' => []]],
-        'edges' => [],
-    ]));
-
-    $flowOrg2 = Flow::create(['tenant_id' => 'org-2', 'name' => 'F2', 'status' => 'draft']);
-    app(PublishFlow::class)->publish($flowOrg2, triggeredGraph([
-        'start' => 'n1',
-        'nodes' => [['id' => 'n1', 'type' => 'core.exit', 'config' => []]],
-        'edges' => [],
-    ]));
-
-    app(\Nodeflow\Triggers\EventTriggerListener::class)->handle(new FakeMultiTenantAlertEvent([
-        'org-1' => ['1', '2'],
-        'org-2' => ['3'],
-    ]));
-
-    $runs = Run::withoutTenancy()->get()->keyBy('tenant_id');
-
-    expect($runs)->toHaveCount(2)
-        ->and($runs['org-1']->subjects()->count())->toBe(2)
-        ->and($runs['org-2']->subjects()->count())->toBe(1)
-        ->and($runs['org-1']->subjects()->pluck('subject_id')->sort()->values()->all())->toBe(['1', '2'])
-        ->and($runs['org-2']->subjects()->pluck('subject_id')->all())->toBe(['3']);
-});
-
-it('fans out to every tenant even when the ambient tenant is non-null', function () {
-    // Every other test in this file binds an ambient tenant of null. This one
-    // proves the fan-out also works when the listener runs with a concrete,
-    // resolved ambient tenant — e.g. a queued job carrying tenant context, or
-    // a listener invoked synchronously mid-request — which is the realistic
-    // case, not the exception.
-    //
-    // History: this test used to document a real conflict between Task 3's
-    // BelongsToTenant creating guard and this fan-out — with a non-null
-    // ambient tenant, org-1's run would be created (matching the ambient
-    // tenant) and then org-2's Run::create would throw
-    // CrossTenantWriteException, aborting the loop and leaving org-2's alert
-    // never started. The fix: StartRun now creates its Run row inside
-    // TenancyGuardSuspension::run(), which suspends only the creating()
-    // contradiction check — not the read scope, not materialise() — because
-    // that run's tenant_id is $flow->tenant_id, already read from a trusted
-    // row, not attacker-supplied input, and the run is being created in
-    // response to a system event with no ambient tenant of its own. Both
-    // tenants' runs are now created regardless of the ambient tenant.
-    app(TriggerRegistry::class)->register(FakeMultiTenantAlertTrigger::class);
-
-    $flowOrg1 = Flow::create(['tenant_id' => 'org-1', 'name' => 'F1', 'status' => 'draft']);
-    app(PublishFlow::class)->publish($flowOrg1, triggeredGraph([
-        'start' => 'n1',
-        'nodes' => [['id' => 'n1', 'type' => 'core.exit', 'config' => []]],
-        'edges' => [],
-    ]));
-
-    $flowOrg2 = Flow::create(['tenant_id' => 'org-2', 'name' => 'F2', 'status' => 'draft']);
-    app(PublishFlow::class)->publish($flowOrg2, triggeredGraph([
-        'start' => 'n1',
-        'nodes' => [['id' => 'n1', 'type' => 'core.exit', 'config' => []]],
-        'edges' => [],
-    ]));
-
-    // Switch the ambient tenant to a concrete, non-null value that matches
-    // ONE of the two tenants the event resolves to, then fire it.
-    app()->bind(TenantResolver::class, fn () => new class implements TenantResolver {
-        public function currentTenantId(): ?string { return 'org-1'; }
-        public function ownsSubject(string $t, string $ty, string $i): bool { return true; }
-    });
-
-    app(\Nodeflow\Triggers\EventTriggerListener::class)->handle(new FakeMultiTenantAlertEvent([
-        'org-1' => ['1', '2'],
-        'org-2' => ['3'],
-    ]));
-
-    $runs = Run::withoutTenancy()->get()->keyBy('tenant_id');
-
-    expect($runs)->toHaveCount(2)
-        ->and($runs['org-1']->subjects()->count())->toBe(2)
-        ->and($runs['org-2']->subjects()->count())->toBe(1);
-});
-
-it('does not let one tenant\'s failure strand another tenant\'s alert', function () {
-    // org-1's subject '666' is not owned by any tenant here (simulating a bad
-    // subject id in the alert payload), so materialising org-1's audience
-    // throws CrossTenantSubjectException. org-2's subject '3' is fine. That
-    // failure must not prevent org-2's run from starting — the same principle
-    // NodeRunner already applies per subject: a fan-out must not let one
-    // participant's failure strand the others. A stranded participant here is
-    // a bank whose customers never receive a flood warning.
-    app()->bind(TenantResolver::class, fn () => new class implements TenantResolver {
-        public function currentTenantId(): ?string { return null; }
-        public function ownsSubject(string $t, string $ty, string $i): bool { return $i !== '666'; }
-    });
-
-    // Capture reports rather than letting them hit the real handler, so this
-    // test can assert EventTriggerListener actually reports the failure
-    // (via the global report() helper) instead of merely swallowing it.
-    $reported = [];
-    app()->instance(\Illuminate\Contracts\Debug\ExceptionHandler::class, new class($reported) implements \Illuminate\Contracts\Debug\ExceptionHandler {
-        public function __construct(private array &$reported) {}
-
-        public function report(\Throwable $e) {
-            $this->reported[] = $e;
-        }
-
-        public function shouldReport(\Throwable $e)
+        public function currentTenantId(): ?string
         {
-            return true;
+            return $this->test->tenant;
         }
 
-        public function render($request, \Throwable $e)
+        public function ownsSubject(string $tenantId, string $subjectType, string $subjectId): bool
         {
-            throw $e;
-        }
-
-        public function renderForConsole($output, \Throwable $e): void
-        {
+            return $subjectId !== $this->test->unownedSubject;
         }
     });
 
-    app(TriggerRegistry::class)->register(FakeMultiTenantAlertTrigger::class);
+    OrderPlacedEventSource::reset();
+    AlternateOrderPlacedEventSource::reset();
+    ReverseFirstOrderPlacedSource::$snapshots = 0;
+    ReverseFirstOrderPlacedSource::$resolutions = 0;
+    ReverseSecondOrderPlacedSource::$snapshots = 0;
+    ReverseSecondOrderPlacedSource::$resolutions = 0;
 
-    $flowOrg1 = Flow::create(['tenant_id' => 'org-1', 'name' => 'F1', 'status' => 'draft']);
-    app(PublishFlow::class)->publish($flowOrg1, triggeredGraph([
-        'start' => 'n1',
-        'nodes' => [['id' => 'n1', 'type' => 'core.exit', 'config' => []]],
-        'edges' => [],
-    ]));
+    Nodeflow::registerTriggerSources([OrderPlacedEventSource::class]);
+});
 
-    $flowOrg2 = Flow::create(['tenant_id' => 'org-2', 'name' => 'F2', 'status' => 'draft']);
-    app(PublishFlow::class)->publish($flowOrg2, triggeredGraph([
-        'start' => 'n1',
-        'nodes' => [['id' => 'n1', 'type' => 'core.exit', 'config' => []]],
-        'edges' => [],
-    ]));
+afterEach(fn () => OrderPlacedEventSource::reset());
 
-    // Must not throw out of handle(): org-1's failure is caught and reported.
-    app(\Nodeflow\Triggers\EventTriggerListener::class)->handle(new FakeMultiTenantAlertEvent([
-        'org-1' => ['666'],
-        'org-2' => ['3'],
-    ]));
+it('starts every matching active tenant flow through the real Laravel dispatcher', function () {
+    publishOrderPlacedFlow('org-1', minimumTotal: 50, name: 'Org 1');
+    publishOrderPlacedFlow('org-2', minimumTotal: 100, name: 'Org 2');
+
+    Event::dispatch(orderPlacedEvent());
 
     $runs = Run::withoutTenancy()->get()->keyBy('tenant_id');
 
     expect($runs)->toHaveCount(1)
-        ->and($runs->has('org-1'))->toBeFalse()
-        ->and($runs['org-2']->subjects()->count())->toBe(1)
-        ->and($reported)->toHaveCount(1)
-        ->and($reported[0])->toBeInstanceOf(\Nodeflow\Execution\CrossTenantSubjectException::class);
+        ->and($runs->has('org-1'))->toBeTrue()
+        ->and($runs['org-1']->started_via)->toBe('event')
+        ->and($runs['org-1']->trigger_data)->toBe(['total' => 75])
+        ->and($runs['org-1']->subjects()->pluck('subject_id')->sort()->values()->all())->toBe(['1', '2']);
 });
+
+it('fans one event out to matching flows in several tenants with an ambient tenant', function () {
+    publishOrderPlacedFlow('org-1', minimumTotal: 50, name: 'Org 1');
+    publishOrderPlacedFlow('org-2', minimumTotal: 50, name: 'Org 2');
+    $this->tenant = 'org-1';
+
+    Event::dispatch(orderPlacedEvent());
+
+    expect(Run::withoutTenancy()->orderBy('tenant_id')->pluck('tenant_id')->all())
+        ->toBe(['org-1', 'org-2']);
+});
+
+it('does nothing for an unallowlisted event class or when no active activation matches', function () {
+    publishOrderPlacedFlow('org-1', minimumTotal: 1000);
+
+    Event::dispatch(new UnregisteredEvent);
+    Event::dispatch(orderPlacedEvent());
+
+    expect(Run::withoutTenancy()->count())->toBe(0)
+        ->and(OrderPlacedEventSource::$occurrences)->toHaveCount(1);
+});
+
+it('attaches one listener per event class across repeated and shared-source registration', function () {
+    $dispatcher = Event::getFacadeRoot();
+    $before = count($dispatcher->getListeners(OrderPlacedAcrossTenants::class));
+
+    expect($before)->toBe(1);
+
+    Nodeflow::registerTriggerSources([
+        AlternateOrderPlacedEventSource::class,
+        OrderPlacedEventSource::class,
+    ]);
+    Nodeflow::registerTriggerSources([AlternateOrderPlacedEventSource::class]);
+
+    expect($dispatcher->getListeners(OrderPlacedAcrossTenants::class))->toHaveCount($before);
+
+    publishOrderPlacedFlow('org-1', source: OrderPlacedEventSource::key(), name: 'Primary');
+    publishOrderPlacedFlow('org-2', source: AlternateOrderPlacedEventSource::key(), name: 'Alternate');
+    Event::dispatch(orderPlacedEvent());
+
+    expect(Run::withoutTenancy()->count())->toBe(2)
+        ->and(OrderPlacedEventSource::$snapshots)->toBe(1)
+        ->and(AlternateOrderPlacedEventSource::$snapshots)->toBe(1)
+        ->and(AlternateOrderPlacedEventSource::$resolutions)->toBe(1);
+});
+
+it('deduplicates a shared event listener when the opposite source registers first', function () {
+    $dispatcher = Event::getFacadeRoot();
+
+    expect($dispatcher->getListeners(ReverseOrderPlacedEvent::class))->toBe([]);
+
+    Nodeflow::registerTriggerSources([
+        ReverseSecondOrderPlacedSource::class,
+        ReverseFirstOrderPlacedSource::class,
+    ]);
+    Nodeflow::registerTriggerSources([
+        ReverseFirstOrderPlacedSource::class,
+        ReverseSecondOrderPlacedSource::class,
+    ]);
+
+    expect($dispatcher->getListeners(ReverseOrderPlacedEvent::class))->toHaveCount(1);
+
+    Event::dispatch(new ReverseOrderPlacedEvent);
+
+    // No activations means sources are never asked to snapshot or resolve.
+    expect(ReverseFirstOrderPlacedSource::$snapshots)->toBe(0)
+        ->and(ReverseSecondOrderPlacedSource::$snapshots)->toBe(0);
+});
+
+it('uses the source occurrence identity to make redelivery idempotent', function () {
+    publishOrderPlacedFlow('org-1');
+    $event = orderPlacedEvent('delivery-91');
+
+    Event::dispatch($event);
+    Event::dispatch($event);
+
+    expect(Run::withoutTenancy()->count())->toBe(1)
+        ->and(OrderPlacedEventSource::$occurrences)->toHaveCount(2);
+});
+
+it('pins every candidate before one source resolution republishes and deactivates flows', function () {
+    $first = publishOrderPlacedFlow('org-1', name: 'First');
+    $second = publishOrderPlacedFlow('org-1', name: 'Second');
+    $firstVersion = $first->current_version_id;
+    $secondVersion = $second->current_version_id;
+    $mutated = false;
+
+    OrderPlacedEventSource::$resolver = function (LaravelEventOccurrence $occurrence, array $config) use (
+        $first,
+        $second,
+        &$mutated,
+    ): TriggerMatch {
+        if (! $mutated) {
+            $mutated = true;
+            app(PublishFlow::class)->publish($first->fresh(), orderPlacedGraph(OrderPlacedEventSource::key(), 0));
+            $second->fresh()->update(['status' => 'paused']);
+        }
+
+        return TriggerMatch::make()->forTenant(
+            'org-1',
+            'user',
+            ['1'],
+            ['snapshot' => true],
+            'pinned-event',
+        );
+    };
+
+    Event::dispatch(orderPlacedEvent('pinned-event'));
+
+    expect(Run::withoutTenancy()->orderBy('flow_version_id')->pluck('flow_version_id')->all())
+        ->toBe(collect([$firstVersion, $secondVersion])->sort()->values()->all());
+});
+
+it('isolates activation failures and contains reporter failures', function () {
+    publishOrderPlacedFlow('org-1', name: 'Broken');
+    publishOrderPlacedFlow('org-2', name: 'Healthy');
+    $this->unownedSubject = '666';
+    $handler = new RecordingEventTriggerExceptionHandler;
+    $handler->throwWhileReporting = true;
+    app()->instance(ExceptionHandler::class, $handler);
+
+    Event::dispatch(new OrderPlacedAcrossTenants('isolated-1', [
+        'org-1' => ['users' => ['666'], 'total' => 75],
+        'org-2' => ['users' => ['3'], 'total' => 75],
+    ]));
+
+    expect(Run::withoutTenancy()->pluck('tenant_id')->all())->toBe(['org-2'])
+        ->and($handler->reported)->toHaveCount(1);
+});
+
+it('isolates a source snapshot failure from another source sharing the event', function () {
+    Nodeflow::registerTriggerSources([AlternateOrderPlacedEventSource::class]);
+    publishOrderPlacedFlow('org-1', source: OrderPlacedEventSource::key(), name: 'Primary');
+    publishOrderPlacedFlow('org-2', source: AlternateOrderPlacedEventSource::key(), name: 'Broken');
+    AlternateOrderPlacedEventSource::$failSnapshot = true;
+    $handler = new RecordingEventTriggerExceptionHandler;
+    app()->instance(ExceptionHandler::class, $handler);
+
+    Event::dispatch(orderPlacedEvent());
+
+    expect(Run::withoutTenancy()->pluck('tenant_id')->all())->toBe(['org-1'])
+        ->and($handler->reported)->toHaveCount(1)
+        ->and($handler->reported[0]->getMessage())->toBe('alternate snapshot failed');
+});
+
+it('isolates malformed foreign tenant matches from healthy sources', function () {
+    Nodeflow::registerTriggerSources([AlternateOrderPlacedEventSource::class]);
+    publishOrderPlacedFlow('org-1', source: OrderPlacedEventSource::key(), name: 'Foreign');
+    publishOrderPlacedFlow('org-2', source: AlternateOrderPlacedEventSource::key(), name: 'Healthy');
+    OrderPlacedEventSource::$resolver = fn () => TriggerMatch::make()
+        ->forTenant('foreign-org', 'user', ['9']);
+    $handler = new RecordingEventTriggerExceptionHandler;
+    app()->instance(ExceptionHandler::class, $handler);
+
+    Event::dispatch(orderPlacedEvent());
+
+    expect(Run::withoutTenancy()->pluck('tenant_id')->all())->toBe(['org-2'])
+        ->and($handler->reported)->toHaveCount(1)
+        ->and($handler->reported[0]->getMessage())->toContain('activation tenant [org-1]');
+});
+
+it('never reflects over or automatically serializes the host event object', function () {
+    publishOrderPlacedFlow('org-1');
+    $unsafe = new ExplosiveEventState;
+
+    Event::dispatch(new OrderPlacedAcrossTenants(
+        'safe-1',
+        ['org-1' => ['users' => ['1'], 'total' => 75]],
+        $unsafe,
+    ));
+
+    $occurrence = OrderPlacedEventSource::$occurrences[0];
+    $run = Run::withoutTenancy()->sole();
+
+    expect($unsafe->serializationAttempts)->toBe(0)
+        ->and($occurrence)->toBeInstanceOf(LaravelEventOccurrence::class)
+        ->and($occurrence)->not->toHaveProperty('event')
+        ->and($occurrence->data)->not->toHaveKey('unsafeState')
+        ->and($run->trigger_data)->toBe(['total' => 75]);
+});
+
+it('rejects occurrence snapshots containing mutable object state', function () {
+    publishOrderPlacedFlow('org-1');
+    OrderPlacedEventSource::$snapshotter = fn (OrderPlacedAcrossTenants $event) => new LaravelEventOccurrence(
+        $event::class,
+        ['unsafe' => new stdClass],
+    );
+    $handler = new RecordingEventTriggerExceptionHandler;
+    app()->instance(ExceptionHandler::class, $handler);
+
+    Event::dispatch(orderPlacedEvent());
+
+    expect(Run::withoutTenancy()->count())->toBe(0)
+        ->and($handler->reported)->toHaveCount(1)
+        ->and($handler->reported[0])->toBeInstanceOf(InvalidArgumentException::class);
+});
+
+it('preserves normal synchronous Laravel event timing', function () {
+    publishOrderPlacedFlow('org-1');
+
+    DB::transaction(function () {
+        Event::dispatch(orderPlacedEvent());
+
+        expect(OrderPlacedEventSource::$occurrences)->toHaveCount(1)
+            ->and(Run::withoutTenancy()->count())->toBe(1);
+    });
+});
+
+it('rejects registration of a source whose allowlisted event class does not exist', function () {
+    expect(fn () => Nodeflow::registerTriggerSources([InvalidEventClassSource::class]))
+        ->toThrow(InvalidArgumentException::class, 'event class');
+
+    expect(app(TriggerSourceRegistry::class)->has('event', InvalidEventClassSource::key()))->toBeFalse();
+});
+
+it('requires a concrete allowlisted event class rather than an interface listener', function () {
+    expect(fn () => Nodeflow::registerTriggerSources([InterfaceEventSource::class]))
+        ->toThrow(InvalidArgumentException::class, 'event class');
+
+    expect(app(TriggerSourceRegistry::class)->has('event', InterfaceEventSource::key()))->toBeFalse();
+});
+
+function publishOrderPlacedFlow(
+    string $tenantId,
+    int $minimumTotal = 0,
+    string $source = 'test.order_placed',
+    string $name = 'Order placed flow',
+): Flow {
+    $flow = Flow::create([
+        'tenant_id' => $tenantId,
+        'name' => $name,
+        'status' => 'draft',
+    ]);
+    app(PublishFlow::class)->publish($flow, orderPlacedGraph($source, $minimumTotal));
+
+    return $flow->fresh();
+}
+
+function orderPlacedGraph(string $source, int $minimumTotal): array
+{
+    return [
+        'start' => 'trigger',
+        'nodes' => [
+            [
+                'id' => 'trigger',
+                'type' => 'core.trigger.laravel_event',
+                'config' => [
+                    'source' => $source,
+                    'minimum_total' => $minimumTotal,
+                ],
+            ],
+            ['id' => 'exit', 'type' => 'core.exit', 'config' => []],
+        ],
+        'edges' => [['from' => 'trigger', 'output' => 'started', 'to' => 'exit']],
+    ];
+}
+
+function orderPlacedEvent(string $eventId = 'delivery-1'): OrderPlacedAcrossTenants
+{
+    return new OrderPlacedAcrossTenants($eventId, [
+        'org-1' => ['users' => ['1', '2'], 'total' => 75],
+        'org-2' => ['users' => ['3'], 'total' => 75],
+    ]);
+}

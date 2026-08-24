@@ -37,7 +37,6 @@ use Nodeflow\Triggers\ModelObserver\ModelObserverTriggerDriver;
 use Nodeflow\Triggers\ModelObserver\ModelObserverTriggerNode;
 use Nodeflow\Triggers\TriggerDriverRegistry;
 use Nodeflow\Triggers\TriggerNodeRegistry;
-use Nodeflow\Triggers\TriggerRegistry;
 use Nodeflow\Triggers\TriggerSourceRegistry;
 use Nodeflow\Triggers\Webhook\WebhookTriggerDriver;
 use Nodeflow\Triggers\Webhook\WebhookTriggerNode;
@@ -53,7 +52,6 @@ class NodeflowServiceProvider extends ServiceProvider
         $this->app->singleton(GraphTypeCatalog::class);
         $this->app->singleton(NodeRegistry::class);
         $this->app->singleton(SubjectAttributeRegistry::class);
-        $this->app->singleton(TriggerRegistry::class);
         $this->app->singleton(TriggerDriverRegistry::class);
         $this->app->singleton(TriggerNodeRegistry::class);
         $this->app->singleton(TriggerSourceRegistry::class);

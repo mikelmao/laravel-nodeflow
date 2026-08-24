@@ -162,7 +162,7 @@ it('adds all three homes to a hand-written provider without touching its registe
     // Fully-qualified, unlike the stub's own use-imported form: this file's
     // existing imports are unknown, so the insertion cannot rely on one.
     expect($contents)->toContain('\Nodeflow\Nodeflow::register($this->nodes);')
-        ->toContain('app(\Nodeflow\Triggers\TriggerRegistry::class)->register(...$this->triggers);')
+        ->toContain('\Nodeflow\Nodeflow::registerTriggerSources($this->triggers);')
         ->toContain('app(\Nodeflow\Schema\SubjectAttributeRegistry::class)->register(...$this->subjectAttributes());');
 
     expectParseablePhp($this->path);
@@ -245,7 +245,7 @@ function providerWithCommentedOutBootCalls(): string
         public function boot(): void
         {
             // Nodeflow::register($this->nodes);
-            // app(TriggerRegistry::class)->register(...$this->triggers);
+            // Nodeflow::registerTriggerSources($this->triggers);
             // app(SubjectAttributeRegistry::class)->register(...$this->subjectAttributes());
         }
 
@@ -277,7 +277,7 @@ it('adds real boot() calls next to the commented-out ones and ends up wired', fu
     $contents = file_get_contents($this->path);
 
     expect($contents)->toContain('\Nodeflow\Nodeflow::register($this->nodes);')
-        ->toContain('app(\Nodeflow\Triggers\TriggerRegistry::class)->register(...$this->triggers);')
+        ->toContain('\Nodeflow\Nodeflow::registerTriggerSources($this->triggers);')
         ->toContain('app(\Nodeflow\Schema\SubjectAttributeRegistry::class)->register(...$this->subjectAttributes());')
         // The commented-out calls survive untouched alongside the real ones.
         ->toContain('// Nodeflow::register($this->nodes);');

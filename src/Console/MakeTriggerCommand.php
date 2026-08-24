@@ -4,15 +4,16 @@ namespace Nodeflow\Console;
 
 use Illuminate\Console\GeneratorCommand;
 use Illuminate\Support\Str;
-use Nodeflow\Triggers\TriggerRegistry;
+use Nodeflow\Triggers\LaravelEvent\LaravelEventTriggerDriver;
+use Nodeflow\Triggers\TriggerSourceRegistry;
 use Symfony\Component\Console\Input\InputOption;
 
 use function Laravel\Prompts\text;
 
 /**
- * Scaffolds a Trigger.
+ * Scaffolds an allowlisted Laravel event trigger source.
  *
- * It earns its place on one method: event() returns a host event class, and
+ * It earns its place on one method: eventClass() returns a host event class, and
  * naming the wrong one produces a trigger that fails silently rather than
  * loudly — the listener attaches to an event that never fires.
  */
@@ -24,7 +25,7 @@ class MakeTriggerCommand extends GeneratorCommand
 
     protected $type = 'Trigger';
 
-    private ?string $resolvedType = null;
+    private ?string $resolvedSource = null;
 
     private ?string $resolvedEvent = null;
 
@@ -34,23 +35,23 @@ class MakeTriggerCommand extends GeneratorCommand
         // it for the process's lifetime, so a second Artisan::call() of this
         // same command (from a host script, a queued job, or a test's own
         // artisan() call run twice) reuses this exact instance rather than a
-        // fresh one. Without this reset, $resolvedType/$resolvedEvent from a
+        // fresh one. Without this reset, $resolvedSource/$resolvedEvent from a
         // first, unrelated invocation would still be set on the second call,
-        // and triggerType()/eventClass() would return the stale value straight
+        // and sourceKey()/eventClass() would return the stale value straight
         // from cache — skipping validation entirely and rendering the first
         // trigger's type or event into the second file while still reporting
         // success. Resetting here keeps the memoization useful within one
-        // handle() (each of eventClass()/triggerType() is called twice per
+        // handle() (each of eventClass()/sourceKey() is called twice per
         // run: once here, once again inside buildClass()) without letting it
         // survive across separate runs.
-        $this->resolvedType = null;
+        $this->resolvedSource = null;
         $this->resolvedEvent = null;
 
         // Both resolved before parent::handle() writes anything, so a usage error
         // never leaves a half-generated file behind.
         try {
             $this->eventClass();
-            $this->triggerType();
+            $this->sourceKey();
         } catch (\InvalidArgumentException $e) {
             $this->components->error($e->getMessage());
 
@@ -112,9 +113,9 @@ class MakeTriggerCommand extends GeneratorCommand
     {
         $this->components->warn($because.' Register the trigger yourself:');
         $this->newLine();
-        $this->line('    app(\\Nodeflow\\Triggers\\TriggerRegistry::class)->register(');
+        $this->line('    \\Nodeflow\\Nodeflow::registerTriggerSources([');
         $this->line('        \\'.$triggerClass.'::class,');
-        $this->line('    );');
+        $this->line('    ]);');
         $this->newLine();
         $this->components->warn(
             'Until it is registered no listener is attached, so this trigger will never fire.'
@@ -143,7 +144,7 @@ class MakeTriggerCommand extends GeneratorCommand
     {
         // strtr, not str_replace: see F-1 in MakeNodeCommand::paletteGroup().
         return strtr(parent::buildClass($name), [
-            '{{ type }}' => $this->triggerType(),
+            '{{ type }}' => $this->sourceKey(),
             '{{ event }}' => ltrim($this->eventClass(), '\\'),
             '{{ label }}' => Str::headline(class_basename($this->getNameInput())),
         ]);
@@ -188,7 +189,7 @@ class MakeTriggerCommand extends GeneratorCommand
 
         // A warning, not a refusal. Generating the trigger before writing the
         // event is a normal order of work, and ::class needs no loaded class.
-        if (! class_exists($event) && ! interface_exists($event)) {
+        if (! class_exists($event)) {
             $this->components->warn(
                 "Event class [{$event}] could not be found. The trigger has still been "
                 .'generated — ::class does not require the class to exist. If that name is '
@@ -201,19 +202,15 @@ class MakeTriggerCommand extends GeneratorCommand
     }
 
     /**
-     * Identical rules to MakeNodeCommand::nodeType(), deliberately: the same
-     * pattern, the same reserved prefix, and the same visible warning when the
-     * value is derived rather than given. Also checked against TriggerRegistry,
-     * for the same reason MakeNodeCommand checks NodeRegistry: TriggerRegistry
-     * keys by type, so a second trigger sharing an existing type would silently
-     * replace the first one every host boot resolves it through.
+     * Identical syntax rules to MakeNodeCommand::nodeType(), but this value is a
+     * source key within the Laravel-event driver rather than a mutable flow type.
      *
      * @throws \InvalidArgumentException
      */
-    private function triggerType(): string
+    private function sourceKey(): string
     {
-        if ($this->resolvedType !== null) {
-            return $this->resolvedType;
+        if ($this->resolvedSource !== null) {
+            return $this->resolvedSource;
         }
 
         $suggested = Str::snake(class_basename($this->getNameInput()));
@@ -226,17 +223,17 @@ class MakeTriggerCommand extends GeneratorCommand
         // type warning path below.
         if ($type === '' && $this->input->isInteractive() && ! $this->laravel->runningUnitTests()) {
             $type = trim(text(
-                label: 'Stable type identifier for this trigger',
+                label: 'Stable source identifier for this trigger',
                 placeholder: 'shop.order_placed',
                 default: $suggested,
-                hint: "A flow's trigger_type stores this string. Prefix it with your domain.",
+                hint: 'Published trigger nodes store this source key. Prefix it with your domain.',
             ));
         } elseif ($type === '') {
             $type = $suggested;
 
             $this->components->warn(
-                "No --type given; derived [{$type}] from the class name. Flows store this "
-                .'string, so pass --type explicitly with your domain prefix.'
+                "No --type given; derived [{$type}] from the class name. Published trigger nodes "
+                .'store this source key, so pass --type explicitly with your domain prefix.'
             );
         }
 
@@ -254,28 +251,25 @@ class MakeTriggerCommand extends GeneratorCommand
             );
         }
 
-        // TriggerRegistry keys by type, so registering a second trigger with an
-        // existing type silently replaces the first in every flow that resolves
-        // it. Refuse here rather than let that be discovered at runtime.
-        $registry = $this->laravel->make(TriggerRegistry::class);
+        $registry = $this->laravel->make(TriggerSourceRegistry::class);
 
-        if ($registry->has($type)) {
+        if ($registry->has(LaravelEventTriggerDriver::key(), $type)) {
             // Regenerating a trigger that already owns its own type is not a
             // collision — the same exemption MakeNodeCommand::validateType()
             // makes, and for the same reason: it is what makes --force usable.
-            $existing = $registry->resolve($type)::class;
+            $existing = $registry->resolve(LaravelEventTriggerDriver::key(), $type)::class;
 
             if ($existing === $this->qualifyClass($this->getNameInput())) {
-                return $this->resolvedType = $type;
+                return $this->resolvedSource = $type;
             }
 
             throw new \InvalidArgumentException(
-                "Type [{$type}] is already registered by [{$existing}]. Two triggers sharing a "
-                .'type silently replace each other in the registry. Choose another type.'
+                "Source [{$type}] is already registered by [{$existing}] for the Laravel event "
+                .'driver. Choose another source key.'
             );
         }
 
-        return $this->resolvedType = $type;
+        return $this->resolvedSource = $type;
     }
 
     protected function getOptions(): array

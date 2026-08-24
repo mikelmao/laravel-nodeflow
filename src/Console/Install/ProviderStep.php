@@ -73,8 +73,8 @@ final class ProviderStep implements InstallStep
             ],
             [
                 'anchor' => self::BOOT_ANCHOR,
-                'needle' => '->register(...$this->triggers);',
-                'insert' => PHP_EOL.'        app(\Nodeflow\Triggers\TriggerRegistry::class)->register(...$this->triggers);'.PHP_EOL,
+                'needle' => 'Nodeflow::registerTriggerSources($this->triggers);',
+                'insert' => PHP_EOL.'        \Nodeflow\Nodeflow::registerTriggerSources($this->triggers);'.PHP_EOL,
             ],
             [
                 'anchor' => self::BOOT_ANCHOR,
@@ -184,7 +184,7 @@ final class ProviderStep implements InstallStep
             public function boot(): void
             {
                 \Nodeflow\Nodeflow::register($this->nodes);
-                app(\Nodeflow\Triggers\TriggerRegistry::class)->register(...$this->triggers);
+                \Nodeflow\Nodeflow::registerTriggerSources($this->triggers);
                 app(\Nodeflow\Schema\SubjectAttributeRegistry::class)->register(...$this->subjectAttributes());
             }
 

@@ -16,7 +16,6 @@ use Nodeflow\Models\Flow;
 use Nodeflow\Nodes\NodeRegistry;
 use Nodeflow\Publishing\GraphInvalidException;
 use Nodeflow\Publishing\PublishFlow;
-use Nodeflow\Triggers\TriggerRegistry;
 use Nodeflow\Triggers\Webhook\WebhookCredentials;
 use Nodeflow\Triggers\Webhook\WebhookTriggerDriver;
 
@@ -63,7 +62,6 @@ class FlowEditorController extends Controller
             'flow' => [
                 'id' => $flow->id,
                 'name' => $flow->name,
-                'trigger_type' => $flow->trigger_type,
                 'status' => $flow->status,
                 'version' => $flow->currentVersion?->version,
                 'draft_revision' => $flow->draft_revision,
@@ -76,7 +74,10 @@ class FlowEditorController extends Controller
                 ?? $flow->currentVersion?->graph
                 ?? ['start' => '', 'nodes' => [], 'edges' => []],
             'palette' => app(NodeRegistry::class)->palette(),
-            'triggers' => app(TriggerRegistry::class)->palette(),
+            // Retained only as a compatibility-shaped array until the editor
+            // consumes server-authored trigger-node metadata. There is no
+            // mutable flow-level trigger registry behind it.
+            'triggers' => [],
             'webhook' => $endpoint === null ? null : [
                 'url' => app(WebhookCredentials::class)->url($endpoint),
                 'active' => $flow->status === 'active'

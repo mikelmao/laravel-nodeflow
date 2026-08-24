@@ -3,6 +3,7 @@
 use Nodeflow\Contracts\TriggerSource;
 use Nodeflow\Nodeflow;
 use Nodeflow\Schema\TriggerDefinition;
+use Nodeflow\Triggers\LaravelEvent\LaravelEventOccurrence;
 use Nodeflow\Triggers\LaravelEvent\LaravelEventTriggerDriver;
 use Nodeflow\Triggers\LaravelEvent\LaravelEventTriggerNode;
 use Nodeflow\Triggers\LaravelEvent\LaravelEventTriggerSource;
@@ -342,6 +343,11 @@ it('validates event descriptors against Laravel event sources', function () {
         public function definition(): TriggerDefinition
         {
             return TriggerDefinition::make('Order placed event');
+        }
+
+        public function snapshot(object $event): LaravelEventOccurrence
+        {
+            return new LaravelEventOccurrence($event::class, []);
         }
 
         public function resolve(TriggerOccurrence $occurrence, array $config): TriggerMatch

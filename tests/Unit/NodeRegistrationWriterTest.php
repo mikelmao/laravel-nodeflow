@@ -289,7 +289,6 @@ function threeHomesSource(): string
     use Illuminate\Support\ServiceProvider;
     use Nodeflow\Nodeflow;
     use Nodeflow\Schema\SubjectAttributeRegistry;
-    use Nodeflow\Triggers\TriggerRegistry;
 
     class NodeflowServiceProvider extends ServiceProvider
     {
@@ -303,7 +302,7 @@ function threeHomesSource(): string
         {
             Nodeflow::register($this->nodes);
 
-            app(TriggerRegistry::class)->register(...$this->triggers);
+            Nodeflow::registerTriggerSources($this->triggers);
 
             app(SubjectAttributeRegistry::class)->register(...$this->subjectAttributes());
         }
