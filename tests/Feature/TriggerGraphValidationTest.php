@@ -100,6 +100,69 @@ class SourceFieldCompilerGraphTriggerNode extends AbstractTriggerNode
     }
 }
 
+class DottedFieldGraphTriggerSource implements TriggerSource
+{
+    public static function key(): string
+    {
+        return 'test.dotted-field-source';
+    }
+
+    public static function driver(): string
+    {
+        return 'test.fake';
+    }
+
+    public function definition(): TriggerDefinition
+    {
+        return TriggerDefinition::make('Dotted field source')->fields([
+            Field::text('template.variant')->required(),
+        ]);
+    }
+
+    public function resolve(TriggerOccurrence $occurrence, array $config): TriggerMatch
+    {
+        return TriggerMatch::make();
+    }
+}
+
+class DottedFieldGraphTriggerNode extends AbstractTriggerNode
+{
+    public static int $compilations = 0;
+
+    public static function type(): string
+    {
+        return 'test.dotted-field-trigger';
+    }
+
+    public function definition(): TriggerDefinition
+    {
+        return TriggerDefinition::make('Dotted field trigger')->fields([
+            Field::select('source')->required(),
+            Field::text('trigger.option')->required(),
+        ]);
+    }
+
+    public function driver(): string
+    {
+        return 'test.fake';
+    }
+
+    public function compile(array $config): TriggerActivationDescriptor
+    {
+        self::$compilations++;
+
+        return new TriggerActivationDescriptor(
+            'test.fake',
+            (string) $config['source'],
+            null,
+            [
+                'trigger.option' => $config['trigger.option'],
+                'template.variant' => $config['template.variant'],
+            ],
+        );
+    }
+}
+
 class AccumulatingGraphTriggerNode extends AbstractTriggerNode
 {
     public static int $compilations = 0;
@@ -796,6 +859,78 @@ it('validates combined source config before compiling and leaves publication unt
 
     expect($valid->passes())->toBeTrue()
         ->and(SourceFieldCompilerGraphTriggerNode::$compilations)->toBe(1);
+});
+
+it('validates, compiles, and publishes dotted trigger and source fields as flat config', function () {
+    Nodeflow::registerTriggerNodes([DottedFieldGraphTriggerNode::class]);
+    Nodeflow::registerTriggerSources([DottedFieldGraphTriggerSource::class]);
+    DottedFieldGraphTriggerNode::$compilations = 0;
+
+    $graph = directTriggerGraph(DottedFieldGraphTriggerNode::type(), [
+        'source' => DottedFieldGraphTriggerSource::key(),
+        'trigger.option' => 'automatic',
+        'template.variant' => 'welcome',
+    ]);
+
+    expect(app(GraphValidator::class)->validate(Graph::fromArray($graph))->passes())->toBeTrue()
+        ->and(DottedFieldGraphTriggerNode::$compilations)->toBe(1);
+
+    $flow = Flow::create([
+        'tenant_id' => 'org-1',
+        'name' => 'Flat dotted trigger config',
+        'status' => 'draft',
+    ]);
+
+    DottedFieldGraphTriggerNode::$compilations = 0;
+    $published = app(PublishFlow::class)->publish($flow, $graph);
+
+    expect($published->version->graph['nodes'][0]['config'])->toBe($graph['nodes'][0]['config'])
+        ->and($flow->fresh()->triggerActivation->descriptor)->toBe([
+            'trigger.option' => 'automatic',
+            'template.variant' => 'welcome',
+        ])
+        ->and(DottedFieldGraphTriggerNode::$compilations)->toBe(2);
+});
+
+it('reports literal dotted field errors and rejects nested substitutes atomically', function () {
+    Nodeflow::registerTriggerNodes([DottedFieldGraphTriggerNode::class]);
+    Nodeflow::registerTriggerSources([DottedFieldGraphTriggerSource::class]);
+    DottedFieldGraphTriggerNode::$compilations = 0;
+
+    $missing = app(GraphValidator::class)->validate(Graph::fromArray(directTriggerGraph(
+        DottedFieldGraphTriggerNode::type(),
+        [
+            'source' => DottedFieldGraphTriggerSource::key(),
+            'trigger.option' => 'automatic',
+        ],
+    )));
+
+    expect(collect($missing->nodeErrors())->pluck('field')->all())->toContain('template.variant')
+        ->and(DottedFieldGraphTriggerNode::$compilations)->toBe(0);
+
+    $nestedGraph = directTriggerGraph(DottedFieldGraphTriggerNode::type(), [
+        'source' => DottedFieldGraphTriggerSource::key(),
+        'trigger' => ['option' => 'automatic'],
+        'template' => ['variant' => 'welcome'],
+    ]);
+    $nested = app(GraphValidator::class)->validate(Graph::fromArray($nestedGraph));
+
+    expect(collect($nested->nodeErrors())->pluck('field')->all())
+        ->toContain('trigger.option', 'template.variant')
+        ->and(DottedFieldGraphTriggerNode::$compilations)->toBe(0);
+
+    $flow = Flow::create([
+        'tenant_id' => 'org-1',
+        'name' => 'No nested dotted publication',
+        'status' => 'draft',
+    ]);
+
+    expect(fn () => app(PublishFlow::class)->publish($flow, $nestedGraph))
+        ->toThrow(GraphInvalidException::class)
+        ->and(DottedFieldGraphTriggerNode::$compilations)->toBe(0)
+        ->and($flow->fresh()->current_version_id)->toBeNull()
+        ->and($flow->versions()->count())->toBe(0)
+        ->and($flow->triggerActivation()->exists())->toBeFalse();
 });
 
 it('accumulates node and source field errors before skipping compilation', function () {

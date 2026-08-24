@@ -193,6 +193,9 @@ class Field
             $rules[] = new ValidDuration;
         }
 
-        return [$this->key => $rules];
+        // Config is deliberately a flat map. Laravel treats dots in rule keys as
+        // nested array traversal unless they are escaped, while its error bag
+        // still reports the original literal key for the editor contract.
+        return [str_replace('.', '\\.', $this->key) => $rules];
     }
 }
