@@ -49,12 +49,21 @@ class FlowInterpreter extends Workflow
     {
         $graph = Graph::fromArray(self::activity(LoadGraphActivity::class, $runId));
 
-        if ($entryNodeId === null && self::getVersion(
-            'nodeflow.resolve-missing-entry',
-            WorkflowStub::DEFAULT_VERSION,
-            1,
-        ) === 1) {
-            $entryNodeId = self::activity(ResolveRunEntryNodeActivity::class, $runId);
+        if ($entryNodeId === null) {
+            $entryVersion = self::getVersion(
+                'nodeflow.resolve-missing-entry',
+                WorkflowStub::DEFAULT_VERSION,
+                1,
+            );
+
+            if ($entryVersion === 1) {
+                $entryNodeId = self::activity(ResolveRunEntryNodeActivity::class, $runId);
+            } else {
+                $legacyTargets = $graph->targetsFor($graph->startNodeId(), 'started');
+                $entryNodeId = count($legacyTargets) === 1
+                    ? $legacyTargets[0]
+                    : $graph->startNodeId();
+            }
         }
 
         $loop = (new InterpreterLoop)->steps($graph, $maxSteps, $entryNodeId);

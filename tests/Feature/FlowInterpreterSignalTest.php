@@ -99,7 +99,7 @@ it('records a version marker before resolving a new missing-entry workflow', fun
         ->and($resolve->command['activity_type'])->toBe(ResolveRunEntryNodeActivity::class);
 });
 
-it('cold replays pre-version history through the legacy graph start command shape', function () {
+it('cold replays pre-version history through the legacy started-edge entry shape', function () {
     $graph = triggeredExitGraph();
     $scheduled = WorkflowFiberRunner::forClass(
         FlowInterpreter::class,
@@ -127,9 +127,12 @@ it('cold replays pre-version history through the legacy graph start command shap
         ]],
     )->step();
 
+    $arguments = Serializer::unserializeWithCodec('avro', $scheduled->command['arguments']);
+
     expect(array_column($scheduled->commands, 'type'))->toBe(['schedule_activity'])
         ->and($scheduled->command['activity_type'])->toBe(RunNodeActivity::class)
-        ->and(Serializer::unserializeWithCodec('avro', $scheduled->command['arguments']))->toBe([42, 'trigger']);
+        ->and($arguments)->toBe([42, 'first-action'])
+        ->and($arguments)->not->toContain('trigger');
 });
 
 it('does not version or resolve a workflow whose payload has an explicit entry', function () {
