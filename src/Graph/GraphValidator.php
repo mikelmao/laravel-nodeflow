@@ -102,8 +102,12 @@ class GraphValidator
                 $fromType = $from['type'] ?? '';
                 $family = $this->types->family($fromType);
                 $outputs = match ($family) {
-                    'executable' => $this->registry->resolve($fromType)->definition()->outputNames(),
-                    'trigger' => $this->triggers->resolve($fromType)->definition()->outputNames(),
+                    'executable' => $this->registry->has($fromType)
+                        ? $this->registry->resolve($fromType)->definition()->outputNames()
+                        : null,
+                    'trigger' => $this->triggers->has($fromType)
+                        ? $this->triggers->resolve($fromType)->definition()->outputNames()
+                        : null,
                     default => null,
                 };
 

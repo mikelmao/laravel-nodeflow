@@ -38,6 +38,26 @@ it('rejects an unknown node type', function () {
         ->and(implode(' ', $result->errors()))->toContain('nope.missing');
 });
 
+it('returns structured errors for an unresolved executable alias with an outgoing edge', function () {
+    app(NodeRegistry::class)->alias('legacy.missing', 'canonical.missing');
+
+    $result = $this->validator->validate(Graph::fromArray(triggeredGraph([
+        'start' => 'n1',
+        'nodes' => [
+            ['id' => 'n1', 'type' => 'legacy.missing', 'config' => []],
+            ['id' => 'n2', 'type' => 'core.exit', 'config' => []],
+        ],
+        'edges' => [['from' => 'n1', 'output' => 'default', 'to' => 'n2']],
+    ])));
+
+    expect($result->passes())->toBeFalse()
+        ->and($result->nodeErrors())->toContain([
+            'node' => 'n1',
+            'field' => null,
+            'message' => 'Node [n1] uses unknown type [legacy.missing].',
+        ]);
+});
+
 it('rejects a cycle', function () {
     $result = $this->validator->validate(Graph::fromArray(triggeredGraph([
         'start' => 'n1',
