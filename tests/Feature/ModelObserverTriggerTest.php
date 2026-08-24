@@ -59,6 +59,60 @@ class AlternateOrderModelTriggerSource implements ModelObserverTriggerSource
     }
 }
 
+class ReverseObservedOrder extends ObservedOrder {}
+
+abstract class ReverseOrderModelTriggerSource implements ModelObserverTriggerSource
+{
+    public static function driver(): string
+    {
+        return ModelObserverTriggerDriver::key();
+    }
+
+    public static function modelClass(): string
+    {
+        return ReverseObservedOrder::class;
+    }
+
+    public function definition(): TriggerDefinition
+    {
+        return TriggerDefinition::make('Reverse-order observed orders');
+    }
+
+    public function resolve(TriggerOccurrence $occurrence, array $config): TriggerMatch
+    {
+        static::$resolutions++;
+        $payload = $occurrence->payload;
+
+        return TriggerMatch::make()->forTenant(
+            (string) $payload->attributes['tenant_id'],
+            'user',
+            [(string) $payload->attributes['user_id']],
+            ['source' => static::key()],
+            static::key().'-'.$payload->event.'-'.$payload->modelKey,
+        );
+    }
+}
+
+class ReverseFirstOrderModelTriggerSource extends ReverseOrderModelTriggerSource
+{
+    public static int $resolutions = 0;
+
+    public static function key(): string
+    {
+        return 'test.reverse_first_observed_orders';
+    }
+}
+
+class ReverseSecondOrderModelTriggerSource extends ReverseOrderModelTriggerSource
+{
+    public static int $resolutions = 0;
+
+    public static function key(): string
+    {
+        return 'test.reverse_second_observed_orders';
+    }
+}
+
 class RecordingModelTriggerExceptionHandler implements ExceptionHandler
 {
     /** @var Throwable[] */
@@ -216,28 +270,58 @@ it('captures value-only immutable state before deferral', function () {
         ->and($occurrence)->not->toHaveProperty('model');
 });
 
-it('captures deleted and restored snapshots before deferral', function (string $event, Closure $action) {
+it('keeps deleted and restored value snapshots immutable before outer commit', function (
+    string $event,
+    Closure $prepare,
+    Closure $emit,
+    bool $eventDeletedAtIsNull,
+    array $eventChangedFields,
+) {
     publishObservedOrderFlow($event);
 
-    DB::transaction(fn () => $action());
+    DB::transaction(function () use ($event, $prepare, $emit) {
+        $order = $prepare();
+        $emit($order);
+
+        // Reuse the exact event instance and replace all three mutable inputs a
+        // deferred implementation could accidentally read: current values,
+        // originals and the model's tracked changes.
+        $order->status = 'mutated-after-'.$event;
+        $order->deleted_at = $event === 'deleted' ? null : '2099-01-01 00:00:00';
+        $order->syncChanges();
+        $order->syncOriginal();
+
+        expect(OrderModelTriggerSource::$occurrences)->toBe([]);
+    });
 
     $occurrence = OrderModelTriggerSource::$occurrences[0];
     expect($occurrence->event)->toBe($event)
-        ->and(array_key_exists('deleted_at', $occurrence->attributes))->toBeTrue();
+        ->and($occurrence->attributes['status'])->toBe('new')
+        ->and($occurrence->original['status'])->toBe('new')
+        ->and($occurrence->changedFields)->toBe($eventChangedFields)
+        ->and($occurrence->attributes['deleted_at'] === null)->toBe($eventDeletedAtIsNull)
+        ->and($occurrence->original['deleted_at'] === null)->toBe($eventDeletedAtIsNull)
+        ->and($occurrence)->not->toHaveProperty('model');
 })->with([
-    'deleted' => ['deleted', function () {
-        $order = ObservedOrder::withoutEvents(fn () => ObservedOrder::create(orderAttributes()));
-        $order->delete();
-    }],
-    'restored' => ['restored', function () {
-        $order = ObservedOrder::withoutEvents(function () {
+    'deleted' => [
+        'deleted',
+        fn () => ObservedOrder::withoutEvents(fn () => ObservedOrder::create(orderAttributes())),
+        fn (ObservedOrder $order) => $order->delete(),
+        false,
+        [],
+    ],
+    'restored' => [
+        'restored',
+        fn () => ObservedOrder::withoutEvents(function () {
             $order = ObservedOrder::create(orderAttributes());
             $order->delete();
 
             return $order;
-        });
-        $order->restore();
-    }],
+        }),
+        fn (ObservedOrder $order) => $order->restore(),
+        true,
+        ['deleted_at'],
+    ],
 ]);
 
 it('pins the activation active at emission across republish and deactivation', function () {
@@ -283,6 +367,55 @@ it('deduplicates listeners across repeat and shared-model source registration in
     expect(Run::withoutTenancy()->count())->toBe(2)
         ->and(AlternateOrderModelTriggerSource::$resolutions)->toBe(1)
         ->and(OrderModelTriggerSource::$occurrences)->toHaveCount(1);
+});
+
+it('deduplicates shared-model listeners when the opposite source registers first', function () {
+    $dispatcher = Event::getFacadeRoot();
+    $eventNames = array_map(
+        fn (string $event): string => 'eloquent.'.$event.': '.ReverseObservedOrder::class,
+        ['created', 'updated', 'deleted', 'restored'],
+    );
+    ReverseFirstOrderModelTriggerSource::$resolutions = 0;
+    ReverseSecondOrderModelTriggerSource::$resolutions = 0;
+
+    foreach ($eventNames as $eventName) {
+        expect($dispatcher->getListeners($eventName))->toBe([]);
+    }
+
+    app(TriggerSourceRegistry::class)->register(
+        ReverseSecondOrderModelTriggerSource::class,
+        ReverseFirstOrderModelTriggerSource::class,
+    );
+    app(TriggerSourceRegistry::class)->register(
+        ReverseFirstOrderModelTriggerSource::class,
+        ReverseSecondOrderModelTriggerSource::class,
+    );
+
+    expect(array_sum(array_map(
+        fn (string $eventName): int => count($dispatcher->getListeners($eventName)),
+        $eventNames,
+    )))->toBe(4);
+
+    foreach ($eventNames as $eventName) {
+        expect($dispatcher->getListeners($eventName))->toHaveCount(1);
+    }
+
+    publishObservedOrderFlow(
+        'created',
+        name: 'Reverse second',
+        source: ReverseSecondOrderModelTriggerSource::key(),
+    );
+    publishObservedOrderFlow(
+        'created',
+        name: 'Reverse first',
+        source: ReverseFirstOrderModelTriggerSource::key(),
+    );
+
+    ReverseObservedOrder::create(orderAttributes());
+
+    expect(Run::withoutTenancy()->count())->toBe(2)
+        ->and(ReverseFirstOrderModelTriggerSource::$resolutions)->toBe(1)
+        ->and(ReverseSecondOrderModelTriggerSource::$resolutions)->toBe(1);
 });
 
 it('does not fire for query-builder mass updates', function () {
