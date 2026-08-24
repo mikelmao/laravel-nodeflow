@@ -61,7 +61,6 @@ class RunViewController extends Controller
                 'is_test' => (bool) $run->is_test,
                 'started_via' => (string) $run->started_via,
                 'trigger_node_id' => (string) $run->trigger_node_id,
-                'trigger_data' => $run->trigger_data,
                 'started_at' => $run->started_at?->toIso8601String(),
                 'ended_at' => $run->ended_at?->toIso8601String(),
                 'error' => $run->error,

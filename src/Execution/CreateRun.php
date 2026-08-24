@@ -91,14 +91,21 @@ class CreateRun
             return $winner;
         }
 
-        $workflowId = $this->engine->start(FlowInterpreter::class, [
-            'run_id' => $run->id,
-            'max_steps' => (int) config('nodeflow.limits.max_steps_per_run', 1000),
-        ]);
+        $connection = DB::connection();
 
-        $run->update(['engine_workflow_id' => $workflowId]);
+        if ($connection->transactionLevel() === 0) {
+            $this->startEngine($run, $entryNodeId);
 
-        return $run->fresh();
+            return $run->refresh();
+        }
+
+        // An outer caller owns the remaining transaction. Starting now can
+        // launch a workflow for a Run that the outer transaction later rolls
+        // back. Laravel discards afterCommit callbacks on rollback and invokes
+        // this exactly once when the outermost commit succeeds.
+        $connection->afterCommit(fn () => $this->startEngine($run, $entryNodeId));
+
+        return $run;
     }
 
     private function existing(FlowVersion $version, string $key): ?Run
@@ -107,6 +114,17 @@ class CreateRun
             ->where('flow_version_id', $version->id)
             ->where('idempotency_key', $key)
             ->first();
+    }
+
+    private function startEngine(Run $run, string $entryNodeId): void
+    {
+        $workflowId = $this->engine->start(FlowInterpreter::class, [
+            'run_id' => $run->id,
+            'max_steps' => (int) config('nodeflow.limits.max_steps_per_run', 1000),
+            'entry_node_id' => $entryNodeId,
+        ]);
+
+        $run->update(['engine_workflow_id' => $workflowId]);
     }
 
     private function validatedTriggerData(mixed $data): ?array

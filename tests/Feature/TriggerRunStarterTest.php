@@ -1,6 +1,10 @@
 <?php
 
 use Illuminate\Database\Eloquent\ModelNotFoundException;
+use Illuminate\Database\Events\TransactionBeginning;
+use Illuminate\Database\Events\QueryExecuted;
+use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Event;
 use Nodeflow\Contracts\TenantResolver;
 use Nodeflow\Engine\WorkflowEngine;
 use Nodeflow\Execution\CreateRun;
@@ -198,6 +202,8 @@ it('allows an empty matched audience and still records the occurrence', function
 
 it('validates trigger data JSON and byte limits before creating anything', function () {
     config()->set('nodeflow.limits.trigger_data_bytes', 12);
+    $transactions = 0;
+    Event::listen(TransactionBeginning::class, function () use (&$transactions) { $transactions++; });
 
     $version = FlowVersion::withoutTenancy()->findOrFail($this->v1->id);
     $base = [
@@ -221,7 +227,95 @@ it('validates trigger data JSON and byte limits before creating anything', funct
         'trigger_data' => ['value' => 'x'], // 13 encoded bytes
     ]))->toThrow(InvalidArgumentException::class, '12');
 
-    expect(Run::withoutTenancy()->count())->toBe(0);
+    expect(Run::withoutTenancy()->count())->toBe(0)
+        ->and($transactions)->toBe(0);
+});
+
+it('enforces the actual default trigger data limit at the exact encoded byte boundary', function () {
+    expect(config('nodeflow.limits.trigger_data_bytes'))->toBe(65_536);
+
+    $version = FlowVersion::withoutTenancy()->findOrFail($this->v1->id);
+    $overhead = strlen(json_encode(['data' => ''], JSON_THROW_ON_ERROR));
+    $exact = ['data' => str_repeat('x', 65_536 - $overhead)];
+    $tooLarge = ['data' => str_repeat('x', 65_537 - $overhead)];
+    $options = [
+        'started_via' => 'test.fake',
+        'trigger_node_id' => 'trigger',
+    ];
+
+    $accepted = app(CreateRun::class)->forVersion($version, 'user', ['1'], 'old-entry', [
+        ...$options,
+        'trigger_data' => $exact,
+    ]);
+
+    $transactions = 0;
+    Event::listen(TransactionBeginning::class, function () use (&$transactions) { $transactions++; });
+
+    expect(strlen(json_encode($accepted->trigger_data, JSON_THROW_ON_ERROR)))->toBe(65_536);
+    expect(fn () => app(CreateRun::class)->forVersion($version, 'user', ['2'], 'old-entry', [
+        ...$options,
+        'trigger_data' => $tooLarge,
+    ]))->toThrow(InvalidArgumentException::class, '65537');
+
+    expect($transactions)->toBe(0)
+        ->and(Run::withoutTenancy()->count())->toBe(1);
+});
+
+it('recovers the committed winner of a real unique-key race without rematerializing or restarting', function () {
+    $version = FlowVersion::withoutTenancy()->findOrFail($this->v1->id);
+    $armed = true;
+    $winnerId = null;
+
+    DB::listen(function (QueryExecuted $query) use (&$armed, &$winnerId, $version) {
+        if (! $armed
+            || ! str_starts_with(ltrim(strtolower($query->sql)), 'select')
+            || ! str_contains($query->sql, 'nodeflow_runs')
+            || ! str_contains($query->sql, 'idempotency_key')) {
+            return;
+        }
+
+        // The preflight SELECT has already produced its empty result. Insert a
+        // committed competing delivery before CreateRun opens its transaction,
+        // so the production insert hits the database's real unique constraint.
+        $armed = false;
+        $now = now();
+        $winnerId = DB::table('nodeflow_runs')->insertGetId([
+            'flow_version_id' => $version->id,
+            'tenant_id' => 'org-1',
+            'engine_workflow_id' => 'winner-workflow',
+            'strategy' => 'subject',
+            'status' => 'pending',
+            'is_test' => false,
+            'idempotency_key' => 'race-key',
+            'started_via' => 'test.fake',
+            'trigger_node_id' => 'trigger',
+            'trigger_data' => json_encode(['winner' => true], JSON_THROW_ON_ERROR),
+            'steps_taken' => 0,
+            'created_at' => $now,
+            'updated_at' => $now,
+        ]);
+        DB::table('nodeflow_run_subjects')->insert([
+            'run_id' => $winnerId,
+            'subject_type' => 'user',
+            'subject_id' => '2',
+            'current_node_id' => 'old-entry',
+            'status' => 'active',
+        ]);
+    });
+
+    $winner = app(CreateRun::class)->forVersion($version, 'user', ['1'], 'old-entry', [
+        'started_via' => 'test.fake',
+        'trigger_node_id' => 'trigger',
+        'trigger_data' => ['candidate' => true],
+        'idempotency_key' => 'race-key',
+    ]);
+
+    expect($winner->id)->toBe($winnerId)
+        ->and($winner->engine_workflow_id)->toBe('winner-workflow')
+        ->and($winner->trigger_data)->toBe(['winner' => true])
+        ->and($winner->subjects()->pluck('subject_id')->all())->toBe(['2'])
+        ->and(Run::withoutTenancy()->count())->toBe(1)
+        ->and(app(WorkflowEngine::class)->started())->toBe([]);
 });
 
 it('accepts trigger data at the exact encoded byte limit and rejects invalid limits', function () {
@@ -238,9 +332,14 @@ it('accepts trigger data at the exact encoded byte limit and rejects invalid lim
     $run = app(CreateRun::class)->forVersion($version, 'user', ['1'], 'old-entry', $options);
     expect($run->trigger_data)->toBe($data);
 
+    $transactions = 0;
+    Event::listen(TransactionBeginning::class, function () use (&$transactions) { $transactions++; });
+
     foreach ([0, -1, 'bad'] as $invalid) {
         config()->set('nodeflow.limits.trigger_data_bytes', $invalid);
         expect(fn () => app(CreateRun::class)->forVersion($version, 'user', ['2'], 'old-entry', $options))
             ->toThrow(InvalidArgumentException::class, 'positive');
     }
+
+    expect($transactions)->toBe(0);
 });

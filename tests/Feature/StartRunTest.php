@@ -1,5 +1,6 @@
 <?php
 
+use Illuminate\Support\Facades\DB;
 use Nodeflow\Contracts\TenantResolver;
 use Nodeflow\Engine\WorkflowEngine;
 use Nodeflow\Execution\StartRun;
@@ -48,7 +49,72 @@ it('starts the interpreter workflow with the run id', function () {
     $started = app(WorkflowEngine::class)->started();
 
     expect($started[0]['workflow'])->toBe(FlowInterpreter::class)
-        ->and($started[0]['args']['run_id'])->toBe($run->id);
+        ->and($started[0]['args']['run_id'])->toBe($run->id)
+        ->and($started[0]['args']['entry_node_id'])->toBe('n1');
+});
+
+it('starts the engine only after its own transaction has committed', function () {
+    app()->singleton(WorkflowEngine::class, fn () => new class implements WorkflowEngine
+    {
+        public array $transactionLevels = [];
+
+        public function start(string $workflowClass, array $args): string
+        {
+            $this->transactionLevels[] = DB::connection()->transactionLevel();
+
+            return 'ordered-workflow';
+        }
+
+        public function signal(string $workflowId, string $method, array $args = []): void {}
+        public function cancel(string $workflowId): void {}
+        public function isRunning(string $workflowId): bool { return true; }
+    });
+
+    $run = app(StartRun::class)->forFlow($this->flow->fresh(), 'user', ['1']);
+    $engine = app(WorkflowEngine::class);
+
+    expect($engine->transactionLevels)->toBe([0])
+        ->and($run->engine_workflow_id)->toBe('ordered-workflow');
+});
+
+it('defers engine start to an ambient transaction commit and synchronizes the returned run', function () {
+    DB::beginTransaction();
+
+    $run = app(StartRun::class)->forFlow($this->flow->fresh(), 'user', ['1']);
+
+    expect(app(WorkflowEngine::class)->started())->toBe([])
+        ->and($run->engine_workflow_id)->toBeNull();
+
+    DB::commit();
+
+    expect(app(WorkflowEngine::class)->started())->toHaveCount(1)
+        ->and($run->engine_workflow_id)->toBe('fake-1')
+        ->and($run->fresh()->engine_workflow_id)->toBe('fake-1');
+});
+
+it('does not start or update the engine when an ambient transaction rolls back', function () {
+    DB::beginTransaction();
+    $run = app(StartRun::class)->forFlow($this->flow->fresh(), 'user', ['1']);
+    DB::rollBack();
+
+    expect(app(WorkflowEngine::class)->started())->toBe([])
+        ->and($run->engine_workflow_id)->toBeNull()
+        ->and(\Nodeflow\Models\Run::withoutTenancy()->find($run->id))->toBeNull();
+});
+
+it('registers only one deferred start for an idempotent retry inside an ambient transaction', function () {
+    DB::beginTransaction();
+
+    $first = app(StartRun::class)->forFlow($this->flow->fresh(), 'user', ['1'], ['idempotency_key' => 'outer-retry']);
+    $retry = app(StartRun::class)->forFlow($this->flow->fresh(), 'user', ['2'], ['idempotency_key' => 'outer-retry']);
+
+    expect($retry->id)->toBe($first->id)
+        ->and(app(WorkflowEngine::class)->started())->toBe([]);
+
+    DB::commit();
+
+    expect(app(WorkflowEngine::class)->started())->toHaveCount(1)
+        ->and($first->subjects()->pluck('subject_id')->all())->toBe(['1']);
 });
 
 it('marks a per-user run as the subject strategy automatically', function () {

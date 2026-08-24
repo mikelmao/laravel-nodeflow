@@ -9,6 +9,7 @@ use Nodeflow\Execution\Steps\RunNodeStep;
 use Nodeflow\Execution\Steps\WaitStep;
 use Nodeflow\Execution\SubjectExiter;
 use Nodeflow\Graph\Graph;
+use Nodeflow\Graph\GraphTypeCatalog;
 use Nodeflow\Models\Flow;
 use Nodeflow\Models\RunSubject;
 use Nodeflow\Nodeflow;
@@ -94,7 +95,7 @@ it('drives the canonical journey end to end and leaves no subject active', funct
 
     // Exactly what FlowInterpreter::handle() does, with awaitWithTimeout replaced
     // by the thing a wait actually races: a subject leaving the flow.
-    $loop = (new InterpreterLoop)->steps($graph, 100);
+    $loop = (new InterpreterLoop)->steps($graph, 100, $graph->entryNodeId(app(GraphTypeCatalog::class)));
     $send = null;
     $order = [];
 

@@ -166,19 +166,22 @@ it('carries an overlay entry for every node in the pinned graph', function () {
         ->and($overlay['terminal'])->toBeFalse();
 });
 
-it('exposes the safe run origin and trigger snapshot in the existing run wire shape', function () {
+it('exposes safe origin fields without leaking execution-only trigger data', function () {
     allowRunViewing();
     $this->run->update([
         'started_via' => 'test.fake',
-        'trigger_data' => ['delivery' => 'd-1'],
+        'trigger_data' => [
+            'delivery' => 'd-1',
+            'nested' => ['authorization' => 'Bearer secret-token'],
+            'serialized' => json_encode(['private' => ['account' => 42]], JSON_THROW_ON_ERROR),
+        ],
     ]);
 
     $run = runPage($this, $this->run->id)->assertOk()->json('props.run');
 
     expect($run['started_via'])->toBe('test.fake')
         ->and($run['trigger_node_id'])->toBe('trigger')
-        ->and($run['trigger_data'])->toBe(['delivery' => 'd-1'])
-        ->and($run)->not->toHaveKeys(['idempotency_key', 'engine_workflow_id']);
+        ->and($run)->not->toHaveKeys(['trigger_data', 'idempotency_key', 'engine_workflow_id']);
 });
 
 it('serves urls whose node sentinel survives route generation', function () {

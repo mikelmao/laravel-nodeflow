@@ -43,11 +43,11 @@ use Workflow\V2\Workflow;
 #[Signal('audienceEmptied')]
 class FlowInterpreter extends Workflow
 {
-    public function handle(int $runId, int $maxSteps = 1000): void
+    public function handle(int $runId, int $maxSteps = 1000, ?string $entryNodeId = null): void
     {
         $graph = Graph::fromArray(self::activity(LoadGraphActivity::class, $runId));
 
-        $loop = (new InterpreterLoop)->steps($graph, $maxSteps);
+        $loop = (new InterpreterLoop)->steps($graph, $maxSteps, $entryNodeId);
         $send = null;
 
         while ($loop->valid()) {
