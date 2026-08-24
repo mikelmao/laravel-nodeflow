@@ -8,7 +8,6 @@ use InvalidArgumentException;
 use Nodeflow\Graph\GraphTypeCatalog;
 use Nodeflow\Support\StableKey;
 use Nodeflow\Triggers\TriggerDriverRegistry;
-use Nodeflow\Triggers\TriggerNodeRegistry;
 use Symfony\Component\Console\Input\InputOption;
 
 class MakeTriggerCommand extends GeneratorCommand
@@ -32,6 +31,10 @@ class MakeTriggerCommand extends GeneratorCommand
             $this->assertSafeName();
             $this->driverKey();
             $this->graphType();
+            $class = $this->qualifyClass($this->getNameInput());
+            if (class_exists($class, false) || interface_exists($class, false) || trait_exists($class, false)) {
+                throw new InvalidArgumentException("Generated class [{$class}] already exists.");
+            }
         } catch (InvalidArgumentException $e) {
             $this->components->error($e->getMessage());
 
@@ -108,12 +111,7 @@ class MakeTriggerCommand extends GeneratorCommand
 
         $family = $this->laravel->make(GraphTypeCatalog::class)->family($type);
         if ($family !== null) {
-            $nodes = $this->laravel->make(TriggerNodeRegistry::class);
-            $ownClass = $this->qualifyClass($this->getNameInput());
-
-            if (! ($family === 'trigger' && $nodes->has($type) && $nodes->resolve($type)::class === $ownClass)) {
-                throw new InvalidArgumentException("Graph node type [{$type}] is already registered as [{$family}].");
-            }
+            throw new InvalidArgumentException("Graph node type [{$type}] is already registered as [{$family}].");
         }
 
         return $this->resolvedType = $type;

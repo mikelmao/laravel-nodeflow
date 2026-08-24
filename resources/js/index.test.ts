@@ -1,4 +1,9 @@
 import { describe, expect, it } from 'vitest'
+import * as PublicSurface from '.'
+// @ts-expect-error WebhookDetailsProps contains the one-time secret and is intentionally private.
+import type { WebhookDetailsProps } from '.'
+// @ts-expect-error The controller result includes private inspector state and is intentionally private.
+import type { UseEditorControllerResult } from '.'
 import {
     Canvas,
     controlFor,
@@ -69,10 +74,7 @@ import type {
     TriggerSourcePayload,
     TriggerSourcesPayload,
     ToolbarSlots,
-    UseEditorControllerOptions,
-    UseEditorControllerResult,
     ValidationOutcome,
-    WebhookDetailsProps,
     WebhookMetadata,
 } from '.'
 
@@ -127,10 +129,7 @@ type EveryPublicType =
     | TriggerSourcePayload
     | TriggerSourcesPayload
     | ToolbarSlots
-    | UseEditorControllerOptions
-    | UseEditorControllerResult
     | ValidationOutcome
-    | WebhookDetailsProps
     | WebhookMetadata
 
 type IsNever<T> = [T] extends [never] ? true : false
@@ -157,6 +156,7 @@ describe('package public surface', () => {
         ]).not.toContain(undefined)
         expect(everyPublicTypeIsNotNever).toBe(false)
         expect(flowEditorPropsHasUrls).toBe(true)
+        expect('WebhookDetails' in PublicSurface).toBe(false)
     })
 
     // Counterfactual: ship FlowRun but forget the export and a host's run page

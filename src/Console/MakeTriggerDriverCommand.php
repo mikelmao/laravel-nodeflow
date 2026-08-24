@@ -5,17 +5,19 @@ namespace Nodeflow\Console;
 use Illuminate\Console\GeneratorCommand;
 use Illuminate\Support\Str;
 use InvalidArgumentException;
+use Nodeflow\Graph\GraphTypeCatalog;
 use Nodeflow\Support\StableKey;
 use Nodeflow\Triggers\TriggerDriverRegistry;
 use Symfony\Component\Console\Input\InputOption;
+use Throwable;
 
 class MakeTriggerDriverCommand extends GeneratorCommand
 {
     protected $name = 'nodeflow:make-trigger-driver';
 
-    protected $description = 'Create a Nodeflow trigger driver class.';
+    protected $description = 'Create an atomic Nodeflow trigger driver extension kit.';
 
-    protected $type = 'Trigger driver';
+    protected $type = 'Trigger driver kit';
 
     private ?string $resolvedKey = null;
 
@@ -25,16 +27,58 @@ class MakeTriggerDriverCommand extends GeneratorCommand
 
         try {
             $this->assertSafeName();
-            $this->driverKey();
+            if ($this->isReservedName($this->getNameInput())) {
+                throw new InvalidArgumentException('The trigger driver name is reserved by PHP.');
+            }
+            $key = $this->driverKey();
+            $driverClass = $this->qualifyClass($this->getNameInput());
+            $nodeClass = rtrim($this->rootNamespace(), '\\').'\\Nodeflow\\Triggers\\'.class_basename($driverClass).'Trigger';
+            $type = StableKey::assert($key.'.trigger', 'graph node type', 255);
+
+            if ($this->laravel->make(GraphTypeCatalog::class)->family($type) !== null) {
+                throw new InvalidArgumentException("Reference trigger graph type [{$type}] is already registered.");
+            }
+
+            $paths = [
+                $this->getPath($driverClass) => $this->sortImports($this->buildClass($driverClass)),
+                $this->getPath($nodeClass) => $this->renderReferenceNode($nodeClass, $key, $type),
+                $this->testPath($driverClass) => $this->renderContractTest($driverClass, $nodeClass, $key, $type),
+            ];
+
+            $this->assertWritableTargets($paths, [$driverClass, $nodeClass]);
+            foreach ($paths as $contents) {
+                $this->assertParses($contents);
+            }
         } catch (InvalidArgumentException $e) {
             $this->components->error($e->getMessage());
 
             return self::FAILURE;
         }
 
-        if (parent::handle() === false) return self::FAILURE;
+        $originals = [];
+        try {
+            foreach ($paths as $path => $contents) {
+                $originals[$path] = $this->files->exists($path) ? $this->files->get($path) : null;
+                $this->makeDirectory($path);
+                $writtenBytes = $this->files->put($path, $contents);
+                $written = $this->files->exists($path) ? $this->files->get($path) : null;
+                if ($writtenBytes !== strlen($contents) || $written !== $contents) {
+                    throw new InvalidArgumentException("Unable to write [{$path}].");
+                }
+            }
+        } catch (Throwable $e) {
+            foreach ($originals as $path => $original) {
+                $original === null ? $this->files->delete($path) : $this->files->put($path, $original);
+            }
+            $this->components->error($e->getMessage());
 
-        $this->register($this->qualifyClass($this->getNameInput()));
+            return self::FAILURE;
+        }
+
+        $this->components->info("Trigger driver [{$driverClass}] created.");
+        $this->components->info("Reference trigger [{$nodeClass}] created with type [{$type}].");
+        $this->components->info('Contract test ['.$this->testPath($driverClass).'] created.');
+        $this->registerKit($driverClass, $nodeClass);
 
         return self::SUCCESS;
     }
@@ -46,7 +90,7 @@ class MakeTriggerDriverCommand extends GeneratorCommand
 
     protected function getDefaultNamespace($rootNamespace): string
     {
-        return $rootNamespace.'\Nodeflow\TriggerDrivers';
+        return $rootNamespace.'\\Nodeflow\\TriggerDrivers';
     }
 
     protected function buildClass($name): string
@@ -64,9 +108,71 @@ class MakeTriggerDriverCommand extends GeneratorCommand
         return file_exists($custom) ? $custom : __DIR__.'/../..'.$stub;
     }
 
+    private function renderReferenceNode(string $class, string $driver, string $type): string
+    {
+        $stub = $this->files->get($this->resolveStubPath('/stubs/trigger-node.stub'));
+
+        return strtr($stub, [
+            '{{ namespace }}' => Str::beforeLast($class, '\\'),
+            '{{ class }}' => class_basename($class),
+            '{{ type }}' => $type,
+            '{{ driver }}' => $driver,
+            '{{ label }}' => Str::headline(class_basename($class)),
+        ]);
+    }
+
+    private function renderContractTest(string $driverClass, string $nodeClass, string $key, string $type): string
+    {
+        return strtr($this->files->get(__DIR__.'/../../stubs/trigger-driver.test.stub'), [
+            '{{ driver }}' => $driverClass,
+            '{{ node }}' => $nodeClass,
+            '{{ driverClass }}' => class_basename($driverClass),
+            '{{ nodeClass }}' => class_basename($nodeClass),
+            '{{ key }}' => $key,
+            '{{ type }}' => $type,
+        ]);
+    }
+
+    private function testPath(string $driverClass): string
+    {
+        return $this->laravel->basePath('tests/Feature/Nodeflow/TriggerDrivers/'.class_basename($driverClass).'Test.php');
+    }
+
+    /**
+     * @param  array<string, string>  $paths
+     * @param  string[]  $classes
+     */
+    private function assertWritableTargets(array $paths, array $classes): void
+    {
+        foreach ($classes as $class) {
+            if (class_exists($class, false) || interface_exists($class, false) || trait_exists($class, false)) {
+                throw new InvalidArgumentException("Generated class [{$class}] already exists.");
+            }
+        }
+
+        if (! $this->option('force')) {
+            foreach (array_keys($paths) as $path) {
+                if ($this->files->exists($path)) {
+                    throw new InvalidArgumentException("Trigger extension target [{$path}] already exists; no files were changed.");
+                }
+            }
+        }
+    }
+
+    private function assertParses(string $contents): void
+    {
+        try {
+            token_get_all($contents, TOKEN_PARSE);
+        } catch (Throwable) {
+            throw new InvalidArgumentException('A trigger extension stub did not produce parseable PHP; no files were changed.');
+        }
+    }
+
     private function driverKey(): string
     {
-        if ($this->resolvedKey !== null) return $this->resolvedKey;
+        if ($this->resolvedKey !== null) {
+            return $this->resolvedKey;
+        }
 
         $key = trim((string) $this->option('key'));
         if ($key === '') {
@@ -75,17 +181,14 @@ class MakeTriggerDriverCommand extends GeneratorCommand
         }
         StableKey::assert($key, 'trigger driver key', 191);
 
-        if (in_array($key, ['webhook', 'model', 'event', 'manual', 'subflow'], true)
-            || str_starts_with($key, 'core.')) {
+        if (in_array($key, ['webhook', 'model', 'event', 'manual', 'subflow'], true) || str_starts_with($key, 'core.')) {
             throw new InvalidArgumentException("Trigger driver key [{$key}] is reserved.");
         }
 
         $drivers = $this->laravel->make(TriggerDriverRegistry::class);
         if ($drivers->has($key)) {
-            $existing = $drivers->resolve($key)::class;
-            if ($existing !== $this->qualifyClass($this->getNameInput())) {
-                throw new InvalidArgumentException("Trigger driver key [{$key}] is already registered by [{$existing}].");
-            }
+            $existing = $drivers->all()[$key];
+            throw new InvalidArgumentException("Trigger driver key [{$key}] is already registered by [{$existing}].");
         }
 
         return $this->resolvedKey = $key;
@@ -99,30 +202,32 @@ class MakeTriggerDriverCommand extends GeneratorCommand
         }
     }
 
-    private function register(string $class): void
+    private function registerKit(string $driverClass, string $nodeClass): void
     {
-        $outcome = $this->laravel->make(NodeRegistrationWriter::class)->appendTo(
+        $outcome = $this->laravel->make(NodeRegistrationWriter::class)->appendMany(
             $this->laravel->basePath('app/Providers/NodeflowServiceProvider.php'),
-            NodeRegistrationWriter::TRIGGER_DRIVER_ANCHOR,
-            ltrim($class, '\\').'::class',
-            '\\'.ltrim($class, '\\').'::class',
+            [
+                ['anchor' => NodeRegistrationWriter::TRIGGER_DRIVER_ANCHOR, 'presence' => $driverClass.'::class', 'entry' => '\\'.$driverClass.'::class'],
+                ['anchor' => NodeRegistrationWriter::TRIGGER_NODE_ANCHOR, 'presence' => $nodeClass.'::class', 'entry' => '\\'.$nodeClass.'::class'],
+            ],
         );
+
         if (in_array($outcome, [NodeRegistrationOutcome::Appended, NodeRegistrationOutcome::AlreadyPresent], true)) {
-            $this->components->info($outcome === NodeRegistrationOutcome::Appended ? 'Registered trigger driver.' : 'Trigger driver already registered.');
+            $this->components->info('Registered trigger driver and reference node in dependency order.');
+
             return;
         }
 
-        $this->components->warn('Automatic provider registration was unsafe. Register the trigger driver yourself:');
-        $this->line('    \\Nodeflow\\Nodeflow::registerTriggerDrivers([');
-        $this->line('        \\'.ltrim($class, '\\').'::class,');
-        $this->line('    ]);');
+        $this->components->warn('Automatic provider registration was unsafe. Register the extension kit yourself in this order:');
+        $this->line("    \\Nodeflow\\Nodeflow::registerTriggerDrivers([\\{$driverClass}::class]);");
+        $this->line("    \\Nodeflow\\Nodeflow::registerTriggerNodes([\\{$nodeClass}::class]);");
     }
 
     protected function getOptions(): array
     {
         return [
             ['key', null, InputOption::VALUE_OPTIONAL, 'Stable trigger driver key'],
-            ['force', 'f', InputOption::VALUE_NONE, 'Overwrite the driver if it exists'],
+            ['force', 'f', InputOption::VALUE_NONE, 'Overwrite the complete extension kit'],
         ];
     }
 }

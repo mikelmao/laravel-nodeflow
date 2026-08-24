@@ -5,6 +5,7 @@ namespace {{ namespace }};
 use Nodeflow\Contracts\TriggerDriver;
 use Nodeflow\Contracts\TriggerSource;
 use Nodeflow\Triggers\TriggerActivationDescriptor;
+use Nodeflow\Triggers\TriggerOccurrence;
 
 class {{ class }} implements TriggerDriver
 {
@@ -28,5 +29,11 @@ class {{ class }} implements TriggerDriver
         // TODO: validate driver-specific routing metadata without executing
         // author-controlled class names or service selectors.
         return [];
+    }
+
+    /** Convert trusted extension input into Nodeflow's immutable occurrence envelope. */
+    public function occurrence(string $source, mixed $payload, ?string $qualifier = null): TriggerOccurrence
+    {
+        return new TriggerOccurrence(self::key(), $source, $payload, $qualifier);
     }
 }

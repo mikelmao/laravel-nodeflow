@@ -12,6 +12,7 @@ use Nodeflow\Triggers\TriggerOccurrence;
 use Nodeflow\Triggers\TriggerSourceRegistry;
 use Nodeflow\Triggers\Webhook\WebhookOccurrence;
 use Nodeflow\Triggers\Webhook\WebhookTriggerSource;
+use Tests\Support\FakeTriggerDriver;
 
 final class GeneratedSourceEvent {}
 final class GeneratedSourceModel extends Model {}
@@ -25,6 +26,7 @@ beforeEach(function () {
 });
 
 afterEach(function () {
+    FakeTriggerDriver::$onSourceRegistered = null;
     $delete = function (string $dir) use (&$delete): void {
         foreach (scandir($dir) ?: [] as $entry) {
             if ($entry === '.' || $entry === '..') continue;
@@ -101,4 +103,47 @@ it('prints the exact manual source registration and does not duplicate its own a
     Artisan::call('nodeflow:make-trigger-source', ['name' => 'ManualSource', '--driver' => 'webhook', '--key' => 'shop.manual_source']);
     expect(Artisan::output())->toContain('\\Nodeflow\\Nodeflow::registerTriggerSources([')
         ->toContain('\\App\\Nodeflow\\TriggerSources\\ManualSource::class,');
+});
+
+it('rejects a registered source key collision without installing a driver listener', function () {
+    $callbacks = 0;
+    FakeTriggerDriver::$onSourceRegistered = function () use (&$callbacks): void { $callbacks++; };
+    $provider = $this->root.'/app/Providers/NodeflowServiceProvider.php';
+    $before = file_get_contents($provider);
+
+    $this->artisan('nodeflow:make-trigger-source', [
+        'name' => 'CollidingSource', '--driver' => 'test.fake', '--key' => 'test.orders',
+    ])->assertExitCode(1);
+
+    expect($callbacks)->toBe(0)
+        ->and($this->root.'/app/Nodeflow/TriggerSources/CollidingSource.php')->not->toBeFile()
+        ->and(file_get_contents($provider))->toBe($before);
+});
+
+it('refuses a generated source path collision before provider mutation', function () {
+    mkdir($this->root.'/app/Nodeflow/TriggerSources', 0777, true);
+    $path = $this->root.'/app/Nodeflow/TriggerSources/ExistingSource.php';
+    file_put_contents($path, '<?php // keep');
+    $provider = $this->root.'/app/Providers/NodeflowServiceProvider.php';
+    $before = file_get_contents($provider);
+
+    $this->artisan('nodeflow:make-trigger-source', [
+        'name' => 'ExistingSource', '--driver' => 'webhook', '--key' => 'shop.existing',
+    ])->assertExitCode(1);
+
+    expect(file_get_contents($path))->toBe('<?php // keep')
+        ->and(file_get_contents($provider))->toBe($before);
+});
+
+it('refuses a loaded generated source class collision before mutation', function () {
+    class_alias(GeneratedSourceEvent::class, 'App\\Nodeflow\\TriggerSources\\LoadedSource');
+    $provider = $this->root.'/app/Providers/NodeflowServiceProvider.php';
+    $before = file_get_contents($provider);
+
+    $this->artisan('nodeflow:make-trigger-source', [
+        'name' => 'LoadedSource', '--driver' => 'webhook', '--key' => 'shop.loaded_source',
+    ])->assertExitCode(1);
+
+    expect($this->root.'/app/Nodeflow/TriggerSources/LoadedSource.php')->not->toBeFile()
+        ->and(file_get_contents($provider))->toBe($before);
 });

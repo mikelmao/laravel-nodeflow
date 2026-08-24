@@ -2,8 +2,11 @@
 
 use Illuminate\Support\Facades\Artisan;
 use Nodeflow\Contracts\TriggerNode;
+use Nodeflow\Graph\GraphTypeCatalog;
 use Nodeflow\Triggers\TriggerActivationDescriptor;
 use Nodeflow\Triggers\TriggerNodeRegistry;
+
+final class TriggerClassCollisionFixture {}
 
 beforeEach(function () {
     $this->root = sys_get_temp_dir().'/nodeflow-make-trigger-node-'.bin2hex(random_bytes(6));
@@ -73,13 +76,42 @@ it('rejects path traversal and refuses overwrite', function () {
     ])->assertExitCode(0);
     $path = $this->root.'/app/Nodeflow/Triggers/Kept.php';
     $before = file_get_contents($path);
+    $provider = $this->root.'/app/Providers/NodeflowServiceProvider.php';
+    $providerBefore = file_get_contents($provider);
 
     $this->artisan('nodeflow:make-trigger', [
         'name' => 'Kept', '--driver' => 'webhook', '--type' => 'shop.changed',
     ])->assertExitCode(1);
 
     expect(file_get_contents($path))->toBe($before)
+        ->and(file_get_contents($provider))->toBe($providerBefore)
         ->and($this->root.'/app/Nodeflow/Escaped.php')->not->toBeFile();
+});
+
+it('refuses shared graph catalog collisions before file or provider mutation', function () {
+    app(GraphTypeCatalog::class)->claim('shop.claimed', 'executable', self::class);
+    $provider = $this->root.'/app/Providers/NodeflowServiceProvider.php';
+    $before = file_get_contents($provider);
+
+    $this->artisan('nodeflow:make-trigger', [
+        'name' => 'ClaimedTrigger', '--driver' => 'webhook', '--type' => 'shop.claimed',
+    ])->assertExitCode(1);
+
+    expect($this->root.'/app/Nodeflow/Triggers/ClaimedTrigger.php')->not->toBeFile()
+        ->and(file_get_contents($provider))->toBe($before);
+});
+
+it('refuses a loaded generated class collision before mutation', function () {
+    class_alias(TriggerClassCollisionFixture::class, 'App\\Nodeflow\\Triggers\\LoadedTrigger');
+    $provider = $this->root.'/app/Providers/NodeflowServiceProvider.php';
+    $before = file_get_contents($provider);
+
+    $this->artisan('nodeflow:make-trigger', [
+        'name' => 'LoadedTrigger', '--driver' => 'webhook', '--type' => 'shop.loaded_trigger',
+    ])->assertExitCode(1);
+
+    expect($this->root.'/app/Nodeflow/Triggers/LoadedTrigger.php')->not->toBeFile()
+        ->and(file_get_contents($provider))->toBe($before);
 });
 
 it('prints the exact manual trigger-node registration when its anchor is unsafe', function () {

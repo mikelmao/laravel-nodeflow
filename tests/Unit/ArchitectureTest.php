@@ -89,6 +89,7 @@ it('scaffolds trigger extensions only through the public trigger contracts', fun
         file_get_contents($root.'stubs/trigger-node.stub'),
         file_get_contents($root.'stubs/trigger-source.stub'),
         file_get_contents($root.'stubs/trigger-driver.stub'),
+        file_get_contents($root.'stubs/trigger-driver.test.stub'),
     ];
 
     expect($stubs[0])->toContain('AbstractTriggerNode')
@@ -96,7 +97,10 @@ it('scaffolds trigger extensions only through the public trigger contracts', fun
         ->not->toContain('extends ModelObserverTriggerNode')
         ->not->toContain('extends LaravelEventTriggerNode');
     expect($stubs[1])->toContain('Nodeflow\Contracts\TriggerSource');
-    expect($stubs[2])->toContain('Nodeflow\Contracts\TriggerDriver');
+    expect($stubs[2])->toContain('Nodeflow\Contracts\TriggerDriver')
+        ->toContain('Nodeflow\Triggers\TriggerOccurrence');
+    expect($stubs[3])->toContain('TriggerDriverRegistry')
+        ->toContain('TriggerNodeRegistry');
 
     foreach (glob($root.'src/*.php') ?: [] as $file) {
         expect(file_get_contents($file))->not->toContain('TriggerRegistry');

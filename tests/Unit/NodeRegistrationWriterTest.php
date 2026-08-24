@@ -75,6 +75,32 @@ it('appends the node class inside the nodes array', function () {
         ->toContain('\App\Nodeflow\Nodes\SendSms::class,');
 });
 
+it('restores the provider and reports failure after a short write', function () {
+    $path = providerWithAnchor();
+    $before = file_get_contents($path);
+    $files = new class extends Filesystem
+    {
+        private bool $truncate = true;
+
+        public function put($path, $contents, $lock = false)
+        {
+            if ($this->truncate && str_contains($contents, 'SendSms::class')) {
+                $this->truncate = false;
+                parent::put($path, substr($contents, 0, -1), $lock);
+
+                return strlen($contents) - 1;
+            }
+
+            return parent::put($path, $contents, $lock);
+        }
+    };
+
+    $outcome = (new NodeRegistrationWriter($files))->register($path, 'App\Nodeflow\Nodes\SendSms');
+
+    expect($outcome)->toBe(NodeRegistrationOutcome::WriteFailed)
+        ->and(file_get_contents($path))->toBe($before);
+});
+
 it('appends between the anchor and the closing bracket of its own array', function () {
     // The counterfactual this replaced an ordering assertion for: drop
     // `+ strlen(self::ANCHOR)` from the insertion position and the entry lands

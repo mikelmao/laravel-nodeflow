@@ -16,10 +16,7 @@ export { FlowEditor } from './editor/FlowEditor'
 export type { EditorMode, FlowEditorProps, ToolbarSlots } from './editor/FlowEditor'
 export type { ConfigPanelProps } from './editor/ConfigPanel'
 export type { NodeLibraryProps } from './editor/NodeLibrary'
-export { WebhookDetails } from './editor/WebhookDetails'
-export type { WebhookDetailsProps } from './editor/WebhookDetails'
-export { useEditorController } from './editor/useEditorController'
-export type { EditorActions, EditorDocument, EditorSelection, EditorView, UseEditorControllerOptions, UseEditorControllerResult } from './editor/useEditorController'
+export type { EditorActions, EditorDocument, EditorSelection, EditorView } from './editor/useEditorController'
 export type { ValidationOutcome } from './editor/validation'
 
 export type {

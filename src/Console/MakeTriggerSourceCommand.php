@@ -35,6 +35,10 @@ class MakeTriggerSourceCommand extends GeneratorCommand
             $this->driverKey();
             $this->sourceKey();
             $this->selector();
+            $class = $this->qualifyClass($this->getNameInput());
+            if (class_exists($class, false) || interface_exists($class, false) || trait_exists($class, false)) {
+                throw new InvalidArgumentException("Generated class [{$class}] already exists.");
+            }
         } catch (InvalidArgumentException $e) {
             $this->components->error($e->getMessage());
 
@@ -141,10 +145,8 @@ class MakeTriggerSourceCommand extends GeneratorCommand
 
         $sources = $this->laravel->make(TriggerSourceRegistry::class);
         if ($sources->has($this->driverKey(), $key)) {
-            $existing = $sources->resolve($this->driverKey(), $key)::class;
-            if ($existing !== $this->qualifyClass($this->getNameInput())) {
-                throw new InvalidArgumentException("Trigger source [{$this->driverKey()}:{$key}] is already registered by [{$existing}].");
-            }
+            $existing = $sources->all()[$this->driverKey()."\0".$key];
+            throw new InvalidArgumentException("Trigger source [{$this->driverKey()}:{$key}] is already registered by [{$existing}].");
         }
 
         return $this->resolvedKey = $key;

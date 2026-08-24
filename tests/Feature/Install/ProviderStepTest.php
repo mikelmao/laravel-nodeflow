@@ -55,6 +55,67 @@ it('creates a provider whose trigger extension anchors each appear exactly once'
     expect(substr_count($contents, NodeRegistrationWriter::ATTRIBUTE_ANCHOR))->toBe(1);
 });
 
+it('validates a custom provider stub completely before creating the destination', function (Closure $mutate) {
+    mkdir($this->root.'/stubs', 0777, true);
+    $stub = file_get_contents(__DIR__.'/../../../stubs/nodeflow-provider.stub');
+    file_put_contents($this->root.'/stubs/nodeflow-provider.stub', $mutate($stub));
+
+    expect($this->step->apply())->toBe(InstallOutcome::CannotWire)
+        ->and(file_exists($this->path))->toBeFalse();
+})->with([
+    'invalid syntax' => [fn (string $stub): string => $stub.' this is not php {'],
+    'missing anchor' => [fn (string $stub): string => str_replace(NodeRegistrationWriter::TRIGGER_NODE_ANCHOR, 'protected array $other = [', $stub)],
+    'duplicate anchor' => [fn (string $stub): string => str_replace(NodeRegistrationWriter::TRIGGER_NODE_ANCHOR, NodeRegistrationWriter::TRIGGER_NODE_ANCHOR."\n    ];\n\n    ".NodeRegistrationWriter::TRIGGER_NODE_ANCHOR, $stub)],
+    'wrong property order' => [function (string $stub): string {
+        $driver = strpos($stub, NodeRegistrationWriter::TRIGGER_DRIVER_ANCHOR);
+        $node = strpos($stub, NodeRegistrationWriter::TRIGGER_NODE_ANCHOR);
+        return substr_replace(substr_replace($stub, NodeRegistrationWriter::TRIGGER_DRIVER_ANCHOR, $node, strlen(NodeRegistrationWriter::TRIGGER_NODE_ANCHOR)), NodeRegistrationWriter::TRIGGER_NODE_ANCHOR, $driver, strlen(NodeRegistrationWriter::TRIGGER_DRIVER_ANCHOR));
+    }],
+    'wrong provider class' => [fn (string $stub): string => str_replace('class NodeflowServiceProvider', 'class OtherProvider', $stub)],
+    'calls outside boot' => [fn (string $stub): string => str_replace('public function boot(): void', 'public function wire(): void', $stub)],
+]);
+
+it('does not treat duplicate or out-of-order complete providers as ready and leaves them untouched', function (Closure $mutate) {
+    $this->step->apply();
+    $contents = $mutate(file_get_contents($this->path));
+    file_put_contents($this->path, $contents);
+
+    expect($this->step->check())->toBe(InstallOutcome::CannotWire)
+        ->and($this->step->apply())->toBe(InstallOutcome::CannotWire)
+        ->and(file_get_contents($this->path))->toBe($contents);
+})->with([
+    'duplicate registration call' => [fn (string $contents): string => str_replace(
+        'Nodeflow::registerTriggerNodes($this->triggerNodes);',
+        "Nodeflow::registerTriggerNodes(\$this->triggerNodes);\n        Nodeflow::registerTriggerNodes(\$this->triggerNodes);",
+        $contents,
+    )],
+    'duplicate exact anchor' => [fn (string $contents): string => str_replace(
+        NodeRegistrationWriter::TRIGGER_NODE_ANCHOR,
+        NodeRegistrationWriter::TRIGGER_NODE_ANCHOR."\n    ];\n\n    ".NodeRegistrationWriter::TRIGGER_NODE_ANCHOR,
+        $contents,
+    )],
+    'out of order registration calls' => [function (string $contents): string {
+        return str_replace(
+            [
+                'Nodeflow::registerTriggerDrivers($this->triggerDrivers);',
+                'Nodeflow::registerTriggerNodes($this->triggerNodes);',
+            ],
+            [
+                'Nodeflow::registerTriggerNodes($this->triggerNodes);',
+                'Nodeflow::registerTriggerDrivers($this->triggerDrivers);',
+            ],
+            $contents,
+        );
+    }],
+    'out of order properties' => [function (string $contents): string {
+        return str_replace(
+            [NodeRegistrationWriter::TRIGGER_DRIVER_ANCHOR, NodeRegistrationWriter::TRIGGER_NODE_ANCHOR],
+            [NodeRegistrationWriter::TRIGGER_NODE_ANCHOR, NodeRegistrationWriter::TRIGGER_DRIVER_ANCHOR],
+            $contents,
+        );
+    }],
+]);
+
 it('creates a provider in the host root namespace that parses', function () {
     $this->step->apply();
 

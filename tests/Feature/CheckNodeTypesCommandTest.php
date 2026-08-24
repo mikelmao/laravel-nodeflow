@@ -75,6 +75,25 @@ it('checks trigger components derived from historical versions pinned by live ru
         ->toContain('trigger source test.fake:gone.historical_source');
 });
 
+it('includes flow identity when a tenant-neutral live run pins a missing executable type', function () {
+    $flow = Flow::create(['tenant_id' => 'org-1', 'name' => 'Pinned executable', 'status' => 'draft']);
+    $graph = healthTriggerGraph();
+    $graph['nodes'][] = ['id' => 'work', 'type' => 'gone.executable', 'config' => []];
+    $version = FlowVersion::create([
+        'flow_id' => $flow->id, 'tenant_id' => 'org-1', 'version' => 1, 'content_hash' => 'missing-executable',
+        'graph' => $graph,
+    ]);
+    Run::create([
+        'flow_version_id' => $version->id, 'tenant_id' => 'org-1', 'started_via' => 'trigger',
+        'trigger_node_id' => 'trigger', 'trigger_data' => [], 'strategy' => 'cohort', 'status' => 'waiting',
+    ]);
+
+    $exit = Artisan::call('nodeflow:check-node-types');
+    expect($exit)->toBe(1)
+        ->and(Artisan::output())->toContain("flow {$flow->id} version {$version->id} node work missing executable node type gone.executable")
+        ->toContain("NodeRegistry::alias('gone.executable', 'canonical.type')");
+});
+
 it('does not flag inactive activations drafts or completed-only historical versions', function () {
     healthActivation('draft', healthTriggerGraph('gone.inactive'), 'gone.driver', 'gone.source');
 

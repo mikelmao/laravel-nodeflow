@@ -151,7 +151,7 @@ class CheckNodeTypesResolver
                     if ($isTriggerPosition) {
                         self::issue($issues, $identity, 'trigger-node:'.$type, "{$identity} missing trigger node type {$type}; register its class with \\Nodeflow\\Nodeflow::registerTriggerNodes([\\Your\\TriggerNode::class]).");
                     } else {
-                        self::issue($issues, $identity, 'node:'.$type, "version {$version->id} node {$nodeId} type {$type}; re-register the executable node or alias it with NodeRegistry::alias('{$type}', 'canonical.type').");
+                        self::issue($issues, $identity, 'node:'.$type, "{$identity} missing executable node type {$type}; re-register its class or alias it with NodeRegistry::alias('{$type}', 'canonical.type').");
                     }
                 }
 

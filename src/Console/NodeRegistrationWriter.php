@@ -93,49 +93,77 @@ class NodeRegistrationWriter
         string $entry,
         string $indent = '        ',
     ): NodeRegistrationOutcome {
+        return $this->appendMany($providerPath, [[
+            'anchor' => $anchor,
+            'presence' => $presenceNeedle,
+            'entry' => $entry,
+            'indent' => $indent,
+        ]]);
+    }
+
+    /**
+     * Atomically append several registrations. No provider bytes are written
+     * unless every requested home is unique, ordered, and the final PHP parses.
+     *
+     * @param array<int, array{anchor: string, presence: string, entry: string, indent?: string}> $registrations
+     */
+    public function appendMany(string $providerPath, array $registrations): NodeRegistrationOutcome
+    {
         if (! $this->files->exists($providerPath)) {
             return NodeRegistrationOutcome::ProviderMissing;
         }
 
         $contents = $this->files->get($providerPath);
 
-        // Anchor counts stay on the RAW bytes deliberately: a commented-out
-        // anchor (e.g. `// protected array $triggers = [`) must still count
-        // towards ambiguity, because the insertion offset computed below is a
-        // RAW byte offset and a second, commented copy of the anchor text is
-        // exactly the situation that makes "which one?" unanswerable.
-        $occurrences = substr_count($contents, $anchor);
-
-        if ($occurrences === 0) {
-            return NodeRegistrationOutcome::AnchorMissing;
-        }
-
-        if ($occurrences > 1) {
+        if (! $this->hasSafeTriggerTopology($contents)) {
             return NodeRegistrationOutcome::AnchorAmbiguous;
         }
 
-        // E50: scoped to the anchor's own array span, not the whole file — a
-        // mention anywhere else (a docblock example, a string literal in an
-        // unrelated method) must not read as already registered.
-        if ($this->isAlreadyPresent($contents, $anchor, $presenceNeedle)) {
+        $updated = $contents;
+        $changed = false;
+
+        foreach ($registrations as $registration) {
+            $anchor = $registration['anchor'];
+            $presenceNeedle = $registration['presence'];
+            $entry = $registration['entry'];
+            $indent = $registration['indent'] ?? '        ';
+
+            // Anchor counts stay on the RAW bytes deliberately: a commented-out
+            // anchor (e.g. `// protected array $triggers = [`) must still count
+            // towards ambiguity, because the insertion offset computed below is a
+            // RAW byte offset and a second, commented copy of the anchor text is
+            // exactly the situation that makes "which one?" unanswerable.
+            $occurrences = substr_count($updated, $anchor);
+
+            if ($occurrences === 0) {
+                return NodeRegistrationOutcome::AnchorMissing;
+            }
+
+            if ($occurrences > 1) {
+                return NodeRegistrationOutcome::AnchorAmbiguous;
+            }
+
+            // E50: scoped to the anchor's own array span, not the whole file — a
+            // mention anywhere else (a docblock example, a string literal in an
+            // unrelated method) must not read as already registered.
+            if ($this->isAlreadyPresent($updated, $anchor, $presenceNeedle)) {
+                continue;
+            }
+
+            $position = $this->insertionPoint($updated, $anchor);
+
+            if ($position === null) {
+                return NodeRegistrationOutcome::AnchorMissing;
+            }
+
+            $newline = str_contains($updated, "\r\n") ? "\r\n" : "\n";
+            $updated = substr_replace($updated, $newline.$indent.$entry.',', $position, 0);
+            $changed = true;
+        }
+
+        if (! $changed) {
             return NodeRegistrationOutcome::AlreadyPresent;
         }
-
-        $position = $this->insertionPoint($contents, $anchor);
-
-        if ($position === null) {
-            return NodeRegistrationOutcome::AnchorMissing;
-        }
-
-        $newline = str_contains($contents, "\r\n") ? "\r\n" : "\n";
-        $updated = substr_replace(
-            $contents,
-            $newline.$indent.$entry.',',
-            $position,
-            0,
-        );
-
-        $this->files->put($providerPath, $updated);
 
         // E11: a position that passed every check above can still sit inside a
         // comment — a `$nodes` home whose declaration line is itself commented
@@ -145,16 +173,63 @@ class NodeRegistrationWriter
         // entry must be visible outside any comment, or this restores the
         // original bytes and refuses instead of reporting a success that
         // produced broken PHP.
-        $written = $this->files->get($providerPath);
+        if (! $this->parses($updated) || ! $this->hasSafeTriggerTopology($updated)) {
+            return NodeRegistrationOutcome::WriteFailed;
+        }
 
-        if (! $this->parses($written)
-            || ! str_contains(SourceText::withoutPhpComments($written), $presenceNeedle)) {
+        foreach ($registrations as $registration) {
+            if (! str_contains(SourceText::withoutPhpComments($updated), $registration['presence'])) {
+                return NodeRegistrationOutcome::WriteFailed;
+            }
+        }
+
+        $writtenBytes = $this->files->put($providerPath, $updated);
+        $written = $this->files->exists($providerPath) ? $this->files->get($providerPath) : null;
+
+        if ($writtenBytes !== strlen($updated)
+            || $written !== $updated
+            || ! $this->parses($written)
+            || ! $this->hasSafeTriggerTopology($written)) {
             $this->files->put($providerPath, $contents);
 
             return NodeRegistrationOutcome::WriteFailed;
         }
 
         return NodeRegistrationOutcome::Appended;
+    }
+
+    private function hasSafeTriggerTopology(string $contents): bool
+    {
+        $stripped = SourceText::withoutPhpComments($contents);
+        $groups = [
+            [self::TRIGGER_DRIVER_ANCHOR, self::TRIGGER_NODE_ANCHOR, self::TRIGGER_SOURCE_ANCHOR],
+            [
+                'Nodeflow::registerTriggerDrivers($this->triggerDrivers);',
+                'Nodeflow::registerTriggerNodes($this->triggerNodes);',
+                'Nodeflow::registerTriggerSources($this->triggerSources);',
+            ],
+        ];
+
+        foreach ($groups as $groupIndex => $needles) {
+            $haystack = $groupIndex === 0 ? $contents : $stripped;
+            $last = -1;
+            foreach ($needles as $needle) {
+                $count = substr_count($haystack, $needle);
+                if ($count > 1) {
+                    return false;
+                }
+                if ($count === 0) {
+                    continue;
+                }
+                $position = strpos($haystack, $needle);
+                if ($position === false || $position <= $last) {
+                    return false;
+                }
+                $last = $position;
+            }
+        }
+
+        return true;
     }
 
     /**
