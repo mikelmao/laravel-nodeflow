@@ -3,7 +3,9 @@
 use Illuminate\Database\Events\QueryExecuted;
 use Illuminate\Support\Facades\DB;
 use Nodeflow\Contracts\TenantResolver;
+use Nodeflow\Contracts\TriggerDriver;
 use Nodeflow\Contracts\TriggerNode;
+use Nodeflow\Contracts\TriggerSource;
 use Nodeflow\Models\Concerns\TenancyGuardSuspension;
 use Nodeflow\Models\Flow;
 use Nodeflow\Models\FlowVersion;
@@ -16,6 +18,10 @@ use Nodeflow\Publishing\PublishResult;
 use Nodeflow\Schema\TriggerDefinition;
 use Nodeflow\Triggers\TriggerActivationDescriptor;
 use Nodeflow\Triggers\TriggerActivationRepository;
+use Nodeflow\Triggers\TriggerDriverRegistry;
+use Nodeflow\Triggers\TriggerMatch;
+use Nodeflow\Triggers\TriggerNodeRegistry;
+use Nodeflow\Triggers\TriggerOccurrence;
 use Nodeflow\Triggers\TriggerSourceRegistry;
 
 class UnsafeMetadataPublicationTriggerNode implements TriggerNode
@@ -53,6 +59,192 @@ class UnsafeMetadataPublicationTriggerNode implements TriggerNode
             qualifier: null,
             metadata: ['unsafe' => fopen('php://memory', 'r')],
         );
+    }
+}
+
+trait PublicationBoundaryDriver
+{
+    public function sourceRegistered(TriggerSource $source): void {}
+
+    public function validate(TriggerActivationDescriptor $descriptor): array
+    {
+        return [];
+    }
+}
+
+class PublicationBoundaryDriver191 implements TriggerDriver
+{
+    use PublicationBoundaryDriver;
+
+    public static function key(): string { return str_repeat('d', 191); }
+}
+
+class PublicationBoundaryDriver192 implements TriggerDriver
+{
+    use PublicationBoundaryDriver;
+
+    public static function key(): string { return str_repeat('d', 192); }
+}
+
+class PublicationBoundaryWhitespaceDriver implements TriggerDriver
+{
+    use PublicationBoundaryDriver;
+
+    public static function key(): string { return '   '; }
+}
+
+trait PublicationBoundarySource
+{
+    public function definition(): TriggerDefinition
+    {
+        return TriggerDefinition::make('Routing boundary source');
+    }
+
+    public function resolve(TriggerOccurrence $occurrence, array $config): TriggerMatch
+    {
+        return TriggerMatch::make();
+    }
+}
+
+class PublicationBoundaryDriver191Source implements TriggerSource
+{
+    use PublicationBoundarySource;
+
+    public static function key(): string { return 'test.driver-boundary-191'; }
+
+    public static function driver(): string { return PublicationBoundaryDriver191::key(); }
+}
+
+class PublicationBoundaryDriver192Source implements TriggerSource
+{
+    use PublicationBoundarySource;
+
+    public static function key(): string { return 'test.driver-boundary-192'; }
+
+    public static function driver(): string { return PublicationBoundaryDriver192::key(); }
+}
+
+class PublicationBoundaryWhitespaceDriverSource implements TriggerSource
+{
+    use PublicationBoundarySource;
+
+    public static function key(): string { return 'test.driver-boundary-whitespace'; }
+
+    public static function driver(): string { return PublicationBoundaryWhitespaceDriver::key(); }
+}
+
+class PublicationBoundarySource191 implements TriggerSource
+{
+    use PublicationBoundarySource;
+
+    public static function key(): string { return str_repeat('s', 191); }
+
+    public static function driver(): string { return 'test.fake'; }
+}
+
+class PublicationBoundarySource192 implements TriggerSource
+{
+    use PublicationBoundarySource;
+
+    public static function key(): string { return str_repeat('s', 192); }
+
+    public static function driver(): string { return 'test.fake'; }
+}
+
+class PublicationBoundaryWhitespaceSource implements TriggerSource
+{
+    use PublicationBoundarySource;
+
+    public static function key(): string { return '   '; }
+
+    public static function driver(): string { return 'test.fake'; }
+}
+
+trait PublicationBoundaryNode
+{
+    public function definition(): TriggerDefinition
+    {
+        return TriggerDefinition::make('Routing boundary trigger');
+    }
+
+    public function defaultConfig(): array
+    {
+        return [];
+    }
+
+    public function validate(array $config, TriggerSourceRegistry $sources): array
+    {
+        return [];
+    }
+}
+
+class PublicationBoundaryDriver191Node implements TriggerNode
+{
+    use PublicationBoundaryNode;
+
+    public static function type(): string { return 'test.driver-boundary-191'; }
+
+    public function driver(): string { return PublicationBoundaryDriver191::key(); }
+
+    public function compile(array $config): TriggerActivationDescriptor
+    {
+        return new TriggerActivationDescriptor($this->driver(), PublicationBoundaryDriver191Source::key(), null, []);
+    }
+}
+
+class PublicationBoundaryDriver192Node implements TriggerNode
+{
+    use PublicationBoundaryNode;
+
+    public static function type(): string { return 'test.driver-boundary-192'; }
+
+    public function driver(): string { return PublicationBoundaryDriver192::key(); }
+
+    public function compile(array $config): TriggerActivationDescriptor
+    {
+        return new TriggerActivationDescriptor($this->driver(), PublicationBoundaryDriver192Source::key(), null, []);
+    }
+}
+
+class PublicationBoundaryWhitespaceDriverNode implements TriggerNode
+{
+    use PublicationBoundaryNode;
+
+    public static function type(): string { return 'test.driver-boundary-whitespace'; }
+
+    public function driver(): string { return PublicationBoundaryWhitespaceDriver::key(); }
+
+    public function compile(array $config): TriggerActivationDescriptor
+    {
+        return new TriggerActivationDescriptor($this->driver(), PublicationBoundaryWhitespaceDriverSource::key(), null, []);
+    }
+}
+
+class PublicationBoundarySourceNode implements TriggerNode
+{
+    use PublicationBoundaryNode;
+
+    public static function type(): string { return 'test.source-boundary'; }
+
+    public function driver(): string { return 'test.fake'; }
+
+    public function compile(array $config): TriggerActivationDescriptor
+    {
+        return new TriggerActivationDescriptor($this->driver(), $config['routing_key'], null, []);
+    }
+}
+
+class PublicationBoundaryQualifierNode implements TriggerNode
+{
+    use PublicationBoundaryNode;
+
+    public static function type(): string { return 'test.qualifier-boundary'; }
+
+    public function driver(): string { return 'test.fake'; }
+
+    public function compile(array $config): TriggerActivationDescriptor
+    {
+        return new TriggerActivationDescriptor($this->driver(), 'test.orders', $config['routing_key'], []);
     }
 }
 
@@ -199,6 +391,24 @@ it('turns unsafe extension metadata into a structured graph error without leakin
         ->and(TriggerActivation::withoutTenancy()->count())->toBe(0);
 });
 
+it('accepts an exactly 191 character :dataset routing key', function (string $dimension) {
+    $graph = publicationBoundaryGraph($dimension, 'maximum');
+    $result = app(PublishFlow::class)->publish($this->flow, $graph);
+    $activation = TriggerActivation::withoutTenancy()->sole();
+
+    expect($result->version->version)->toBe(1)
+        ->and($activation->{$dimension})->toBe(publicationBoundaryValue($dimension, 'maximum'))
+        ->and(mb_strlen($activation->{$dimension}))->toBe(191);
+})->with(['driver', 'source', 'qualifier']);
+
+it('rejects a 192 character :dataset routing key and preserves the live publication', function (string $dimension) {
+    assertPublicationBoundaryRejection($this, $dimension, 'too-long', 'longer than 191 characters');
+})->with(['driver', 'source', 'qualifier']);
+
+it('rejects a whitespace-only :dataset routing key and preserves the live publication', function (string $dimension) {
+    assertPublicationBoundaryRejection($this, $dimension, 'whitespace', "empty {$dimension} routing key");
+})->with(['driver', 'source', 'qualifier']);
+
 it('finds active activations by exact driver source and nullable qualifier without tenant scope', function () {
     $nullQualifier = makeRepositoryActivation('org-1', 'active', 'event', 'orders', null);
     $qualified = makeRepositoryActivation('org-2', 'active', 'event', 'orders', 'premium');
@@ -312,4 +522,122 @@ function makeRepositoryActivation(
             'descriptor' => $descriptor,
         ]);
     });
+}
+
+function assertPublicationBoundaryRejection(
+    $test,
+    string $dimension,
+    string $boundary,
+    string $expectedMessage,
+): void {
+    $old = app(PublishFlow::class)->publish($test->flow, triggeredExitGraph());
+    $oldActivation = TriggerActivation::withoutTenancy()->sole();
+
+    try {
+        app(PublishFlow::class)->publish(
+            $test->flow->fresh(),
+            publicationBoundaryGraph($dimension, $boundary),
+        );
+        $exception = null;
+    } catch (GraphInvalidException $e) {
+        $exception = $e;
+    }
+
+    $flow = $test->flow->fresh();
+
+    expect($exception)->not->toBeNull()
+        ->and($exception->errors())->toHaveCount(1)
+        ->and($exception->errors()[0])->toContain($expectedMessage)
+        ->and($exception->nodeErrors()[0]['field'])->toBe($dimension)
+        ->and($flow->versions()->count())->toBe(1)
+        ->and($flow->current_version_id)->toBe($old->version->id)
+        ->and($flow->status)->toBe('active')
+        ->and(TriggerActivation::withoutTenancy()->count())->toBe(1)
+        ->and(TriggerActivation::withoutTenancy()->sole()->is($oldActivation))->toBeTrue();
+}
+
+function publicationBoundaryGraph(string $dimension, string $boundary): array
+{
+    $nodeType = match ($dimension) {
+        'driver' => registerPublicationBoundaryDriver($boundary),
+        'source' => registerPublicationBoundarySource($boundary),
+        'qualifier' => registerPublicationBoundaryQualifier(),
+    };
+
+    return [
+        'start' => 'routing-trigger',
+        'nodes' => [
+            [
+                'id' => 'routing-trigger',
+                'type' => $nodeType,
+                'config' => ['routing_key' => publicationBoundaryValue($dimension, $boundary)],
+            ],
+            ['id' => 'exit', 'type' => 'core.exit', 'config' => []],
+        ],
+        'edges' => [['from' => 'routing-trigger', 'output' => 'started', 'to' => 'exit']],
+    ];
+}
+
+function publicationBoundaryValue(string $dimension, string $boundary): string
+{
+    if ($boundary === 'whitespace') {
+        return '   ';
+    }
+
+    $length = $boundary === 'maximum' ? 191 : 192;
+    $character = match ($dimension) {
+        'driver' => 'd',
+        'source' => 's',
+        'qualifier' => 'q',
+    };
+
+    return str_repeat($character, $length);
+}
+
+function registerPublicationBoundaryDriver(string $boundary): string
+{
+    [$driver, $source, $node] = match ($boundary) {
+        'maximum' => [
+            PublicationBoundaryDriver191::class,
+            PublicationBoundaryDriver191Source::class,
+            PublicationBoundaryDriver191Node::class,
+        ],
+        'too-long' => [
+            PublicationBoundaryDriver192::class,
+            PublicationBoundaryDriver192Source::class,
+            PublicationBoundaryDriver192Node::class,
+        ],
+        'whitespace' => [
+            PublicationBoundaryWhitespaceDriver::class,
+            PublicationBoundaryWhitespaceDriverSource::class,
+            PublicationBoundaryWhitespaceDriverNode::class,
+        ],
+    };
+
+    app(TriggerDriverRegistry::class)->register($driver);
+    app(TriggerSourceRegistry::class)->register($source);
+    app(TriggerNodeRegistry::class)->register($node);
+
+    return $node::type();
+}
+
+function registerPublicationBoundarySource(string $boundary): string
+{
+    $source = match ($boundary) {
+        'maximum' => PublicationBoundarySource191::class,
+        'too-long' => PublicationBoundarySource192::class,
+        'whitespace' => PublicationBoundaryWhitespaceSource::class,
+    };
+
+    app(TriggerSourceRegistry::class)->register($source);
+    app(TriggerNodeRegistry::class)->register(PublicationBoundarySourceNode::class);
+
+    return PublicationBoundarySourceNode::type();
+}
+
+function registerPublicationBoundaryQualifier(): string
+{
+    app(TriggerNodeRegistry::class)->register(PublicationBoundaryQualifierNode::class);
+
+    return PublicationBoundaryQualifierNode::type();
 }
