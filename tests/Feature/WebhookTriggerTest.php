@@ -10,6 +10,7 @@ use Nodeflow\Engine\FakeWorkflowEngine;
 use Nodeflow\Engine\WorkflowEngine;
 use Nodeflow\Models\Flow;
 use Nodeflow\Models\Run;
+use Nodeflow\Models\TriggerActivation;
 use Nodeflow\Models\WebhookEndpoint;
 use Nodeflow\Nodeflow;
 use Nodeflow\Publishing\PublishFlow;
@@ -96,6 +97,7 @@ beforeEach(function () {
     HttpContractWebhookSource::$resolver = null;
     HttpContractWebhookSource::$calls = 0;
     HttpContractWebhookSource::$lastConfig = [];
+    $this->tenant = 'org-1';
     $this->unownedWebhookSubjects = [];
     Nodeflow::registerTriggerSources([HttpContractWebhookSource::class]);
     app()->bind(TenantResolver::class, fn () => new class($this) implements TenantResolver
@@ -104,7 +106,7 @@ beforeEach(function () {
 
         public function currentTenantId(): ?string
         {
-            return 'org-1';
+            return $this->test->tenant;
         }
 
         public function ownsSubject(string $tenantId, string $subjectType, string $subjectId): bool
@@ -614,6 +616,23 @@ it('publishes safely without registered webhook routes and rolls endpoint creati
     expect(fn () => app(PublishFlow::class)->publish($broken, webhookHttpContractGraph()))
         ->toThrow(RuntimeException::class, 'fail after endpoint')
         ->and(WebhookEndpoint::query()->where('flow_id', $broken->id)->exists())->toBeFalse();
+});
+
+it('creates webhook credentials from the trusted flow in a tenantless queue context', function () {
+    $flow = Flow::create(['name' => 'Queued publication', 'status' => 'draft']);
+    $this->tenant = null;
+    config()->set('nodeflow.tenancy', 'resolver');
+
+    $result = app(PublishFlow::class)->publish($flow, webhookHttpContractGraph());
+    $endpoint = WebhookEndpoint::query()->where('flow_id', $flow->id)->sole();
+    $activation = TriggerActivation::withoutTenancy()->where('flow_id', $flow->id)->sole();
+
+    expect($endpoint->flow_id)->toBe($flow->id)
+        ->and($endpoint->signing_secret)->toBe($result->webhookSecret)
+        ->and($activation->flow_id)->toBe($flow->id)
+        ->and($activation->flow_version_id)->toBe($result->version->id)
+        ->and($activation->tenant_id)->toBe('org-1')
+        ->and($result->version->tenant_id)->toBe('org-1');
 });
 
 it('publishes safely when a named webhook route needs host-owned parameters', function () {

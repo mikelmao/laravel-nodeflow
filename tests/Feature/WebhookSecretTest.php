@@ -169,6 +169,53 @@ it('returns webhook credentials only on first authenticated publication', functi
         ->and($flow->fresh()->toArray())->not->toHaveKey('webhook_secret');
 });
 
+it('returns secret-free webhook endpoint metadata and a named rotation URL to the editor', function () {
+    Gate::define('nodeflow.update', fn () => true);
+    [$flow, $result] = publishedSecretManagementWebhook();
+    $endpoint = $flow->webhookEndpoint()->firstOrFail();
+
+    $response = secretManagementEditPage($this, "/nodeflow/flows/{$flow->id}/edit")
+        ->assertOk()
+        ->assertJsonPath('props.webhook.url', $result->webhookUrl)
+        ->assertJsonPath('props.webhook.active', true)
+        ->assertJsonPath('props.webhook.secret_rotated_at', $endpoint->secret_rotated_at?->toIso8601String())
+        ->assertJsonPath(
+            'props.urls.webhook_secret_rotate',
+            "http://localhost/nodeflow/flows/{$flow->id}/webhook-secret/rotate",
+        );
+
+    expect(array_keys($response->json('props.webhook')))->toBe(['url', 'active', 'secret_rotated_at'])
+        ->and($response->getContent())->not->toContain('signing_secret', $result->webhookSecret);
+});
+
+it('marks retained webhook metadata inactive after publishing another trigger', function () {
+    Gate::define('nodeflow.update', fn () => true);
+    [$flow, $result] = publishedSecretManagementWebhook();
+    app(PublishFlow::class)->publish($flow->fresh(), triggeredExitGraph());
+
+    secretManagementEditPage($this, "/nodeflow/flows/{$flow->id}/edit")
+        ->assertOk()
+        ->assertJsonPath('props.webhook.url', $result->webhookUrl)
+        ->assertJsonPath('props.webhook.active', false);
+});
+
+it('resolves prefixed rotation routes while safely omitting an unresolvable public URL', function () {
+    Gate::define('nodeflow.update', fn () => true);
+    [$flow] = publishedSecretManagementWebhook();
+    Route::setRoutes(new \Illuminate\Routing\RouteCollection);
+    Route::middleware('web')->prefix('admin')->name('admin.')->group(fn () => Nodeflow::routes());
+    Route::prefix('{workspace}/hooks')->group(fn () => Nodeflow::webhookRoutes());
+    Route::getRoutes()->refreshNameLookups();
+
+    secretManagementEditPage($this, "/admin/flows/{$flow->id}/edit")
+        ->assertOk()
+        ->assertJsonPath('props.webhook.url', null)
+        ->assertJsonPath(
+            'props.urls.webhook_secret_rotate',
+            "http://localhost/admin/flows/{$flow->id}/webhook-secret/rotate",
+        );
+});
+
 it('rolls a secret rotation back when a post-write hook fails', function () {
     $flow = Flow::create(['name' => 'Rollback rotation', 'status' => 'draft']);
     $endpoint = WebhookEndpoint::create([
@@ -213,4 +260,11 @@ function secretManagementHeaders(string $timestamp, string $body, string $secret
         'HTTP_IDEMPOTENCY_KEY' => $key,
         'CONTENT_TYPE' => 'application/json',
     ];
+}
+
+function secretManagementEditPage($test, string $url)
+{
+    return $test->actingAs($test->user)
+        ->withHeaders(['X-Inertia' => 'true', 'X-Inertia-Version' => ''])
+        ->get($url);
 }

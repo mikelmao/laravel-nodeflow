@@ -41,8 +41,7 @@ class WebhookCredentials
             $secret = $this->randomCredential();
 
             try {
-                $endpoint = DB::transaction(fn () => WebhookEndpoint::create([
-                    'flow_id' => $flow->id,
+                $endpoint = DB::transaction(fn () => WebhookEndpoint::createForFlow($flow, [
                     'token' => $this->randomCredential(),
                     'signing_secret' => $secret,
                     'secret_rotated_at' => now(),

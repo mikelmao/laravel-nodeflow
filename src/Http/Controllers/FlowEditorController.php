@@ -17,6 +17,8 @@ use Nodeflow\Nodes\NodeRegistry;
 use Nodeflow\Publishing\GraphInvalidException;
 use Nodeflow\Publishing\PublishFlow;
 use Nodeflow\Triggers\TriggerRegistry;
+use Nodeflow\Triggers\Webhook\WebhookCredentials;
+use Nodeflow\Triggers\Webhook\WebhookTriggerDriver;
 
 /**
  * The editor's server half.
@@ -54,6 +56,8 @@ class FlowEditorController extends Controller
     public function edit(Request $request, Flow $flow): \Inertia\Response
     {
         $this->authorize('update', $flow);
+        $endpoint = $flow->webhookEndpoint()->first();
+        $activation = $flow->triggerActivation()->first();
 
         return Inertia::render('nodeflow/editor', [
             'flow' => [
@@ -73,6 +77,12 @@ class FlowEditorController extends Controller
                 ?? ['start' => '', 'nodes' => [], 'edges' => []],
             'palette' => app(NodeRegistry::class)->palette(),
             'triggers' => app(TriggerRegistry::class)->palette(),
+            'webhook' => $endpoint === null ? null : [
+                'url' => app(WebhookCredentials::class)->url($endpoint),
+                'active' => $flow->status === 'active'
+                    && $activation?->driver === WebhookTriggerDriver::key(),
+                'secret_rotated_at' => $endpoint->secret_rotated_at?->toIso8601String(),
+            ],
             // Prefixes, middleware, and route-name prefixes belong to the host.
             // The client must consume these resolved endpoints rather than revive
             // the prototype's hardcoded /nodeflow route assumptions.
@@ -83,6 +93,10 @@ class FlowEditorController extends Controller
                     ['flow' => $flow],
                 ),
                 'publish' => route($this->routeName($request, 'nodeflow.flows.publish', 'nodeflow.flows.edit'), ['flow' => $flow]),
+                'webhook_secret_rotate' => route(
+                    $this->routeName($request, 'nodeflow.webhooks.secret.rotate', 'nodeflow.flows.edit'),
+                    ['flow' => $flow],
+                ),
                 'options' => route($this->routeName($request, 'nodeflow.fields.options', 'nodeflow.flows.edit'), [
                     'flow' => $flow,
                     'type' => self::TYPE_PLACEHOLDER,
