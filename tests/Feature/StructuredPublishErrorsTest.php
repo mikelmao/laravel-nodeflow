@@ -84,7 +84,7 @@ it('leaves the node null for a graph-level failure', function () {
 });
 
 it('carries the structure through the publish exception', function () {
-    $flow = Flow::create(['name' => 'A', 'trigger_type' => 'manual', 'status' => 'draft']);
+    $flow = Flow::create(['name' => 'A', 'status' => 'draft']);
 
     try {
         app(PublishFlow::class)->publish($flow, triggeredGraph([

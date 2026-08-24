@@ -41,7 +41,6 @@ function seedVersionWithLiveRun(string $tenantId, string $type): FlowVersion
         $flow = Flow::withoutTenancy()->create([
             'tenant_id' => $tenantId,
             'name' => 'A',
-            'trigger_type' => 'manual',
             'status' => 'active',
         ]);
 
@@ -59,6 +58,9 @@ function seedVersionWithLiveRun(string $tenantId, string $type): FlowVersion
         Run::withoutTenancy()->create([
             'flow_version_id' => $version->id,
             'tenant_id' => $tenantId,
+            'started_via' => 'manual',
+            'trigger_node_id' => 'trigger',
+            'trigger_data' => null,
             'strategy' => 'cohort',
             'status' => 'waiting',
         ]);
@@ -85,7 +87,7 @@ it('stamps a version with its flows tenant, not the ambient one', function () {
     // Counterfactual: drop 'tenant_id' from PublishFlow's create() and the row
     // gets the ambient tenant — null in a console or queue publish, which would
     // then be invisible to every scoped read.
-    $flow = Flow::create(['name' => 'A', 'trigger_type' => 'manual', 'status' => 'draft']);
+    $flow = Flow::create(['name' => 'A', 'status' => 'draft']);
 
     $this->tenant = null;
 
@@ -121,7 +123,7 @@ it('continues a flows own version sequence instead of restarting it under a diff
     // this flow's rows, all of them tagged 'org-1' — so max() returns null,
     // (int) null + 1 is 1, and the insert collides with the version already at
     // (flow_id, 1).
-    $flow = Flow::create(['tenant_id' => 'org-1', 'name' => 'A', 'trigger_type' => 'manual', 'status' => 'draft']);
+    $flow = Flow::create(['tenant_id' => 'org-1', 'name' => 'A', 'status' => 'draft']);
 
     $graph = triggeredGraph([
         'start' => 'n1',
@@ -179,7 +181,7 @@ it('throws instead of mislabelling a version when the ambient tenant differs fro
     // either one alone leaves the other holding, which is the point of the
     // belt-and-braces arrangement — see the test below for the hook on its
     // own.)
-    $flow = Flow::create(['tenant_id' => 'org-1', 'name' => 'A', 'trigger_type' => 'manual', 'status' => 'draft']);
+    $flow = Flow::create(['tenant_id' => 'org-1', 'name' => 'A', 'status' => 'draft']);
 
     $this->tenant = 'org-2';
 
@@ -206,7 +208,6 @@ it('refuses a version stamped with the ambient tenant when its flow belongs to a
         fn () => Flow::withoutTenancy()->create([
             'tenant_id' => 'org-2',
             'name' => 'B',
-            'trigger_type' => 'manual',
             'status' => 'active',
         ])
     );
@@ -229,7 +230,7 @@ it('refuses an explicit tenant_id contradicting the flow even with no ambient te
     //
     // Counterfactual: delete the mismatch throw from FlowVersion::booted() and
     // this writes a version labelled 'org-2' onto 'org-1's flow.
-    $flow = Flow::create(['name' => 'A', 'trigger_type' => 'manual', 'status' => 'draft']);
+    $flow = Flow::create(['name' => 'A', 'status' => 'draft']);
 
     $this->tenant = null;
 
@@ -249,7 +250,7 @@ it('still inherits the flows tenant when nothing is set and nothing is ambient',
     //
     // Counterfactual: delete the inheritance branch and this write fails on
     // nodeflow_flow_versions.tenant_id being NOT NULL.
-    $flow = Flow::create(['name' => 'A', 'trigger_type' => 'manual', 'status' => 'draft']);
+    $flow = Flow::create(['name' => 'A', 'status' => 'draft']);
 
     $this->tenant = null;
 
@@ -271,7 +272,6 @@ it('names the flow and both tenants when it refuses a mismatched version', funct
         fn () => Flow::withoutTenancy()->create([
             'tenant_id' => 'org-2',
             'name' => 'B',
-            'trigger_type' => 'manual',
             'status' => 'active',
         ])
     );

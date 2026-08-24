@@ -19,7 +19,7 @@ beforeEach(function () {
         }
     });
 
-    $this->flow = Flow::create(['name' => 'A', 'trigger_type' => 'manual', 'status' => 'draft']);
+    $this->flow = Flow::create(['name' => 'A', 'status' => 'draft']);
 });
 
 function graphWith(string $nodeId): array

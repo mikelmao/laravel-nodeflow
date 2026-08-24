@@ -12,8 +12,6 @@ return new class extends Migration
             $t->id();
             $t->string('tenant_id')->index();
             $t->string('name');
-            $t->string('trigger_type');
-            $t->json('trigger_config')->nullable();
             $t->string('status')->default('draft');
             $t->string('reentry_policy')->default('reenter');
             $t->foreignId('current_version_id')->nullable();
@@ -29,7 +27,7 @@ return new class extends Migration
             // author — it just is not the token.
             $t->unsignedInteger('draft_revision')->default(0);
             $t->timestamps();
-            $t->index(['tenant_id', 'trigger_type', 'status']);
+            $t->index(['tenant_id', 'status']);
         });
 
         Schema::create('nodeflow_flow_versions', function (Blueprint $t) {
@@ -45,6 +43,28 @@ return new class extends Migration
             $t->unique(['flow_id', 'version']);
         });
 
+        Schema::create('nodeflow_trigger_activations', function (Blueprint $t) {
+            $t->id();
+            $t->foreignId('flow_id')->unique()->constrained('nodeflow_flows')->cascadeOnDelete();
+            $t->foreignId('flow_version_id')->unique()->constrained('nodeflow_flow_versions')->cascadeOnDelete();
+            $t->string('tenant_id')->index();
+            $t->string('driver')->index();
+            $t->string('source')->index();
+            $t->string('qualifier')->nullable()->index();
+            $t->string('trigger_node_id');
+            $t->json('descriptor');
+            $t->timestamps();
+        });
+
+        Schema::create('nodeflow_webhook_endpoints', function (Blueprint $t) {
+            $t->id();
+            $t->foreignId('flow_id')->unique()->constrained('nodeflow_flows')->cascadeOnDelete();
+            $t->string('token')->unique();
+            $t->text('signing_secret');
+            $t->timestamp('secret_rotated_at')->nullable();
+            $t->timestamps();
+        });
+
         Schema::create('nodeflow_runs', function (Blueprint $t) {
             $t->id();
             $t->foreignId('flow_version_id')->constrained('nodeflow_flow_versions');
@@ -55,6 +75,9 @@ return new class extends Migration
             $t->string('status')->default('pending');
             $t->boolean('is_test')->default(false);
             $t->string('idempotency_key')->nullable();
+            $t->string('started_via');
+            $t->string('trigger_node_id');
+            $t->json('trigger_data')->nullable();
             $t->unsignedInteger('steps_taken')->default(0);
             $t->text('error')->nullable();
             $t->timestamp('started_at')->nullable();
@@ -112,7 +135,8 @@ return new class extends Migration
     {
         foreach ([
             'nodeflow_templates', 'nodeflow_node_executions', 'nodeflow_run_subjects',
-            'nodeflow_runs', 'nodeflow_flow_versions', 'nodeflow_flows',
+            'nodeflow_runs', 'nodeflow_webhook_endpoints', 'nodeflow_trigger_activations',
+            'nodeflow_flow_versions', 'nodeflow_flows',
         ] as $table) {
             Schema::dropIfExists($table);
         }

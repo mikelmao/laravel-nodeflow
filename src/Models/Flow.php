@@ -6,6 +6,7 @@ use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
 use Illuminate\Database\Eloquent\Relations\HasMany;
 use Illuminate\Database\Eloquent\Relations\HasManyThrough;
+use Illuminate\Database\Eloquent\Relations\HasOne;
 use Nodeflow\Models\Concerns\BelongsToTenant;
 
 class Flow extends Model
@@ -17,7 +18,6 @@ class Flow extends Model
     protected $guarded = [];
 
     protected $casts = [
-        'trigger_config' => 'array',
         'draft_graph' => 'array',
         'draft_updated_at' => 'datetime',
         // The editor's concurrency token, compared with !== against a caller's
@@ -91,5 +91,15 @@ class Flow extends Model
     public function runs(): HasManyThrough
     {
         return $this->hasManyThrough(Run::class, FlowVersion::class);
+    }
+
+    public function activation(): HasOne
+    {
+        return $this->hasOne(TriggerActivation::class);
+    }
+
+    public function webhookEndpoint(): HasOne
+    {
+        return $this->hasOne(WebhookEndpoint::class);
     }
 }

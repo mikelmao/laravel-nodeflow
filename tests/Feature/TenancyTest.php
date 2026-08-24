@@ -25,13 +25,13 @@ beforeEach(function () {
 });
 
 it('stamps the tenant id on create', function () {
-    $flow = Flow::create(['name' => 'A', 'trigger_type' => 'manual', 'status' => 'draft']);
+    $flow = Flow::create(['name' => 'A', 'status' => 'draft']);
 
     expect($flow->tenant_id)->toBe('org-1');
 });
 
 it('hides other tenants rows', function () {
-    Flow::create(['name' => 'A', 'trigger_type' => 'manual', 'status' => 'draft']);
+    Flow::create(['name' => 'A', 'status' => 'draft']);
 
     $this->tenant = 'org-2';
 
@@ -43,7 +43,7 @@ it('hides other tenants rows', function () {
 });
 
 it('can be escaped explicitly for system operations', function () {
-    Flow::create(['name' => 'A', 'trigger_type' => 'manual', 'status' => 'draft']);
+    Flow::create(['name' => 'A', 'status' => 'draft']);
 
     $this->tenant = 'org-2';
 
@@ -53,7 +53,6 @@ it('can be escaped explicitly for system operations', function () {
 it('throws when explicit tenant_id differs from resolved tenant', function () {
     expect(fn () => Flow::create([
         'name' => 'A',
-        'trigger_type' => 'manual',
         'status' => 'draft',
         'tenant_id' => 'org-2',
     ]))->toThrow(CrossTenantWriteException::class);
@@ -62,7 +61,6 @@ it('throws when explicit tenant_id differs from resolved tenant', function () {
 it('allows explicit tenant_id matching the resolved tenant', function () {
     $flow = Flow::create([
         'name' => 'A',
-        'trigger_type' => 'manual',
         'status' => 'draft',
         'tenant_id' => 'org-1',
     ]);
@@ -76,7 +74,6 @@ it('allows explicit tenant_id when no tenant is resolved', function () {
 
     $flow = Flow::create([
         'name' => 'A',
-        'trigger_type' => 'manual',
         'status' => 'draft',
         'tenant_id' => 'org-3',
     ]);
@@ -133,7 +130,6 @@ it('accepts integer tenant_id equal to string resolver', function () {
     // Create flow with integer tenant_id 5
     $flow = Flow::create([
         'name' => 'A',
-        'trigger_type' => 'manual',
         'status' => 'draft',
         'tenant_id' => 5,
     ]);
@@ -148,7 +144,6 @@ it('rejects integer tenant_id differing from string resolver', function () {
 
     expect(fn () => Flow::create([
         'name' => 'A',
-        'trigger_type' => 'manual',
         'status' => 'draft',
         'tenant_id' => 6,
     ]))->toThrow(CrossTenantWriteException::class);
@@ -162,7 +157,7 @@ it('refuses to move an existing row to another tenant on update', function () {
     //
     // Counterfactual: delete the updating() hook from BelongsToTenant and this
     // returns 'org-2' instead of throwing.
-    $flow = Flow::create(['name' => 'A', 'trigger_type' => 'manual', 'status' => 'draft']);
+    $flow = Flow::create(['name' => 'A', 'status' => 'draft']);
 
     expect(fn () => $flow->update(['tenant_id' => 'org-2']))
         ->toThrow(CrossTenantWriteException::class);
@@ -182,7 +177,6 @@ it('refuses a tenant_id change even when the new value is the ambient tenant', f
 
     $flow = Flow::create([
         'name' => 'A',
-        'trigger_type' => 'manual',
         'status' => 'draft',
         'tenant_id' => 'org-3',
     ]);
@@ -196,7 +190,7 @@ it('refuses a tenant_id change even when the new value is the ambient tenant', f
 it('allows an update that leaves tenant_id alone', function () {
     // The guard must not make ordinary edits throw — PublishFlow's own
     // $flow->update(['current_version_id' => ...]) runs through it.
-    $flow = Flow::create(['name' => 'A', 'trigger_type' => 'manual', 'status' => 'draft']);
+    $flow = Flow::create(['name' => 'A', 'status' => 'draft']);
 
     $flow->update(['name' => 'B', 'status' => 'active']);
 
@@ -206,7 +200,7 @@ it('allows an update that leaves tenant_id alone', function () {
 it('allows an update that re-sends the rows existing tenant_id', function () {
     // isDirty() is the test, not presence in the attribute list: an editor
     // round-tripping the whole model back is not a tenant change.
-    $flow = Flow::create(['name' => 'A', 'trigger_type' => 'manual', 'status' => 'draft']);
+    $flow = Flow::create(['name' => 'A', 'status' => 'draft']);
 
     $flow->update(['name' => 'B', 'tenant_id' => 'org-1']);
 
@@ -221,7 +215,7 @@ it('lets a suspended guard write tenant_id on update, as it does on create', fun
     //
     // Counterfactual: drop the isActive() check from the updating() hook and
     // this throws instead of writing.
-    $flow = Flow::create(['name' => 'A', 'trigger_type' => 'manual', 'status' => 'draft']);
+    $flow = Flow::create(['name' => 'A', 'status' => 'draft']);
 
     \Nodeflow\Models\Concerns\TenancyGuardSuspension::run(
         fn () => $flow->update(['tenant_id' => 'org-2'])

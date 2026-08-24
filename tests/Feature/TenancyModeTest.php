@@ -37,7 +37,6 @@ function makeFlowFor(string $tenantId): void
     \Nodeflow\Models\Concerns\TenancyGuardSuspension::run(fn () => Flow::withoutTenancy()->create([
         'tenant_id' => $tenantId,
         'name' => 'A',
-        'trigger_type' => 'manual',
         'status' => 'draft',
     ]));
 }

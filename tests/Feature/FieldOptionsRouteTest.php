@@ -34,7 +34,7 @@ beforeEach(function () {
     $this->user = new User;
     $this->user->id = 1;
 
-    $this->flow = Flow::create(['name' => 'A', 'trigger_type' => 'manual', 'status' => 'draft']);
+    $this->flow = Flow::create(['name' => 'A', 'status' => 'draft']);
 
     app(NodeRegistry::class)->register(DynamicOptionNode::class, BadSourceNode::class);
 });

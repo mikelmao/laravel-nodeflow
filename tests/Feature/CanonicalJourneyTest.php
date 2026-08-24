@@ -81,7 +81,7 @@ beforeEach(function () {
         ],
     ]);
 
-    $flow = Flow::create(['name' => 'Flood alert journey', 'trigger_type' => 'manual', 'status' => 'draft']);
+    $flow = Flow::create(['name' => 'Flood alert journey', 'status' => 'draft']);
 
     app(PublishFlow::class)->publish($flow, $this->graph);
 

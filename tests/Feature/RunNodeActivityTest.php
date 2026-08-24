@@ -18,7 +18,6 @@ beforeEach(function () {
             $flow = Flow::withoutTenancy()->create([
                 'tenant_id' => $tenantId,
                 'name' => "{$tenantId} flow",
-                'trigger_type' => 'manual',
                 'status' => 'active',
             ]);
 
@@ -40,6 +39,9 @@ beforeEach(function () {
         return DB::table('nodeflow_runs')->insertGetId([
             'flow_version_id' => $versionId,
             'tenant_id' => $tenantId,
+            'started_via' => 'manual',
+            'trigger_node_id' => 'trigger',
+            'trigger_data' => null,
             'strategy' => 'cohort',
             'status' => 'running',
             'is_test' => false,

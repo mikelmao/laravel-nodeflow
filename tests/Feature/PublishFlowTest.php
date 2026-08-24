@@ -18,7 +18,7 @@ beforeEach(function () {
 
     Nodeflow::register([FakeSendNode::class]);
 
-    $this->flow = Flow::create(['name' => 'F', 'trigger_type' => 'manual', 'status' => 'draft']);
+    $this->flow = Flow::create(['name' => 'F', 'status' => 'draft']);
 
     $this->validGraph = triggeredGraph([
         'start' => 'n1',
@@ -62,6 +62,9 @@ it('leaves runs on the previous version untouched when a new one is published', 
 
     $run = Run::create([
         'flow_version_id' => $v1->id, 'tenant_id' => 'org-1',
+        'started_via' => 'manual',
+        'trigger_node_id' => 'trigger',
+        'trigger_data' => null,
         'strategy' => 'cohort', 'status' => 'waiting',
     ]);
 

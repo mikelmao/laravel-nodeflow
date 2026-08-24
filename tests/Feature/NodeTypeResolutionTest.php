@@ -8,14 +8,14 @@ use Nodeflow\Nodes\NodeRegistry;
 use Nodeflow\NodeflowServiceProvider;
 
 it('reports a version with live runs referencing an unregistered type', function () {
-    $flow = Flow::create(['tenant_id' => 'org-1', 'name' => 'F', 'trigger_type' => 'manual', 'status' => 'active']);
+    $flow = Flow::create(['tenant_id' => 'org-1', 'name' => 'F', 'status' => 'active']);
 
     $version = FlowVersion::create([
         'flow_id' => $flow->id, 'version' => 1, 'content_hash' => 'h',
         'graph' => ['start' => 'n1', 'nodes' => [['id' => 'n1', 'type' => 'gone.away', 'config' => []]], 'edges' => []],
     ]);
 
-    Run::create(['flow_version_id' => $version->id, 'tenant_id' => 'org-1', 'strategy' => 'cohort', 'status' => 'waiting']);
+    Run::create(['flow_version_id' => $version->id, 'tenant_id' => 'org-1', 'started_via' => 'manual', 'trigger_node_id' => 'trigger', 'trigger_data' => null, 'strategy' => 'cohort', 'status' => 'waiting']);
 
     $this->artisan('nodeflow:check-node-types')
         ->expectsOutputToContain('gone.away')
@@ -23,28 +23,28 @@ it('reports a version with live runs referencing an unregistered type', function
 });
 
 it('ignores versions whose runs have all completed', function () {
-    $flow = Flow::create(['tenant_id' => 'org-1', 'name' => 'F', 'trigger_type' => 'manual', 'status' => 'active']);
+    $flow = Flow::create(['tenant_id' => 'org-1', 'name' => 'F', 'status' => 'active']);
 
     $version = FlowVersion::create([
         'flow_id' => $flow->id, 'version' => 1, 'content_hash' => 'h',
         'graph' => ['start' => 'n1', 'nodes' => [['id' => 'n1', 'type' => 'never.registered', 'config' => []]], 'edges' => []],
     ]);
 
-    Run::create(['flow_version_id' => $version->id, 'tenant_id' => 'org-1', 'strategy' => 'cohort', 'status' => 'completed']);
+    Run::create(['flow_version_id' => $version->id, 'tenant_id' => 'org-1', 'started_via' => 'manual', 'trigger_node_id' => 'trigger', 'trigger_data' => null, 'strategy' => 'cohort', 'status' => 'completed']);
 
     $this->artisan('nodeflow:check-node-types')
         ->assertExitCode(0);
 });
 
 it('passes when every referenced type resolves', function () {
-    $flow = Flow::create(['tenant_id' => 'org-1', 'name' => 'F', 'trigger_type' => 'manual', 'status' => 'active']);
+    $flow = Flow::create(['tenant_id' => 'org-1', 'name' => 'F', 'status' => 'active']);
 
     $version = FlowVersion::create([
         'flow_id' => $flow->id, 'version' => 1, 'content_hash' => 'h',
         'graph' => ['start' => 'n1', 'nodes' => [['id' => 'n1', 'type' => 'test.recording', 'config' => []]], 'edges' => []],
     ]);
 
-    Run::create(['flow_version_id' => $version->id, 'tenant_id' => 'org-1', 'strategy' => 'cohort', 'status' => 'waiting']);
+    Run::create(['flow_version_id' => $version->id, 'tenant_id' => 'org-1', 'started_via' => 'manual', 'trigger_node_id' => 'trigger', 'trigger_data' => null, 'strategy' => 'cohort', 'status' => 'waiting']);
 
     app(NodeRegistry::class)->register(Tests\Support\RecordingSendNode::class);
 
@@ -60,7 +60,7 @@ it('resolves a renamed type through the alias map', function () {
 });
 
 it('logs error when enabled with unresolvable types', function () {
-    $flow = Flow::create(['tenant_id' => 'org-1', 'name' => 'F', 'trigger_type' => 'manual', 'status' => 'active']);
+    $flow = Flow::create(['tenant_id' => 'org-1', 'name' => 'F', 'status' => 'active']);
 
     // Deliberately push the version under test off row 1. The old assertion
     // matched the literal string 'version 1', which was only correct because the
@@ -77,7 +77,7 @@ it('logs error when enabled with unresolvable types', function () {
         'graph' => ['start' => 'n1', 'nodes' => [['id' => 'n1', 'type' => 'boot.unresolvable', 'config' => []]], 'edges' => []],
     ]);
 
-    Run::create(['flow_version_id' => $version->id, 'tenant_id' => 'org-1', 'strategy' => 'cohort', 'status' => 'waiting']);
+    Run::create(['flow_version_id' => $version->id, 'tenant_id' => 'org-1', 'started_via' => 'manual', 'trigger_node_id' => 'trigger', 'trigger_data' => null, 'strategy' => 'cohort', 'status' => 'waiting']);
 
     config(['nodeflow.check_node_types_on_boot' => true]);
     NodeflowServiceProvider::resetNodeTypeCheckForTesting();
@@ -103,14 +103,14 @@ it('logs error when enabled with unresolvable types', function () {
 });
 
 it('does not log error when boot check is disabled', function () {
-    $flow = Flow::create(['tenant_id' => 'org-1', 'name' => 'F', 'trigger_type' => 'manual', 'status' => 'active']);
+    $flow = Flow::create(['tenant_id' => 'org-1', 'name' => 'F', 'status' => 'active']);
 
     $version = FlowVersion::create([
         'flow_id' => $flow->id, 'version' => 1, 'content_hash' => 'h',
         'graph' => ['start' => 'n1', 'nodes' => [['id' => 'n1', 'type' => 'boot.disabled.type', 'config' => []]], 'edges' => []],
     ]);
 
-    Run::create(['flow_version_id' => $version->id, 'tenant_id' => 'org-1', 'strategy' => 'cohort', 'status' => 'waiting']);
+    Run::create(['flow_version_id' => $version->id, 'tenant_id' => 'org-1', 'started_via' => 'manual', 'trigger_node_id' => 'trigger', 'trigger_data' => null, 'strategy' => 'cohort', 'status' => 'waiting']);
 
     config(['nodeflow.check_node_types_on_boot' => false]);
     NodeflowServiceProvider::resetNodeTypeCheckForTesting();
@@ -124,14 +124,14 @@ it('does not log error when boot check is disabled', function () {
 });
 
 it('logs warning when boot check encounters exception', function () {
-    $flow = Flow::create(['tenant_id' => 'org-1', 'name' => 'F', 'trigger_type' => 'manual', 'status' => 'active']);
+    $flow = Flow::create(['tenant_id' => 'org-1', 'name' => 'F', 'status' => 'active']);
 
     $version = FlowVersion::create([
         'flow_id' => $flow->id, 'version' => 1, 'content_hash' => 'h',
         'graph' => ['start' => 'n1', 'nodes' => [['id' => 'n1', 'type' => 'test.recording', 'config' => []]], 'edges' => []],
     ]);
 
-    Run::create(['flow_version_id' => $version->id, 'tenant_id' => 'org-1', 'strategy' => 'cohort', 'status' => 'waiting']);
+    Run::create(['flow_version_id' => $version->id, 'tenant_id' => 'org-1', 'started_via' => 'manual', 'trigger_node_id' => 'trigger', 'trigger_data' => null, 'strategy' => 'cohort', 'status' => 'waiting']);
 
     config(['nodeflow.check_node_types_on_boot' => true]);
     NodeflowServiceProvider::resetNodeTypeCheckForTesting();

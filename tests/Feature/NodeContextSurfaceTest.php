@@ -13,13 +13,16 @@ use Nodeflow\Models\Run;
  * written in the meantime. So it is narrowed now, while there are none.
  */
 beforeEach(function () {
-    $flow = Flow::create(['tenant_id' => 'org-1', 'name' => 'F', 'trigger_type' => 'manual', 'status' => 'active']);
+    $flow = Flow::create(['tenant_id' => 'org-1', 'name' => 'F', 'status' => 'active']);
     $version = FlowVersion::create(['flow_id' => $flow->id, 'version' => 1, 'graph' => ['nodes' => [], 'edges' => []], 'content_hash' => 'h']);
 
     $this->run = Run::create([
         'flow_version_id' => $version->id,
         'tenant_id' => 'org-1',
         'correlation_id' => 'alert-77',
+        'started_via' => 'manual',
+        'trigger_node_id' => 'trigger',
+        'trigger_data' => null,
         'strategy' => 'cohort',
         'status' => 'running',
         'is_test' => true,

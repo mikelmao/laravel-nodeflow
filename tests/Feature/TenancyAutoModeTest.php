@@ -11,7 +11,6 @@ function seedFlowFor(string $tenantId): void
     TenancyGuardSuspension::run(fn () => Flow::withoutTenancy()->create([
         'tenant_id' => $tenantId,
         'name' => 'A',
-        'trigger_type' => 'manual',
         'status' => 'draft',
     ]));
 }

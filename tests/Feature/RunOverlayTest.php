@@ -43,13 +43,16 @@ beforeEach(function () {
         'edges' => [],
     ]));
 
-    $flow = Flow::create(['name' => 'F', 'trigger_type' => 'manual', 'status' => 'active']);
+    $flow = Flow::create(['name' => 'F', 'status' => 'active']);
     $version = FlowVersion::create([
         'flow_id' => $flow->id, 'version' => 1,
         'graph' => $this->graph->toArray(), 'content_hash' => 'h',
     ]);
     $this->run = Run::create([
         'flow_version_id' => $version->id, 'tenant_id' => 'org-1',
+        'started_via' => 'manual',
+        'trigger_node_id' => 'trigger',
+        'trigger_data' => null,
         'strategy' => 'cohort', 'status' => 'running',
     ]);
 
@@ -187,7 +190,7 @@ it('four-oh-fours another tenants overlay rather than forbidding it', function (
 
     $theirs = TenancyGuardSuspension::run(function () {
         $flow = Flow::withoutTenancy()->create([
-            'tenant_id' => 'org-2', 'name' => 'T', 'trigger_type' => 'manual', 'status' => 'active',
+            'tenant_id' => 'org-2', 'name' => 'T', 'status' => 'active',
         ]);
         $version = FlowVersion::withoutTenancy()->create([
             'flow_id' => $flow->id, 'tenant_id' => 'org-2', 'version' => 1, 'content_hash' => 'h',
@@ -196,6 +199,9 @@ it('four-oh-fours another tenants overlay rather than forbidding it', function (
 
         return Run::withoutTenancy()->create([
             'flow_version_id' => $version->id, 'tenant_id' => 'org-2',
+            'started_via' => 'manual',
+            'trigger_node_id' => 'trigger',
+            'trigger_data' => null,
             'strategy' => 'cohort', 'status' => 'running',
         ]);
     });
@@ -228,13 +234,16 @@ it('encodes nodes and byOutput as JSON objects even when every key is a numeric 
         'edges' => [],
     ]));
 
-    $flow = Flow::create(['name' => 'Numeric', 'trigger_type' => 'manual', 'status' => 'active']);
+    $flow = Flow::create(['name' => 'Numeric', 'status' => 'active']);
     $version = FlowVersion::create([
         'flow_id' => $flow->id, 'version' => 1,
         'graph' => $graph->toArray(), 'content_hash' => 'h-numeric',
     ]);
     $run = Run::create([
         'flow_version_id' => $version->id, 'tenant_id' => 'org-1',
+        'started_via' => 'manual',
+        'trigger_node_id' => 'trigger',
+        'trigger_data' => null,
         'strategy' => 'cohort', 'status' => 'running',
     ]);
 

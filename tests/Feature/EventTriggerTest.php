@@ -113,7 +113,7 @@ beforeEach(function () {
     Nodeflow::register([FakeSendNode::class]);
     app(TriggerRegistry::class)->register(FakeAlertTrigger::class);
 
-    $flow = Flow::create(['tenant_id' => 'org-1', 'name' => 'F', 'trigger_type' => 'test.alert', 'status' => 'draft']);
+    $flow = Flow::create(['tenant_id' => 'org-1', 'name' => 'F', 'status' => 'draft']);
 
     app(PublishFlow::class)->publish($flow, triggeredGraph([
         'start' => 'n1',
@@ -158,23 +158,23 @@ it('does not process a shared event twice when two triggers listen for it', func
 
     Event::dispatch(new FakeAlertEvent(['1', '2']));
 
-    // Only the flow whose trigger_type is 'test.alert' exists (from beforeEach),
-    // so only one run should ever be created — twice would mean the shared
-    // event class picked up a duplicate listener.
+    // Only the flow from beforeEach exists, so only one run should ever be
+    // created — twice would mean the shared event class picked up a duplicate
+    // listener.
     expect(Run::withoutTenancy()->count())->toBe(1);
 });
 
 it('starts one run per tenant when one event matches flows in different tenants', function () {
     app(TriggerRegistry::class)->register(FakeMultiTenantAlertTrigger::class);
 
-    $flowOrg1 = Flow::create(['tenant_id' => 'org-1', 'name' => 'F1', 'trigger_type' => 'test.multi_alert', 'status' => 'draft']);
+    $flowOrg1 = Flow::create(['tenant_id' => 'org-1', 'name' => 'F1', 'status' => 'draft']);
     app(PublishFlow::class)->publish($flowOrg1, triggeredGraph([
         'start' => 'n1',
         'nodes' => [['id' => 'n1', 'type' => 'core.exit', 'config' => []]],
         'edges' => [],
     ]));
 
-    $flowOrg2 = Flow::create(['tenant_id' => 'org-2', 'name' => 'F2', 'trigger_type' => 'test.multi_alert', 'status' => 'draft']);
+    $flowOrg2 = Flow::create(['tenant_id' => 'org-2', 'name' => 'F2', 'status' => 'draft']);
     app(PublishFlow::class)->publish($flowOrg2, triggeredGraph([
         'start' => 'n1',
         'nodes' => [['id' => 'n1', 'type' => 'core.exit', 'config' => []]],
@@ -216,14 +216,14 @@ it('fans out to every tenant even when the ambient tenant is non-null', function
     // tenants' runs are now created regardless of the ambient tenant.
     app(TriggerRegistry::class)->register(FakeMultiTenantAlertTrigger::class);
 
-    $flowOrg1 = Flow::create(['tenant_id' => 'org-1', 'name' => 'F1', 'trigger_type' => 'test.multi_alert', 'status' => 'draft']);
+    $flowOrg1 = Flow::create(['tenant_id' => 'org-1', 'name' => 'F1', 'status' => 'draft']);
     app(PublishFlow::class)->publish($flowOrg1, triggeredGraph([
         'start' => 'n1',
         'nodes' => [['id' => 'n1', 'type' => 'core.exit', 'config' => []]],
         'edges' => [],
     ]));
 
-    $flowOrg2 = Flow::create(['tenant_id' => 'org-2', 'name' => 'F2', 'trigger_type' => 'test.multi_alert', 'status' => 'draft']);
+    $flowOrg2 = Flow::create(['tenant_id' => 'org-2', 'name' => 'F2', 'status' => 'draft']);
     app(PublishFlow::class)->publish($flowOrg2, triggeredGraph([
         'start' => 'n1',
         'nodes' => [['id' => 'n1', 'type' => 'core.exit', 'config' => []]],
@@ -290,14 +290,14 @@ it('does not let one tenant\'s failure strand another tenant\'s alert', function
 
     app(TriggerRegistry::class)->register(FakeMultiTenantAlertTrigger::class);
 
-    $flowOrg1 = Flow::create(['tenant_id' => 'org-1', 'name' => 'F1', 'trigger_type' => 'test.multi_alert', 'status' => 'draft']);
+    $flowOrg1 = Flow::create(['tenant_id' => 'org-1', 'name' => 'F1', 'status' => 'draft']);
     app(PublishFlow::class)->publish($flowOrg1, triggeredGraph([
         'start' => 'n1',
         'nodes' => [['id' => 'n1', 'type' => 'core.exit', 'config' => []]],
         'edges' => [],
     ]));
 
-    $flowOrg2 = Flow::create(['tenant_id' => 'org-2', 'name' => 'F2', 'trigger_type' => 'test.multi_alert', 'status' => 'draft']);
+    $flowOrg2 = Flow::create(['tenant_id' => 'org-2', 'name' => 'F2', 'status' => 'draft']);
     app(PublishFlow::class)->publish($flowOrg2, triggeredGraph([
         'start' => 'n1',
         'nodes' => [['id' => 'n1', 'type' => 'core.exit', 'config' => []]],

@@ -5,6 +5,7 @@ namespace Nodeflow\Models;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
 use Illuminate\Database\Eloquent\Relations\HasMany;
+use Illuminate\Database\Eloquent\Relations\HasOne;
 use Nodeflow\Models\Concerns\BelongsToTenant;
 
 class FlowVersion extends Model
@@ -86,6 +87,11 @@ class FlowVersion extends Model
     public function runs(): HasMany
     {
         return $this->hasMany(Run::class);
+    }
+
+    public function activation(): HasOne
+    {
+        return $this->hasOne(TriggerActivation::class);
     }
 
     /**

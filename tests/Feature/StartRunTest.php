@@ -17,7 +17,7 @@ beforeEach(function () {
 
     Nodeflow::register([FakeSendNode::class]);
 
-    $this->flow = Flow::create(['name' => 'F', 'trigger_type' => 'manual', 'status' => 'draft']);
+    $this->flow = Flow::create(['name' => 'F', 'status' => 'draft']);
 
     app(PublishFlow::class)->publish($this->flow, triggeredGraph([
         'start' => 'n1',
@@ -81,7 +81,7 @@ it('creates a run for a different tenant than the ambient one via the internal g
         public function ownsSubject(string $t, string $ty, string $i): bool { return true; }
     });
 
-    $otherTenantFlow = Flow::create(['tenant_id' => 'org-2', 'name' => 'Other', 'trigger_type' => 'manual', 'status' => 'draft']);
+    $otherTenantFlow = Flow::create(['tenant_id' => 'org-2', 'name' => 'Other', 'status' => 'draft']);
 
     app(PublishFlow::class)->publish($otherTenantFlow, triggeredGraph([
         'start' => 'o1',
@@ -115,7 +115,6 @@ it('still throws for a genuine contradicting write outside the guard suspension'
     expect(fn () => Flow::create([
         'tenant_id' => 'org-2',
         'name' => 'Bad',
-        'trigger_type' => 'manual',
         'status' => 'draft',
     ]))->toThrow(\Nodeflow\Models\CrossTenantWriteException::class);
 });

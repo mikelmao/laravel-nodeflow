@@ -32,7 +32,7 @@ beforeEach(function () {
     $this->user = new User;
     $this->user->id = 1;
 
-    $this->flow = Flow::create(['name' => 'A', 'trigger_type' => 'manual', 'status' => 'draft']);
+    $this->flow = Flow::create(['name' => 'A', 'status' => 'draft']);
 });
 
 function exitGraph(): array
@@ -86,7 +86,6 @@ it('four-oh-fours another tenants flow rather than forbidding it', function () {
     $theirs = TenancyGuardSuspension::run(fn () => Flow::withoutTenancy()->create([
         'tenant_id' => 'org-2',
         'name' => 'Theirs',
-        'trigger_type' => 'manual',
         'status' => 'draft',
     ]));
 
@@ -124,7 +123,6 @@ it('renders the editor props the client is written against', function () {
     $response->assertJsonPath('component', 'nodeflow/editor')
         ->assertJsonPath('props.flow.id', $this->flow->id)
         ->assertJsonPath('props.flow.name', 'A')
-        ->assertJsonPath('props.flow.trigger_type', 'manual')
         ->assertJsonPath('props.flow.status', 'draft')
         ->assertJsonPath('props.flow.version', null)
         ->assertJsonPath('props.flow.draft_revision', 0)
@@ -323,7 +321,6 @@ it('four-oh-fours another tenants flow before validating authorization', functio
     $theirs = TenancyGuardSuspension::run(fn () => Flow::withoutTenancy()->create([
         'tenant_id' => 'org-2',
         'name' => 'Theirs',
-        'trigger_type' => 'manual',
         'status' => 'draft',
     ]));
 

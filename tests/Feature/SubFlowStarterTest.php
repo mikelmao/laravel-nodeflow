@@ -17,7 +17,7 @@ beforeEach(function () {
         public function ownsSubject(string $t, string $ty, string $i): bool { return true; }
     });
 
-    $this->childFlow = Flow::create(['tenant_id' => 'org-1', 'name' => 'Child', 'trigger_type' => 'manual', 'status' => 'draft']);
+    $this->childFlow = Flow::create(['tenant_id' => 'org-1', 'name' => 'Child', 'status' => 'draft']);
 
     app(PublishFlow::class)->publish($this->childFlow, triggeredGraph([
         'start' => 'c1',
@@ -27,7 +27,7 @@ beforeEach(function () {
 
     $this->childFlow = $this->childFlow->fresh();
 
-    $parentFlow = Flow::create(['tenant_id' => 'org-1', 'name' => 'Parent', 'trigger_type' => 'manual', 'status' => 'draft']);
+    $parentFlow = Flow::create(['tenant_id' => 'org-1', 'name' => 'Parent', 'status' => 'draft']);
 
     app(PublishFlow::class)->publish($parentFlow, triggeredGraph([
         'start' => 'p1',
@@ -39,6 +39,9 @@ beforeEach(function () {
         'flow_version_id' => $parentFlow->fresh()->current_version_id,
         'tenant_id' => 'org-1',
         'correlation_id' => null,
+        'started_via' => 'manual',
+        'trigger_node_id' => 'trigger',
+        'trigger_data' => null,
         'strategy' => 'cohort',
         'status' => 'running',
     ]);
@@ -74,7 +77,7 @@ it('refuses to start beyond the depth limit', function () {
 });
 
 it('refuses to start a flow belonging to a different tenant than the parent run', function () {
-    $otherTenantFlow = Flow::create(['tenant_id' => 'org-2', 'name' => 'Other', 'trigger_type' => 'manual', 'status' => 'draft']);
+    $otherTenantFlow = Flow::create(['tenant_id' => 'org-2', 'name' => 'Other', 'status' => 'draft']);
 
     app(PublishFlow::class)->publish($otherTenantFlow, triggeredGraph([
         'start' => 'o1',

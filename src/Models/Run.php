@@ -17,6 +17,7 @@ class Run extends Model
 
     protected $casts = [
         'is_test' => 'boolean',
+        'trigger_data' => 'array',
         'started_at' => 'datetime',
         'ended_at' => 'datetime',
     ];

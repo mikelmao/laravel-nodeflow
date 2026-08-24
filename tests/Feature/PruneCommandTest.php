@@ -7,7 +7,7 @@ use Nodeflow\Models\Run;
 use Nodeflow\Models\RunSubject;
 
 beforeEach(function () {
-    $flow = Flow::create(['tenant_id' => 'org-1', 'name' => 'F', 'trigger_type' => 'manual', 'status' => 'active']);
+    $flow = Flow::create(['tenant_id' => 'org-1', 'name' => 'F', 'status' => 'active']);
     $this->version = FlowVersion::create(['flow_id' => $flow->id, 'version' => 1, 'graph' => ['nodes' => [], 'edges' => []], 'content_hash' => 'h']);
 });
 
@@ -15,6 +15,9 @@ function makeRun($version, string $status, int $daysAgo): Run
 {
     $run = Run::create([
         'flow_version_id' => $version->id, 'tenant_id' => 'org-1',
+        'started_via' => 'manual',
+        'trigger_node_id' => 'trigger',
+        'trigger_data' => null,
         'strategy' => 'cohort', 'status' => $status,
     ]);
 

@@ -27,7 +27,7 @@ beforeEach(function () {
     $this->user = new User;
     $this->user->id = 1;
 
-    $this->flow = Flow::create(['name' => 'A', 'trigger_type' => 'manual', 'status' => 'active']);
+    $this->flow = Flow::create(['name' => 'A', 'status' => 'active']);
 
     // The run's pinned version. 'pinned' is the node that proves the run view
     // read this graph and not another.
@@ -42,6 +42,9 @@ beforeEach(function () {
 
     $this->run = Run::create([
         'flow_version_id' => $this->version->id, 'tenant_id' => 'org-1',
+        'started_via' => 'manual',
+        'trigger_node_id' => 'trigger',
+        'trigger_data' => null,
         'strategy' => 'cohort', 'status' => 'running',
     ]);
 });
@@ -76,7 +79,7 @@ it('four-oh-fours another tenants run rather than forbidding it', function () {
 
     $theirs = TenancyGuardSuspension::run(function () {
         $flow = Flow::withoutTenancy()->create([
-            'tenant_id' => 'org-2', 'name' => 'Theirs', 'trigger_type' => 'manual', 'status' => 'active',
+            'tenant_id' => 'org-2', 'name' => 'Theirs', 'status' => 'active',
         ]);
         $version = FlowVersion::withoutTenancy()->create([
             'flow_id' => $flow->id, 'tenant_id' => 'org-2', 'version' => 1, 'content_hash' => 'h', 'graph' => ['start' => 'x', 'nodes' => [], 'edges' => []],
@@ -84,6 +87,9 @@ it('four-oh-fours another tenants run rather than forbidding it', function () {
 
         return Run::withoutTenancy()->create([
             'flow_version_id' => $version->id, 'tenant_id' => 'org-2',
+            'started_via' => 'manual',
+            'trigger_node_id' => 'trigger',
+            'trigger_data' => null,
             'strategy' => 'cohort', 'status' => 'running',
         ]);
     });
