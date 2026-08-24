@@ -136,8 +136,10 @@ final class ProviderStep implements InstallStep
             fn (array $home) => ! str_contains($stripped, $home['needle']),
         );
 
-        if ($missing === [] && $this->isCompleteProvider($contents)) {
-            return InstallOutcome::AlreadyPresent;
+        if ($missing === []) {
+            return $this->isCompleteProvider($contents)
+                ? InstallOutcome::AlreadyPresent
+                : InstallOutcome::CannotWire;
         }
 
         // A differently formatted declaration is host code, not an absent
@@ -333,28 +335,27 @@ final class ProviderStep implements InstallStep
             '{{ namespace }}' => rtrim($this->rootNamespace, '\\').'\\Providers',
         ]);
 
-        if (! $this->isValidCreatedProvider($rendered)) {
+        if (! $this->isCompleteProvider($rendered)) {
             return InstallOutcome::CannotWire;
         }
 
         $this->files->ensureDirectoryExists(dirname($this->path()));
 
-        $writtenBytes = $this->files->put($this->path(), $rendered);
-        $written = $this->files->exists($this->path()) ? $this->files->get($this->path()) : null;
-        if ($writtenBytes !== strlen($rendered) || $written !== $rendered) {
-            if ($this->files->exists($this->path())) {
-                $this->files->delete($this->path());
+        try {
+            $writtenBytes = $this->files->put($this->path(), $rendered);
+            $written = $this->files->exists($this->path()) ? $this->files->get($this->path()) : null;
+            if ($writtenBytes !== strlen($rendered)
+                || $written !== $rendered
+                || ! $this->isCompleteProvider($written)) {
+                throw new \RuntimeException('The created provider could not be verified.');
             }
-
-            return InstallOutcome::CannotWire;
-        }
-
-        // E11: re-read and prove the anchors are there. A stub edited past
-        // recognition would otherwise ship a provider no generator can write to,
-        // and nothing would say so until a host ran make-node and got a paste
-        // instruction it could not explain.
-        if (! $this->isValidCreatedProvider($written)) {
-            $this->files->delete($this->path());
+        } catch (\Throwable) {
+            try {
+                $this->files->delete($this->path());
+            } catch (\Throwable) {
+                // CannotWire is still the only safe outcome. Filesystem-level
+                // recovery failures remain visible to the host on inspection.
+            }
 
             return InstallOutcome::CannotWire;
         }
@@ -401,42 +402,10 @@ final class ProviderStep implements InstallStep
             }
         }
 
-        return true;
-    }
-
-    private function isValidCreatedProvider(string $contents): bool
-    {
-        if (! $this->isCompleteProvider($contents)) {
-            return false;
-        }
-
-        $stripped = SourceText::withoutPhpComments($contents);
-        $namespace = preg_quote(rtrim($this->rootNamespace, '\\').'\\Providers', '/');
-        if (preg_match('/\bnamespace\s+'.$namespace.'\s*;/', $stripped) !== 1
-            || substr_count($stripped, 'class NodeflowServiceProvider') !== 1) {
-            return false;
-        }
-
-        $boot = strpos($stripped, self::BOOT_ANCHOR);
-        $attributes = strpos($stripped, NodeRegistrationWriter::ATTRIBUTE_ANCHOR);
-        if ($boot === false || $attributes === false || $boot >= $attributes) {
-            return false;
-        }
-
-        $bootBody = substr($stripped, $boot, $attributes - $boot);
-        foreach ([
-            'Nodeflow::register($this->nodes);',
-            'Nodeflow::registerTriggerDrivers($this->triggerDrivers);',
-            'Nodeflow::registerTriggerNodes($this->triggerNodes);',
-            'Nodeflow::registerTriggerSources($this->triggerSources);',
-            '->register(...$this->subjectAttributes());',
-        ] as $call) {
-            if (substr_count($bootBody, $call) !== 1) {
-                return false;
-            }
-        }
-
-        return true;
+        return ProviderStructureInspector::valid(
+            $contents,
+            rtrim($this->rootNamespace, '\\').'\\Providers',
+        );
     }
 
     private function hasSafeTopology(string $contents): bool

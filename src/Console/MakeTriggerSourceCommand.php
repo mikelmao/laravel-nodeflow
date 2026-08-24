@@ -32,6 +32,9 @@ class MakeTriggerSourceCommand extends GeneratorCommand
 
         try {
             $this->assertSafeName();
+            if ($this->isReservedName($this->getNameInput())) {
+                throw new InvalidArgumentException('The trigger source name is reserved by PHP.');
+            }
             $this->driverKey();
             $this->sourceKey();
             $this->selector();
@@ -39,17 +42,20 @@ class MakeTriggerSourceCommand extends GeneratorCommand
             if (class_exists($class, false) || interface_exists($class, false) || trait_exists($class, false)) {
                 throw new InvalidArgumentException("Generated class [{$class}] already exists.");
             }
+            $path = $this->getPath($class);
+            $contents = $this->sortImports($this->buildClass($class));
+            $this->laravel->make(VerifiedGeneratorWriter::class)->write(
+                [$path => $contents],
+                (bool) $this->option('force'),
+            );
         } catch (InvalidArgumentException $e) {
             $this->components->error($e->getMessage());
 
             return self::FAILURE;
         }
 
-        if (parent::handle() === false) {
-            return self::FAILURE;
-        }
-
-        $this->register($this->qualifyClass($this->getNameInput()));
+        $this->components->info("Trigger source [{$path}] created successfully.");
+        $this->register($class);
 
         return self::SUCCESS;
     }

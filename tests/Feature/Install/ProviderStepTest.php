@@ -73,7 +73,271 @@ it('validates a custom provider stub completely before creating the destination'
     }],
     'wrong provider class' => [fn (string $stub): string => str_replace('class NodeflowServiceProvider', 'class OtherProvider', $stub)],
     'calls outside boot' => [fn (string $stub): string => str_replace('public function boot(): void', 'public function wire(): void', $stub)],
+    'decoy provider class' => [fn (string $stub): string => str_replace(
+        'class NodeflowServiceProvider extends ServiceProvider',
+        'class DecoyProvider extends ServiceProvider',
+        $stub,
+    )."\n\nclass NodeflowServiceProvider extends ServiceProvider {}\n"],
+    'anchors supplied by a trait' => [function (string $stub): string {
+        $stub = str_replace(
+            [
+                NodeRegistrationWriter::ANCHOR,
+                NodeRegistrationWriter::TRIGGER_DRIVER_ANCHOR,
+                NodeRegistrationWriter::TRIGGER_NODE_ANCHOR,
+                NodeRegistrationWriter::TRIGGER_SOURCE_ANCHOR,
+            ],
+            [
+                'protected array $otherNodes = [',
+                'protected array $otherDrivers = [',
+                'protected array $otherTriggerNodes = [',
+                'protected array $otherSources = [',
+            ],
+            $stub,
+        );
+        $trait = <<<'PHP'
+        trait DecoyRegistrationHomes
+        {
+            protected array $nodes = [];
+            protected array $triggerDrivers = [];
+            protected array $triggerNodes = [];
+            protected array $triggerSources = [];
+        }
+
+
+        PHP;
+
+        return str_replace('class NodeflowServiceProvider', $trait.'class NodeflowServiceProvider', $stub);
+    }],
+    'calls supplied by strings' => [function (string $stub): string {
+        return str_replace(
+            [
+                'Nodeflow::register($this->nodes);',
+                'Nodeflow::registerTriggerDrivers($this->triggerDrivers);',
+                'Nodeflow::registerTriggerNodes($this->triggerNodes);',
+                'Nodeflow::registerTriggerSources($this->triggerSources);',
+                'app(SubjectAttributeRegistry::class)->register(...$this->subjectAttributes());',
+            ],
+            [
+                "\$one = 'Nodeflow::register(\$this->nodes);';",
+                "\$two = 'Nodeflow::registerTriggerDrivers(\$this->triggerDrivers);';",
+                "\$three = 'Nodeflow::registerTriggerNodes(\$this->triggerNodes);';",
+                "\$four = 'Nodeflow::registerTriggerSources(\$this->triggerSources);';",
+                "\$five = 'app(SubjectAttributeRegistry::class)->register(...\$this->subjectAttributes());';",
+            ],
+            $stub,
+        );
+    }],
+    'calls supplied by comments' => [fn (string $stub): string => str_replace(
+        [
+            'Nodeflow::register($this->nodes);',
+            'Nodeflow::registerTriggerDrivers($this->triggerDrivers);',
+            'Nodeflow::registerTriggerNodes($this->triggerNodes);',
+            'Nodeflow::registerTriggerSources($this->triggerSources);',
+            'app(SubjectAttributeRegistry::class)->register(...$this->subjectAttributes());',
+        ],
+        [
+            '// Nodeflow::register($this->nodes);',
+            '// Nodeflow::registerTriggerDrivers($this->triggerDrivers);',
+            '// Nodeflow::registerTriggerNodes($this->triggerNodes);',
+            '// Nodeflow::registerTriggerSources($this->triggerSources);',
+            '// app(SubjectAttributeRegistry::class)->register(...$this->subjectAttributes());',
+        ],
+        $stub,
+    )],
+    'calls supplied by helper' => [function (string $stub): string {
+        $stub = str_replace('public function boot(): void', 'private function helper(): void', $stub);
+
+        return str_replace(
+            NodeRegistrationWriter::ATTRIBUTE_ANCHOR,
+            "public function boot(): void\n    {\n    }\n\n    ".NodeRegistrationWriter::ATTRIBUTE_ANCHOR,
+            $stub,
+        );
+    }],
+    'calls supplied by constructor' => [function (string $stub): string {
+        $stub = str_replace('public function boot(): void', 'public function __construct()', $stub);
+
+        return str_replace(
+            NodeRegistrationWriter::ATTRIBUTE_ANCHOR,
+            "public function boot(): void\n    {\n    }\n\n    ".NodeRegistrationWriter::ATTRIBUTE_ANCHOR,
+            $stub,
+        );
+    }],
+    'calls after provider class' => [function (string $stub): string {
+        $start = strpos($stub, '    public function boot(): void');
+        $end = strpos($stub, '    /** @return', $start);
+        $boot = substr($stub, $start, $end - $start);
+        $stub = substr_replace($stub, "    public function boot(): void\n    {\n    }\n\n", $start, $end - $start);
+
+        return $stub."\n\nclass CallsAfterProvider\n{\n".str_replace('    public function boot(): void', '    public function helper(): void', $boot)."}\n";
+    }],
+    'multiple provider declarations' => [fn (string $stub): string => $stub."\n\nclass NodeflowServiceProvider extends ServiceProvider {}\n"],
+    'ambiguous namespace' => [fn (string $stub): string => $stub."\n\nnamespace Other; class NodeflowServiceProvider {}\n"],
+    'wrong namespace' => [fn (string $stub): string => str_replace('namespace {{ namespace }};', 'namespace Other\\Providers;', $stub)],
+    'static boot with required parameter' => [fn (string $stub): string => str_replace(
+        'public function boot(): void',
+        'public static function boot(string $required): void',
+        $stub,
+    )],
+    'registration calls guarded by a false expression' => [fn (string $stub): string => str_replace(
+        [
+            'Nodeflow::register($this->nodes);',
+            'Nodeflow::registerTriggerDrivers($this->triggerDrivers);',
+            'Nodeflow::registerTriggerNodes($this->triggerNodes);',
+            'Nodeflow::registerTriggerSources($this->triggerSources);',
+            'app(SubjectAttributeRegistry::class)->register(...$this->subjectAttributes());',
+        ],
+        [
+            'false && Nodeflow::register($this->nodes);',
+            'false && Nodeflow::registerTriggerDrivers($this->triggerDrivers);',
+            'false && Nodeflow::registerTriggerNodes($this->triggerNodes);',
+            'false && Nodeflow::registerTriggerSources($this->triggerSources);',
+            'false && app(SubjectAttributeRegistry::class)->register(...$this->subjectAttributes());',
+        ],
+        $stub,
+    )],
+    'lookalike imports' => [fn (string $stub): string => str_replace(
+        ['use Nodeflow\\Nodeflow;', 'use Nodeflow\\Schema\\SubjectAttributeRegistry;'],
+        ['use Other\\Nodeflow;', 'use Other\\SubjectAttributeRegistry;'],
+        $stub,
+    )],
+    'compound subject attribute return' => [fn (string $stub): string => str_replace(
+        "return [\n        ];",
+        'return [] + $invalid;',
+        $stub,
+    )],
+    'conditional subject attribute return' => [fn (string $stub): string => str_replace(
+        "return [\n        ];",
+        "if (false) {\n            return [];\n        }\n\n        return [];",
+        $stub,
+    )],
+    'provider class inside a false conditional' => [fn (string $stub): string => str_replace(
+        'class NodeflowServiceProvider extends ServiceProvider',
+        "if (false) {\nclass NodeflowServiceProvider extends ServiceProvider",
+        $stub,
+    )."\n}\n"],
+    'static registration properties' => [fn (string $stub): string => str_replace(
+        'protected array $',
+        'static protected array $',
+        $stub,
+    )],
+    'indexed subject attribute array' => [fn (string $stub): string => str_replace(
+        "return [\n        ];",
+        'return [1][0];',
+        $stub,
+    )],
+    'coalesced subject attribute array' => [fn (string $stub): string => str_replace(
+        "return [\n        ];",
+        'return [$value] ?? [];',
+        $stub,
+    )],
+    'abstract provider' => [fn (string $stub): string => str_replace(
+        'class NodeflowServiceProvider extends ServiceProvider',
+        'abstract class NodeflowServiceProvider extends ServiceProvider',
+        $stub,
+    )],
+    'unrelated provider parent' => [fn (string $stub): string => str_replace(
+        'class NodeflowServiceProvider extends ServiceProvider',
+        'class NodeflowServiceProvider extends UnrelatedProvider',
+        $stub,
+    )],
+    'imported non-Laravel app function' => [fn (string $stub): string => str_replace(
+        'use Illuminate\\Support\\ServiceProvider;',
+        "use Illuminate\\Support\\ServiceProvider;\nuse function Other\\app;",
+        $stub,
+    )],
+    'aliased non-Laravel app function' => [fn (string $stub): string => str_replace(
+        'use Illuminate\\Support\\ServiceProvider;',
+        "use Illuminate\\Support\\ServiceProvider;\nuse function Other\\resolve as app;",
+        $stub,
+    )],
+    'mixed-group imported app function' => [fn (string $stub): string => str_replace(
+        'use Illuminate\\Support\\ServiceProvider;',
+        "use Illuminate\\Support\\ServiceProvider;\nuse Other\\{function resolve as app};",
+        $stub,
+    )],
+    'namespace-local app function' => [fn (string $stub): string => str_replace(
+        'use Illuminate\\Support\\ServiceProvider;',
+        "function app(...\$arguments): mixed { return null; }\n\nuse Illuminate\\Support\\ServiceProvider;",
+        $stub,
+    )],
 ]);
+
+it('removes a partially created provider when its destination write or verification throws', function (string $mode) {
+    $files = new class($this->path, $mode) extends Filesystem
+    {
+        public function __construct(private string $target, private string $mode) {}
+
+        public function put($path, $contents, $lock = false)
+        {
+            if ($path === $this->target && $this->mode === 'put') {
+                parent::put($path, substr($contents, 0, -1), $lock);
+
+                throw new RuntimeException('Injected destination write failure.');
+            }
+
+            return parent::put($path, $contents, $lock);
+        }
+
+        public function get($path, $lock = false)
+        {
+            if ($path === $this->target && $this->mode === 'get') {
+                throw new RuntimeException('Injected destination verification failure.');
+            }
+
+            return parent::get($path, $lock);
+        }
+    };
+    $step = new ProviderStep($files, $this->root, 'App\\');
+
+    expect($step->apply())->toBe(InstallOutcome::CannotWire)
+        ->and($this->path)->not->toBeFile();
+})->with([
+    'write throws after partial bytes' => ['put'],
+    'verification read throws after complete write' => ['get'],
+]);
+
+it('accepts a real boot method containing nested closure braces', function () {
+    mkdir($this->root.'/stubs', 0777, true);
+    $stub = file_get_contents(__DIR__.'/../../../stubs/nodeflow-provider.stub');
+    $stub = str_replace(
+        "    public function boot(): void\n    {",
+        "    public function boot(): void\n    {\n        \$decoy = function (): array { return ['brace' => '}']; };",
+        $stub,
+    );
+    file_put_contents($this->root.'/stubs/nodeflow-provider.stub', $stub);
+
+    expect($this->step->apply())->toBe(InstallOutcome::Wired);
+    expectParseablePhp($this->path);
+});
+
+it('accepts unrelated direct host registrations in the real boot method', function () {
+    mkdir($this->root.'/stubs', 0777, true);
+    $stub = file_get_contents(__DIR__.'/../../../stubs/nodeflow-provider.stub');
+    $stub = str_replace(
+        "    public function boot(): void\n    {",
+        "    public function boot(): void\n    {\n        \$this->app->register(\\App\\Providers\\AuthServiceProvider::class);",
+        $stub,
+    );
+    file_put_contents($this->root.'/stubs/nodeflow-provider.stub', $stub);
+
+    expect($this->step->apply())->toBe(InstallOutcome::Wired);
+    expectParseablePhp($this->path);
+});
+
+it('leaves an existing structurally decoy provider untouched', function () {
+    $stub = file_get_contents(__DIR__.'/../../../stubs/nodeflow-provider.stub');
+    $contents = str_replace('{{ namespace }}', 'App\\Providers', $stub);
+    $contents = str_replace(
+        'class NodeflowServiceProvider extends ServiceProvider',
+        'class DecoyProvider extends ServiceProvider',
+        $contents,
+    )."\n\nclass NodeflowServiceProvider extends ServiceProvider {}\n";
+    file_put_contents($this->path, $contents);
+
+    expect($this->step->check())->toBe(InstallOutcome::CannotWire)
+        ->and($this->step->apply())->toBe(InstallOutcome::CannotWire)
+        ->and(file_get_contents($this->path))->toBe($contents);
+});
 
 it('does not treat duplicate or out-of-order complete providers as ready and leaves them untouched', function (Closure $mutate) {
     $this->step->apply();

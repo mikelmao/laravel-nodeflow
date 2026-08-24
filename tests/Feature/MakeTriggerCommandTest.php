@@ -1,6 +1,7 @@
 <?php
 
 use Illuminate\Support\Facades\Artisan;
+use Illuminate\Filesystem\Filesystem;
 use Nodeflow\Contracts\TriggerNode;
 use Nodeflow\Graph\GraphTypeCatalog;
 use Nodeflow\Triggers\TriggerActivationDescriptor;
@@ -138,3 +139,50 @@ it('deduplicates and preserves CRLF provider formatting', function () {
     expect(substr_count($contents, '\\App\\Nodeflow\\Triggers\\CrlfNode::class'))->toBe(1)
         ->and(preg_match('/(?<!\r)\n/', $contents))->toBe(0);
 });
+
+it('fails and restores generator writes before touching a CRLF provider', function (string $mode, bool $existing) {
+    $path = $this->root.'/app/Nodeflow/Triggers/VerifiedTrigger.php';
+    $original = '<?php // pre-existing trigger';
+    if ($existing) {
+        mkdir(dirname($path), 0777, true);
+        file_put_contents($path, $original);
+    }
+    $provider = $this->root.'/app/Providers/NodeflowServiceProvider.php';
+    file_put_contents($provider, str_replace("\n", "\r\n", file_get_contents($provider)));
+    $providerBefore = file_get_contents($provider);
+    $files = new class($path, $mode) extends Filesystem
+    {
+        private bool $intercept = true;
+
+        public function __construct(private string $target, private string $mode) {}
+
+        public function put($path, $contents, $lock = false)
+        {
+            if ($path === $this->target && $this->intercept) {
+                $this->intercept = false;
+                $written = $this->mode === 'short' ? substr($contents, 0, -1) : '<?php malformed {';
+                parent::put($path, $written, $lock);
+
+                return $this->mode === 'short' ? strlen($contents) - 1 : strlen($contents);
+            }
+
+            return parent::put($path, $contents, $lock);
+        }
+    };
+    $this->app->instance(Filesystem::class, $files);
+    $this->app->instance('files', $files);
+
+    $this->artisan('nodeflow:make-trigger', [
+        'name' => 'VerifiedTrigger', '--driver' => 'webhook', '--type' => 'shop.verified_trigger', '--force' => $existing,
+    ])->expectsOutputToContain('no registrations were changed')->assertExitCode(1);
+
+    expect(file_get_contents($provider))->toBe($providerBefore);
+    if ($existing) {
+        expect(file_get_contents($path))->toBe($original);
+    } else {
+        expect($path)->not->toBeFile();
+    }
+})->with([
+    'short new write' => ['short', false],
+    'changed overwrite' => ['changed', true],
+]);

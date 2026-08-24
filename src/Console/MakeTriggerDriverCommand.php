@@ -9,7 +9,6 @@ use Nodeflow\Graph\GraphTypeCatalog;
 use Nodeflow\Support\StableKey;
 use Nodeflow\Triggers\TriggerDriverRegistry;
 use Symfony\Component\Console\Input\InputOption;
-use Throwable;
 
 class MakeTriggerDriverCommand extends GeneratorCommand
 {
@@ -45,31 +44,12 @@ class MakeTriggerDriverCommand extends GeneratorCommand
                 $this->testPath($driverClass) => $this->renderContractTest($driverClass, $nodeClass, $key, $type),
             ];
 
-            $this->assertWritableTargets($paths, [$driverClass, $nodeClass]);
-            foreach ($paths as $contents) {
-                $this->assertParses($contents);
-            }
+            $this->assertAvailableClasses([$driverClass, $nodeClass]);
+            $this->laravel->make(VerifiedGeneratorWriter::class)->write(
+                $paths,
+                (bool) $this->option('force'),
+            );
         } catch (InvalidArgumentException $e) {
-            $this->components->error($e->getMessage());
-
-            return self::FAILURE;
-        }
-
-        $originals = [];
-        try {
-            foreach ($paths as $path => $contents) {
-                $originals[$path] = $this->files->exists($path) ? $this->files->get($path) : null;
-                $this->makeDirectory($path);
-                $writtenBytes = $this->files->put($path, $contents);
-                $written = $this->files->exists($path) ? $this->files->get($path) : null;
-                if ($writtenBytes !== strlen($contents) || $written !== $contents) {
-                    throw new InvalidArgumentException("Unable to write [{$path}].");
-                }
-            }
-        } catch (Throwable $e) {
-            foreach ($originals as $path => $original) {
-                $original === null ? $this->files->delete($path) : $this->files->put($path, $original);
-            }
             $this->components->error($e->getMessage());
 
             return self::FAILURE;
@@ -139,32 +119,14 @@ class MakeTriggerDriverCommand extends GeneratorCommand
     }
 
     /**
-     * @param  array<string, string>  $paths
      * @param  string[]  $classes
      */
-    private function assertWritableTargets(array $paths, array $classes): void
+    private function assertAvailableClasses(array $classes): void
     {
         foreach ($classes as $class) {
             if (class_exists($class, false) || interface_exists($class, false) || trait_exists($class, false)) {
                 throw new InvalidArgumentException("Generated class [{$class}] already exists.");
             }
-        }
-
-        if (! $this->option('force')) {
-            foreach (array_keys($paths) as $path) {
-                if ($this->files->exists($path)) {
-                    throw new InvalidArgumentException("Trigger extension target [{$path}] already exists; no files were changed.");
-                }
-            }
-        }
-    }
-
-    private function assertParses(string $contents): void
-    {
-        try {
-            token_get_all($contents, TOKEN_PARSE);
-        } catch (Throwable) {
-            throw new InvalidArgumentException('A trigger extension stub did not produce parseable PHP; no files were changed.');
         }
     }
 

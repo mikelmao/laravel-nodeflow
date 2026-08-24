@@ -1,6 +1,7 @@
 <?php
 
 use Illuminate\Database\Eloquent\Model;
+use Illuminate\Filesystem\Filesystem;
 use Illuminate\Support\Facades\Artisan;
 use Nodeflow\Contracts\TriggerSource;
 use Nodeflow\Triggers\LaravelEvent\LaravelEventOccurrence;
@@ -147,3 +148,53 @@ it('refuses a loaded generated source class collision before mutation', function
     expect($this->root.'/app/Nodeflow/TriggerSources/LoadedSource.php')->not->toBeFile()
         ->and(file_get_contents($provider))->toBe($before);
 });
+
+it('fails and restores generator writes without provider or listener mutation', function (string $mode, bool $existing) {
+    $path = $this->root.'/app/Nodeflow/TriggerSources/VerifiedSource.php';
+    $original = '<?php // pre-existing source';
+    if ($existing) {
+        mkdir(dirname($path), 0777, true);
+        file_put_contents($path, $original);
+    }
+    $provider = $this->root.'/app/Providers/NodeflowServiceProvider.php';
+    file_put_contents($provider, str_replace("\n", "\r\n", file_get_contents($provider)));
+    $providerBefore = file_get_contents($provider);
+    $callbacks = 0;
+    FakeTriggerDriver::$onSourceRegistered = function () use (&$callbacks): void { $callbacks++; };
+    $files = new class($path, $mode) extends Filesystem
+    {
+        private bool $intercept = true;
+
+        public function __construct(private string $target, private string $mode) {}
+
+        public function put($path, $contents, $lock = false)
+        {
+            if ($path === $this->target && $this->intercept) {
+                $this->intercept = false;
+                $written = $this->mode === 'short' ? substr($contents, 0, -1) : '<?php malformed {';
+                parent::put($path, $written, $lock);
+
+                return $this->mode === 'short' ? strlen($contents) - 1 : strlen($contents);
+            }
+
+            return parent::put($path, $contents, $lock);
+        }
+    };
+    $this->app->instance(Filesystem::class, $files);
+    $this->app->instance('files', $files);
+
+    $this->artisan('nodeflow:make-trigger-source', [
+        'name' => 'VerifiedSource', '--driver' => 'test.fake', '--key' => 'shop.verified_source', '--force' => $existing,
+    ])->expectsOutputToContain('no registrations were changed')->assertExitCode(1);
+
+    expect(file_get_contents($provider))->toBe($providerBefore)
+        ->and($callbacks)->toBe(0);
+    if ($existing) {
+        expect(file_get_contents($path))->toBe($original);
+    } else {
+        expect($path)->not->toBeFile();
+    }
+})->with([
+    'short new write' => ['short', false],
+    'changed overwrite' => ['changed', true],
+]);
