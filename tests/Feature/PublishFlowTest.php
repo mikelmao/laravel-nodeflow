@@ -31,7 +31,7 @@ beforeEach(function () {
 });
 
 it('freezes version 1 and points the flow at it', function () {
-    $version = app(PublishFlow::class)->publish($this->flow, $this->validGraph, 'user-9');
+    $version = app(PublishFlow::class)->publish($this->flow, $this->validGraph, 'user-9')->version;
 
     expect($version->version)->toBe(1)
         ->and($version->published_at)->not->toBeNull()
@@ -40,8 +40,8 @@ it('freezes version 1 and points the flow at it', function () {
 });
 
 it('increments the version on each publish and leaves earlier versions untouched', function () {
-    $first = app(PublishFlow::class)->publish($this->flow, $this->validGraph);
-    $second = app(PublishFlow::class)->publish($this->flow, $this->validGraph);
+    $first = app(PublishFlow::class)->publish($this->flow, $this->validGraph)->version;
+    $second = app(PublishFlow::class)->publish($this->flow, $this->validGraph)->version;
 
     expect($second->version)->toBe(2)
         ->and($first->fresh()->graph)->toBe($this->validGraph)
@@ -58,7 +58,7 @@ it('refuses to publish an invalid graph', function () {
 });
 
 it('leaves runs on the previous version untouched when a new one is published', function () {
-    $v1 = app(PublishFlow::class)->publish($this->flow, $this->validGraph);
+    $v1 = app(PublishFlow::class)->publish($this->flow, $this->validGraph)->version;
 
     $run = Run::create([
         'flow_version_id' => $v1->id, 'tenant_id' => 'org-1',
@@ -97,7 +97,7 @@ it('publishes a graph with concurrent branch waits despite the warning', functio
         ->and(implode(' ', $validationResult->warnings()))->toContain('sequentially');
 
     // Assert that publishing succeeds despite the warning
-    $version = app(PublishFlow::class)->publish($this->flow, $graphWithConcurrentWaits);
+    $version = app(PublishFlow::class)->publish($this->flow, $graphWithConcurrentWaits)->version;
 
     expect($version->version)->toBe(1)
         ->and($version->published_at)->not->toBeNull()
@@ -154,5 +154,5 @@ it('publishes a wait with a duration the engine can parse', function () {
         'edges' => [['from' => 'w1', 'output' => 'default', 'to' => 'n2']],
     ]);
 
-    expect(app(PublishFlow::class)->publish($this->flow, $graph)->version)->toBe(1);
+    expect(app(PublishFlow::class)->publish($this->flow, $graph)->version->version)->toBe(1);
 });

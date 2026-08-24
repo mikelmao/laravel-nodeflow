@@ -164,7 +164,7 @@ class FlowEditorController extends Controller
         $request->validate($this->graphRules());
 
         try {
-            $version = app(PublishFlow::class)->publish(
+            $result = app(PublishFlow::class)->publish(
                 $flow,
                 // See draft(): the raw input, so a node's `position` survives into
                 // the frozen version instead of being stripped by validated().
@@ -184,7 +184,7 @@ class FlowEditorController extends Controller
         // editor must keep echoing the current token on its next autosave, and
         // this is the only response that would otherwise leave it guessing.
         return response()->json([
-            'version' => $version->version,
+            'version' => $result->version->version,
             'draft_revision' => (int) ($flow->draft_revision ?? 0),
         ]);
     }

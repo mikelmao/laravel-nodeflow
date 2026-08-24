@@ -93,9 +93,15 @@ class Flow extends Model
         return $this->hasManyThrough(Run::class, FlowVersion::class);
     }
 
+    public function triggerActivation(): HasOne
+    {
+        return $this->hasOne(TriggerActivation::class)->withoutGlobalScope('nodeflow_tenant');
+    }
+
+    /** @deprecated Use triggerActivation(). */
     public function activation(): HasOne
     {
-        return $this->hasOne(TriggerActivation::class);
+        return $this->triggerActivation();
     }
 
     public function webhookEndpoint(): HasOne

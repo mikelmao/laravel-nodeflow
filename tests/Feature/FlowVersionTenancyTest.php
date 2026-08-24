@@ -95,7 +95,7 @@ it('stamps a version with its flows tenant, not the ambient one', function () {
         'start' => 'n1',
         'nodes' => [['id' => 'n1', 'type' => 'core.exit', 'config' => []]],
         'edges' => [],
-    ]));
+    ]))->version;
 
     expect($version->tenant_id)->toBe('org-1');
 });
@@ -142,7 +142,7 @@ it('continues a flows own version sequence instead of restarting it under a diff
         fn () => app(\Nodeflow\Publishing\PublishFlow::class)->publish($flow->fresh(), $graph)
     );
 
-    expect($second->version)->toBe(2);
+    expect($second->version->version)->toBe(2);
 });
 
 it('resolves a runs flow version across tenants, lazily and eagerly', function () {

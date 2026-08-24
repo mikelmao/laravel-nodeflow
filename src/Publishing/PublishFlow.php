@@ -10,17 +10,27 @@ use Nodeflow\Models\FlowVersion;
 
 class PublishFlow
 {
-    public function __construct(private GraphValidator $validator) {}
+    public function __construct(
+        private GraphValidator $validator,
+        private CompileTriggerActivation $compileActivation,
+    ) {}
 
-    public function publish(Flow $flow, array $graph, ?string $publishedBy = null): FlowVersion
+    public function publish(Flow $flow, array $graph, ?string $publishedBy = null): PublishResult
     {
-        $result = $this->validator->validate(Graph::fromArray($graph));
+        $compiledGraph = Graph::fromArray($graph);
+        $result = $this->validator->validate($compiledGraph);
 
         if (! $result->passes()) {
             throw new GraphInvalidException($result->errors(), $result->nodeErrors());
         }
 
-        return DB::transaction(function () use ($flow, $graph, $publishedBy) {
+        try {
+            $encodedGraph = json_encode($graph, JSON_THROW_ON_ERROR);
+        } catch (\Throwable) {
+            throw new GraphInvalidException(['The flow graph contains values that cannot be published safely.']);
+        }
+
+        return DB::transaction(function () use ($flow, $graph, $encodedGraph, $publishedBy, $compiledGraph) {
             $version = FlowVersion::create([
                 'flow_id' => $flow->id,
                 // From the flow, never from the ambient tenant. The flow was
@@ -40,10 +50,12 @@ class PublishFlow
                 'tenant_id' => $flow->tenant_id,
                 'version' => ((int) $flow->versions()->max('version')) + 1,
                 'graph' => $graph,
-                'content_hash' => hash('sha256', json_encode($graph)),
+                'content_hash' => hash('sha256', $encodedGraph),
                 'published_at' => now(),
                 'published_by' => $publishedBy,
             ]);
+
+            $this->compileActivation->compile($flow, $version, $compiledGraph);
 
             // The draft became this version, so it is no longer pending work. Left
             // behind, the editor reopens showing an already-published graph as
@@ -70,7 +82,7 @@ class PublishFlow
                 'draft_updated_at' => null,
             ]);
 
-            return $version;
+            return new PublishResult($version);
         });
     }
 }
