@@ -27,16 +27,16 @@ it('registers extensions under stable graph driver and source keys', function ()
     Nodeflow::registerTriggerSources([FakeTriggerSource::class]);
 
     $driver = app(TriggerDriverRegistry::class)->resolve('test.fake');
-    $node = app(TriggerNodeRegistry::class)->resolve('test.trigger');
-    $source = app(TriggerSourceRegistry::class)->resolve('test.fake', 'test.source');
-    $descriptor = $node->compile(['source' => 'test.source', 'account' => 'primary']);
+    $node = app(TriggerNodeRegistry::class)->resolve('test.fake_trigger');
+    $source = app(TriggerSourceRegistry::class)->resolve('test.fake', 'test.orders');
+    $descriptor = $node->compile(['source' => 'test.orders', 'account' => 'primary']);
 
     expect($driver)->toBeInstanceOf(FakeTriggerDriver::class)
         ->and($node)->toBeInstanceOf(FakeTriggerNode::class)
         ->and($source)->toBeInstanceOf(FakeTriggerSource::class)
         ->and($descriptor->toArray())->toBe([
             'driver' => 'test.fake',
-            'source' => 'test.source',
+            'source' => 'test.orders',
             'qualifier' => null,
             'metadata' => ['account' => 'primary'],
         ])
@@ -59,8 +59,8 @@ it('makes a source visible while notifying its driver', function () {
     $visibleDuringCallback = false;
 
     FakeTriggerDriver::$onSourceRegistered = function ($source) use ($sources, &$visibleDuringCallback) {
-        $visibleDuringCallback = $sources->has('test.fake', 'test.source')
-            && $sources->resolve('test.fake', 'test.source') === $source;
+        $visibleDuringCallback = $sources->has('test.fake', 'test.orders')
+            && $sources->resolve('test.fake', 'test.orders') === $source;
     };
 
     Nodeflow::registerTriggerDrivers([FakeTriggerDriver::class]);
@@ -102,13 +102,13 @@ it('rolls back a source whose driver callback fails and permits retry', function
 
     expect(fn () => Nodeflow::registerTriggerSources([FakeTriggerSource::class]))
         ->toThrow(RuntimeException::class, 'listener boot failed')
-        ->and($sources->has('test.fake', 'test.source'))->toBeFalse()
-        ->and(fn () => $sources->resolve('test.fake', 'test.source'))
-        ->toThrow(RuntimeException::class, 'test.fake:test.source');
+        ->and($sources->has('test.fake', 'test.orders'))->toBeFalse()
+        ->and(fn () => $sources->resolve('test.fake', 'test.orders'))
+        ->toThrow(RuntimeException::class, 'test.fake:test.orders');
 
     Nodeflow::registerTriggerSources([FakeTriggerSource::class]);
 
-    expect($sources->has('test.fake', 'test.source'))->toBeTrue()
+    expect($sources->has('test.fake', 'test.orders'))->toBeTrue()
         ->and(app(TriggerDriverRegistry::class)->resolve('test.fake')->registeredSources)->toBe(2);
 });
 
@@ -126,8 +126,8 @@ it('rejects duplicate driver and source keys claimed by different classes', func
     Nodeflow::registerTriggerSources([FakeTriggerSource::class]);
 
     expect(fn () => Nodeflow::registerTriggerSources([FakeDuplicateTriggerSource::class]))
-        ->toThrow(InvalidArgumentException::class, 'test.fake:test.source')
-        ->and(app(TriggerSourceRegistry::class)->resolve('test.fake', 'test.source'))
+        ->toThrow(InvalidArgumentException::class, 'test.fake:test.orders')
+        ->and(app(TriggerSourceRegistry::class)->resolve('test.fake', 'test.orders'))
         ->toBeInstanceOf(FakeTriggerSource::class);
 });
 
@@ -145,8 +145,8 @@ it('prevents executable and trigger nodes claiming the same stable graph type', 
     $nodes->register(FakeCollidingExecutableNode::class);
 
     expect(fn () => $triggers->register(FakeTriggerNode::class))
-        ->toThrow(InvalidGraphTypeRegistration::class, 'test.trigger')
-        ->and(app(GraphTypeCatalog::class)->family('test.trigger'))->toBe('executable');
+        ->toThrow(InvalidGraphTypeRegistration::class, 'test.fake_trigger')
+        ->and(app(GraphTypeCatalog::class)->family('test.fake_trigger'))->toBe('executable');
 });
 
 it('prevents the same collision when the trigger node registers first', function () {
@@ -156,7 +156,7 @@ it('prevents the same collision when the trigger node registers first', function
     $triggers->register(FakeTriggerNode::class);
 
     expect(fn () => $nodes->register(FakeCollidingExecutableNode::class))
-        ->toThrow(InvalidGraphTypeRegistration::class, 'test.trigger');
+        ->toThrow(InvalidGraphTypeRegistration::class, 'test.fake_trigger');
 });
 
 it('prevents an executable alias from claiming a registered trigger type', function () {
@@ -164,19 +164,19 @@ it('prevents an executable alias from claiming a registered trigger type', funct
     app(TriggerNodeRegistry::class)->register(FakeTriggerNode::class);
     $nodes->register(FakeSendNode::class);
 
-    expect(fn () => $nodes->alias('test.trigger', 'test.send'))
-        ->toThrow(InvalidGraphTypeRegistration::class, 'test.trigger')
-        ->and($nodes->has('test.trigger'))->toBeFalse();
+    expect(fn () => $nodes->alias('test.fake_trigger', 'test.send'))
+        ->toThrow(InvalidGraphTypeRegistration::class, 'test.fake_trigger')
+        ->and($nodes->has('test.fake_trigger'))->toBeFalse();
 });
 
 it('prevents a trigger from claiming a registered executable alias', function () {
     $nodes = app(NodeRegistry::class);
     $nodes->register(FakeSendNode::class);
-    $nodes->alias('test.trigger', 'test.send');
+    $nodes->alias('test.fake_trigger', 'test.send');
 
-    expect($nodes->resolve('test.trigger'))->toBeInstanceOf(FakeSendNode::class)
+    expect($nodes->resolve('test.fake_trigger'))->toBeInstanceOf(FakeSendNode::class)
         ->and(fn () => app(TriggerNodeRegistry::class)->register(FakeTriggerNode::class))
-        ->toThrow(InvalidGraphTypeRegistration::class, 'test.trigger');
+        ->toThrow(InvalidGraphTypeRegistration::class, 'test.fake_trigger');
 });
 
 it('keeps trigger matches immutable and normalizes identifiers', function () {
@@ -192,7 +192,7 @@ it('keeps trigger matches immutable and normalizes identifiers', function () {
 
 it('resolves occurrences through stable source configuration', function () {
     $match = (new FakeTriggerSource)->resolve(
-        new TriggerOccurrence('test.fake', 'test.source', [
+        new TriggerOccurrence('test.fake', 'test.orders', [
             'tenant_id' => 42,
             'subject_id' => 9,
             'occurrence_id' => 'occ-9',

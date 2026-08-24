@@ -19,21 +19,21 @@ beforeEach(function () {
 
     $this->childFlow = Flow::create(['tenant_id' => 'org-1', 'name' => 'Child', 'trigger_type' => 'manual', 'status' => 'draft']);
 
-    app(PublishFlow::class)->publish($this->childFlow, [
+    app(PublishFlow::class)->publish($this->childFlow, triggeredGraph([
         'start' => 'c1',
         'nodes' => [['id' => 'c1', 'type' => 'core.exit', 'config' => []]],
         'edges' => [],
-    ]);
+    ]));
 
     $this->childFlow = $this->childFlow->fresh();
 
     $parentFlow = Flow::create(['tenant_id' => 'org-1', 'name' => 'Parent', 'trigger_type' => 'manual', 'status' => 'draft']);
 
-    app(PublishFlow::class)->publish($parentFlow, [
+    app(PublishFlow::class)->publish($parentFlow, triggeredGraph([
         'start' => 'p1',
         'nodes' => [['id' => 'p1', 'type' => 'core.exit', 'config' => []]],
         'edges' => [],
-    ]);
+    ]));
 
     $this->parentRun = Run::create([
         'flow_version_id' => $parentFlow->fresh()->current_version_id,
@@ -76,11 +76,11 @@ it('refuses to start beyond the depth limit', function () {
 it('refuses to start a flow belonging to a different tenant than the parent run', function () {
     $otherTenantFlow = Flow::create(['tenant_id' => 'org-2', 'name' => 'Other', 'trigger_type' => 'manual', 'status' => 'draft']);
 
-    app(PublishFlow::class)->publish($otherTenantFlow, [
+    app(PublishFlow::class)->publish($otherTenantFlow, triggeredGraph([
         'start' => 'o1',
         'nodes' => [['id' => 'o1', 'type' => 'core.exit', 'config' => []]],
         'edges' => [],
-    ]);
+    ]));
 
     expect(fn () => app(SubFlowStarter::class)->start($this->parentRun, $otherTenantFlow->id, 'user', ['1']))
         ->toThrow(\Illuminate\Database\Eloquent\ModelNotFoundException::class);

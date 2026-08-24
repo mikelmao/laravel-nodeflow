@@ -59,7 +59,7 @@ beforeEach(function () {
     JourneySendNode::reset();
     Nodeflow::register([JourneySendNode::class]);
 
-    $this->graph = [
+    $this->graph = triggeredGraph([
         'start' => 's1',
         'nodes' => [
             ['id' => 's1', 'type' => 'test.journey_send', 'config' => []],
@@ -79,7 +79,7 @@ beforeEach(function () {
             ['from' => 'c1', 'output' => 'no', 'to' => 'x1'],
             ['from' => 'f1', 'output' => 'sent', 'to' => 'x1'],
         ],
-    ];
+    ]);
 
     $flow = Flow::create(['name' => 'Flood alert journey', 'trigger_type' => 'manual', 'status' => 'draft']);
 

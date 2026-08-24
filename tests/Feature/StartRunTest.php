@@ -19,14 +19,14 @@ beforeEach(function () {
 
     $this->flow = Flow::create(['name' => 'F', 'trigger_type' => 'manual', 'status' => 'draft']);
 
-    app(PublishFlow::class)->publish($this->flow, [
+    app(PublishFlow::class)->publish($this->flow, triggeredGraph([
         'start' => 'n1',
         'nodes' => [
             ['id' => 'n1', 'type' => 'test.send', 'config' => ['channel' => 'sms']],
             ['id' => 'n2', 'type' => 'core.exit', 'config' => []],
         ],
         'edges' => [['from' => 'n1', 'output' => 'sent', 'to' => 'n2']],
-    ]);
+    ]));
 });
 
 it('creates a run pinned to the current version with subjects at the start node', function () {
@@ -83,11 +83,11 @@ it('creates a run for a different tenant than the ambient one via the internal g
 
     $otherTenantFlow = Flow::create(['tenant_id' => 'org-2', 'name' => 'Other', 'trigger_type' => 'manual', 'status' => 'draft']);
 
-    app(PublishFlow::class)->publish($otherTenantFlow, [
+    app(PublishFlow::class)->publish($otherTenantFlow, triggeredGraph([
         'start' => 'o1',
         'nodes' => [['id' => 'o1', 'type' => 'core.exit', 'config' => []]],
         'edges' => [],
-    ]);
+    ]));
 
     // Switch back to a concrete, non-null ambient tenant — 'org-1' — that
     // differs from the flow's own tenant_id. Outside StartRun's internal

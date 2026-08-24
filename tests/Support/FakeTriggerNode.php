@@ -11,7 +11,7 @@ class FakeTriggerNode extends AbstractTriggerNode
 {
     public static function type(): string
     {
-        return 'test.trigger';
+        return 'test.fake_trigger';
     }
 
     public function definition(): TriggerDefinition
@@ -28,7 +28,7 @@ class FakeTriggerNode extends AbstractTriggerNode
 
     public function defaultConfig(): array
     {
-        return ['source' => 'test.source'];
+        return ['source' => 'test.orders'];
     }
 
     public function compile(array $config): TriggerActivationDescriptor

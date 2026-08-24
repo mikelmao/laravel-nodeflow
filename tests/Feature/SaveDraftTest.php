@@ -24,11 +24,11 @@ beforeEach(function () {
 
 function graphWith(string $nodeId): array
 {
-    return [
+    return triggeredGraph([
         'start' => $nodeId,
         'nodes' => [['id' => $nodeId, 'type' => 'core.exit', 'config' => []]],
         'edges' => [],
-    ];
+    ]);
 }
 
 it('saves a first draft when nothing has been saved yet', function () {

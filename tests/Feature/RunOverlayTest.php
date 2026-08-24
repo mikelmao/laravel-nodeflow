@@ -32,7 +32,7 @@ beforeEach(function () {
     //   segment — reached, released NOBODY down 'unmatched' (a zero-count row)
     //   parked  — never executed, but 3 subjects are sitting on it right now
     //   nobody  — never touched at all
-    $this->graph = Graph::fromArray([
+    $this->graph = Graph::fromArray(triggeredGraph([
         'start' => 'sent',
         'nodes' => [
             ['id' => 'sent', 'type' => 'core.exit', 'config' => []],
@@ -41,7 +41,7 @@ beforeEach(function () {
             ['id' => 'nobody', 'type' => 'core.exit', 'config' => []],
         ],
         'edges' => [],
-    ]);
+    ]));
 
     $flow = Flow::create(['name' => 'F', 'trigger_type' => 'manual', 'status' => 'active']);
     $version = FlowVersion::create([
@@ -148,7 +148,7 @@ it('ignores execution rows for a node id that is not in the pinned graph', funct
     NodeExecution::create(['run_id' => $this->run->id, 'node_id' => 'ghost', 'output' => 'default', 'subject_count' => 9]);
 
     expect(array_keys((array) ($this->snapshot)()['nodes']))
-        ->toBe(['sent', 'segment', 'parked', 'nobody']);
+        ->toBe(['trigger', 'sent', 'segment', 'parked', 'nobody']);
 });
 
 it('marks only a completed run terminal', function () {
@@ -218,7 +218,7 @@ it('four-oh-fours another tenants overlay rather than forbidding it', function (
 it('encodes nodes and byOutput as JSON objects even when every key is a numeric string', function () {
     Gate::define('nodeflow.viewAny', fn ($user, $subject = null) => true);
 
-    $graph = Graph::fromArray([
+    $graph = Graph::fromArray(triggeredGraph([
         'start' => '0',
         'nodes' => [
             ['id' => '0', 'type' => 'core.exit', 'config' => []],
@@ -226,7 +226,7 @@ it('encodes nodes and byOutput as JSON objects even when every key is a numeric 
             ['id' => '2', 'type' => 'core.exit', 'config' => []],
         ],
         'edges' => [],
-    ]);
+    ]));
 
     $flow = Flow::create(['name' => 'Numeric', 'trigger_type' => 'manual', 'status' => 'active']);
     $version = FlowVersion::create([

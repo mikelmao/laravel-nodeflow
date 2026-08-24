@@ -49,6 +49,8 @@ function seedVersionWithLiveRun(string $tenantId, string $type): FlowVersion
             'flow_id' => $flow->id,
             'tenant_id' => $tenantId,
             'version' => 1,
+            // Deliberately raw: this fixture probes CheckNodeTypesResolver against
+            // historical persisted executable graphs without publishing them.
             'graph' => ['start' => 'n1', 'nodes' => [['id' => 'n1', 'type' => $type, 'config' => []]], 'edges' => []],
             'content_hash' => 'x',
             'published_at' => now(),
@@ -87,11 +89,11 @@ it('stamps a version with its flows tenant, not the ambient one', function () {
 
     $this->tenant = null;
 
-    $version = app(\Nodeflow\Publishing\PublishFlow::class)->publish($flow, [
+    $version = app(\Nodeflow\Publishing\PublishFlow::class)->publish($flow, triggeredGraph([
         'start' => 'n1',
         'nodes' => [['id' => 'n1', 'type' => 'core.exit', 'config' => []]],
         'edges' => [],
-    ]);
+    ]));
 
     expect($version->tenant_id)->toBe('org-1');
 });
@@ -121,11 +123,11 @@ it('continues a flows own version sequence instead of restarting it under a diff
     // (flow_id, 1).
     $flow = Flow::create(['tenant_id' => 'org-1', 'name' => 'A', 'trigger_type' => 'manual', 'status' => 'draft']);
 
-    $graph = [
+    $graph = triggeredGraph([
         'start' => 'n1',
         'nodes' => [['id' => 'n1', 'type' => 'core.exit', 'config' => []]],
         'edges' => [],
-    ];
+    ]);
 
     app(\Nodeflow\Publishing\PublishFlow::class)->publish($flow, $graph);
 
@@ -181,11 +183,11 @@ it('throws instead of mislabelling a version when the ambient tenant differs fro
 
     $this->tenant = 'org-2';
 
-    expect(fn () => app(\Nodeflow\Publishing\PublishFlow::class)->publish($flow->fresh(), [
+    expect(fn () => app(\Nodeflow\Publishing\PublishFlow::class)->publish($flow->fresh(), triggeredGraph([
         'start' => 'n1',
         'nodes' => [['id' => 'n1', 'type' => 'core.exit', 'config' => []]],
         'edges' => [],
-    ]))->toThrow(\Nodeflow\Models\CrossTenantWriteException::class);
+    ])))->toThrow(\Nodeflow\Models\CrossTenantWriteException::class);
 });
 
 it('refuses a version stamped with the ambient tenant when its flow belongs to another', function () {
@@ -212,7 +214,7 @@ it('refuses a version stamped with the ambient tenant when its flow belongs to a
     expect(fn () => FlowVersion::create([
         'flow_id' => $othersFlow->id,
         'version' => 1,
-        'graph' => ['start' => 'n1', 'nodes' => [['id' => 'n1', 'type' => 'core.exit', 'config' => []]], 'edges' => []],
+        'graph' => triggeredExitGraph(),
         'content_hash' => 'x',
     ]))->toThrow(\Nodeflow\Models\CrossTenantWriteException::class);
 
@@ -235,7 +237,7 @@ it('refuses an explicit tenant_id contradicting the flow even with no ambient te
         'flow_id' => $flow->id,
         'tenant_id' => 'org-2',
         'version' => 1,
-        'graph' => ['start' => 'n1', 'nodes' => [['id' => 'n1', 'type' => 'core.exit', 'config' => []]], 'edges' => []],
+        'graph' => triggeredExitGraph(),
         'content_hash' => 'x',
     ]))->toThrow(\Nodeflow\Models\CrossTenantWriteException::class);
 });
@@ -254,7 +256,7 @@ it('still inherits the flows tenant when nothing is set and nothing is ambient',
     $version = FlowVersion::create([
         'flow_id' => $flow->id,
         'version' => 1,
-        'graph' => ['start' => 'n1', 'nodes' => [['id' => 'n1', 'type' => 'core.exit', 'config' => []]], 'edges' => []],
+        'graph' => triggeredExitGraph(),
         'content_hash' => 'x',
     ]);
 
@@ -278,7 +280,7 @@ it('names the flow and both tenants when it refuses a mismatched version', funct
         FlowVersion::create([
             'flow_id' => $othersFlow->id,
             'version' => 1,
-            'graph' => ['start' => 'n1', 'nodes' => [['id' => 'n1', 'type' => 'core.exit', 'config' => []]], 'edges' => []],
+            'graph' => triggeredExitGraph(),
             'content_hash' => 'x',
         ]);
         expect(false)->toBeTrue('expected a CrossTenantWriteException');

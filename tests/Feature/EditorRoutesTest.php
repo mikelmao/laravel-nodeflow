@@ -37,16 +37,12 @@ beforeEach(function () {
 
 function exitGraph(): array
 {
-    return [
-        'start' => 'e1',
-        'nodes' => [['id' => 'e1', 'type' => 'core.exit', 'config' => []]],
-        'edges' => [],
-    ];
+    return triggeredExitGraph();
 }
 
 function graphWithConcurrentWaits(): array
 {
-    return [
+    return triggeredGraph([
         'start' => 'c1',
         'nodes' => [
             ['id' => 'c1', 'type' => 'core.condition', 'config' => [
@@ -64,7 +60,7 @@ function graphWithConcurrentWaits(): array
             ['from' => 'w1', 'output' => 'default', 'to' => 'e1'],
             ['from' => 'w2', 'output' => 'default', 'to' => 'e1'],
         ],
-    ];
+    ]);
 }
 
 function allowEverything(): void
@@ -168,8 +164,8 @@ it('shows the draft graph in preference to the published version', function () {
         ->assertJsonPath('props.flow.version', 1);
 
     $draft = exitGraph();
-    $draft['nodes'][0]['id'] = 'unsaved';
-    $draft['start'] = 'unsaved';
+    $draft['nodes'][1]['id'] = 'unsaved';
+    $draft['edges'][0]['to'] = 'unsaved';
 
     app(\Nodeflow\Editor\SaveDraft::class)->save(
         $this->flow->fresh(),
@@ -415,8 +411,11 @@ it('returns per-node errors when publish is rejected', function () {
             'edges' => [],
         ]])
         ->assertStatus(422)
-        ->assertJsonPath('node_errors.0.node', 'w1')
-        ->assertJsonPath('node_errors.0.field', 'duration');
+        ->assertJsonFragment([
+            'node' => 'w1',
+            'field' => 'duration',
+            'message' => 'The duration field is required.',
+        ]);
 });
 
 it('four-twenty-twos a published node with no id rather than exploding', function () {

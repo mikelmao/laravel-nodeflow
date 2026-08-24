@@ -2,13 +2,21 @@
 
 namespace Nodeflow\Graph;
 
+use Illuminate\Support\Facades\Validator;
 use Nodeflow\Nodes\HandlesAudience;
 use Nodeflow\Nodes\HandlesSubject;
 use Nodeflow\Nodes\NodeRegistry;
+use Nodeflow\Triggers\TriggerNodeRegistry;
+use Nodeflow\Triggers\TriggerSourceRegistry;
 
 class GraphValidator
 {
-    public function __construct(private NodeRegistry $registry) {}
+    public function __construct(
+        private NodeRegistry $registry,
+        private TriggerNodeRegistry $triggers,
+        private TriggerSourceRegistry $sources,
+        private GraphTypeCatalog $types,
+    ) {}
 
     public function validate(Graph $graph): GraphValidationResult
     {
@@ -26,6 +34,18 @@ class GraphValidator
             $nodeErrors[] = ['node' => $graph->startNodeId(), 'field' => null, 'message' => end($errors)];
         }
 
+        $triggerIds = $graph->triggerNodeIds($this->types);
+
+        if (count($triggerIds) !== 1) {
+            $errors[] = 'The graph must contain exactly one trigger node.';
+            $nodeErrors[] = ['node' => null, 'field' => null, 'message' => end($errors)];
+        }
+
+        if (count($triggerIds) !== 1 || $graph->startNodeId() !== $triggerIds[0]) {
+            $errors[] = 'The graph start must be its trigger node.';
+            $nodeErrors[] = ['node' => null, 'field' => null, 'message' => end($errors)];
+        }
+
         foreach ($graph->duplicateNodeIds() as $id) {
             $errors[] = "Node id [{$id}] is used by more than one node. Node ids must be unique — ".
                 'rename or remove the duplicate so each node keeps its own id.';
@@ -35,8 +55,15 @@ class GraphValidator
         foreach ($graph->nodeIds() as $id) {
             $node = $graph->node($id);
             $type = $node['type'] ?? '';
+            $family = $this->types->family($type);
 
-            if (! $this->registry->has($type)) {
+            if ($family === 'trigger') {
+                $this->validateTriggerNode($id, $node, $errors, $nodeErrors);
+
+                continue;
+            }
+
+            if ($family !== 'executable' || ! $this->registry->has($type)) {
                 $errors[] = "Node [{$id}] uses unknown type [{$type}].";
                 $nodeErrors[] = ['node' => $id, 'field' => null, 'message' => end($errors)];
 
@@ -71,10 +98,16 @@ class GraphValidator
 
             $from = $graph->node($edge['from']);
 
-            if ($from !== null && $this->registry->has($from['type'] ?? '')) {
-                $outputs = $this->registry->resolve($from['type'])->definition()->outputNames();
+            if ($from !== null) {
+                $fromType = $from['type'] ?? '';
+                $family = $this->types->family($fromType);
+                $outputs = match ($family) {
+                    'executable' => $this->registry->resolve($fromType)->definition()->outputNames(),
+                    'trigger' => $this->triggers->resolve($fromType)->definition()->outputNames(),
+                    default => null,
+                };
 
-                if (! in_array($edge['output'], $outputs, true)) {
+                if ($outputs !== null && ! in_array($edge['output'], $outputs, true)) {
                     $errors[] = "Node [{$edge['from']}] has no output [{$edge['output']}].";
                     $nodeErrors[] = ['node' => $edge['from'], 'field' => null, 'message' => end($errors)];
                 }
@@ -97,6 +130,29 @@ class GraphValidator
             $seenOutputs[$key] = true;
         }
 
+        foreach ($triggerIds as $triggerId) {
+            if ($graph->incomingEdges($triggerId) !== []) {
+                $errors[] = "Trigger node [{$triggerId}] cannot have incoming edges.";
+                $nodeErrors[] = ['node' => $triggerId, 'field' => null, 'message' => end($errors)];
+            }
+
+            $targets = $graph->targetsFor($triggerId, 'started');
+
+            if (count($targets) !== 1) {
+                $errors[] = "Trigger node [{$triggerId}] must have exactly one [started] edge target.";
+                $nodeErrors[] = ['node' => $triggerId, 'field' => null, 'message' => end($errors)];
+
+                continue;
+            }
+
+            $target = $graph->node($targets[0]);
+
+            if ($this->types->family($target['type'] ?? '') !== 'executable') {
+                $errors[] = "Trigger node [{$triggerId}] must start an executable node.";
+                $nodeErrors[] = ['node' => $triggerId, 'field' => null, 'message' => end($errors)];
+            }
+        }
+
         if (($cycle = $this->findCycle($graph)) !== null) {
             $path = implode(' -> ', $cycle);
             $errors[] = "The flow contains a cycle: {$path}. Flows must be acyclic.";
@@ -111,6 +167,47 @@ class GraphValidator
         }
 
         return new GraphValidationResult($errors, $warnings, $nodeErrors);
+    }
+
+    private function validateTriggerNode(string $id, array $node, array &$errors, array &$nodeErrors): void
+    {
+        $trigger = $this->triggers->resolve($node['type']);
+        $config = $node['config'] ?? [];
+        $fieldErrors = $trigger->validate($config, $this->sources);
+        $sourceKey = $config['source'] ?? null;
+
+        if (is_string($sourceKey) && $this->sources->has($trigger->driver(), $sourceKey)) {
+            $source = $this->sources->resolve($trigger->driver(), $sourceKey);
+            $reservedKeys = array_map(
+                fn ($field): string => $field->key,
+                $trigger->definition()->fieldObjects(),
+            );
+            $sourceKeys = array_map(
+                fn ($field): string => $field->key,
+                $source->definition()->fieldObjects(),
+            );
+            $collisions = array_values(array_intersect($reservedKeys, $sourceKeys));
+
+            foreach ($collisions as $field) {
+                $message = "The source field [{$field}] collides with a reserved trigger field.";
+                $errors[] = "Trigger node [{$id}]: {$message}";
+                $nodeErrors[] = ['node' => $id, 'field' => $field, 'message' => $message];
+            }
+
+            if ($collisions === []) {
+                $mergedErrors = Validator::make($config, array_merge(
+                    $trigger->definition()->rules(),
+                    $source->definition()->rules(),
+                ))->errors()->toArray();
+
+                $fieldErrors = array_replace_recursive($mergedErrors, $fieldErrors);
+            }
+        }
+
+        foreach ($fieldErrors as $field => $messages) {
+            $errors[] = "Node [{$id}] field [{$field}]: ".implode(' ', $messages);
+            $nodeErrors[] = ['node' => $id, 'field' => $field, 'message' => implode(' ', $messages)];
+        }
     }
 
     /**

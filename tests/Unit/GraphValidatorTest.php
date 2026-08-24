@@ -1,44 +1,45 @@
 <?php
 
 use Nodeflow\Graph\Graph;
+use Nodeflow\Graph\GraphTypeCatalog;
 use Nodeflow\Graph\GraphValidator;
+use Nodeflow\Nodeflow;
 use Nodeflow\Nodes\NodeRegistry;
-use Tests\Support\FakeExitNode;
 use Tests\Support\FakeSendNode;
-use Tests\Support\FakeWaitNode;
+use Nodeflow\Triggers\TriggerNodeRegistry;
+use Nodeflow\Triggers\TriggerSourceRegistry;
 
 beforeEach(function () {
-    $this->registry = new NodeRegistry;
-    $this->registry->register(FakeSendNode::class, FakeExitNode::class, FakeWaitNode::class);
-    $this->validator = new GraphValidator($this->registry);
+    Nodeflow::register([FakeSendNode::class]);
+    $this->validator = app(GraphValidator::class);
 });
 
 it('passes a well formed graph', function () {
-    $result = $this->validator->validate(Graph::fromArray([
+    $result = $this->validator->validate(Graph::fromArray(triggeredGraph([
         'start' => 'n1',
         'nodes' => [
             ['id' => 'n1', 'type' => 'test.send', 'config' => ['channel' => 'sms']],
             ['id' => 'n2', 'type' => 'core.exit', 'config' => []],
         ],
         'edges' => [['from' => 'n1', 'output' => 'sent', 'to' => 'n2']],
-    ]));
+    ])));
 
     expect($result->passes())->toBeTrue();
 });
 
 it('rejects an unknown node type', function () {
-    $result = $this->validator->validate(Graph::fromArray([
+    $result = $this->validator->validate(Graph::fromArray(triggeredGraph([
         'start' => 'n1',
         'nodes' => [['id' => 'n1', 'type' => 'nope.missing', 'config' => []]],
         'edges' => [],
-    ]));
+    ])));
 
     expect($result->passes())->toBeFalse()
         ->and(implode(' ', $result->errors()))->toContain('nope.missing');
 });
 
 it('rejects a cycle', function () {
-    $result = $this->validator->validate(Graph::fromArray([
+    $result = $this->validator->validate(Graph::fromArray(triggeredGraph([
         'start' => 'n1',
         'nodes' => [
             ['id' => 'n1', 'type' => 'test.send', 'config' => ['channel' => 'sms']],
@@ -48,7 +49,7 @@ it('rejects a cycle', function () {
             ['from' => 'n1', 'output' => 'sent', 'to' => 'n2'],
             ['from' => 'n2', 'output' => 'sent', 'to' => 'n1'],
         ],
-    ]));
+    ])));
 
     $errors = implode(' ', $result->errors());
 
@@ -59,43 +60,43 @@ it('rejects a cycle', function () {
 });
 
 it('rejects invalid node config', function () {
-    $result = $this->validator->validate(Graph::fromArray([
+    $result = $this->validator->validate(Graph::fromArray(triggeredGraph([
         'start' => 'n1',
         'nodes' => [['id' => 'n1', 'type' => 'test.send', 'config' => ['channel' => 'pigeon']]],
         'edges' => [],
-    ]));
+    ])));
 
     expect($result->passes())->toBeFalse()
         ->and(implode(' ', $result->errors()))->toContain('channel');
 });
 
 it('rejects an edge pointing at a missing node', function () {
-    $result = $this->validator->validate(Graph::fromArray([
+    $result = $this->validator->validate(Graph::fromArray(triggeredGraph([
         'start' => 'n1',
         'nodes' => [['id' => 'n1', 'type' => 'test.send', 'config' => ['channel' => 'sms']]],
         'edges' => [['from' => 'n1', 'output' => 'sent', 'to' => 'ghost']],
-    ]));
+    ])));
 
     expect($result->passes())->toBeFalse()
         ->and(implode(' ', $result->errors()))->toContain('ghost');
 });
 
 it('rejects an edge on an output the node does not declare', function () {
-    $result = $this->validator->validate(Graph::fromArray([
+    $result = $this->validator->validate(Graph::fromArray(triggeredGraph([
         'start' => 'n1',
         'nodes' => [
             ['id' => 'n1', 'type' => 'test.send', 'config' => ['channel' => 'sms']],
             ['id' => 'n2', 'type' => 'core.exit', 'config' => []],
         ],
         'edges' => [['from' => 'n1', 'output' => 'exploded', 'to' => 'n2']],
-    ]));
+    ])));
 
     expect($result->passes())->toBeFalse()
         ->and(implode(' ', $result->errors()))->toContain('exploded');
 });
 
 it('warns when two branches of a branching node both contain waits', function () {
-    $result = $this->validator->validate(Graph::fromArray([
+    $result = $this->validator->validate(Graph::fromArray(triggeredGraph([
         'start' => 'n1',
         'nodes' => [
             ['id' => 'n1', 'type' => 'test.send', 'config' => ['channel' => 'sms']],
@@ -106,43 +107,43 @@ it('warns when two branches of a branching node both contain waits', function ()
             ['from' => 'n1', 'output' => 'sent', 'to' => 'w1'],
             ['from' => 'n1', 'output' => 'failed', 'to' => 'w2'],
         ],
-    ]));
+    ])));
 
     expect($result->passes())->toBeTrue()
         ->and(implode(' ', $result->warnings()))->toContain('sequentially');
 });
 
 it('rejects a graph with no start node set', function () {
-    $result = $this->validator->validate(Graph::fromArray([
+    $result = $this->validator->validate(Graph::fromArray(triggeredGraph([
         'start' => '',
         'nodes' => [['id' => 'n1', 'type' => 'core.exit', 'config' => []]],
         'edges' => [],
-    ]));
+    ])));
 
     expect($result->passes())->toBeFalse()
         ->and(implode(' ', $result->errors()))->toContain('start');
 });
 
 it('rejects a graph whose start node does not exist', function () {
-    $result = $this->validator->validate(Graph::fromArray([
+    $result = $this->validator->validate(Graph::fromArray(triggeredGraph([
         'start' => 'ghost',
         'nodes' => [['id' => 'n1', 'type' => 'core.exit', 'config' => []]],
         'edges' => [],
-    ]));
+    ])));
 
     expect($result->passes())->toBeFalse()
         ->and(implode(' ', $result->errors()))->toContain('ghost');
 });
 
 it('rejects duplicate node ids', function () {
-    $result = $this->validator->validate(Graph::fromArray([
+    $result = $this->validator->validate(Graph::fromArray(triggeredGraph([
         'start' => 'n1',
         'nodes' => [
             ['id' => 'n1', 'type' => 'test.send', 'config' => ['channel' => 'sms']],
             ['id' => 'n1', 'type' => 'core.exit', 'config' => []],
         ],
         'edges' => [],
-    ]));
+    ])));
 
     $errors = implode(' ', $result->errors());
 
@@ -203,11 +204,19 @@ it('rejects a graph referencing a node type that implements neither cardinality 
         $this->types['test.no-cardinality'] = Tests\Support\FakeNoCardinalityNode::class;
     })->call($registry);
 
-    $result = (new GraphValidator($registry))->validate(Graph::fromArray([
+    $types = app(GraphTypeCatalog::class);
+    $types->claim('test.no-cardinality', 'executable', Tests\Support\FakeNoCardinalityNode::class);
+
+    $result = (new GraphValidator(
+        $registry,
+        app(TriggerNodeRegistry::class),
+        app(TriggerSourceRegistry::class),
+        $types,
+    ))->validate(Graph::fromArray(triggeredGraph([
         'start' => 'n1',
         'nodes' => [['id' => 'n1', 'type' => 'test.no-cardinality', 'config' => []]],
         'edges' => [],
-    ]));
+    ])));
 
     $errors = implode(' ', $result->errors());
 

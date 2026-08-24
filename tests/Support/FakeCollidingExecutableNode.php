@@ -12,7 +12,7 @@ class FakeCollidingExecutableNode extends Node implements HandlesAudience
 {
     public static function type(): string
     {
-        return 'test.trigger';
+        return 'test.fake_trigger';
     }
 
     public function definition(): NodeDefinition

@@ -26,11 +26,11 @@ it('names the node whose field failed validation', function () {
     // §5.3: the editor renders an error beside its node. Parsing it back out of
     // "Node [w1] field [duration]: ..." is brittle, so the structure is carried.
     // Counterfactual: return only strings and there is nothing to key on.
-    $result = app(GraphValidator::class)->validate(Graph::fromArray([
+    $result = app(GraphValidator::class)->validate(Graph::fromArray(triggeredGraph([
         'start' => 'w1',
         'nodes' => [['id' => 'w1', 'type' => 'core.wait', 'config' => []]],
         'edges' => [],
-    ]));
+    ])));
 
     expect($result->passes())->toBeFalse()
         ->and($result->nodeErrors())->toContain([
@@ -43,21 +43,21 @@ it('names the node whose field failed validation', function () {
 it('keeps the flat strings byte-identical alongside the structure', function () {
     // The existing suite asserts on these. Counterfactual: reshape errors() and
     // GraphValidatorTest and PublishFlowTest break.
-    $result = app(GraphValidator::class)->validate(Graph::fromArray([
+    $result = app(GraphValidator::class)->validate(Graph::fromArray(triggeredGraph([
         'start' => 'w1',
         'nodes' => [['id' => 'w1', 'type' => 'core.wait', 'config' => []]],
         'edges' => [],
-    ]));
+    ])));
 
     expect($result->errors())->toContain('Node [w1] field [duration]: The duration field is required.');
 });
 
 it('names the node for an unknown type', function () {
-    $result = app(GraphValidator::class)->validate(Graph::fromArray([
+    $result = app(GraphValidator::class)->validate(Graph::fromArray(triggeredGraph([
         'start' => 'x1',
         'nodes' => [['id' => 'x1', 'type' => 'nope.missing', 'config' => []]],
         'edges' => [],
-    ]));
+    ])));
 
     expect($result->nodeErrors())->toContain([
         'node' => 'x1',
@@ -87,11 +87,11 @@ it('carries the structure through the publish exception', function () {
     $flow = Flow::create(['name' => 'A', 'trigger_type' => 'manual', 'status' => 'draft']);
 
     try {
-        app(PublishFlow::class)->publish($flow, [
+        app(PublishFlow::class)->publish($flow, triggeredGraph([
             'start' => 'w1',
             'nodes' => [['id' => 'w1', 'type' => 'core.wait', 'config' => []]],
             'edges' => [],
-        ]);
+        ]));
         $this->fail('expected GraphInvalidException');
     } catch (GraphInvalidException $e) {
         expect($e->nodeErrors())->toContain([

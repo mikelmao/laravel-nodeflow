@@ -26,11 +26,11 @@ beforeEach(function () {
                 'tenant_id' => $tenantId,
                 'flow_id' => $flow->id,
                 'version' => 1,
-                'graph' => [
+                'graph' => triggeredGraph([
                     'start' => 'n1',
                     'nodes' => [['id' => 'n1', 'type' => 'core.exit', 'config' => []]],
                     'edges' => [],
-                ],
+                ]),
                 'content_hash' => "hash-{$tenantId}",
             ]);
         });

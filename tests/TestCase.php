@@ -3,10 +3,33 @@
 namespace Tests;
 
 use Nodeflow\NodeflowServiceProvider;
+use Nodeflow\Triggers\TriggerDriverRegistry;
+use Nodeflow\Triggers\TriggerNodeRegistry;
+use Nodeflow\Triggers\TriggerSourceRegistry;
 use Orchestra\Testbench\TestCase as Orchestra;
+use Tests\Support\FakeTriggerDriver;
+use Tests\Support\FakeTriggerNode;
+use Tests\Support\FakeTriggerSource;
+
+require_once __DIR__.'/Support/TriggeredGraph.php';
 
 abstract class TestCase extends Orchestra
 {
+    protected function setUp(): void
+    {
+        parent::setUp();
+
+        // Registry contract tests deliberately construct the extension order
+        // themselves. Every other test starts with the standard valid fixture.
+        if (str_ends_with(static::class, 'TriggerRegistriesTest')) {
+            return;
+        }
+
+        app(TriggerDriverRegistry::class)->register(FakeTriggerDriver::class);
+        app(TriggerNodeRegistry::class)->register(FakeTriggerNode::class);
+        app(TriggerSourceRegistry::class)->register(FakeTriggerSource::class);
+    }
+
     protected function getPackageProviders($app): array
     {
         return [NodeflowServiceProvider::class];

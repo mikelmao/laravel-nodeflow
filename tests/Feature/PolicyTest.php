@@ -43,7 +43,7 @@ it('denies run abilities when the host has defined no gates', function () {
         'flow_id' => $this->flow->id,
         'tenant_id' => 'org-1',
         'version' => 1,
-        'graph' => ['start' => 'n1', 'nodes' => [['id' => 'n1', 'type' => 'core.exit', 'config' => []]], 'edges' => []],
+        'graph' => triggeredExitGraph(),
         'content_hash' => 'x',
         'published_at' => now(),
     ]);

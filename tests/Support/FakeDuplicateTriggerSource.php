@@ -11,7 +11,7 @@ class FakeDuplicateTriggerSource implements TriggerSource
 {
     public static function key(): string
     {
-        return 'test.source';
+        return 'test.orders';
     }
 
     public static function driver(): string

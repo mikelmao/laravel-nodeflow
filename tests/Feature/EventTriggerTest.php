@@ -115,11 +115,11 @@ beforeEach(function () {
 
     $flow = Flow::create(['tenant_id' => 'org-1', 'name' => 'F', 'trigger_type' => 'test.alert', 'status' => 'draft']);
 
-    app(PublishFlow::class)->publish($flow, [
+    app(PublishFlow::class)->publish($flow, triggeredGraph([
         'start' => 'n1',
         'nodes' => [['id' => 'n1', 'type' => 'core.exit', 'config' => []]],
         'edges' => [],
-    ]);
+    ]));
 });
 
 it('starts a run for each active flow matching the fired event', function () {
@@ -168,18 +168,18 @@ it('starts one run per tenant when one event matches flows in different tenants'
     app(TriggerRegistry::class)->register(FakeMultiTenantAlertTrigger::class);
 
     $flowOrg1 = Flow::create(['tenant_id' => 'org-1', 'name' => 'F1', 'trigger_type' => 'test.multi_alert', 'status' => 'draft']);
-    app(PublishFlow::class)->publish($flowOrg1, [
+    app(PublishFlow::class)->publish($flowOrg1, triggeredGraph([
         'start' => 'n1',
         'nodes' => [['id' => 'n1', 'type' => 'core.exit', 'config' => []]],
         'edges' => [],
-    ]);
+    ]));
 
     $flowOrg2 = Flow::create(['tenant_id' => 'org-2', 'name' => 'F2', 'trigger_type' => 'test.multi_alert', 'status' => 'draft']);
-    app(PublishFlow::class)->publish($flowOrg2, [
+    app(PublishFlow::class)->publish($flowOrg2, triggeredGraph([
         'start' => 'n1',
         'nodes' => [['id' => 'n1', 'type' => 'core.exit', 'config' => []]],
         'edges' => [],
-    ]);
+    ]));
 
     app(\Nodeflow\Triggers\EventTriggerListener::class)->handle(new FakeMultiTenantAlertEvent([
         'org-1' => ['1', '2'],
@@ -217,18 +217,18 @@ it('fans out to every tenant even when the ambient tenant is non-null', function
     app(TriggerRegistry::class)->register(FakeMultiTenantAlertTrigger::class);
 
     $flowOrg1 = Flow::create(['tenant_id' => 'org-1', 'name' => 'F1', 'trigger_type' => 'test.multi_alert', 'status' => 'draft']);
-    app(PublishFlow::class)->publish($flowOrg1, [
+    app(PublishFlow::class)->publish($flowOrg1, triggeredGraph([
         'start' => 'n1',
         'nodes' => [['id' => 'n1', 'type' => 'core.exit', 'config' => []]],
         'edges' => [],
-    ]);
+    ]));
 
     $flowOrg2 = Flow::create(['tenant_id' => 'org-2', 'name' => 'F2', 'trigger_type' => 'test.multi_alert', 'status' => 'draft']);
-    app(PublishFlow::class)->publish($flowOrg2, [
+    app(PublishFlow::class)->publish($flowOrg2, triggeredGraph([
         'start' => 'n1',
         'nodes' => [['id' => 'n1', 'type' => 'core.exit', 'config' => []]],
         'edges' => [],
-    ]);
+    ]));
 
     // Switch the ambient tenant to a concrete, non-null value that matches
     // ONE of the two tenants the event resolves to, then fire it.
@@ -291,18 +291,18 @@ it('does not let one tenant\'s failure strand another tenant\'s alert', function
     app(TriggerRegistry::class)->register(FakeMultiTenantAlertTrigger::class);
 
     $flowOrg1 = Flow::create(['tenant_id' => 'org-1', 'name' => 'F1', 'trigger_type' => 'test.multi_alert', 'status' => 'draft']);
-    app(PublishFlow::class)->publish($flowOrg1, [
+    app(PublishFlow::class)->publish($flowOrg1, triggeredGraph([
         'start' => 'n1',
         'nodes' => [['id' => 'n1', 'type' => 'core.exit', 'config' => []]],
         'edges' => [],
-    ]);
+    ]));
 
     $flowOrg2 = Flow::create(['tenant_id' => 'org-2', 'name' => 'F2', 'trigger_type' => 'test.multi_alert', 'status' => 'draft']);
-    app(PublishFlow::class)->publish($flowOrg2, [
+    app(PublishFlow::class)->publish($flowOrg2, triggeredGraph([
         'start' => 'n1',
         'nodes' => [['id' => 'n1', 'type' => 'core.exit', 'config' => []]],
         'edges' => [],
-    ]);
+    ]));
 
     // Must not throw out of handle(): org-1's failure is caught and reported.
     app(\Nodeflow\Triggers\EventTriggerListener::class)->handle(new FakeMultiTenantAlertEvent([

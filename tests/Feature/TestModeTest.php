@@ -33,11 +33,11 @@ it('propagates test mode into the node context so nodes can suppress side effect
 
     $flow = Flow::create(['name' => 'F', 'trigger_type' => 'manual', 'status' => 'draft']);
 
-    $graph = [
+    $graph = triggeredGraph([
         'start' => 'n1',
         'nodes' => [['id' => 'n1', 'type' => 'test.recording', 'config' => []]],
         'edges' => [],
-    ];
+    ]);
 
     app(PublishFlow::class)->publish($flow, $graph);
 
@@ -57,11 +57,11 @@ it('records a real send for a run that is not a test', function () {
 
     $flow = Flow::create(['name' => 'F', 'trigger_type' => 'manual', 'status' => 'draft']);
 
-    $graph = [
+    $graph = triggeredGraph([
         'start' => 'n1',
         'nodes' => [['id' => 'n1', 'type' => 'test.recording', 'config' => []]],
         'edges' => [],
-    ];
+    ]);
 
     app(PublishFlow::class)->publish($flow, $graph);
 
@@ -81,11 +81,11 @@ it('does not suppress sends merely because is_test was omitted from the options'
 
     $flow = Flow::create(['name' => 'F', 'trigger_type' => 'manual', 'status' => 'draft']);
 
-    $graph = [
+    $graph = triggeredGraph([
         'start' => 'n1',
         'nodes' => [['id' => 'n1', 'type' => 'test.recording', 'config' => []]],
         'edges' => [],
-    ];
+    ]);
 
     app(PublishFlow::class)->publish($flow, $graph);
 

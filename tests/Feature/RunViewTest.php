@@ -33,11 +33,11 @@ beforeEach(function () {
     // read this graph and not another.
     $this->version = FlowVersion::create([
         'flow_id' => $this->flow->id, 'version' => 1, 'content_hash' => 'h1',
-        'graph' => [
+        'graph' => triggeredGraph([
             'start' => 'pinned',
             'nodes' => [['id' => 'pinned', 'type' => 'core.exit', 'config' => []]],
             'edges' => [],
-        ],
+        ]),
     ]);
 
     $this->run = Run::create([
@@ -131,11 +131,11 @@ it('renders the runs own version and not the flows newest published version', fu
 
     $newer = FlowVersion::create([
         'flow_id' => $this->flow->id, 'version' => 2, 'content_hash' => 'h2',
-        'graph' => [
+        'graph' => triggeredGraph([
             'start' => 'newer',
             'nodes' => [['id' => 'newer', 'type' => 'core.exit', 'config' => []]],
             'edges' => [],
-        ],
+        ]),
     ]);
     $this->flow->update(['current_version_id' => $newer->id]);
 
@@ -155,7 +155,7 @@ it('carries an overlay entry for every node in the pinned graph', function () {
 
     $overlay = runPage($this, $this->run->id)->assertOk()->json('props.overlay');
 
-    expect(array_keys($overlay['nodes']))->toBe(['pinned'])
+    expect(array_keys($overlay['nodes']))->toBe(['trigger', 'pinned'])
         ->and($overlay['nodes']['pinned']['reached'])->toBeFalse()
         ->and($overlay['terminal'])->toBeFalse();
 });

@@ -20,14 +20,14 @@ beforeEach(function () {
 
     $this->flow = Flow::create(['name' => 'F', 'trigger_type' => 'manual', 'status' => 'draft']);
 
-    $this->validGraph = [
+    $this->validGraph = triggeredGraph([
         'start' => 'n1',
         'nodes' => [
             ['id' => 'n1', 'type' => 'test.send', 'config' => ['channel' => 'sms']],
             ['id' => 'n2', 'type' => 'core.exit', 'config' => []],
         ],
         'edges' => [['from' => 'n1', 'output' => 'sent', 'to' => 'n2']],
-    ];
+    ]);
 });
 
 it('freezes version 1 and points the flow at it', function () {
@@ -72,7 +72,7 @@ it('leaves runs on the previous version untouched when a new one is published', 
 });
 
 it('publishes a graph with concurrent branch waits despite the warning', function () {
-    $graphWithConcurrentWaits = [
+    $graphWithConcurrentWaits = triggeredGraph([
         'start' => 'n1',
         'nodes' => [
             ['id' => 'n1', 'type' => 'test.send', 'config' => ['channel' => 'sms']],
@@ -86,7 +86,7 @@ it('publishes a graph with concurrent branch waits despite the warning', functio
             ['from' => 'w1', 'output' => 'default', 'to' => 'n2'],
             ['from' => 'w2', 'output' => 'default', 'to' => 'n2'],
         ],
-    ];
+    ]);
 
     // Assert that this graph genuinely emits a warning
     $validationResult = app(GraphValidator::class)->validate(Graph::fromArray($graphWithConcurrentWaits));
@@ -104,14 +104,14 @@ it('publishes a graph with concurrent branch waits despite the warning', functio
 it('refuses to publish a wait whose duration the engine cannot parse', function () {
     // The error must reach the person who can fix it: the author at publish
     // time, not a real customer at send time.
-    $graph = [
+    $graph = triggeredGraph([
         'start' => 'w1',
         'nodes' => [
             ['id' => 'w1', 'type' => 'core.wait', 'config' => ['duration' => '1 dya']],
             ['id' => 'n2', 'type' => 'core.exit', 'config' => []],
         ],
         'edges' => [['from' => 'w1', 'output' => 'default', 'to' => 'n2']],
-    ];
+    ]);
 
     expect(fn () => app(PublishFlow::class)->publish($this->flow, $graph))
         ->toThrow(GraphInvalidException::class);
@@ -122,14 +122,14 @@ it('refuses to publish a wait whose duration the engine cannot parse', function 
 it('refuses to publish a wait whose duration resolves to zero seconds', function () {
     // "banana" parses without an exception and yields 0 seconds, which would make
     // a day-2 message send immediately.
-    $graph = [
+    $graph = triggeredGraph([
         'start' => 'w1',
         'nodes' => [
             ['id' => 'w1', 'type' => 'core.wait', 'config' => ['duration' => 'banana']],
             ['id' => 'n2', 'type' => 'core.exit', 'config' => []],
         ],
         'edges' => [['from' => 'w1', 'output' => 'default', 'to' => 'n2']],
-    ];
+    ]);
 
     try {
         app(PublishFlow::class)->publish($this->flow, $graph);
@@ -142,14 +142,14 @@ it('refuses to publish a wait whose duration resolves to zero seconds', function
 });
 
 it('publishes a wait with a duration the engine can parse', function () {
-    $graph = [
+    $graph = triggeredGraph([
         'start' => 'w1',
         'nodes' => [
             ['id' => 'w1', 'type' => 'core.wait', 'config' => ['duration' => '2 days']],
             ['id' => 'n2', 'type' => 'core.exit', 'config' => []],
         ],
         'edges' => [['from' => 'w1', 'output' => 'default', 'to' => 'n2']],
-    ];
+    ]);
 
     expect(app(PublishFlow::class)->publish($this->flow, $graph)->version)->toBe(1);
 });

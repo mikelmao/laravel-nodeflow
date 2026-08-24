@@ -4,7 +4,7 @@ use Nodeflow\Graph\Graph;
 
 function sampleGraph(): array
 {
-    return [
+    return triggeredGraph([
         'start' => 'n1',
         'nodes' => [
             ['id' => 'n1', 'type' => 'test.send', 'config' => ['channel' => 'sms']],
@@ -15,15 +15,15 @@ function sampleGraph(): array
             ['from' => 'n1', 'output' => 'sent', 'to' => 'n2'],
             ['from' => 'n1', 'output' => 'failed', 'to' => 'n3'],
         ],
-    ];
+    ]);
 }
 
 it('reads nodes, start, and edges', function () {
     $graph = Graph::fromArray(sampleGraph());
 
-    expect($graph->startNodeId())->toBe('n1')
+    expect($graph->startNodeId())->toBe('trigger')
         ->and($graph->node('n1')['type'])->toBe('test.send')
-        ->and($graph->nodeIds())->toBe(['n1', 'n2', 'n3']);
+        ->and($graph->nodeIds())->toBe(['trigger', 'n1', 'n2', 'n3']);
 });
 
 it('resolves edge targets by output name', function () {
@@ -40,7 +40,7 @@ it('round trips through toArray', function () {
 });
 
 it('round trips a node position and unrecognised extra keys through toArray', function () {
-    $graph = [
+    $graph = triggeredGraph([
         'start' => 'n1',
         'nodes' => [
             [
@@ -52,7 +52,7 @@ it('round trips a node position and unrecognised extra keys through toArray', fu
             ],
         ],
         'edges' => [],
-    ];
+    ]);
 
     expect(Graph::fromArray($graph)->toArray())->toBe($graph);
 });
