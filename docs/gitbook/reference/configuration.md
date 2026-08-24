@@ -1,6 +1,6 @@
 # Configuration reference
 
-Nodeflow ships six top-level entries: four nested groups and two scalar settings. Together they contain twelve leaf keys. Publish an application-owned copy only when you need to change a value, then rebuild Laravel's configuration cache.
+Nodeflow ships six top-level entries: four nested groups and two scalar settings. Together they contain thirteen leaf keys. Publish an application-owned copy only when you need to change a value, then rebuild Laravel's configuration cache.
 
 ```bash
 php artisan vendor:publish --tag=nodeflow-config
@@ -18,6 +18,7 @@ php artisan config:cache
 | `nodeflow.limits.max_steps_per_run` | `1000` | Integer-like value; cast to `int` when a run starts, with no positive-range validation. | None | Maximum interpreter node activities for a newly started workflow. Use a positive value large enough for legitimate loops; zero or a negative value prevents node execution. |
 | `nodeflow.limits.subject_chunk` | `500` | Integer-like value; no package validation. | None | Active subjects loaded per batch for nodes implementing only `HandlesSubject`. Zero or a negative value is unsafe for Laravel chunking. |
 | `nodeflow.limits.audience_chunk` | `5000` | Integer-like value; no package validation. | None | Active subjects passed to each `HandlesAudience` invocation. Zero or a negative value is unsafe for Laravel chunking. |
+| `nodeflow.limits.materialise_chunk` | `1000` | Integer-like value; cast to `int`, with an effective minimum of `1`. | None | Uses fixed-size ownership and insertion batches while materializing a run audience. Raise it only when the host resolver and database can safely handle the larger batch. |
 | `nodeflow.limits.subject_page` | `50` | Integer-like value; cast to `int` for cursor pagination, with no positive-range validation. | None | Page size for the run-view active-subject endpoint. Zero or a negative value is unsafe for pagination. |
 | `nodeflow.limits.trigger_data_bytes` | `65_536` | A positive integer or a digit-only positive integer string. Other strings, zero, and negatives are rejected. | None | Maximum byte length of JSON-encoded `trigger_data` at run creation. Raise it only after reviewing storage, observability, and sensitive-data exposure. |
 | `nodeflow.webhooks.replay_window_seconds` | `300` | Positive integer. Numeric strings are rejected. | None | Maximum absolute age of `X-Nodeflow-Timestamp` for a signed webhook. A bad configured value makes signature verification unavailable rather than weakening replay protection. |

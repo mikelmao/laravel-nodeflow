@@ -307,9 +307,9 @@ it('isolates an invalid pinned snapshot before extension code and continues vali
     expect($runs)->toHaveCount(1)
         ->and($runs[0]->tenant_id)->toBe('org-2')
         ->and($resolutions)->toBe(1)
-        // The valid run is checked by both TriggerRunStarter and the shared
-        // audience materializer; the forged candidate contributes zero checks.
-        ->and($this->ownershipChecks)->toBe(2)
+        // The materializer exclusively checks the valid audience; the forged
+        // candidate contributes zero ownership checks.
+        ->and($this->ownershipChecks)->toBe(1)
         ->and($reported->reported)->toHaveCount(1)
         ->and($reported->reported[0]->getMessage())->toContain('pinned graph');
 });

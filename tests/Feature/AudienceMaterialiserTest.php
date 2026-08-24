@@ -1,5 +1,7 @@
 <?php
 
+use Illuminate\Database\QueryException;
+use Illuminate\Support\Facades\DB;
 use Nodeflow\Contracts\BatchTenantResolver;
 use Nodeflow\Contracts\TenantResolver;
 use Nodeflow\Execution\AudienceMaterialiser;
@@ -149,4 +151,95 @@ it('deduplicates repeated ids across batches with the inserted count', function 
 
     expect($count)->toBe(1)
         ->and($this->run->subjects()->pluck('subject_id')->all())->toBe(['1']);
+});
+
+it('rejects identifiers that cannot be persisted losslessly before batch ownership', function (string $subjectId, string $message) {
+    $resolver = new class implements BatchTenantResolver {
+        public int $calls = 0;
+
+        public function currentTenantId(): ?string { return 'org-1'; }
+        public function ownsSubject(string $tenantId, string $subjectType, string $subjectId): bool { return true; }
+        public function ownedSubjectIds(string $tenantId, string $subjectType, array $subjectIds): array
+        {
+            $this->calls++;
+
+            return $subjectIds;
+        }
+    };
+    app()->instance(TenantResolver::class, $resolver);
+    app()->forgetInstance(AudienceMaterialiser::class);
+
+    expect(fn () => app(AudienceMaterialiser::class)->materialise($this->run, 'user', [$subjectId]))
+        ->toThrow(InvalidArgumentException::class, $message);
+
+    expect($resolver->calls)->toBe(0)
+        ->and($this->run->subjects()->count())->toBe(0);
+})->with([
+    'overlong' => [str_repeat('x', 256), '255 Unicode characters'],
+    'invalid utf-8' => ["\xB1\x31", 'valid UTF-8'],
+    'nul byte' => ["valid\0id", 'NUL byte'],
+]);
+
+it('rejects an unrepresentable subject type before consuming its audience', function () {
+    $resolver = new class implements BatchTenantResolver {
+        public int $calls = 0;
+
+        public function currentTenantId(): ?string { return 'org-1'; }
+        public function ownsSubject(string $tenantId, string $subjectType, string $subjectId): bool { return true; }
+        public function ownedSubjectIds(string $tenantId, string $subjectType, array $subjectIds): array
+        {
+            $this->calls++;
+
+            return $subjectIds;
+        }
+    };
+    app()->instance(TenantResolver::class, $resolver);
+    app()->forgetInstance(AudienceMaterialiser::class);
+
+    expect(fn () => app(AudienceMaterialiser::class)->materialise($this->run, str_repeat('t', 256), ['1']))
+        ->toThrow(InvalidArgumentException::class, 'subject type');
+
+    expect($resolver->calls)->toBe(0)
+        ->and($this->run->subjects()->count())->toBe(0);
+});
+
+it('rolls back earlier batches when a later identifier is not lossless', function () {
+    config()->set('nodeflow.limits.materialise_chunk', 1);
+
+    expect(fn () => app(AudienceMaterialiser::class)->materialise($this->run, 'user', ['1', "later\0id"]))
+        ->toThrow(InvalidArgumentException::class, 'NUL byte');
+
+    expect($this->run->subjects()->count())->toBe(0);
+});
+
+it('counts only newly inserted rows when a batch collides with existing subjects', function () {
+    DB::table('nodeflow_run_subjects')->insert([
+        'run_id' => $this->run->id,
+        'subject_type' => 'user',
+        'subject_id' => '1',
+        'current_node_id' => null,
+        'status' => 'active',
+    ]);
+
+    $count = app(AudienceMaterialiser::class)->materialise($this->run, 'user', ['1', '2']);
+
+    expect($count)->toBe(1)
+        ->and($this->run->subjects()->pluck('subject_id')->all())->toBe(['1', '2']);
+});
+
+it('does not swallow non-unique subject insertion failures', function () {
+    $this->owned[] = 'reject';
+    DB::unprepared(<<<'SQL'
+        CREATE TRIGGER reject_run_subject_insert
+        BEFORE INSERT ON nodeflow_run_subjects
+        WHEN NEW.subject_id = 'reject'
+        BEGIN
+            SELECT RAISE(FAIL, 'subject insert rejected');
+        END
+        SQL);
+
+    expect(fn () => app(AudienceMaterialiser::class)->materialise($this->run, 'user', ['reject']))
+        ->toThrow(QueryException::class, 'subject insert rejected');
+
+    expect($this->run->subjects()->count())->toBe(0);
 });

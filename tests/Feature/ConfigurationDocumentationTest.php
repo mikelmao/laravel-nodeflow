@@ -27,6 +27,7 @@ it('keeps the configuration reference synchronized with every shipped key and de
         'limits.max_steps_per_run' => 1000,
         'limits.subject_chunk' => 500,
         'limits.audience_chunk' => 5000,
+        'limits.materialise_chunk' => 1000,
         'limits.subject_page' => 50,
         'limits.trigger_data_bytes' => 65_536,
         'webhooks.replay_window_seconds' => 300,
@@ -63,6 +64,7 @@ it('keeps the configuration reference synchronized with every shipped key and de
             '`1000`',
             '`500`',
             '`5000`',
+            '`1000`',
             '`50`',
             '`65_536`',
             '`300`',
@@ -74,7 +76,8 @@ it('keeps the configuration reference synchronized with every shipped key and de
         ->and(collect($documented)->except('tenancy')->pluck('environment')->unique()->all())->toBe(['None'])
         ->and($docs)->toContain('six top-level entries')
         ->toContain('four nested groups')
-        ->toContain('twelve leaf keys')
+        ->toContain('thirteen leaf keys')
+        ->toContain('fixed-size ownership and insertion batches')
         ->toContain('positive integer or a digit-only positive integer string')
         ->toContain('Numeric strings are rejected')
         ->toContain('active trigger activations')

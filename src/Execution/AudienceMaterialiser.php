@@ -2,7 +2,9 @@
 
 namespace Nodeflow\Execution;
 
+use Illuminate\Database\QueryException;
 use Illuminate\Support\Facades\DB;
+use InvalidArgumentException;
 use Nodeflow\Contracts\BatchTenantResolver;
 use Nodeflow\Contracts\TenantResolver;
 use UnexpectedValueException;
@@ -15,6 +17,7 @@ class AudienceMaterialiser
     public function materialise(Run $run, string $subjectType, iterable $subjectIds, ?string $startNodeId = null): int
     {
         $chunkSize = max(1, (int) config('nodeflow.limits.materialise_chunk', 1000));
+        $this->assertLosslessIdentifier($subjectType, 'subject type');
 
         return DB::transaction(function () use ($run, $subjectType, $subjectIds, $startNodeId, $chunkSize): int {
             $inserted = 0;
@@ -46,6 +49,10 @@ class AudienceMaterialiser
     /** @param array<string, string> $subjectIds */
     private function flush(Run $run, string $subjectType, array $subjectIds, ?string $startNodeId): int
     {
+        foreach ($subjectIds as $subjectId) {
+            $this->assertLosslessIdentifier($subjectId, 'subject ID');
+        }
+
         if ($this->tenants instanceof BatchTenantResolver) {
             $owned = [];
 
@@ -86,6 +93,54 @@ class AudienceMaterialiser
             ];
         }
 
-        return DB::table('nodeflow_run_subjects')->insertOrIgnore($rows);
+        return $this->insertRows($rows);
+    }
+
+    /** @param list<array<string, mixed>> $rows */
+    private function insertRows(array $rows): int
+    {
+        try {
+            return DB::transaction(function () use ($rows): int {
+                DB::table('nodeflow_run_subjects')->insert($rows);
+
+                return count($rows);
+            });
+        } catch (QueryException $e) {
+            if (! UniqueConstraintViolation::matches($e)) {
+                throw $e;
+            }
+        }
+
+        $inserted = 0;
+
+        foreach ($rows as $row) {
+            try {
+                DB::transaction(function () use ($row): void {
+                    DB::table('nodeflow_run_subjects')->insert($row);
+                });
+                $inserted++;
+            } catch (QueryException $e) {
+                if (! UniqueConstraintViolation::matches($e)) {
+                    throw $e;
+                }
+            }
+        }
+
+        return $inserted;
+    }
+
+    private function assertLosslessIdentifier(string $value, string $kind): void
+    {
+        if (preg_match('//u', $value) !== 1) {
+            throw new InvalidArgumentException("{$kind} must be valid UTF-8.");
+        }
+
+        if (str_contains($value, "\0")) {
+            throw new InvalidArgumentException("{$kind} must not contain a NUL byte.");
+        }
+
+        if (preg_match_all('/./u', $value) > 255) {
+            throw new InvalidArgumentException("{$kind} must be at most 255 Unicode characters.");
+        }
     }
 }
