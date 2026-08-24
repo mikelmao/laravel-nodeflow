@@ -8,8 +8,10 @@ use Nodeflow\Models\Flow;
 use Nodeflow\Models\FlowVersion;
 use Nodeflow\Models\TriggerActivation;
 use Nodeflow\Triggers\TriggerActivationDescriptor;
+use Nodeflow\Triggers\TriggerDefinitionContext;
 use Nodeflow\Triggers\TriggerDriverRegistry;
 use Nodeflow\Triggers\TriggerNodeRegistry;
+use Nodeflow\Triggers\TriggerSourceCompatibility;
 use Nodeflow\Triggers\TriggerSourceRegistry;
 use Throwable;
 
@@ -19,10 +21,17 @@ class CompileTriggerActivation
         private readonly TriggerNodeRegistry $nodes,
         private readonly TriggerDriverRegistry $drivers,
         private readonly TriggerSourceRegistry $sources,
+        private readonly TriggerSourceCompatibility $sourceCompatibility,
     ) {}
 
-    public function compile(Flow $flow, FlowVersion $version, Graph $graph): TriggerActivation
+    public function compile(
+        Flow $flow,
+        FlowVersion $version,
+        Graph $graph,
+        ?TriggerDefinitionContext $definitions = null,
+    ): TriggerActivation
     {
+        $definitions ??= new TriggerDefinitionContext;
         $nodeId = $graph->startNodeId();
         $this->assertPersistedString($nodeId, 'trigger_node_id', 255, null);
         $node = $graph->node($nodeId);
@@ -54,8 +63,60 @@ class CompileTriggerActivation
             );
         }
 
+        $config = $node['config'] ?? [];
+
         try {
-            $descriptor = $trigger->compile($node['config'] ?? []);
+            $nodeDefinition = $definitions->node($trigger);
+            $selectedSource = $trigger->source($config);
+        } catch (Throwable) {
+            throw $this->invalid(
+                $nodeId,
+                'source',
+                "Trigger node [{$nodeId}] could not resolve its selected source definition.",
+            );
+        }
+
+        $this->assertPersistedString($selectedSource, 'source', 191, $nodeId);
+
+        if (! $this->sources->has($declaredDriver, $selectedSource)) {
+            throw $this->invalid(
+                $nodeId,
+                'source',
+                "Trigger node [{$nodeId}] selected a source that is not registered for its driver.",
+            );
+        }
+
+        try {
+            $source = $this->sources->resolve($declaredDriver, $selectedSource);
+            $sourceDefinition = $definitions->source($source);
+            $compatible = $this->sourceCompatibility->supports($trigger, $source);
+        } catch (Throwable) {
+            throw $this->invalid(
+                $nodeId,
+                'source',
+                "Trigger node [{$nodeId}] could not resolve its selected source definition.",
+            );
+        }
+
+        if (! $compatible) {
+            throw $this->invalid(
+                $nodeId,
+                'source',
+                "Trigger node [{$nodeId}] selected a source that is not compatible with the node.",
+            );
+        }
+
+        $collisions = $nodeDefinition->collidingFieldKeys($sourceDefinition);
+
+        if ($collisions !== []) {
+            $field = $collisions[0];
+            $message = "The source field [{$field}] collides with a reserved trigger field.";
+
+            throw $this->invalid($nodeId, $field, $message);
+        }
+
+        try {
+            $descriptor = $trigger->compile($config);
         } catch (Throwable) {
             throw $this->invalid(
                 $nodeId,
@@ -80,6 +141,14 @@ class CompileTriggerActivation
                 $nodeId,
                 'driver',
                 "Trigger node [{$nodeId}] compiled a driver that does not match its registered driver.",
+            );
+        }
+
+        if ($descriptor->source !== $selectedSource) {
+            throw $this->invalid(
+                $nodeId,
+                'source',
+                "Trigger node [{$nodeId}] compiled a source that does not match its selected source.",
             );
         }
 

@@ -8,15 +8,18 @@ use Nodeflow\Contracts\TriggerNode;
 use Nodeflow\Contracts\TriggerSource;
 use Nodeflow\Editor\SaveDraft;
 use Nodeflow\Editor\StaleDraftException;
+use Nodeflow\Graph\Graph;
 use Nodeflow\Models\Concerns\TenancyGuardSuspension;
 use Nodeflow\Models\Flow;
 use Nodeflow\Models\FlowVersion;
 use Nodeflow\Models\TriggerActivation;
 use Nodeflow\Models\WebhookEndpoint;
+use Nodeflow\Nodeflow;
 use Nodeflow\Publishing\CompileTriggerActivation;
 use Nodeflow\Publishing\GraphInvalidException;
 use Nodeflow\Publishing\PublishFlow;
 use Nodeflow\Publishing\PublishResult;
+use Nodeflow\Schema\Field;
 use Nodeflow\Schema\TriggerDefinition;
 use Nodeflow\Triggers\TriggerActivationDescriptor;
 use Nodeflow\Triggers\TriggerActivationRepository;
@@ -71,6 +74,188 @@ class UnsafeMetadataPublicationTriggerNode implements TriggerNode
             qualifier: null,
             metadata: ['unsafe' => fopen('php://memory', 'r')],
         );
+    }
+}
+
+class DirectCompilerCollisionSource implements TriggerSource
+{
+    public static function key(): string
+    {
+        return 'test.compiler-collision';
+    }
+
+    public static function driver(): string
+    {
+        return 'test.fake';
+    }
+
+    public function definition(): TriggerDefinition
+    {
+        return TriggerDefinition::make('Compiler collision source')->fields([
+            Field::text('source')->required(),
+        ]);
+    }
+
+    public function resolve(TriggerOccurrence $occurrence, array $config): TriggerMatch
+    {
+        return TriggerMatch::make();
+    }
+}
+
+abstract class DirectCompilerGuardNode implements TriggerNode
+{
+    public function definition(): TriggerDefinition
+    {
+        return TriggerDefinition::make('Direct compiler guard')->fields([
+            Field::select('source')->required(),
+        ]);
+    }
+
+    public function driver(): string
+    {
+        return 'test.fake';
+    }
+
+    public function defaultConfig(): array
+    {
+        return [];
+    }
+
+    public function validate(array $config, TriggerSourceRegistry $sources): array
+    {
+        return [];
+    }
+}
+
+class DirectCompilerMismatchedSourceNode extends DirectCompilerGuardNode
+{
+    public static function type(): string
+    {
+        return 'test.compiler-mismatched-source';
+    }
+
+    public function source(array $config): string
+    {
+        return 'test.orders';
+    }
+
+    public function supportsSource(TriggerSource $source): bool
+    {
+        return true;
+    }
+
+    public function compile(array $config): TriggerActivationDescriptor
+    {
+        return new TriggerActivationDescriptor('test.fake', DirectCompilerCollisionSource::key(), null, []);
+    }
+}
+
+class DirectCompilerIncompatibleSourceNode extends DirectCompilerGuardNode
+{
+    public static function type(): string
+    {
+        return 'test.compiler-incompatible-source';
+    }
+
+    public function source(array $config): string
+    {
+        return DirectCompilerCollisionSource::key();
+    }
+
+    public function supportsSource(TriggerSource $source): bool
+    {
+        return false;
+    }
+
+    public function compile(array $config): TriggerActivationDescriptor
+    {
+        return new TriggerActivationDescriptor('test.fake', DirectCompilerCollisionSource::key(), null, []);
+    }
+}
+
+class DirectCompilerCollidingSourceNode extends DirectCompilerGuardNode
+{
+    public static function type(): string
+    {
+        return 'test.compiler-colliding-source';
+    }
+
+    public function source(array $config): string
+    {
+        return DirectCompilerCollisionSource::key();
+    }
+
+    public function supportsSource(TriggerSource $source): bool
+    {
+        return true;
+    }
+
+    public function compile(array $config): TriggerActivationDescriptor
+    {
+        return new TriggerActivationDescriptor('test.fake', DirectCompilerCollisionSource::key(), null, []);
+    }
+}
+
+class StatefulPublicationSource implements TriggerSource
+{
+    public static int $definitions = 0;
+
+    public static function key(): string
+    {
+        return 'test.stateful-publication-source';
+    }
+
+    public static function driver(): string
+    {
+        return 'test.fake';
+    }
+
+    public function definition(): TriggerDefinition
+    {
+        self::$definitions++;
+
+        return TriggerDefinition::make('Stateful publication source')->fields([
+            Field::text('account')->required(),
+        ]);
+    }
+
+    public function resolve(TriggerOccurrence $occurrence, array $config): TriggerMatch
+    {
+        return TriggerMatch::make();
+    }
+}
+
+class StatefulPublicationTriggerNode extends DirectCompilerGuardNode
+{
+    public static int $definitions = 0;
+
+    public static function type(): string
+    {
+        return 'test.stateful-publication-trigger';
+    }
+
+    public function definition(): TriggerDefinition
+    {
+        self::$definitions++;
+
+        return parent::definition();
+    }
+
+    public function source(array $config): string
+    {
+        return (string) $config['source'];
+    }
+
+    public function supportsSource(TriggerSource $source): bool
+    {
+        return $source instanceof StatefulPublicationSource;
+    }
+
+    public function compile(array $config): TriggerActivationDescriptor
+    {
+        return new TriggerActivationDescriptor('test.fake', (string) $config['source'], null, [
+            'account' => $config['account'],
+        ]);
     }
 }
 
@@ -263,13 +448,13 @@ class PublicationBoundaryDriver192Node implements TriggerNode
 
     public static function type(): string { return 'test.driver-boundary-192'; }
 
-    public function driver(): string { return PublicationBoundaryDriver192::key(); }
+    public function driver(): string { return 'test.fake'; }
 
-    public function source(array $config): string { return PublicationBoundaryDriver192Source::key(); }
+    public function source(array $config): string { return 'test.orders'; }
 
     public function compile(array $config): TriggerActivationDescriptor
     {
-        return new TriggerActivationDescriptor($this->driver(), PublicationBoundaryDriver192Source::key(), null, []);
+        return new TriggerActivationDescriptor(PublicationBoundaryDriver192::key(), 'test.orders', null, []);
     }
 }
 
@@ -279,13 +464,13 @@ class PublicationBoundaryWhitespaceDriverNode implements TriggerNode
 
     public static function type(): string { return 'test.driver-boundary-whitespace'; }
 
-    public function driver(): string { return PublicationBoundaryWhitespaceDriver::key(); }
+    public function driver(): string { return 'test.fake'; }
 
-    public function source(array $config): string { return PublicationBoundaryWhitespaceDriverSource::key(); }
+    public function source(array $config): string { return 'test.orders'; }
 
     public function compile(array $config): TriggerActivationDescriptor
     {
-        return new TriggerActivationDescriptor($this->driver(), PublicationBoundaryWhitespaceDriverSource::key(), null, []);
+        return new TriggerActivationDescriptor(PublicationBoundaryWhitespaceDriver::key(), 'test.orders', null, []);
     }
 }
 
@@ -295,13 +480,13 @@ class PublicationInvalidUtf8DriverNode implements TriggerNode
 
     public static function type(): string { return 'test.driver-invalid-utf8'; }
 
-    public function driver(): string { return PublicationInvalidUtf8Driver::key(); }
+    public function driver(): string { return 'test.fake'; }
 
-    public function source(array $config): string { return PublicationInvalidUtf8DriverSource::key(); }
+    public function source(array $config): string { return 'test.orders'; }
 
     public function compile(array $config): TriggerActivationDescriptor
     {
-        return new TriggerActivationDescriptor($this->driver(), PublicationInvalidUtf8DriverSource::key(), null, []);
+        return new TriggerActivationDescriptor(PublicationInvalidUtf8Driver::key(), 'test.orders', null, []);
     }
 }
 
@@ -432,6 +617,27 @@ it('publishes a typed result and compiles one activation from trusted records', 
         ->and(json_encode($activation->descriptor))->not->toContain('Tests\\Support');
 });
 
+it('uses one definition snapshot per publication without cross-publication caching', function () {
+    StatefulPublicationTriggerNode::$definitions = 0;
+    StatefulPublicationSource::$definitions = 0;
+    Nodeflow::registerTriggerNodes([StatefulPublicationTriggerNode::class]);
+    Nodeflow::registerTriggerSources([StatefulPublicationSource::class]);
+    $graph = publicationGraphForNode(StatefulPublicationTriggerNode::type(), 'stateful-trigger', [
+        'source' => StatefulPublicationSource::key(),
+        'account' => 'primary',
+    ]);
+
+    app(PublishFlow::class)->publish($this->flow, $graph);
+
+    expect(StatefulPublicationTriggerNode::$definitions)->toBe(1)
+        ->and(StatefulPublicationSource::$definitions)->toBe(1);
+
+    app(PublishFlow::class)->publish($this->flow->fresh(), $graph);
+
+    expect(StatefulPublicationTriggerNode::$definitions)->toBe(2)
+        ->and(StatefulPublicationSource::$definitions)->toBe(2);
+});
+
 it('replaces the old activation when republishing and keeps one row per flow', function () {
     $first = app(PublishFlow::class)->publish(
         $this->flow,
@@ -471,6 +677,50 @@ it('rolls back a version when activation compilation fails', function () {
         ->and($flow->status)->toBe('active')
         ->and($flow->versions()->count())->toBe(1)
         ->and(TriggerActivation::withoutTenancy()->sole()->is($oldActivation))->toBeTrue();
+});
+
+it('direct compilation rejects a descriptor source that differs from the node selection atomically', function () {
+    Nodeflow::registerTriggerSources([DirectCompilerCollisionSource::class]);
+    Nodeflow::registerTriggerNodes([DirectCompilerMismatchedSourceNode::class]);
+
+    $exception = directCompilerGuardFailure(
+        $this,
+        DirectCompilerMismatchedSourceNode::type(),
+        ['source' => 'test.orders'],
+    );
+
+    expect($exception->nodeErrors()[0]['field'])->toBe('source')
+        ->and($exception->getMessage())->toContain('does not match');
+});
+
+it('direct compilation rejects a node-incompatible source atomically', function () {
+    Nodeflow::registerTriggerSources([DirectCompilerCollisionSource::class]);
+    Nodeflow::registerTriggerNodes([DirectCompilerIncompatibleSourceNode::class]);
+
+    $exception = directCompilerGuardFailure(
+        $this,
+        DirectCompilerIncompatibleSourceNode::type(),
+        ['source' => DirectCompilerCollisionSource::key()],
+    );
+
+    expect($exception->nodeErrors()[0]['field'])->toBe('source')
+        ->and($exception->getMessage())->toContain('not compatible');
+});
+
+it('direct compilation rejects reserved source-field collisions atomically', function () {
+    Nodeflow::registerTriggerSources([DirectCompilerCollisionSource::class]);
+    Nodeflow::registerTriggerNodes([DirectCompilerCollidingSourceNode::class]);
+
+    $exception = directCompilerGuardFailure(
+        $this,
+        DirectCompilerCollidingSourceNode::type(),
+        ['source' => DirectCompilerCollisionSource::key()],
+    );
+
+    expect($exception->nodeErrors()[0])->toMatchArray([
+        'field' => 'source',
+        'message' => 'The source field [source] collides with a reserved trigger field.',
+    ]);
 });
 
 it('rolls back deletion and the new version when activation persistence fails', function () {
@@ -626,9 +876,24 @@ it('rejects a whitespace-only :dataset routing key and preserves the live public
 it('rejects invalid UTF-8 from a registered :dataset extension and preserves the live publication', function (string $dimension) {
     $old = app(PublishFlow::class)->publish($this->flow, triggeredExitGraph());
     $oldActivation = TriggerActivation::withoutTenancy()->sole();
+    $graph = publicationInvalidUtf8Graph($dimension);
 
     try {
-        app(PublishFlow::class)->publish($this->flow->fresh(), publicationInvalidUtf8Graph($dimension));
+        DB::transaction(function () use ($graph) {
+            $version = FlowVersion::withoutTenancy()->create([
+                'flow_id' => $this->flow->id,
+                'tenant_id' => $this->flow->tenant_id,
+                'version' => 2,
+                'graph' => $graph,
+                'content_hash' => 'invalid-utf8-routing',
+            ]);
+
+            app(CompileTriggerActivation::class)->compile(
+                $this->flow->fresh(),
+                $version,
+                Graph::fromArray($graph),
+            );
+        });
         $exception = null;
     } catch (GraphInvalidException $e) {
         $exception = $e;
@@ -863,6 +1128,35 @@ function makeRepositoryActivation(
     });
 }
 
+function directCompilerGuardFailure($test, string $type, array $config): GraphInvalidException
+{
+    $published = app(PublishFlow::class)->publish($test->flow, triggeredExitGraph());
+    $oldActivation = TriggerActivation::withoutTenancy()->sole();
+    $graph = publicationGraphForNode($type, 'guarded-trigger', $config);
+    $version = FlowVersion::withoutTenancy()->create([
+        'flow_id' => $test->flow->id,
+        'tenant_id' => $test->flow->tenant_id,
+        'version' => 2,
+        'graph' => $graph,
+        'content_hash' => hash('sha256', json_encode($graph, JSON_THROW_ON_ERROR)),
+    ]);
+
+    try {
+        app(CompileTriggerActivation::class)->compile(
+            $test->flow->fresh(),
+            $version,
+            Graph::fromArray($graph),
+        );
+    } catch (GraphInvalidException $exception) {
+        expect($test->flow->fresh()->current_version_id)->toBe($published->version->id)
+            ->and(TriggerActivation::withoutTenancy()->sole()->is($oldActivation))->toBeTrue();
+
+        return $exception;
+    }
+
+    throw new RuntimeException('Direct activation compilation unexpectedly succeeded.');
+}
+
 function assertPublicationBoundaryRejection(
     $test,
     string $dimension,
@@ -871,12 +1165,24 @@ function assertPublicationBoundaryRejection(
 ): void {
     $old = app(PublishFlow::class)->publish($test->flow, triggeredExitGraph());
     $oldActivation = TriggerActivation::withoutTenancy()->sole();
+    $graph = publicationBoundaryGraph($dimension, $boundary);
 
     try {
-        app(PublishFlow::class)->publish(
-            $test->flow->fresh(),
-            publicationBoundaryGraph($dimension, $boundary),
-        );
+        DB::transaction(function () use ($test, $graph) {
+            $version = FlowVersion::withoutTenancy()->create([
+                'flow_id' => $test->flow->id,
+                'tenant_id' => $test->flow->tenant_id,
+                'version' => 2,
+                'graph' => $graph,
+                'content_hash' => hash('sha256', json_encode($graph, JSON_THROW_ON_ERROR)),
+            ]);
+
+            app(CompileTriggerActivation::class)->compile(
+                $test->flow->fresh(),
+                $version,
+                Graph::fromArray($graph),
+            );
+        });
         $exception = null;
     } catch (GraphInvalidException $e) {
         $exception = $e;
@@ -953,8 +1259,11 @@ function registerPublicationBoundaryDriver(string $boundary): string
         ],
     };
 
-    app(TriggerDriverRegistry::class)->register($driver);
-    app(TriggerSourceRegistry::class)->register($source);
+    if ($boundary === 'maximum') {
+        app(TriggerDriverRegistry::class)->register($driver);
+        app(TriggerSourceRegistry::class)->register($source);
+    }
+
     app(TriggerNodeRegistry::class)->register($node);
 
     return $node::type();
@@ -968,7 +1277,10 @@ function registerPublicationBoundarySource(string $boundary): string
         'whitespace' => PublicationBoundaryWhitespaceSource::class,
     };
 
-    app(TriggerSourceRegistry::class)->register($source);
+    if ($boundary === 'maximum') {
+        app(TriggerSourceRegistry::class)->register($source);
+    }
+
     app(TriggerNodeRegistry::class)->register(PublicationBoundarySourceNode::class);
 
     return PublicationBoundarySourceNode::type();
@@ -988,13 +1300,6 @@ function publicationInvalidUtf8Graph(string $dimension): array
         'source' => PublicationInvalidUtf8SourceNode::class,
         'qualifier' => PublicationInvalidUtf8QualifierNode::class,
     };
-
-    if ($dimension === 'driver') {
-        app(TriggerDriverRegistry::class)->register(PublicationInvalidUtf8Driver::class);
-        app(TriggerSourceRegistry::class)->register(PublicationInvalidUtf8DriverSource::class);
-    } elseif ($dimension === 'source') {
-        app(TriggerSourceRegistry::class)->register(PublicationInvalidUtf8Source::class);
-    }
 
     app(TriggerNodeRegistry::class)->register($node);
 

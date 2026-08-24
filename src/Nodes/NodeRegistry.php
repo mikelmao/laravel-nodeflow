@@ -3,6 +3,7 @@
 namespace Nodeflow\Nodes;
 
 use Nodeflow\Graph\GraphTypeCatalog;
+use Nodeflow\Support\StableKey;
 
 class NodeRegistry
 {
@@ -50,6 +51,7 @@ class NodeRegistry
 
     public function alias(string $oldType, string $newType): self
     {
+        StableKey::assert($newType, 'graph node type', 255);
         $this->graphTypes->claim($oldType, 'executable', self::class);
         $this->aliases[$oldType] = $newType;
 

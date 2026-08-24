@@ -2,6 +2,8 @@
 
 namespace Nodeflow\Graph;
 
+use Nodeflow\Support\StableKey;
+
 final class GraphTypeCatalog
 {
     /** @var array<string, array{string, string}> */
@@ -9,6 +11,8 @@ final class GraphTypeCatalog
 
     public function claim(string $type, string $family, string $class): void
     {
+        StableKey::assert($type, 'graph node type', 255);
+
         if (isset($this->claims[$type]) && $this->claims[$type] !== [$family, $class]) {
             throw InvalidGraphTypeRegistration::collision($type, $this->claims[$type], [$family, $class]);
         }

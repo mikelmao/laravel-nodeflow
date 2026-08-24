@@ -163,6 +163,76 @@ class EditorNarrowWebhookTriggerNode extends \Nodeflow\Triggers\AbstractTriggerN
     }
 }
 
+class StatefulEditorWebhookSource implements WebhookTriggerSource
+{
+    public static int $definitions = 0;
+
+    public static function key(): string
+    {
+        return 'test.editor-stateful-source';
+    }
+
+    public static function driver(): string
+    {
+        return 'webhook';
+    }
+
+    public function definition(): TriggerDefinition
+    {
+        self::$definitions++;
+
+        return TriggerDefinition::make('Stateful editor source')->fields([
+            self::$definitions === 1
+                ? Field::text('account')->required()
+                : Field::text('source')->required(),
+        ]);
+    }
+
+    public function resolve(TriggerOccurrence $occurrence, array $config): TriggerMatch
+    {
+        return TriggerMatch::make();
+    }
+}
+
+class StatefulEditorWebhookTriggerNode extends \Nodeflow\Triggers\AbstractTriggerNode
+{
+    public static int $definitions = 0;
+
+    public static function type(): string
+    {
+        return 'test.editor-stateful-trigger';
+    }
+
+    public function definition(): TriggerDefinition
+    {
+        self::$definitions++;
+
+        return TriggerDefinition::make('Stateful editor trigger')->fields([
+            Field::select('source')->required(),
+        ]);
+    }
+
+    public function driver(): string
+    {
+        return 'webhook';
+    }
+
+    protected function sourceType(): string
+    {
+        return WebhookTriggerSource::class;
+    }
+
+    public function compile(array $config): \Nodeflow\Triggers\TriggerActivationDescriptor
+    {
+        return new \Nodeflow\Triggers\TriggerActivationDescriptor(
+            'webhook',
+            (string) $config['source'],
+            null,
+            [],
+        );
+    }
+}
+
 beforeEach(function () {
     $this->tenant = 'org-1';
 
@@ -388,6 +458,25 @@ it('authors compatible source keys per trigger node without same-driver guesses'
     $this->actingAs($this->user)
         ->getJson("/nodeflow/flows/{$this->flow->id}/trigger-nodes/test.editor-narrow-trigger/sources/test.editor-webhook/fields/template/options")
         ->assertNotFound();
+});
+
+it('materializes each trigger definition once for one internally consistent editor payload', function () {
+    allowEverything();
+    StatefulEditorWebhookTriggerNode::$definitions = 0;
+    StatefulEditorWebhookSource::$definitions = 0;
+    Nodeflow::registerTriggerNodes([StatefulEditorWebhookTriggerNode::class]);
+    Nodeflow::registerTriggerSources([StatefulEditorWebhookSource::class]);
+
+    $response = editPage($this, $this->flow->id)->assertOk();
+    $node = collect($response->json('props.trigger_nodes'))
+        ->firstWhere('type', StatefulEditorWebhookTriggerNode::type());
+    $source = collect($response->json('props.trigger_sources.webhook'))
+        ->firstWhere('key', StatefulEditorWebhookSource::key());
+
+    expect(StatefulEditorWebhookTriggerNode::$definitions)->toBe(1)
+        ->and(StatefulEditorWebhookSource::$definitions)->toBe(1)
+        ->and($node['compatible_source_keys'])->toContain(StatefulEditorWebhookSource::key())
+        ->and(array_column($source['fields'], 'key'))->toBe(['account']);
 });
 
 it('returns structured collision errors and does not partially publish', function () {

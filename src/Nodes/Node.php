@@ -7,7 +7,7 @@ use Nodeflow\Schema\NodeDefinition;
 
 abstract class Node
 {
-    /** Stable identifier. Never derive this from the class name. */
+    /** Stable `[a-z][a-z0-9._-]*` identifier (max 255). Never derive it from the class name. */
     abstract public static function type(): string;
 
     abstract public function definition(): NodeDefinition;

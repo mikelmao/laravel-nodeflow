@@ -8,8 +8,10 @@ use Nodeflow\Triggers\TriggerOccurrence;
 
 interface TriggerSource
 {
+    /** Stable `[a-z][a-z0-9._-]*` routing key, at most 191 characters. */
     public static function key(): string;
 
+    /** Registered driver key using the same stable-key grammar. */
     public static function driver(): string;
 
     public function definition(): TriggerDefinition;

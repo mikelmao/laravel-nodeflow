@@ -2,8 +2,16 @@
 
 use Nodeflow\Graph\GraphTypeCatalog;
 use Nodeflow\Graph\InvalidGraphTypeRegistration;
+use Nodeflow\Execution\NodeResult;
+use Nodeflow\Execution\SubjectContext;
 use Nodeflow\Nodeflow;
+use Nodeflow\Nodes\HandlesSubject;
+use Nodeflow\Nodes\Node;
 use Nodeflow\Nodes\NodeRegistry;
+use Nodeflow\Schema\NodeDefinition;
+use Nodeflow\Schema\TriggerDefinition;
+use Nodeflow\Triggers\AbstractTriggerNode;
+use Nodeflow\Triggers\TriggerActivationDescriptor;
 use Nodeflow\Triggers\TriggerDriverRegistry;
 use Nodeflow\Triggers\TriggerMatch;
 use Nodeflow\Triggers\TriggerNodeRegistry;
@@ -17,8 +25,108 @@ use Tests\Support\FakeTriggerDriver;
 use Tests\Support\FakeTriggerNode;
 use Tests\Support\FakeTriggerSource;
 
+class MutableStableKeyDriver implements \Nodeflow\Contracts\TriggerDriver
+{
+    public static string $key = 'test.mutable-driver';
+
+    public static int $sourceRegistrations = 0;
+
+    public static function key(): string
+    {
+        return self::$key;
+    }
+
+    public function sourceRegistered(\Nodeflow\Contracts\TriggerSource $source): void
+    {
+        self::$sourceRegistrations++;
+    }
+
+    public function validate(TriggerActivationDescriptor $descriptor): array
+    {
+        return [];
+    }
+}
+
+class MutableStableKeySource implements \Nodeflow\Contracts\TriggerSource
+{
+    public static string $key = 'test.mutable-source';
+
+    public static string $driver = 'test.mutable-driver';
+
+    public static function key(): string
+    {
+        return self::$key;
+    }
+
+    public static function driver(): string
+    {
+        return self::$driver;
+    }
+
+    public function definition(): TriggerDefinition
+    {
+        return TriggerDefinition::make('Mutable stable source');
+    }
+
+    public function resolve(TriggerOccurrence $occurrence, array $config): TriggerMatch
+    {
+        return TriggerMatch::make();
+    }
+}
+
+class MutableStableKeyTriggerNode extends AbstractTriggerNode
+{
+    public static string $type = 'test.mutable-trigger';
+
+    public static function type(): string
+    {
+        return self::$type;
+    }
+
+    public function definition(): TriggerDefinition
+    {
+        return TriggerDefinition::make('Mutable stable trigger');
+    }
+
+    public function driver(): string
+    {
+        return 'test.mutable-driver';
+    }
+
+    public function compile(array $config): TriggerActivationDescriptor
+    {
+        return new TriggerActivationDescriptor('test.mutable-driver', 'test.mutable-source', null, []);
+    }
+}
+
+class MutableStableKeyExecutableNode extends Node implements HandlesSubject
+{
+    public static string $type = 'test.mutable-executable';
+
+    public static function type(): string
+    {
+        return self::$type;
+    }
+
+    public function definition(): NodeDefinition
+    {
+        return NodeDefinition::make('Mutable stable executable');
+    }
+
+    public function forSubject(SubjectContext $context): NodeResult
+    {
+        return $context->continue();
+    }
+}
+
 beforeEach(function () {
     FakeTriggerDriver::$onSourceRegistered = null;
+    MutableStableKeyDriver::$key = 'test.mutable-driver';
+    MutableStableKeyDriver::$sourceRegistrations = 0;
+    MutableStableKeySource::$key = 'test.mutable-source';
+    MutableStableKeySource::$driver = 'test.mutable-driver';
+    MutableStableKeyTriggerNode::$type = 'test.mutable-trigger';
+    MutableStableKeyExecutableNode::$type = 'test.mutable-executable';
 });
 
 it('registers extensions under stable graph driver and source keys', function () {
@@ -177,6 +285,99 @@ it('prevents a trigger from claiming a registered executable alias', function ()
     expect($nodes->resolve('test.fake_trigger'))->toBeInstanceOf(FakeSendNode::class)
         ->and(fn () => app(TriggerNodeRegistry::class)->register(FakeTriggerNode::class))
         ->toThrow(InvalidGraphTypeRegistration::class, 'test.fake_trigger');
+});
+
+it('rejects malformed public stable keys before registry state or listeners change', function (
+    string $key,
+    string $reason,
+) {
+    MutableStableKeyDriver::$key = $key;
+
+    expect(fn () => app(TriggerDriverRegistry::class)->register(MutableStableKeyDriver::class))
+        ->toThrow(InvalidArgumentException::class, $reason)
+        ->and(array_values(app(TriggerDriverRegistry::class)->all()))
+        ->not->toContain(MutableStableKeyDriver::class);
+
+    MutableStableKeyDriver::$key = 'test.mutable-driver';
+    app(TriggerDriverRegistry::class)->register(MutableStableKeyDriver::class);
+    MutableStableKeySource::$key = $key;
+
+    expect(fn () => app(TriggerSourceRegistry::class)->register(MutableStableKeySource::class))
+        ->toThrow(InvalidArgumentException::class, $reason)
+        ->and(app(TriggerSourceRegistry::class)->all())->toBe([])
+        ->and(MutableStableKeyDriver::$sourceRegistrations)->toBe(0);
+
+    MutableStableKeyTriggerNode::$type = $key;
+
+    expect(fn () => app(TriggerNodeRegistry::class)->register(MutableStableKeyTriggerNode::class))
+        ->toThrow(InvalidArgumentException::class, $reason)
+        ->and(array_values(app(TriggerNodeRegistry::class)->all()))
+        ->not->toContain(MutableStableKeyTriggerNode::class);
+
+    MutableStableKeyExecutableNode::$type = $key;
+
+    expect(fn () => app(NodeRegistry::class)->register(MutableStableKeyExecutableNode::class))
+        ->toThrow(InvalidArgumentException::class, $reason)
+        ->and(array_values(app(NodeRegistry::class)->all()))
+        ->not->toContain(MutableStableKeyExecutableNode::class);
+})->with([
+    'numeric leading key' => ['1bad', 'must start with a lowercase letter'],
+    'slash path ambiguity' => ['bad/key', 'only lowercase letters, digits, dots, underscores, and hyphens'],
+    'percent path ambiguity' => ['bad%2fkey', 'only lowercase letters, digits, dots, underscores, and hyphens'],
+    'whitespace' => ['bad key', 'only lowercase letters, digits, dots, underscores, and hyphens'],
+    'control character' => ["bad\nkey", 'only lowercase letters, digits, dots, underscores, and hyphens'],
+    'invalid UTF-8' => ["bad\xFF", 'valid UTF-8'],
+]);
+
+it('rejects malformed source driver keys before source registration side effects', function () {
+    MutableStableKeySource::$driver = 'bad/driver';
+
+    expect(fn () => app(TriggerSourceRegistry::class)->register(MutableStableKeySource::class))
+        ->toThrow(InvalidArgumentException::class, 'trigger source driver key')
+        ->and(app(TriggerSourceRegistry::class)->all())->toBe([])
+        ->and(MutableStableKeyDriver::$sourceRegistrations)->toBe(0);
+});
+
+it('accepts stable keys at their storage boundaries', function () {
+    MutableStableKeyDriver::$key = str_repeat('d', 191);
+    MutableStableKeySource::$driver = MutableStableKeyDriver::$key;
+    MutableStableKeySource::$key = str_repeat('s', 191);
+    MutableStableKeyTriggerNode::$type = str_repeat('t', 255);
+    MutableStableKeyExecutableNode::$type = str_repeat('e', 255);
+
+    app(TriggerDriverRegistry::class)->register(MutableStableKeyDriver::class);
+    app(TriggerSourceRegistry::class)->register(MutableStableKeySource::class);
+    app(TriggerNodeRegistry::class)->register(MutableStableKeyTriggerNode::class);
+    app(NodeRegistry::class)->register(MutableStableKeyExecutableNode::class);
+
+    expect(app(TriggerDriverRegistry::class)->has(str_repeat('d', 191)))->toBeTrue()
+        ->and(app(TriggerSourceRegistry::class)->has(str_repeat('d', 191), str_repeat('s', 191)))->toBeTrue()
+        ->and(app(TriggerNodeRegistry::class)->has(str_repeat('t', 255)))->toBeTrue()
+        ->and(app(NodeRegistry::class)->has(str_repeat('e', 255)))->toBeTrue();
+});
+
+it('rejects stable keys beyond their storage boundaries', function () {
+    MutableStableKeyDriver::$key = str_repeat('d', 192);
+
+    expect(fn () => app(TriggerDriverRegistry::class)->register(MutableStableKeyDriver::class))
+        ->toThrow(InvalidArgumentException::class, '191');
+
+    MutableStableKeyDriver::$key = 'test.mutable-driver';
+    app(TriggerDriverRegistry::class)->register(MutableStableKeyDriver::class);
+    MutableStableKeySource::$key = str_repeat('s', 192);
+
+    expect(fn () => app(TriggerSourceRegistry::class)->register(MutableStableKeySource::class))
+        ->toThrow(InvalidArgumentException::class, '191');
+
+    MutableStableKeyTriggerNode::$type = str_repeat('t', 256);
+
+    expect(fn () => app(TriggerNodeRegistry::class)->register(MutableStableKeyTriggerNode::class))
+        ->toThrow(InvalidArgumentException::class, '255');
+
+    MutableStableKeyExecutableNode::$type = str_repeat('e', 256);
+
+    expect(fn () => app(NodeRegistry::class)->register(MutableStableKeyExecutableNode::class))
+        ->toThrow(InvalidArgumentException::class, '255');
 });
 
 it('keeps trigger matches immutable and normalizes identifiers', function () {

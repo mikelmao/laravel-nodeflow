@@ -8,6 +8,7 @@ use Nodeflow\Graph\Graph;
 use Nodeflow\Graph\GraphValidator;
 use Nodeflow\Models\Flow;
 use Nodeflow\Models\FlowVersion;
+use Nodeflow\Triggers\TriggerDefinitionContext;
 use Nodeflow\Triggers\Webhook\WebhookCredentials;
 use Nodeflow\Triggers\Webhook\WebhookTriggerDriver;
 
@@ -28,7 +29,8 @@ class PublishFlow
     {
         $expectedDraftRevision ??= (int) ($flow->draft_revision ?? 0);
         $compiledGraph = Graph::fromArray($graph);
-        $result = $this->validator->validate($compiledGraph);
+        $definitions = new TriggerDefinitionContext;
+        $result = $this->validator->validate($compiledGraph, $definitions);
 
         if (! $result->passes()) {
             throw new GraphInvalidException($result->errors(), $result->nodeErrors());
@@ -58,6 +60,7 @@ class PublishFlow
             $publishedBy,
             $compiledGraph,
             $expectedDraftRevision,
+            $definitions,
         ) {
             // This is an identity reload, not an authorization read: the caller
             // reached $flow through a scoped route/query already. Locking the
@@ -99,7 +102,12 @@ class PublishFlow
                 'published_by' => $publishedBy,
             ]);
 
-            $activation = $this->compileActivation->compile($lockedFlow, $version, $compiledGraph);
+            $activation = $this->compileActivation->compile(
+                $lockedFlow,
+                $version,
+                $compiledGraph,
+                $definitions,
+            );
             $webhook = $activation->driver === WebhookTriggerDriver::key()
                 ? $this->webhookCredentials->forPublication($lockedFlow)
                 : null;

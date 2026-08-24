@@ -6,6 +6,7 @@ use Illuminate\Support\Facades\Validator;
 use Nodeflow\Nodes\HandlesAudience;
 use Nodeflow\Nodes\HandlesSubject;
 use Nodeflow\Nodes\NodeRegistry;
+use Nodeflow\Triggers\TriggerDefinitionContext;
 use Nodeflow\Triggers\TriggerDriverRegistry;
 use Nodeflow\Triggers\TriggerNodeRegistry;
 use Nodeflow\Triggers\TriggerSourceCompatibility;
@@ -23,8 +24,12 @@ class GraphValidator
         private GraphTypeCatalog $types,
     ) {}
 
-    public function validate(Graph $graph): GraphValidationResult
+    public function validate(
+        Graph $graph,
+        ?TriggerDefinitionContext $definitions = null,
+    ): GraphValidationResult
     {
+        $definitions ??= new TriggerDefinitionContext;
         $errors = [];
         $warnings = [];
         $nodeErrors = [];
@@ -75,7 +80,7 @@ class GraphValidator
                 }
 
                 try {
-                    $this->validateTriggerNode($id, $node, $errors, $nodeErrors);
+                    $this->validateTriggerNode($id, $node, $definitions, $errors, $nodeErrors);
                 } catch (Throwable) {
                     $message = "Trigger node [{$id}] validation could not be completed.";
                     $errors[] = $message;
@@ -193,7 +198,13 @@ class GraphValidator
         return new GraphValidationResult($errors, $warnings, $nodeErrors);
     }
 
-    private function validateTriggerNode(string $id, array $node, array &$errors, array &$nodeErrors): void
+    private function validateTriggerNode(
+        string $id,
+        array $node,
+        TriggerDefinitionContext $definitions,
+        array &$errors,
+        array &$nodeErrors,
+    ): void
     {
         $trigger = $this->triggers->resolve($node['type']);
         $config = $node['config'] ?? [];
@@ -202,7 +213,7 @@ class GraphValidator
         $definition = null;
 
         try {
-            $definition = $trigger->definition();
+            $definition = $definitions->node($trigger);
             $fieldErrors = $this->mergeFieldErrors(
                 $fieldErrors,
                 Validator::make($config, $definition->rules())->errors()->toArray(),
@@ -256,7 +267,7 @@ class GraphValidator
             $canCompile = false;
         }
 
-        if (! $canCompile || $fieldErrors !== [] || $definition === null || $driverKey === null) {
+        if (! $canCompile || $definition === null || $driverKey === null || isset($fieldErrors['source'])) {
             $this->addTriggerFieldErrors($id, $fieldErrors, $errors, $nodeErrors);
 
             return;
@@ -271,6 +282,7 @@ class GraphValidator
                 $errors,
                 $nodeErrors,
             );
+            $this->addTriggerFieldErrors($id, $fieldErrors, $errors, $nodeErrors);
 
             return;
         }
@@ -282,6 +294,7 @@ class GraphValidator
                 $errors,
                 $nodeErrors,
             );
+            $this->addTriggerFieldErrors($id, $fieldErrors, $errors, $nodeErrors);
 
             return;
         }
@@ -295,7 +308,7 @@ class GraphValidator
                 ]);
             }
 
-            $sourceDefinition = $source->definition();
+            $sourceDefinition = $definitions->source($source);
         } catch (Throwable) {
             $this->addTriggerError(
                 $id,
@@ -303,6 +316,7 @@ class GraphValidator
                 $errors,
                 $nodeErrors,
             );
+            $this->addTriggerFieldErrors($id, $fieldErrors, $errors, $nodeErrors);
 
             return;
         }
@@ -321,7 +335,7 @@ class GraphValidator
                     $fieldErrors,
                     Validator::make(
                         $config,
-                        $this->sourceCompatibility->combinedDefinition($trigger, $source)->rules(),
+                        $this->sourceCompatibility->combinedDefinition($trigger, $source, $definitions)->rules(),
                     )->errors()->toArray(),
                 );
             } catch (Throwable) {

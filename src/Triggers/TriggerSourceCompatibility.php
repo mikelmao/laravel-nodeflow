@@ -24,29 +24,37 @@ final class TriggerSourceCompatibility
         return $source::driver() === $node->driver() && $node->supportsSource($source);
     }
 
-    public function authorable(TriggerNode $node, TriggerSource $source): bool
+    public function authorable(
+        TriggerNode $node,
+        TriggerSource $source,
+        TriggerDefinitionContext $definitions,
+    ): bool
     {
         if (! $this->supports($node, $source)) {
             return false;
         }
 
-        return $node->definition()->collidingFieldKeys($source->definition()) === [];
+        return $definitions->node($node)->collidingFieldKeys($definitions->source($source)) === [];
     }
 
     /** @return string[] */
-    public function sourceKeys(TriggerNode $node): array
+    public function sourceKeys(TriggerNode $node, TriggerDefinitionContext $definitions): array
     {
         return array_values(array_map(
             fn (TriggerSource $source): string => $source::key(),
             array_filter(
                 $this->sources->forDriver($node->driver()),
-                fn (TriggerSource $source): bool => $this->authorable($node, $source),
+                fn (TriggerSource $source): bool => $this->authorable($node, $source, $definitions),
             ),
         ));
     }
 
-    public function combinedDefinition(TriggerNode $node, TriggerSource $source): TriggerDefinition
+    public function combinedDefinition(
+        TriggerNode $node,
+        TriggerSource $source,
+        TriggerDefinitionContext $definitions,
+    ): TriggerDefinition
     {
-        return $node->definition()->combinedWith($source->definition());
+        return $definitions->node($node)->combinedWith($definitions->source($source));
     }
 }

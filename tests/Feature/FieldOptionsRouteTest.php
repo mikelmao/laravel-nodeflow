@@ -68,6 +68,7 @@ class FieldOptionsWebhookSource implements WebhookTriggerSource
     {
         return TriggerDefinition::make('Field options source')->fields([
             Field::select('template')->optionsFrom(FakeOptionSource::class),
+            Field::select('template.variant')->optionsFrom(FakeOptionSource::class),
         ]);
     }
 
@@ -180,6 +181,13 @@ it('resolves options contributed by a compatible trigger source', function () {
         ->getJson("/nodeflow/flows/{$this->flow->id}/trigger-nodes/test.field-options-trigger/sources/test.field-options-source/fields/template/options")
         ->assertOk()
         ->assertJsonPath('options.reminder', 'Reminder');
+});
+
+it('keeps stable dotted field keys addressable through the options route', function () {
+    $this->actingAs($this->user)
+        ->getJson("/nodeflow/flows/{$this->flow->id}/trigger-nodes/test.field-options-trigger/sources/test.field-options-source/fields/template.variant/options")
+        ->assertOk()
+        ->assertJsonPath('options.welcome', 'Welcome message');
 });
 
 it('resolves trigger options inside a host parameterized domain group', function () {

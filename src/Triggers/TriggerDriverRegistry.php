@@ -4,6 +4,7 @@ namespace Nodeflow\Triggers;
 
 use InvalidArgumentException;
 use Nodeflow\Contracts\TriggerDriver;
+use Nodeflow\Support\StableKey;
 use RuntimeException;
 
 class TriggerDriverRegistry
@@ -23,7 +24,7 @@ class TriggerDriverRegistry
                 );
             }
 
-            $key = $class::key();
+            $key = StableKey::assert($class::key(), 'trigger driver key', 191);
 
             if (isset($this->drivers[$key]) && $this->drivers[$key] !== $class) {
                 throw new InvalidArgumentException(

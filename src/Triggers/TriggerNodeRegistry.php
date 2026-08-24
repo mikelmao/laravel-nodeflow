@@ -53,18 +53,24 @@ class TriggerNodeRegistry
         return $this->types;
     }
 
-    public function palette(): array
+    public function palette(?TriggerDefinitionContext $definitions = null): array
     {
-        return array_values(array_map(function (string $class, string $type): array {
-            $node = app($class);
+        $definitions ??= new TriggerDefinitionContext;
 
-            return array_merge($node->definition()->toArray(), [
+        return array_values(array_map(function (string $class, string $type) use ($definitions): array {
+            $node = app($class);
+            $definition = $definitions->node($node);
+
+            return array_merge($definition->toArray(), [
                 'type' => $type,
                 'kind' => 'trigger',
                 'driver' => $node->driver(),
-                'outputs' => $node->definition()->outputNames(),
+                'outputs' => $definition->outputNames(),
                 'default_config' => $node->defaultConfig(),
-                'compatible_source_keys' => app(TriggerSourceCompatibility::class)->sourceKeys($node),
+                'compatible_source_keys' => app(TriggerSourceCompatibility::class)->sourceKeys(
+                    $node,
+                    $definitions,
+                ),
             ]);
         }, $this->types, array_keys($this->types)));
     }

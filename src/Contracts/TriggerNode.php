@@ -8,6 +8,7 @@ use Nodeflow\Triggers\TriggerSourceRegistry;
 
 interface TriggerNode
 {
+    /** Stable `[a-z][a-z0-9._-]*` graph type, at most 255 characters. */
     public static function type(): string;
 
     public function definition(): TriggerDefinition;

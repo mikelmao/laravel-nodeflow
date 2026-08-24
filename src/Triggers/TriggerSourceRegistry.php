@@ -4,6 +4,7 @@ namespace Nodeflow\Triggers;
 
 use InvalidArgumentException;
 use Nodeflow\Contracts\TriggerSource;
+use Nodeflow\Support\StableKey;
 use RuntimeException;
 
 class TriggerSourceRegistry
@@ -27,8 +28,8 @@ class TriggerSourceRegistry
                 );
             }
 
-            $driverKey = $class::driver();
-            $sourceKey = $class::key();
+            $driverKey = StableKey::assert($class::driver(), 'trigger source driver key', 191);
+            $sourceKey = StableKey::assert($class::key(), 'trigger source key', 191);
             $key = $this->compositeKey($driverKey, $sourceKey);
 
             if (! $this->drivers->has($driverKey)) {

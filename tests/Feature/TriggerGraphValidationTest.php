@@ -100,6 +100,43 @@ class SourceFieldCompilerGraphTriggerNode extends AbstractTriggerNode
     }
 }
 
+class AccumulatingGraphTriggerNode extends AbstractTriggerNode
+{
+    public static int $compilations = 0;
+
+    public static function type(): string
+    {
+        return 'test.accumulating-trigger-errors';
+    }
+
+    public function definition(): TriggerDefinition
+    {
+        return TriggerDefinition::make('Accumulating trigger errors')->fields([
+            Field::select('source')->required(),
+            Field::text('mode')->required(),
+        ]);
+    }
+
+    public function driver(): string
+    {
+        return 'test.fake';
+    }
+
+    public function validate(array $config, TriggerSourceRegistry $sources): array
+    {
+        return array_merge_recursive(parent::validate($config, $sources), [
+            'node_rule' => ['The node rule field is required.'],
+        ]);
+    }
+
+    public function compile(array $config): TriggerActivationDescriptor
+    {
+        self::$compilations++;
+
+        return new TriggerActivationDescriptor('test.fake', (string) $config['source'], null, []);
+    }
+}
+
 class WrongTypedEventGraphTriggerSource implements TriggerSource
 {
     public static function key(): string
@@ -759,6 +796,21 @@ it('validates combined source config before compiling and leaves publication unt
 
     expect($valid->passes())->toBeTrue()
         ->and(SourceFieldCompilerGraphTriggerNode::$compilations)->toBe(1);
+});
+
+it('accumulates node and source field errors before skipping compilation', function () {
+    Nodeflow::registerTriggerNodes([AccumulatingGraphTriggerNode::class]);
+    Nodeflow::registerTriggerSources([ConfiguredGraphTriggerSource::class]);
+    AccumulatingGraphTriggerNode::$compilations = 0;
+
+    $result = app(GraphValidator::class)->validate(Graph::fromArray(directTriggerGraph(
+        AccumulatingGraphTriggerNode::type(),
+        ['source' => ConfiguredGraphTriggerSource::key()],
+    )));
+
+    expect(collect($result->nodeErrors())->pluck('field')->all())
+        ->toContain('mode', 'node_rule', 'account')
+        ->and(AccumulatingGraphTriggerNode::$compilations)->toBe(0);
 });
 
 it('rejects missing and wrongly typed source selections', function (mixed $source, string $message) {

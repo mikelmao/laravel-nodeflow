@@ -16,6 +16,7 @@ use Nodeflow\Models\Flow;
 use Nodeflow\Nodes\NodeRegistry;
 use Nodeflow\Publishing\GraphInvalidException;
 use Nodeflow\Publishing\PublishFlow;
+use Nodeflow\Triggers\TriggerDefinitionContext;
 use Nodeflow\Triggers\TriggerDriverRegistry;
 use Nodeflow\Triggers\TriggerNodeRegistry;
 use Nodeflow\Triggers\TriggerSourceRegistry;
@@ -63,6 +64,7 @@ class FlowEditorController extends Controller
         $this->authorize('update', $flow);
         $endpoint = $flow->webhookEndpoint()->first();
         $activation = $flow->triggerActivation()->first();
+        $definitions = new TriggerDefinitionContext;
 
         return Inertia::render('nodeflow/editor', [
             'flow' => [
@@ -83,8 +85,8 @@ class FlowEditorController extends Controller
                 fn (array $definition): array => ['kind' => 'executable'] + $definition,
                 app(NodeRegistry::class)->palette(),
             ),
-            'trigger_nodes' => app(TriggerNodeRegistry::class)->palette(),
-            'trigger_sources' => $this->triggerSources(),
+            'trigger_nodes' => app(TriggerNodeRegistry::class)->palette($definitions),
+            'trigger_sources' => $this->triggerSources($definitions),
             // Retained only as a compatibility-shaped array until the editor
             // consumes server-authored trigger-node metadata. There is no
             // mutable flow-level trigger registry behind it.
@@ -144,7 +146,7 @@ class FlowEditorController extends Controller
      * intentional: built-in trigger nodes remain authorable before a host adds
      * compatible sources, and the client can render that state without guessing.
      */
-    private function triggerSources(): array
+    private function triggerSources(TriggerDefinitionContext $definitions): array
     {
         $drivers = app(TriggerDriverRegistry::class);
         $sources = app(TriggerSourceRegistry::class);
@@ -152,7 +154,7 @@ class FlowEditorController extends Controller
 
         foreach ($grouped as $driver => $_) {
             foreach ($sources->forDriver($driver) as $source) {
-                $definition = $source->definition();
+                $definition = $definitions->source($source);
                 $grouped[$driver][] = array_merge($definition->toArray(), [
                     'key' => $source::key(),
                     'driver' => $driver,

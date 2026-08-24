@@ -11,6 +11,7 @@ use Nodeflow\Nodes\NodeRegistry;
 use Nodeflow\Schema\Field;
 use Nodeflow\Schema\OptionSource;
 use Nodeflow\Schema\UnknownOptionSourceException;
+use Nodeflow\Triggers\TriggerDefinitionContext;
 use Nodeflow\Triggers\TriggerNodeRegistry;
 use Nodeflow\Triggers\TriggerSourceCompatibility;
 use Nodeflow\Triggers\TriggerSourceRegistry;
@@ -69,7 +70,9 @@ class FieldOptionsController extends Controller
             throw new NotFoundHttpException("Unknown trigger node type [{$type}].");
         }
 
-        $declared = $this->field($triggers->resolve($type)->definition()->fieldObjects(), $field);
+        $trigger = $triggers->resolve($type);
+        $definitions = new TriggerDefinitionContext;
+        $declared = $this->field($definitions->node($trigger)->fieldObjects(), $field);
 
         if ($declared === null) {
             throw new NotFoundHttpException("Trigger node type [{$type}] declares no field [{$field}].");
@@ -102,12 +105,13 @@ class FieldOptionsController extends Controller
 
         $resolvedSource = $sources->resolve($driver, $source);
         $compatibility = app(TriggerSourceCompatibility::class);
+        $definitions = new TriggerDefinitionContext;
 
-        if (! $compatibility->authorable($trigger, $resolvedSource)) {
+        if (! $compatibility->authorable($trigger, $resolvedSource, $definitions)) {
             throw new NotFoundHttpException("Trigger source [{$source}] is incompatible with node type [{$type}].");
         }
 
-        $sourceDefinition = $resolvedSource->definition();
+        $sourceDefinition = $definitions->source($resolvedSource);
 
         $declared = $this->field($sourceDefinition->fieldObjects(), $field);
 
