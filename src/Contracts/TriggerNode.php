@@ -18,5 +18,12 @@ interface TriggerNode
 
     public function validate(array $config, TriggerSourceRegistry $sources): array;
 
+    /**
+     * Compile stable activation routing metadata from node configuration.
+     *
+     * Implementations must be pure and deterministic for the same configuration.
+     * Nodeflow invokes this during publication and again when validating a pinned
+     * occurrence snapshot before extension or audience code is allowed to run.
+     */
     public function compile(array $config): TriggerActivationDescriptor;
 }

@@ -13,6 +13,7 @@ class TriggerOccurrenceDispatcher
         private readonly TriggerSourceRegistry $sources,
         private readonly TriggerRunStarter $runs,
         private readonly TriggerActivationSnapshotComparator $snapshots,
+        private readonly TriggerActivationValidator $activationValidator,
     ) {}
 
     /** @return Run[] */
@@ -38,6 +39,7 @@ class TriggerOccurrenceDispatcher
         foreach ($activations as $activation) {
             try {
                 $this->assertCoherent($occurrence, $activation);
+                $this->activationValidator->validatePinned($activation);
                 $match = $source->resolve($occurrence, $activation->descriptor);
                 $tenantMatch = $this->matchForActivation($match, $activation);
 
@@ -95,7 +97,10 @@ class TriggerOccurrenceDispatcher
                     );
                 }
 
-                $byActivationId[$activationKey] = $existing;
+                // Keep this ID's exact snapshot. The logical tuple retains its
+                // first representative, but a later repeat of this alias must
+                // compare against itself rather than against that other ID.
+                $byActivationId[$activationKey] = $candidate;
 
                 continue;
             }

@@ -19,6 +19,7 @@ use Nodeflow\Triggers\TriggerTenantMatch;
 
 beforeEach(function () {
     $this->ownedSubjects = ['1', '2', '3'];
+    $this->ownershipChecks = 0;
 
     app()->bind(TenantResolver::class, fn () => new class($this) implements TenantResolver
     {
@@ -28,6 +29,8 @@ beforeEach(function () {
 
         public function ownsSubject(string $tenantId, string $subjectType, string $subjectId): bool
         {
+            $this->test->ownershipChecks++;
+
             return in_array($subjectId, $this->test->ownedSubjects, true);
         }
     });
@@ -135,7 +138,8 @@ it('rejects activation routing metadata that differs from the pinned graph descr
     ))->toThrow(InvalidArgumentException::class, 'pinned graph');
 
     expect(Run::withoutTenancy()->count())->toBe(0)
-        ->and(app(WorkflowEngine::class)->started())->toBe([]);
+        ->and(app(WorkflowEngine::class)->started())->toBe([])
+        ->and($this->ownershipChecks)->toBe(0);
 })->with([
     'driver' => [['driver' => 'forged.driver']],
     'source' => [['source' => 'forged.source']],

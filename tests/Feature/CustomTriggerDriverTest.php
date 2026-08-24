@@ -80,6 +80,7 @@ class RecordingTriggerExceptionHandler implements ExceptionHandler
 beforeEach(function () {
     FakeTriggerSource::$resolver = null;
     $this->unownedSubjects = [];
+    $this->ownershipChecks = 0;
 
     app()->bind(TenantResolver::class, fn () => new class($this) implements TenantResolver
     {
@@ -92,6 +93,8 @@ beforeEach(function () {
 
         public function ownsSubject(string $tenantId, string $subjectType, string $subjectId): bool
         {
+            $this->test->ownershipChecks++;
+
             return ! in_array($subjectId, $this->test->unownedSubjects, true);
         }
     });
@@ -204,7 +207,6 @@ it('uses supplied snapshots without repository lookup and enforces their routing
 });
 
 it('rejects a supplied snapshot whose routing metadata contradicts its pinned graph', function () {
-    app(TriggerSourceRegistry::class)->register(AlternateFakeTriggerSource::class);
     publishCustomTriggerFlow('org-1', 'Pinned authority', 'test.orders', ['account' => 'retail']);
     $snapshot = app(TriggerActivationRepository::class)
         ->forDriverSource('test.fake', 'test.orders')[0];
@@ -214,16 +216,22 @@ it('rejects a supplied snapshot whose routing metadata contradicts its pinned gr
         flowVersionId: $snapshot->flowVersionId,
         tenantId: $snapshot->tenantId,
         driver: 'test.fake',
-        source: 'test.returns',
+        source: 'test.orders',
         qualifier: null,
         triggerNodeId: $snapshot->triggerNodeId,
         descriptor: ['account' => 'forged'],
     );
     $reported = captureReportedExceptions();
+    $resolutions = 0;
+    FakeTriggerSource::$resolver = function () use (&$resolutions): TriggerMatch {
+        $resolutions++;
+
+        return TriggerMatch::make()->forTenant('org-1', 'user', ['42']);
+    };
 
     $runs = app(TriggerOccurrenceDispatcher::class)->dispatch(new TriggerOccurrence(
         'test.fake',
-        'test.returns',
+        'test.orders',
         ['tenant_id' => 'org-1', 'subject_id' => '42', 'occurrence_id' => 'forged-1'],
         activations: [$forged],
     ));
@@ -231,8 +239,50 @@ it('rejects a supplied snapshot whose routing metadata contradicts its pinned gr
     expect($runs)->toBe([])
         ->and(Run::withoutTenancy()->count())->toBe(0)
         ->and(app(WorkflowEngine::class)->started())->toBe([])
+        ->and($resolutions)->toBe(0)
+        ->and($this->ownershipChecks)->toBe(0)
         ->and($reported->reported)->toHaveCount(1)
         ->and($reported->reported[0])->toBeInstanceOf(InvalidArgumentException::class)
+        ->and($reported->reported[0]->getMessage())->toContain('pinned graph');
+});
+
+it('isolates an invalid pinned snapshot before extension code and continues valid candidates', function () {
+    publishCustomTriggerFlow('org-1', 'Invalid pinned snapshot', 'test.orders', ['mode' => 'valid']);
+    publishCustomTriggerFlow('org-2', 'Valid pinned snapshot', 'test.orders', ['mode' => 'valid']);
+    $snapshots = app(TriggerActivationRepository::class)
+        ->forDriverSource('test.fake', 'test.orders');
+    $forged = new TriggerActivationSnapshot(
+        activationId: $snapshots[0]->activationId,
+        flowId: $snapshots[0]->flowId,
+        flowVersionId: $snapshots[0]->flowVersionId,
+        tenantId: $snapshots[0]->tenantId,
+        driver: $snapshots[0]->driver,
+        source: $snapshots[0]->source,
+        qualifier: $snapshots[0]->qualifier,
+        triggerNodeId: $snapshots[0]->triggerNodeId,
+        descriptor: ['mode' => 'forged'],
+    );
+    $resolutions = 0;
+    FakeTriggerSource::$resolver = function () use (&$resolutions): TriggerMatch {
+        $resolutions++;
+
+        return TriggerMatch::make()
+            ->forTenant('org-1', 'user', ['1'])
+            ->forTenant('org-2', 'user', ['2']);
+    };
+    $reported = captureReportedExceptions();
+
+    $runs = app(TriggerOccurrenceDispatcher::class)->dispatch(new TriggerOccurrence(
+        'test.fake', 'test.orders', [], activations: [$forged, $snapshots[1]],
+    ));
+
+    expect($runs)->toHaveCount(1)
+        ->and($runs[0]->tenant_id)->toBe('org-2')
+        ->and($resolutions)->toBe(1)
+        // The valid run is checked by both TriggerRunStarter and the shared
+        // audience materializer; the forged candidate contributes zero checks.
+        ->and($this->ownershipChecks)->toBe(2)
+        ->and($reported->reported)->toHaveCount(1)
         ->and($reported->reported[0]->getMessage())->toContain('pinned graph');
 });
 
@@ -325,7 +375,7 @@ it('deduplicates exact supplied candidates before resolving or starting them', f
     );
 
     $runs = app(TriggerOccurrenceDispatcher::class)->dispatch(new TriggerOccurrence(
-        'test.fake', 'test.orders', [], activations: [$snapshot, $snapshot, $sameLogicalSnapshot],
+        'test.fake', 'test.orders', [], activations: [$snapshot, $sameLogicalSnapshot, $sameLogicalSnapshot],
     ));
 
     expect($runs)->toHaveCount(1)
