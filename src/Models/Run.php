@@ -18,6 +18,9 @@ class Run extends Model
     protected $casts = [
         'is_test' => 'boolean',
         'trigger_data' => 'array',
+        'engine_entry_node_id' => 'string',
+        'engine_dispatch_status' => 'string',
+        'engine_dispatch_error' => 'string',
         'started_at' => 'datetime',
         'ended_at' => 'datetime',
     ];

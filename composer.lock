@@ -4,7 +4,7 @@
         "Read more about it at https://getcomposer.org/doc/01-basic-usage.md#installing-dependencies",
         "This file is @generated automatically"
     ],
-    "content-hash": "2ff3d42fe012fbdbee9b0c1369461c5d",
+    "content-hash": "146448eb0cda92965930272bf420c420",
     "packages": [
         {
             "name": "apache/avro",

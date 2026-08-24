@@ -3,6 +3,7 @@
 use Illuminate\Database\Events\TransactionBeginning;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Event;
+use Illuminate\Support\Facades\Queue;
 use Nodeflow\Contracts\TenantResolver;
 use Nodeflow\Engine\WorkflowEngine;
 use Nodeflow\Execution\CrossTenantExecutionException;
@@ -44,7 +45,10 @@ it('creates a run pinned to the current version with subjects at the start node'
         ->and($run->trigger_node_id)->toBe('trigger')
         ->and($run->trigger_data)->toBeNull()
         ->and($run->nodeExecutions()->count())->toBe(0)
-        ->and($run->engine_workflow_id)->not->toBeNull();
+        ->and($run->engine_workflow_id)->not->toBeNull()
+        ->and($run->engine_entry_node_id)->toBe('n1')
+        ->and($run->engine_dispatch_status)->toBe('dispatched')
+        ->and($run->engine_dispatch_error)->toBeNull();
 });
 
 it('refuses a raw same-tenant current-version pointer to another flow', function () {
@@ -110,6 +114,7 @@ it('starts the engine only after its own transaction has committed', function ()
 });
 
 it('recovers an idempotent run after the first engine dispatch fails', function () {
+    Queue::fake();
     app()->singleton(WorkflowEngine::class, fn () => new class implements WorkflowEngine
     {
         public int $attempts = 0;
@@ -143,8 +148,11 @@ it('recovers an idempotent run after the first engine dispatch fails', function 
 
     $stranded = \Nodeflow\Models\Run::withoutTenancy()->firstOrFail();
     expect($stranded->engine_workflow_id)->toBeNull()
-        ->and($stranded->error)->toBe('Workflow dispatch failed; retry the idempotent run start.')
-        ->and($stranded->error)->not->toContain('credential');
+        ->and($stranded->engine_entry_node_id)->toBe('n1')
+        ->and($stranded->engine_dispatch_status)->toBe('failed')
+        ->and($stranded->engine_dispatch_error)->toBe('Workflow dispatch failed; recovery required.')
+        ->and($stranded->engine_dispatch_error)->not->toContain('credential')
+        ->and($stranded->error)->toBeNull();
 
     $recovered = app(StartRun::class)->forFlow(
         $this->flow->fresh(),
@@ -156,19 +164,23 @@ it('recovers an idempotent run after the first engine dispatch fails', function 
 
     expect($recovered->id)->toBe($stranded->id)
         ->and($recovered->engine_workflow_id)->toBe("nodeflow-run:{$stranded->id}")
+        ->and($recovered->engine_dispatch_status)->toBe('dispatched')
+        ->and($recovered->engine_dispatch_error)->toBeNull()
         ->and($recovered->error)->toBeNull()
         ->and($recovered->subjects()->pluck('subject_id')->all())->toBe(['1'])
         ->and($engine->executions)->toHaveCount(1);
 });
 
 it('recovers the stable engine handle when persisting it failed after dispatch', function () {
-    $failUpdate = true;
-    \Nodeflow\Models\Run::updating(function (\Nodeflow\Models\Run $run) use (&$failUpdate) {
-        if ($failUpdate && $run->isDirty('engine_workflow_id')) {
-            $failUpdate = false;
-            throw new RuntimeException('secret database write detail');
-        }
-    });
+    Queue::fake();
+    DB::unprepared(<<<'SQL'
+        CREATE TRIGGER fail_idempotent_run_engine_handle
+        BEFORE UPDATE OF engine_workflow_id ON nodeflow_runs
+        WHEN NEW.engine_workflow_id IS NOT NULL
+        BEGIN
+            SELECT RAISE(FAIL, 'secret database write detail');
+        END
+        SQL);
 
     expect(fn () => app(StartRun::class)->forFlow(
         $this->flow->fresh(),
@@ -180,7 +192,11 @@ it('recovers the stable engine handle when persisting it failed after dispatch',
     $stranded = \Nodeflow\Models\Run::withoutTenancy()->firstOrFail();
     expect(app(WorkflowEngine::class)->started())->toHaveCount(1)
         ->and($stranded->engine_workflow_id)->toBeNull()
-        ->and($stranded->error)->toBe('Workflow dispatch failed; retry the idempotent run start.');
+        ->and($stranded->engine_dispatch_status)->toBe('failed')
+        ->and($stranded->engine_dispatch_error)->toBe('Workflow dispatch failed; recovery required.')
+        ->and($stranded->error)->toBeNull();
+
+    DB::unprepared('DROP TRIGGER fail_idempotent_run_engine_handle');
 
     $recovered = app(StartRun::class)->forFlow(
         $this->flow->fresh(),
@@ -191,12 +207,15 @@ it('recovers the stable engine handle when persisting it failed after dispatch',
 
     expect($recovered->id)->toBe($stranded->id)
         ->and($recovered->engine_workflow_id)->toBe("nodeflow-run:{$stranded->id}")
+        ->and($recovered->engine_dispatch_status)->toBe('dispatched')
+        ->and($recovered->engine_dispatch_error)->toBeNull()
         ->and($recovered->error)->toBeNull()
         ->and($recovered->subjects()->pluck('subject_id')->all())->toBe(['1'])
         ->and(app(WorkflowEngine::class)->started())->toHaveCount(1);
 });
 
 it('records and recovers a dispatch that fails after an ambient commit', function () {
+    Queue::fake();
     app()->singleton(WorkflowEngine::class, fn () => new class implements WorkflowEngine
     {
         public int $attempts = 0;
@@ -229,11 +248,13 @@ it('records and recovers a dispatch that fails after an ambient commit', functio
         ['idempotency_key' => 'recover-after-commit'],
     );
 
-    expect(fn () => DB::commit())->toThrow(RuntimeException::class, 'secret after-commit');
+    DB::commit();
 
     $stranded = $created->fresh();
     expect($stranded->engine_workflow_id)->toBeNull()
-        ->and($stranded->error)->toBe('Workflow dispatch failed; retry the idempotent run start.');
+        ->and($stranded->engine_dispatch_status)->toBe('failed')
+        ->and($stranded->engine_dispatch_error)->toBe('Workflow dispatch failed; recovery required.')
+        ->and($stranded->error)->toBeNull();
 
     $recovered = app(StartRun::class)->forFlow(
         $this->flow->fresh(),
@@ -244,12 +265,14 @@ it('records and recovers a dispatch that fails after an ambient commit', functio
 
     expect($recovered->id)->toBe($stranded->id)
         ->and($recovered->engine_workflow_id)->toBe("nodeflow-run:{$stranded->id}")
+        ->and($recovered->engine_dispatch_status)->toBe('dispatched')
+        ->and($recovered->engine_dispatch_error)->toBeNull()
         ->and($recovered->error)->toBeNull()
         ->and($recovered->subjects()->pluck('subject_id')->all())->toBe(['1'])
         ->and(app(WorkflowEngine::class)->executions)->toHaveCount(1);
 });
 
-it('clears only the package dispatch sentinel once an existing run has an engine handle', function () {
+it('never treats execution errors as dispatch state when an engine handle exists', function () {
     $run = app(StartRun::class)->forFlow(
         $this->flow->fresh(),
         'user',
@@ -264,7 +287,9 @@ it('clears only the package dispatch sentinel once an existing run has an engine
         ['1'],
         ['idempotency_key' => 'clear-dispatch-sentinel'],
     );
-    expect($recovered->error)->toBeNull();
+    expect($recovered->error)->toBe('Workflow dispatch failed; retry the idempotent run start.')
+        ->and($recovered->engine_dispatch_status)->toBe('dispatched')
+        ->and($recovered->engine_dispatch_error)->toBeNull();
 
     $recovered->update(['error' => 'Node execution failed']);
     $preserved = app(StartRun::class)->forFlow(
@@ -284,7 +309,9 @@ it('does not record a dispatch failure after another actor persisted the stable 
         {
             DB::table('nodeflow_runs')->where('id', $args['run_id'])->update([
                 'engine_workflow_id' => $instanceId,
-                'error' => null,
+                'engine_dispatch_status' => 'failed',
+                'engine_dispatch_error' => 'Workflow dispatch failed; recovery required.',
+                'error' => 'Node execution failed concurrently.',
             ]);
 
             throw new RuntimeException('late losing callback failure');
@@ -304,7 +331,9 @@ it('does not record a dispatch failure after another actor persisted the stable 
 
     $run = \Nodeflow\Models\Run::withoutTenancy()->firstOrFail();
     expect($run->engine_workflow_id)->toBe("nodeflow-run:{$run->id}")
-        ->and($run->error)->toBeNull();
+        ->and($run->engine_dispatch_status)->toBe('dispatched')
+        ->and($run->engine_dispatch_error)->toBeNull()
+        ->and($run->error)->toBe('Node execution failed concurrently.');
 });
 
 it('defers engine start to an ambient transaction commit and synchronizes the returned run', function () {

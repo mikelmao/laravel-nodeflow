@@ -95,6 +95,9 @@ return new class extends Migration
             $t->string('tenant_id')->index();
             $t->string('correlation_id')->nullable()->index();
             $t->string('engine_workflow_id')->nullable()->index();
+            $t->string('engine_entry_node_id')->nullable();
+            $t->string('engine_dispatch_status')->nullable()->index();
+            $t->text('engine_dispatch_error')->nullable();
             $t->string('strategy');
             $t->string('status')->default('pending');
             $t->boolean('is_test')->default(false);

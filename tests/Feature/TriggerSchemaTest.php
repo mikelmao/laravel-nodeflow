@@ -86,7 +86,8 @@ it('stores trigger activations, webhook endpoints, and run origins in the base s
             'created_at', 'updated_at',
         ]))->toBeTrue()
         ->and(Schema::hasColumns('nodeflow_runs', [
-            'started_via', 'trigger_node_id', 'trigger_data',
+            'started_via', 'trigger_node_id', 'trigger_data', 'engine_entry_node_id',
+            'engine_dispatch_status', 'engine_dispatch_error',
         ]))->toBeTrue()
         ->and(Schema::hasColumn('nodeflow_flows', 'trigger_type'))->toBeFalse()
         ->and(Schema::hasColumn('nodeflow_flows', 'trigger_config'))->toBeFalse();
@@ -108,7 +109,19 @@ it('stores trigger activations, webhook endpoints, and run origins in the base s
         ->and($endpointIndexes->where('unique', true)->pluck('columns')->all())
         ->toContain(['flow_id'], ['token'])
         ->and($runIndexes->where('unique', true)->pluck('columns')->all())
-        ->toContain(['flow_version_id', 'idempotency_key']);
+        ->toContain(['flow_version_id', 'idempotency_key'])
+        ->and($runIndexes->pluck('columns')->all())
+        ->toContain(['engine_dispatch_status']);
+
+    $run = new Run([
+        'engine_entry_node_id' => 12,
+        'engine_dispatch_status' => 34,
+        'engine_dispatch_error' => 56,
+    ]);
+
+    expect($run->engine_entry_node_id)->toBe('12')
+        ->and($run->engine_dispatch_status)->toBe('34')
+        ->and($run->engine_dispatch_error)->toBe('56');
 });
 
 it('declares MySQL-only binary collations for case-exact activation routing keys', function () {

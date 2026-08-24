@@ -170,6 +170,9 @@ it('exposes safe origin fields without leaking execution-only trigger data', fun
     allowRunViewing();
     $this->run->update([
         'started_via' => 'test.fake',
+        'engine_entry_node_id' => 'private-entry-node',
+        'engine_dispatch_status' => 'failed',
+        'engine_dispatch_error' => 'private dispatch infrastructure detail',
         'trigger_data' => [
             'delivery' => 'd-1',
             'nested' => ['authorization' => 'Bearer secret-token'],
@@ -177,11 +180,24 @@ it('exposes safe origin fields without leaking execution-only trigger data', fun
         ],
     ]);
 
-    $run = runPage($this, $this->run->id)->assertOk()->json('props.run');
+    $response = runPage($this, $this->run->id)->assertOk();
+    $run = $response->json('props.run');
 
     expect($run['started_via'])->toBe('test.fake')
         ->and($run['trigger_node_id'])->toBe('trigger')
-        ->and($run)->not->toHaveKeys(['trigger_data', 'idempotency_key', 'engine_workflow_id']);
+        ->and($run)->not->toHaveKeys([
+            'trigger_data',
+            'idempotency_key',
+            'engine_workflow_id',
+            'engine_entry_node_id',
+            'engine_dispatch_status',
+            'engine_dispatch_error',
+        ])
+        ->and($response->getContent())->not->toContain(
+            'private-entry-node',
+            'private dispatch infrastructure detail',
+            'engine_dispatch_status',
+        );
 });
 
 it('serves urls whose node sentinel survives route generation', function () {

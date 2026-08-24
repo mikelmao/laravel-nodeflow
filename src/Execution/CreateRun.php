@@ -4,18 +4,21 @@ namespace Nodeflow\Execution;
 
 use Illuminate\Database\QueryException;
 use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Queue;
 use InvalidArgumentException;
 use JsonException;
 use Nodeflow\Engine\WorkflowEngine;
+use Nodeflow\Jobs\RetryRunDispatch;
 use Nodeflow\Models\Concerns\TenancyGuardSuspension;
 use Nodeflow\Models\FlowVersion;
 use Nodeflow\Models\Run;
 use Nodeflow\Workflows\FlowInterpreter;
+use RuntimeException;
 use Throwable;
 
 class CreateRun
 {
-    private const DISPATCH_FAILURE = 'Workflow dispatch failed; retry the idempotent run start.';
+    private const DISPATCH_FAILURE = 'Workflow dispatch failed; recovery required.';
 
     /** @var array<string, list<Run>> */
     private static array $pendingDispatches = [];
@@ -42,7 +45,7 @@ class CreateRun
             $existing = $this->existing($version, (string) $key);
 
             if ($existing !== null) {
-                return $this->ensureEngineStarted($existing, $entryNodeId);
+                return $this->ensureEngineStarted($existing);
             }
         }
 
@@ -74,6 +77,9 @@ class CreateRun
                     'status' => 'pending',
                     'is_test' => (bool) ($options['is_test'] ?? false),
                     'idempotency_key' => $key,
+                    'engine_entry_node_id' => $entryNodeId,
+                    'engine_dispatch_status' => 'pending',
+                    'engine_dispatch_error' => null,
                     'started_via' => $startedVia,
                     'trigger_node_id' => $triggerNodeId,
                     'trigger_data' => $triggerData,
@@ -94,22 +100,44 @@ class CreateRun
                 throw $e;
             }
 
-            return $this->ensureEngineStarted($winner, $entryNodeId);
+            return $this->ensureEngineStarted($winner);
         }
 
-        return $this->ensureEngineStarted($run, $entryNodeId);
+        return $this->ensureEngineStarted($run);
     }
 
-    private function ensureEngineStarted(Run $run, string $entryNodeId): Run
+    public function resume(int|string $runId): Run
     {
+        $run = Run::withoutTenancy()->findOrFail($runId);
+        $version = FlowVersion::withoutTenancy()->findOrFail($run->flow_version_id);
+
+        if ((string) $version->tenant_id !== (string) $run->tenant_id) {
+            throw CrossTenantExecutionException::forRunVersion($run, $version);
+        }
+
+        $this->persistedEntryNodeId($run);
+
+        return $this->ensureEngineStarted($run, scheduleRetry: false);
+    }
+
+    private function ensureEngineStarted(Run $run, bool $scheduleRetry = true): Run
+    {
+        $entryNodeId = $this->persistedEntryNodeId($run);
+
         if ($run->engine_workflow_id !== null) {
-            return $this->clearDispatchFailure($run);
+            return $this->markDispatched($run);
         }
 
         $connection = DB::connection();
 
         if ($connection->transactionLevel() === 0) {
-            $this->startEngine($run, $entryNodeId);
+            try {
+                $this->startEngine($run, $entryNodeId);
+            } catch (Throwable $e) {
+                $this->handleDispatchFailure($run, $scheduleRetry);
+
+                throw $e;
+            }
 
             return $run->refresh();
         }
@@ -130,16 +158,14 @@ class CreateRun
         self::$pendingDispatches[$dispatchKey] = [$run];
 
         try {
-            $connection->afterCommit(function () use ($dispatchKey, $run, $entryNodeId) {
+            $connection->afterCommit(function () use ($dispatchKey, $run, $entryNodeId, $scheduleRetry) {
                 try {
                     $this->startEngine($run, $entryNodeId);
-
-                    foreach (self::$pendingDispatches[$dispatchKey] ?? [] as $pendingRun) {
-                        if ($pendingRun !== $run) {
-                            $pendingRun->setRawAttributes($run->getAttributes(), true);
-                        }
-                    }
+                } catch (Throwable $e) {
+                    $this->handleDispatchFailure($run, $scheduleRetry);
+                    $this->safeReport($e);
                 } finally {
+                    $this->synchronizePendingRuns($dispatchKey, $run);
                     unset(self::$pendingDispatches[$dispatchKey]);
                 }
             });
@@ -168,29 +194,32 @@ class CreateRun
 
     private function startEngine(Run $run, string $entryNodeId): void
     {
-        try {
-            $workflowId = $this->engine->start(FlowInterpreter::class, [
-                'run_id' => $run->id,
-                'max_steps' => (int) config('nodeflow.limits.max_steps_per_run', 1000),
-                'entry_node_id' => $entryNodeId,
-            ], $this->workflowInstanceId($run));
+        $workflowId = $this->engine->start(FlowInterpreter::class, [
+            'run_id' => $run->id,
+            'max_steps' => (int) config('nodeflow.limits.max_steps_per_run', 1000),
+            'entry_node_id' => $entryNodeId,
+        ], $this->workflowInstanceId($run));
 
-            $run->refresh();
+        $run->refresh();
 
-            if ($run->engine_workflow_id !== null) {
-                $this->clearDispatchFailure($run);
+        if ($run->engine_workflow_id !== null) {
+            $this->markDispatched($run);
 
-                return;
-            }
+            return;
+        }
 
-            $run->update([
+        DB::table($run->getTable())
+            ->where('id', $run->id)
+            ->whereNull('engine_workflow_id')
+            ->update([
                 'engine_workflow_id' => $workflowId,
-                'error' => null,
+                'engine_dispatch_status' => 'dispatched',
+                'engine_dispatch_error' => null,
             ]);
-        } catch (Throwable $e) {
-            $this->recordDispatchFailure($run);
+        $run->refresh();
 
-            throw $e;
+        if ($run->engine_workflow_id === null) {
+            throw new RuntimeException("Run [{$run->id}] workflow handle could not be persisted.");
         }
     }
 
@@ -199,31 +228,95 @@ class CreateRun
         return "nodeflow-run:{$run->id}";
     }
 
-    private function recordDispatchFailure(Run $run): void
+    private function handleDispatchFailure(Run $run, bool $scheduleRetry): void
     {
+        $shouldSchedule = $this->recordDispatchFailure($run);
+
+        if (! $scheduleRetry || ! $shouldSchedule) {
+            return;
+        }
+
         try {
-            DB::table($run->getTable())
-                ->where('id', $run->id)
-                ->whereNull('engine_workflow_id')
-                ->update(['error' => self::DISPATCH_FAILURE]);
+            Queue::push(new RetryRunDispatch($run->id));
             $run->refresh();
-        } catch (Throwable) {
-            // Preserve the dispatch exception. A persistence failure must not
-            // replace the actionable cause returned to the caller.
+        } catch (Throwable $queueFailure) {
+            $this->safeReport($queueFailure);
         }
     }
 
-    private function clearDispatchFailure(Run $run): Run
+    private function recordDispatchFailure(Run $run): bool
     {
-        if ($run->error === self::DISPATCH_FAILURE) {
-            DB::table($run->getTable())
+        try {
+            $updated = DB::table($run->getTable())
                 ->where('id', $run->id)
-                ->where('error', self::DISPATCH_FAILURE)
-                ->update(['error' => null]);
+                ->whereNull('engine_workflow_id')
+                ->where(function ($query) {
+                    $query->whereNull('engine_dispatch_status')
+                        ->orWhere('engine_dispatch_status', 'pending');
+                })
+                ->update([
+                    'engine_dispatch_status' => 'failed',
+                    'engine_dispatch_error' => self::DISPATCH_FAILURE,
+                ]);
             $run->refresh();
+
+            if ($run->engine_workflow_id !== null) {
+                $this->markDispatched($run);
+
+                return false;
+            }
+
+            return $updated === 1;
+        } catch (Throwable $persistenceFailure) {
+            // Preserve the dispatch exception. A persistence failure must not
+            // replace the actionable cause returned to the caller.
+            $this->safeReport($persistenceFailure);
+
+            return true;
         }
+    }
+
+    private function markDispatched(Run $run): Run
+    {
+        DB::table($run->getTable())
+            ->where('id', $run->id)
+            ->whereNotNull('engine_workflow_id')
+            ->update([
+                'engine_dispatch_status' => 'dispatched',
+                'engine_dispatch_error' => null,
+            ]);
+        $run->refresh();
 
         return $run;
+    }
+
+    private function persistedEntryNodeId(Run $run): string
+    {
+        $entryNodeId = $run->engine_entry_node_id;
+
+        if (! is_string($entryNodeId) || trim($entryNodeId) === '') {
+            throw new InvalidArgumentException("Run [{$run->id}] has no persisted engine entry intent.");
+        }
+
+        return $entryNodeId;
+    }
+
+    private function synchronizePendingRuns(string $dispatchKey, Run $run): void
+    {
+        foreach (self::$pendingDispatches[$dispatchKey] ?? [] as $pendingRun) {
+            if ($pendingRun !== $run) {
+                $pendingRun->setRawAttributes($run->getAttributes(), true);
+            }
+        }
+    }
+
+    private function safeReport(Throwable $e): void
+    {
+        try {
+            report($e);
+        } catch (Throwable) {
+            // Reporting is secondary and must never replace dispatch failure.
+        }
     }
 
     private function validatedIdempotencyKey(mixed $key): ?string
