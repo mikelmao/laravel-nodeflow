@@ -185,6 +185,65 @@ it('freezes an activation snapshot after creation', function (
     'descriptor snapshot' => ['descriptor', ['path' => 'invoices'], \LogicException::class, 'immutable'],
 ]);
 
+it('does not move an activated version to another flow in the same tenant', function () {
+    [$flow, $version] = makeTriggerSchemaFlow('Original same-tenant flow');
+    $otherFlow = Flow::create([
+        'tenant_id' => 'org-1',
+        'name' => 'Other same-tenant flow',
+        'status' => 'active',
+    ]);
+    $activation = createTriggerSchemaActivation($flow, $version);
+
+    expect(fn () => $version->update(['flow_id' => $otherFlow->id]))
+        ->toThrow(\LogicException::class, 'flow_id may not change from');
+
+    $version->refresh();
+    $activation->refresh();
+
+    expect($version->flow_id)->toBe($flow->id)
+        ->and($version->flow->is($flow))->toBeTrue()
+        ->and($activation->flow_id)->toBe($flow->id)
+        ->and($activation->flow_version_id)->toBe($version->id)
+        ->and($activation->flowVersion->is($version))->toBeTrue();
+});
+
+it('does not move an activated version to a flow in another tenant', function () {
+    [$flow, $version] = makeTriggerSchemaFlow('Original cross-tenant flow');
+    $otherFlow = TenancyGuardSuspension::run(fn () => Flow::withoutTenancy()->create([
+        'tenant_id' => 'org-2',
+        'name' => 'Other cross-tenant flow',
+        'status' => 'active',
+    ]));
+    $activation = createTriggerSchemaActivation($flow, $version);
+
+    expect(fn () => $version->update(['flow_id' => $otherFlow->id]))
+        ->toThrow(\LogicException::class, 'flow_id may not change from');
+
+    $version->refresh();
+    $activation->refresh();
+
+    expect($version->flow_id)->toBe($flow->id)
+        ->and($version->flow->is($flow))->toBeTrue()
+        ->and($activation->flow_id)->toBe($flow->id)
+        ->and($activation->flow_version_id)->toBe($version->id)
+        ->and($activation->flowVersion->is($version))->toBeTrue();
+});
+
+it('allows publication metadata to change on an existing version', function () {
+    [$flow, $version] = makeTriggerSchemaFlow('Publishable version');
+    $publishedAt = now()->startOfSecond();
+
+    $version->update([
+        'published_at' => $publishedAt,
+        'published_by' => 'publisher-9',
+    ]);
+    $version = $version->fresh();
+
+    expect($version->published_at?->equalTo($publishedAt))->toBeTrue()
+        ->and($version->published_by)->toBe('publisher-9')
+        ->and($version->flow_id)->toBe($flow->id);
+});
+
 it('creates an activation only when its flow version and tenant references all match', function () {
     bindTriggerSchemaTenant('org-1');
     [$flow, $version] = makeTriggerSchemaFlow();
