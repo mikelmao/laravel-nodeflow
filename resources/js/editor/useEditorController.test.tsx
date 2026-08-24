@@ -215,6 +215,116 @@ describe('useEditorController', () => {
         expect(view.result.current.document.nodes.filter((node) => node.data.kind === 'trigger')).toHaveLength(2)
     })
 
+    it('retains the start-selected trigger when replacing a malformed multi-trigger draft', () => {
+        const malformed: Graph = {
+            start: 'active-trigger',
+            nodes: [
+                { id: 'first-trigger', type: 'custom.webhook', config: { source: 'first' }, position: { x: 10, y: 20 } },
+                { id: 'active-trigger', type: 'custom.event', config: { source: 'active' }, position: { x: 40, y: 50 } },
+                { id: 'first-target', type: 'app.send', config: {}, position: { x: 300, y: 20 } },
+                { id: 'active-target', type: 'app.send', config: {}, position: { x: 300, y: 50 } },
+            ],
+            edges: [
+                { from: 'first-trigger', to: 'first-target', output: 'started' },
+                { from: 'active-trigger', to: 'active-target', output: 'legacy-output' },
+            ],
+        }
+        const view = controller({ graph: malformed })
+        const before = view.result.current.document
+
+        act(() => view.result.current.actions.replaceTrigger(webhook))
+        const replaced = view.result.current.document
+        expect(replaced).toMatchObject({
+            startId: 'active-trigger',
+            nodes: [
+                { id: 'active-trigger', position: { x: 40, y: 50 }, data: { type: 'custom.webhook', config: { source: 'orders' } } },
+                { id: 'first-target' },
+                { id: 'active-target' },
+            ],
+            edges: [{ source: 'active-trigger', sourceHandle: 'started', target: 'active-target', label: 'started' }],
+        })
+        expect(replaced.nodes.map((node) => node.id)).not.toContain('first-trigger')
+
+        act(() => view.result.current.actions.addTrigger(event))
+        expect(view.result.current.document).toBe(replaced)
+        act(() => view.result.current.actions.undo())
+        expect(view.result.current.document).toEqual(before)
+        act(() => view.result.current.actions.redo())
+        expect(view.result.current.document).toEqual(replaced)
+    })
+
+    it('autosaves one start-selected malformed trigger replacement', async () => {
+        const fetchMock = vi.fn(async (_url: string, _options?: RequestInit) => Response.json({ draft_revision: 8 }))
+        vi.stubGlobal('fetch', fetchMock)
+        const view = controller({
+            graph: {
+                start: 'active-trigger',
+                nodes: [
+                    { id: 'first-trigger', type: 'custom.webhook', config: {}, position: { x: 0, y: 0 } },
+                    { id: 'active-trigger', type: 'custom.event', config: {}, position: { x: 0, y: 100 } },
+                    { id: 'send1', type: 'app.send', config: {}, position: { x: 300, y: 100 } },
+                ],
+                edges: [{ from: 'active-trigger', to: 'send1', output: 'started' }],
+            },
+        })
+
+        act(() => view.result.current.actions.replaceTrigger(webhook))
+
+        await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(1))
+        const body = JSON.parse(String((fetchMock.mock.calls[0]?.[1] as RequestInit | undefined)?.body)) as { graph: Graph }
+        expect(body.graph.start).toBe('active-trigger')
+        expect(body.graph.nodes?.find((node) => node.id === 'active-trigger')).toMatchObject({ type: 'custom.webhook', position: { x: 0, y: 100 } })
+        expect(body.graph.nodes?.map((node) => node.id)).not.toContain('first-trigger')
+    })
+
+    it('clears malformed executable starts whenever a recognized trigger is deleted or removed', () => {
+        const malformed: Graph = {
+            start: 'send1',
+            nodes: [
+                { id: 'hook', type: 'custom.webhook', config: {}, position: { x: 0, y: 0 } },
+                { id: 'send1', type: 'app.send', config: {}, position: { x: 200, y: 0 } },
+            ],
+            edges: [{ from: 'hook', to: 'send1', output: 'started' }],
+        }
+        const direct = controller({ graph: malformed })
+        const directBefore = direct.result.current.document
+
+        act(() => direct.result.current.actions.deleteNode('hook'))
+        expect(direct.result.current.document).toMatchObject({ startId: '', nodes: [{ id: 'send1' }], edges: [] })
+        act(() => direct.result.current.actions.undo())
+        expect(direct.result.current.document).toEqual(directBefore)
+        act(() => direct.result.current.actions.redo())
+        expect(direct.result.current.document.startId).toBe('')
+
+        const changed = controller({ graph: malformed })
+        const changedBefore = changed.result.current.document
+        act(() => changed.result.current.actions.nodesChange([{ id: 'hook', type: 'remove' }]))
+        expect(changed.result.current.document).toMatchObject({ startId: '', nodes: [{ id: 'send1' }], edges: [] })
+        act(() => changed.result.current.actions.undo())
+        expect(changed.result.current.document).toEqual(changedBefore)
+    })
+
+    it('preserves a valid trigger start when deleting an ordinary executable', () => {
+        const view = controller({
+            graph: {
+                start: 'hook',
+                nodes: [
+                    { id: 'hook', type: 'custom.webhook', config: {}, position: { x: 0, y: 0 } },
+                    { id: 'send1', type: 'app.send', config: {}, position: { x: 200, y: 0 } },
+                    { id: 'exit1', type: 'core.exit', config: {}, position: { x: 400, y: 0 } },
+                ],
+                edges: [
+                    { from: 'hook', to: 'send1', output: 'started' },
+                    { from: 'send1', to: 'exit1', output: 'sent' },
+                ],
+            },
+        })
+
+        act(() => view.result.current.actions.deleteNode('send1'))
+
+        expect(view.result.current.document).toMatchObject({ startId: 'hook', nodes: [{ id: 'hook' }, { id: 'exit1' }], edges: [] })
+    })
+
     it('does not autosave an invalid connection no-op', async () => {
         const fetchMock = vi.fn()
         vi.stubGlobal('fetch', fetchMock)

@@ -301,8 +301,8 @@ export function useEditorController(options: UseEditorControllerOptions): UseEdi
             return
         }
 
-        const retained = triggers[0]!
-        const removedIds = new Set(triggers.slice(1).map((node) => node.id))
+        const retained = triggers.find((node) => node.id === current.startId) ?? triggers[0]!
+        const removedIds = new Set(triggers.filter((node) => node.id !== retained.id).map((node) => node.id))
         const remainingNodes = current.nodes
             .filter((node) => !removedIds.has(node.id))
             .map((node): NodeflowNode => node.id === retained.id
@@ -366,12 +366,14 @@ export function useEditorController(options: UseEditorControllerOptions): UseEdi
 
     const deleteNode = useCallback((id: string) => {
         const current = documentRef.current
+        const removedNode = current.nodes.find((node) => node.id === id)
         const nextNodes = current.nodes.filter((node) => node.id !== id)
         if (nextNodes.length === current.nodes.length) return
-        commit({ nodes: nextNodes, edges: current.edges.filter((edge) => edge.source !== id && edge.target !== id), startId: current.startId === id ? '' : current.startId })
+        const removesTrigger = removedNode !== undefined && defs[removedNode.data.type]?.kind === 'trigger'
+        commit({ nodes: nextNodes, edges: current.edges.filter((edge) => edge.source !== id && edge.target !== id), startId: removesTrigger || current.startId === id ? '' : current.startId })
         setSelected((selection) => selection.nodeId === id ? { nodeId: null, edgeId: null } : selection)
         setView((current) => ({ ...current, selectedEdgeId: null }))
-    }, [commit])
+    }, [commit, defs])
 
     const nodesChange = useCallback((changes: NodeChange<NodeflowNode>[]) => {
         const selectionChanges = changes.filter((change) => change.type === 'select')
@@ -389,9 +391,10 @@ export function useEditorController(options: UseEditorControllerOptions): UseEdi
         const currentTriggers = current.nodes.filter((node) => defs[node.data.type]?.kind === 'trigger').length
         const nextTriggers = nodes.filter((node) => defs[node.data.type]?.kind === 'trigger').length
         if (nextTriggers > 1 && nextTriggers > currentTriggers) return
+        const removesTrigger = current.nodes.some((node) => removed.has(node.id) && defs[node.data.type]?.kind === 'trigger')
         const position = graphChanges.find((change) => change.type === 'position')
         const transaction = position?.type === 'position' ? `move:${position.id}` : null
-        commit({ nodes, edges: removed.size === 0 ? current.edges : current.edges.filter((edge) => !removed.has(edge.source) && !removed.has(edge.target)), startId: removed.has(current.startId) ? '' : current.startId }, transaction)
+        commit({ nodes, edges: removed.size === 0 ? current.edges : current.edges.filter((edge) => !removed.has(edge.source) && !removed.has(edge.target)), startId: removesTrigger || removed.has(current.startId) ? '' : current.startId }, transaction)
         if (position?.type === 'position' && position.dragging === false) closeConfigTransaction()
         if (removed.size > 0) setSelected((selection) => removed.has(selection.nodeId ?? '') || current.edges.some((edge) => edge.id === selection.edgeId && (removed.has(edge.source) || removed.has(edge.target))) ? { nodeId: null, edgeId: null } : selection)
     }, [closeConfigTransaction, commit, defs, selectNode])
