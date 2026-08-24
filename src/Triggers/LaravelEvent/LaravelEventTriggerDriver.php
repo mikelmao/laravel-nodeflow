@@ -20,6 +20,9 @@ class LaravelEventTriggerDriver implements TriggerDriver
     /** @var array<class-string, true> */
     private array $listening = [];
 
+    /** @var array<string, class-string> */
+    private array $sourceEventClasses = [];
+
     public function __construct(
         private readonly TriggerSourceRegistry $sources,
         private readonly TriggerActivationRepository $activations,
@@ -38,29 +41,39 @@ class LaravelEventTriggerDriver implements TriggerDriver
             return;
         }
 
-        $eventClass = $source::eventClass();
+        $declaredEventClass = $source::eventClass();
 
-        if (trim($eventClass) === ''
-            || ! class_exists($eventClass)
-            || ! (new ReflectionClass($eventClass))->isInstantiable()) {
+        if (trim($declaredEventClass) === '' || ! class_exists($declaredEventClass)) {
             throw new InvalidArgumentException(
-                "Laravel event trigger source [{$source::key()}] declared invalid event class [{$eventClass}]."
+                "Laravel event trigger source [{$source::key()}] declared invalid event class [{$declaredEventClass}]."
             );
         }
 
-        if (isset($this->listening[$eventClass])) {
-            return;
+        $eventReflection = new ReflectionClass($declaredEventClass);
+
+        if (! $eventReflection->isInstantiable()) {
+            throw new InvalidArgumentException(
+                "Laravel event trigger source [{$source::key()}] declared invalid event class [{$declaredEventClass}]."
+            );
         }
 
-        $this->events->listen($eventClass, function (mixed $event) use ($eventClass): void {
-            if (! is_object($event) || $event::class !== $eventClass) {
-                return;
-            }
+        /** @var class-string $eventClass */
+        $eventClass = $eventReflection->getName();
 
-            $this->eventDispatched($eventClass, $event);
-        });
+        if (! isset($this->listening[$eventClass])) {
+            $this->events->listen($eventClass, function (mixed $event) use ($eventClass): void {
+                if (! is_object($event)
+                    || (new ReflectionClass($event))->getName() !== $eventClass) {
+                    return;
+                }
 
-        $this->listening[$eventClass] = true;
+                $this->eventDispatched($eventClass, $event);
+            });
+
+            $this->listening[$eventClass] = true;
+        }
+
+        $this->sourceEventClasses[$source::key()] = $eventClass;
     }
 
     public function validate(TriggerActivationDescriptor $descriptor): array
@@ -94,7 +107,7 @@ class LaravelEventTriggerDriver implements TriggerDriver
         // graph than the graph active at event emission.
         foreach ($this->sources->forDriver(self::key()) as $source) {
             if (! $source instanceof LaravelEventTriggerSource
-                || $source::eventClass() !== $eventClass) {
+                || ($this->sourceEventClasses[$source::key()] ?? null) !== $eventClass) {
                 continue;
             }
 
@@ -120,7 +133,11 @@ class LaravelEventTriggerDriver implements TriggerDriver
             try {
                 $payload = $source->snapshot($event);
 
-                if ($payload->eventClass !== $eventClass) {
+                $payloadEventClass = class_exists($payload->eventClass)
+                    ? (new ReflectionClass($payload->eventClass))->getName()
+                    : null;
+
+                if ($payloadEventClass !== $eventClass) {
                     throw new InvalidArgumentException(
                         "Laravel event source [{$source::key()}] returned an occurrence for [{$payload->eventClass}] while handling [{$eventClass}]."
                     );

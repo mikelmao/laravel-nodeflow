@@ -46,6 +46,10 @@ final class MakeTriggerTestEventTwo
     public function __construct(public string $tenantId = 't2', public array $userIds = ['9']) {}
 }
 
+interface MakeTriggerTestEventContract {}
+
+abstract class AbstractMakeTriggerTestEvent {}
+
 beforeEach(function () {
     $this->root = sys_get_temp_dir().'/nodeflow-make-trigger-'.bin2hex(random_bytes(6));
 
@@ -199,10 +203,45 @@ it('fails without an event class before writing a file', function () {
     $this->artisan('nodeflow:make-trigger', [
         'name' => 'NoEventTrigger',
         '--type' => 'shop.no_event',
-    ])->assertExitCode(1);
+    ])
+        ->expectsOutputToContain('eventClass()')
+        ->assertExitCode(1);
 
     expect($this->root.'/app/Nodeflow/Triggers/NoEventTrigger.php')->not->toBeFile();
 });
+
+it('rejects a loaded non-instantiable event before writing the scaffold or provider', function (string $event) {
+    mkdir($this->root.'/app/Providers', 0777, true);
+    $provider = $this->root.'/app/Providers/NodeflowServiceProvider.php';
+    $originalProvider = <<<'PHP'
+    <?php
+
+    namespace App\Providers;
+
+    use Illuminate\Support\ServiceProvider;
+
+    class NodeflowServiceProvider extends ServiceProvider
+    {
+        protected array $triggers = [
+        ];
+    }
+    PHP;
+    file_put_contents($provider, $originalProvider);
+
+    $this->artisan('nodeflow:make-trigger', [
+        'name' => 'NonInstantiableEventTrigger',
+        '--event' => $event,
+        '--type' => 'shop.non_instantiable',
+    ])
+        ->expectsOutputToContain('concrete event class')
+        ->assertExitCode(1);
+
+    expect($this->root.'/app/Nodeflow/Triggers/NonInstantiableEventTrigger.php')->not->toBeFile()
+        ->and(file_get_contents($provider))->toBe($originalProvider);
+})->with([
+    'interface' => MakeTriggerTestEventContract::class,
+    'abstract class' => AbstractMakeTriggerTestEvent::class,
+]);
 
 it('rejects reserved or malformed source keys', function (string $key) {
     $this->artisan('nodeflow:make-trigger', [

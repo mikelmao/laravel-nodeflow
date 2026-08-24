@@ -6,6 +6,7 @@ use Illuminate\Console\GeneratorCommand;
 use Illuminate\Support\Str;
 use Nodeflow\Triggers\LaravelEvent\LaravelEventTriggerDriver;
 use Nodeflow\Triggers\TriggerSourceRegistry;
+use ReflectionClass;
 use Symfony\Component\Console\Input\InputOption;
 
 use function Laravel\Prompts\text;
@@ -182,8 +183,19 @@ class MakeTriggerCommand extends GeneratorCommand
         if ($event === '') {
             throw new \InvalidArgumentException(
                 'No --event given. Unlike --type there is no safe default: a trigger whose '
-                .'event() names the wrong class attaches its listener to an event that never '
+                .'eventClass() names the wrong class attaches its listener to an event that never '
                 .'fires, and nothing reports it. Pass --event with your event class.'
+            );
+        }
+
+        $eventSymbolIsLoaded = class_exists($event)
+            || interface_exists($event)
+            || trait_exists($event);
+
+        if ($eventSymbolIsLoaded && ! (new ReflectionClass($event))->isInstantiable()) {
+            throw new \InvalidArgumentException(
+                "Loaded event symbol [{$event}] is not a concrete event class. "
+                .'Pass --event with an instantiable event class.'
             );
         }
 

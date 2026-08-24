@@ -193,6 +193,87 @@ final class AbstractEventSource extends OrderPlacedEventSource
     }
 }
 
+final class LeadingSlashEventSource extends OrderPlacedEventSource
+{
+    public static function key(): string
+    {
+        return 'test.leading_slash_event';
+    }
+
+    public static function eventClass(): string
+    {
+        return '\\'.OrderPlacedAcrossTenants::class;
+    }
+}
+
+final class CaseVariantEventSource extends OrderPlacedEventSource
+{
+    public static function key(): string
+    {
+        return 'test.case_variant_event';
+    }
+
+    public static function eventClass(): string
+    {
+        return strtolower(OrderPlacedAcrossTenants::class);
+    }
+}
+
+final class AliasedEventSource extends OrderPlacedEventSource
+{
+    public static function key(): string
+    {
+        return 'test.aliased_event';
+    }
+
+    public static function eventClass(): string
+    {
+        return 'NodeflowCanonicalOrderPlacedEventAlias';
+    }
+}
+
+final class MutableEventClassSource extends OrderPlacedEventSource
+{
+    public static string $eventClass = OrderPlacedAcrossTenants::class;
+
+    public static int $eventClassReads = 0;
+
+    public static function key(): string
+    {
+        return 'test.mutable_event_class';
+    }
+
+    public static function eventClass(): string
+    {
+        self::$eventClassReads++;
+
+        return self::$eventClass;
+    }
+}
+
+final class LaterThrowingEventClassSource extends OrderPlacedEventSource
+{
+    public static bool $throw = false;
+
+    public static int $eventClassReads = 0;
+
+    public static function key(): string
+    {
+        return 'test.later_throwing_event_class';
+    }
+
+    public static function eventClass(): string
+    {
+        self::$eventClassReads++;
+
+        if (self::$throw) {
+            throw new RuntimeException('eventClass must not be read during dispatch');
+        }
+
+        return OrderPlacedAcrossTenants::class;
+    }
+}
+
 final class RecordingEventTriggerExceptionHandler implements ExceptionHandler
 {
     /** @var Throwable[] */
@@ -249,6 +330,10 @@ final class ExplosiveEventState implements JsonSerializable
 }
 
 beforeEach(function () {
+    if (! class_exists('NodeflowCanonicalOrderPlacedEventAlias', false)) {
+        class_alias(OrderPlacedAcrossTenants::class, 'NodeflowCanonicalOrderPlacedEventAlias');
+    }
+
     $this->tenant = null;
     $this->unownedSubject = null;
 
@@ -273,6 +358,10 @@ beforeEach(function () {
     ReverseFirstOrderPlacedSource::$resolutions = 0;
     ReverseSecondOrderPlacedSource::$snapshots = 0;
     ReverseSecondOrderPlacedSource::$resolutions = 0;
+    MutableEventClassSource::$eventClass = OrderPlacedAcrossTenants::class;
+    MutableEventClassSource::$eventClassReads = 0;
+    LaterThrowingEventClassSource::$throw = false;
+    LaterThrowingEventClassSource::$eventClassReads = 0;
 
     Nodeflow::registerTriggerSources([OrderPlacedEventSource::class]);
 });
@@ -360,6 +449,49 @@ it('deduplicates a shared event listener when the opposite source registers firs
     // No activations means sources are never asked to snapshot or resolve.
     expect(ReverseFirstOrderPlacedSource::$snapshots)->toBe(0)
         ->and(ReverseSecondOrderPlacedSource::$snapshots)->toBe(0);
+});
+
+it('canonicalizes leading-slash case-variant and aliased event declarations to one listener', function () {
+    $dispatcher = Event::getFacadeRoot();
+    $before = count($dispatcher->getListeners(OrderPlacedAcrossTenants::class));
+
+    Nodeflow::registerTriggerSources([
+        LeadingSlashEventSource::class,
+        CaseVariantEventSource::class,
+        AliasedEventSource::class,
+    ]);
+
+    expect($dispatcher->getListeners(OrderPlacedAcrossTenants::class))->toHaveCount($before);
+
+    publishOrderPlacedFlow('org-1', source: LeadingSlashEventSource::key(), name: 'Leading slash');
+    publishOrderPlacedFlow('org-1', source: CaseVariantEventSource::key(), name: 'Case variant');
+    publishOrderPlacedFlow('org-1', source: AliasedEventSource::key(), name: 'Alias');
+
+    Event::dispatch(orderPlacedEvent());
+
+    expect(Run::withoutTenancy()->count())->toBe(3);
+});
+
+it('uses the event route captured at registration when a source later mutates its declaration', function () {
+    Nodeflow::registerTriggerSources([MutableEventClassSource::class]);
+    publishOrderPlacedFlow('org-1', source: MutableEventClassSource::key());
+    MutableEventClassSource::$eventClass = UnregisteredEvent::class;
+
+    Event::dispatch(orderPlacedEvent());
+
+    expect(MutableEventClassSource::$eventClassReads)->toBe(1)
+        ->and(Run::withoutTenancy()->count())->toBe(1);
+});
+
+it('never rereads a source event declaration while delivering a host event', function () {
+    Nodeflow::registerTriggerSources([LaterThrowingEventClassSource::class]);
+    publishOrderPlacedFlow('org-1', source: LaterThrowingEventClassSource::key());
+    LaterThrowingEventClassSource::$throw = true;
+
+    Event::dispatch(orderPlacedEvent());
+
+    expect(LaterThrowingEventClassSource::$eventClassReads)->toBe(1)
+        ->and(Run::withoutTenancy()->count())->toBe(1);
 });
 
 it('uses the source occurrence identity to make redelivery idempotent', function () {
