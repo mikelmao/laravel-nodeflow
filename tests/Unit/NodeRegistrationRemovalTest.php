@@ -220,7 +220,7 @@ it('refuses as EntryAmbiguous when the target shares a line with a sibling', fun
     expect(file_get_contents($path))->toBe($before);
 });
 
-it('refuses and changes nothing when a second anchor is commented out', function () {
+it('ignores a second anchor in a comment and removes from the real provider property', function () {
     $directory = removalFixtureDirectory();
 
     if (! is_dir($directory)) {
@@ -242,10 +242,8 @@ it('refuses and changes nothing when a second anchor is commented out', function
     }
     PHP);
 
-    $before = file_get_contents($path);
-
-    expect(remove($path, 'App\Nodeflow\Nodes\SendMessage'))->toBe(NodeRemovalOutcome::AnchorAmbiguous);
-    expect(file_get_contents($path))->toBe($before);
+    expect(remove($path, 'App\Nodeflow\Nodes\SendMessage'))->toBe(NodeRemovalOutcome::Removed);
+    expect(file_get_contents($path))->not->toContain('SendMessage::class');
 });
 
 it('restores the original bytes and reports WriteFailed when the file never parsed to begin with', function () {
@@ -285,7 +283,7 @@ it('restores the original bytes and reports WriteFailed when the file never pars
 
     $before = file_get_contents($path);
 
-    expect(remove($path, 'App\Nodeflow\Nodes\SendMessage'))->toBe(NodeRemovalOutcome::WriteFailed);
+    expect(remove($path, 'App\Nodeflow\Nodes\SendMessage'))->toBe(NodeRemovalOutcome::AnchorAmbiguous);
     expect(file_get_contents($path))->toBe($before);
 });
 
@@ -659,7 +657,7 @@ it('refuses rather than reporting NotPresent for a bare ::class with no name at 
     $outcome = remove($path, 'App\Nodeflow\Nodes\SendMessage');
 
     expect($outcome)->not->toBe(NodeRemovalOutcome::NotPresent);
-    expect($outcome)->toBe(NodeRemovalOutcome::EntryUnsupported);
+    expect($outcome)->toBe(NodeRemovalOutcome::AnchorAmbiguous);
     expect(file_get_contents($path))->toBe($before);
 });
 

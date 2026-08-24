@@ -12,7 +12,10 @@ it('reports a version with live runs referencing an unregistered type', function
 
     $version = FlowVersion::create([
         'flow_id' => $flow->id, 'version' => 1, 'content_hash' => 'h',
-        'graph' => ['start' => 'n1', 'nodes' => [['id' => 'n1', 'type' => 'gone.away', 'config' => []]], 'edges' => []],
+        'graph' => ['start' => 'trigger', 'nodes' => [
+            ['id' => 'trigger', 'type' => 'test.fake_trigger', 'config' => ['source' => 'test.orders']],
+            ['id' => 'n1', 'type' => 'gone.away', 'config' => []],
+        ], 'edges' => [['from' => 'trigger', 'to' => 'n1', 'output' => 'started']]],
     ]);
 
     Run::create(['flow_version_id' => $version->id, 'tenant_id' => 'org-1', 'started_via' => 'manual', 'trigger_node_id' => 'trigger', 'trigger_data' => null, 'strategy' => 'cohort', 'status' => 'waiting']);
@@ -74,7 +77,10 @@ it('logs error when enabled with unresolvable types', function () {
 
     $version = FlowVersion::create([
         'flow_id' => $flow->id, 'version' => 2, 'content_hash' => 'h',
-        'graph' => ['start' => 'n1', 'nodes' => [['id' => 'n1', 'type' => 'boot.unresolvable', 'config' => []]], 'edges' => []],
+        'graph' => ['start' => 'trigger', 'nodes' => [
+            ['id' => 'trigger', 'type' => 'test.fake_trigger', 'config' => ['source' => 'test.orders']],
+            ['id' => 'n1', 'type' => 'boot.unresolvable', 'config' => []],
+        ], 'edges' => [['from' => 'trigger', 'to' => 'n1', 'output' => 'started']]],
     ]);
 
     Run::create(['flow_version_id' => $version->id, 'tenant_id' => 'org-1', 'started_via' => 'manual', 'trigger_node_id' => 'trigger', 'trigger_data' => null, 'strategy' => 'cohort', 'status' => 'waiting']);
@@ -128,7 +134,10 @@ it('logs warning when boot check encounters exception', function () {
 
     $version = FlowVersion::create([
         'flow_id' => $flow->id, 'version' => 1, 'content_hash' => 'h',
-        'graph' => ['start' => 'n1', 'nodes' => [['id' => 'n1', 'type' => 'test.recording', 'config' => []]], 'edges' => []],
+        'graph' => ['start' => 'trigger', 'nodes' => [
+            ['id' => 'trigger', 'type' => 'test.fake_trigger', 'config' => ['source' => 'test.orders']],
+            ['id' => 'n1', 'type' => 'test.recording', 'config' => []],
+        ], 'edges' => [['from' => 'trigger', 'to' => 'n1', 'output' => 'started']]],
     ]);
 
     Run::create(['flow_version_id' => $version->id, 'tenant_id' => 'org-1', 'started_via' => 'manual', 'trigger_node_id' => 'trigger', 'trigger_data' => null, 'strategy' => 'cohort', 'status' => 'waiting']);
@@ -148,4 +157,52 @@ it('logs warning when boot check encounters exception', function () {
 
     $provider = new NodeflowServiceProvider(app());
     $provider->checkNodeTypesOnBoot();
+});
+
+it('defers boot health until host provider boot registrations have completed and runs once', function () {
+    $flow = Flow::create(['tenant_id' => 'org-1', 'name' => 'Host boot order', 'status' => 'draft']);
+    $version = FlowVersion::create([
+        'flow_id' => $flow->id, 'version' => 1, 'content_hash' => 'host-boot-order',
+        'graph' => [
+            'start' => 'trigger',
+            'nodes' => [
+                ['id' => 'trigger', 'type' => 'test.fake_trigger', 'config' => ['source' => 'test.orders']],
+                ['id' => 'work', 'type' => 'test.recording', 'config' => []],
+            ],
+            'edges' => [['from' => 'trigger', 'to' => 'work', 'output' => 'started']],
+        ],
+    ]);
+    Run::create([
+        'flow_version_id' => $version->id, 'tenant_id' => 'org-1', 'started_via' => 'manual',
+        'trigger_node_id' => 'trigger', 'trigger_data' => [], 'strategy' => 'cohort', 'status' => 'waiting',
+    ]);
+
+    config(['nodeflow.check_node_types_on_boot' => true]);
+    NodeflowServiceProvider::resetNodeTypeCheckForTesting();
+    Log::spy();
+
+    $application = app();
+    $booted = new ReflectionProperty($application, 'booted');
+    $callbacks = new ReflectionProperty($application, 'bootedCallbacks');
+    $originalBooted = $booted->getValue($application);
+    $originalCallbacks = $callbacks->getValue($application);
+    $booted->setValue($application, false);
+    $callbacks->setValue($application, []);
+
+    try {
+        // Package provider boots first and only schedules the check.
+        (new NodeflowServiceProvider($application))->boot();
+        expect($callbacks->getValue($application))->toHaveCount(1);
+
+        // A later host provider boot makes its extension visible.
+        app(NodeRegistry::class)->register(Tests\Support\RecordingSendNode::class);
+        $callback = $callbacks->getValue($application)[0];
+        $callback($application);
+        $callback($application); // once guard
+    } finally {
+        $booted->setValue($application, $originalBooted);
+        $callbacks->setValue($application, $originalCallbacks);
+    }
+
+    Log::shouldNotHaveReceived('error', fn ($message) => str_contains($message, 'Unresolvable nodeflow type'));
 });

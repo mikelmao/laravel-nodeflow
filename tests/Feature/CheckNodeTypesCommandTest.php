@@ -4,7 +4,11 @@ use Nodeflow\Models\Flow;
 use Nodeflow\Models\FlowVersion;
 use Nodeflow\Models\Run;
 use Nodeflow\Models\TriggerActivation;
+use Nodeflow\Console\CheckNodeTypesResolver;
+use Nodeflow\Nodes\NodeRegistry;
+use Illuminate\Database\Events\QueryExecuted;
 use Illuminate\Support\Facades\Artisan;
+use Illuminate\Support\Facades\DB;
 
 function healthTriggerGraph(string $type = 'test.fake_trigger', string $source = 'test.orders'): array
 {
@@ -144,4 +148,76 @@ it('passes when active and live trigger components all resolve', function () {
     healthActivation('active', healthTriggerGraph(), 'test.fake', 'test.orders');
 
     $this->artisan('nodeflow:check-node-types')->assertExitCode(0);
+});
+
+it('skips trigger-family requirements for manual and subflow runs while still checking downstream executables', function () {
+    $flow = Flow::create(['tenant_id' => 'org-1', 'name' => 'Manual pinned', 'status' => 'draft']);
+    $graph = healthTriggerGraph('gone.start');
+    $graph['nodes'][] = ['id' => 'work', 'type' => 'gone.downstream', 'config' => []];
+    $version = FlowVersion::create([
+        'flow_id' => $flow->id, 'tenant_id' => 'org-1', 'version' => 1, 'content_hash' => 'manual-pinned', 'graph' => $graph,
+    ]);
+    foreach (['manual', 'subflow'] as $origin) {
+        Run::create([
+            'flow_version_id' => $version->id, 'tenant_id' => 'org-1', 'started_via' => $origin,
+            'trigger_node_id' => 'trigger', 'trigger_data' => [], 'strategy' => 'cohort', 'status' => 'waiting',
+        ]);
+    }
+
+    Artisan::call('nodeflow:check-node-types');
+    expect(Artisan::output())
+        ->toContain("flow {$flow->id} version {$version->id} node work missing executable node type gone.downstream")
+        ->not->toContain('gone.start')
+        ->not->toContain('node trigger missing executable');
+});
+
+it('requires trigger components when mixed live origins include a trigger run', function () {
+    $flow = Flow::create(['tenant_id' => 'org-1', 'name' => 'Mixed pinned', 'status' => 'draft']);
+    $version = FlowVersion::create([
+        'flow_id' => $flow->id, 'tenant_id' => 'org-1', 'version' => 1, 'content_hash' => 'mixed-pinned',
+        'graph' => healthTriggerGraph('gone.mixed_start'),
+    ]);
+    foreach (['manual', 'trigger'] as $origin) {
+        Run::create([
+            'flow_version_id' => $version->id, 'tenant_id' => 'org-1', 'started_via' => $origin,
+            'trigger_node_id' => 'trigger', 'trigger_data' => [], 'strategy' => 'cohort', 'status' => 'waiting',
+        ]);
+    }
+
+    Artisan::call('nodeflow:check-node-types');
+    expect(Artisan::output())->toContain("flow {$flow->id} version {$version->id} node trigger missing trigger node type gone.mixed_start");
+});
+
+it('uses a bounded tenant-neutral query set and never scans inactive historical versions', function () {
+    for ($i = 0; $i < 20; $i++) {
+        $flow = Flow::create(['tenant_id' => $i % 2 ? 'org-2' : 'org-1', 'name' => "Inactive {$i}", 'status' => 'draft']);
+        $version = FlowVersion::withoutTenancy()->create([
+            'flow_id' => $flow->id, 'tenant_id' => $flow->tenant_id, 'version' => 1,
+            'content_hash' => "inactive-{$i}", 'graph' => healthTriggerGraph('gone.inactive.'.$i),
+        ]);
+        Run::withoutTenancy()->create([
+            'flow_version_id' => $version->id, 'tenant_id' => $flow->tenant_id, 'started_via' => 'trigger',
+            'trigger_node_id' => 'trigger', 'trigger_data' => [], 'strategy' => 'cohort', 'status' => 'completed',
+        ]);
+    }
+    $liveFlow = Flow::withoutTenancy()->create(['tenant_id' => 'org-2', 'name' => 'Live other tenant', 'status' => 'draft']);
+    $liveVersion = FlowVersion::withoutTenancy()->create([
+        'flow_id' => $liveFlow->id, 'tenant_id' => 'org-2', 'version' => 1,
+        'content_hash' => 'live-other', 'graph' => healthTriggerGraph(source: 'gone.other_tenant'),
+    ]);
+    Run::withoutTenancy()->create([
+        'flow_version_id' => $liveVersion->id, 'tenant_id' => 'org-2', 'started_via' => 'trigger',
+        'trigger_node_id' => 'trigger', 'trigger_data' => [], 'strategy' => 'cohort', 'status' => 'waiting',
+    ]);
+
+    $queries = 0;
+    DB::listen(function (QueryExecuted $query) use (&$queries): void {
+        if (str_starts_with(strtolower(ltrim($query->sql)), 'select')) $queries++;
+    });
+    $missing = CheckNodeTypesResolver::findMissingTypes(app(NodeRegistry::class));
+
+    expect($queries)->toBeLessThanOrEqual(4)
+        ->and($missing)->toHaveCount(1)
+        ->and($missing[0])->toContain("flow {$liveFlow->id} version {$liveVersion->id}")
+        ->toContain('gone.other_tenant');
 });

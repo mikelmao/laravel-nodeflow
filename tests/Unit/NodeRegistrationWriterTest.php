@@ -101,6 +101,27 @@ it('restores the provider and reports failure after a short write', function () 
         ->and(file_get_contents($path))->toBe($before);
 });
 
+it('leaves the original provider and no sibling temp when atomic rename fails', function () {
+    $path = providerWithAnchor();
+    $before = file_get_contents($path);
+    $files = new class extends Filesystem
+    {
+        public function move($path, $target)
+        {
+            if (str_contains($path, '.nodeflow-tmp-')) return false;
+
+            return parent::move($path, $target);
+        }
+    };
+
+    $outcome = (new NodeRegistrationWriter($files, [providerFixtureDirectory()]))
+        ->register($path, 'App\Nodeflow\Nodes\RenameFailure');
+
+    expect($outcome)->toBe(NodeRegistrationOutcome::WriteFailed)
+        ->and(file_get_contents($path))->toBe($before)
+        ->and(glob(providerFixtureDirectory().'/*.nodeflow-tmp-*') ?: [])->toBe([]);
+});
+
 it('appends between the anchor and the closing bracket of its own array', function () {
     // The counterfactual this replaced an ordering assertion for: drop
     // `+ strlen(self::ANCHOR)` from the insertion position and the entry lands
@@ -278,7 +299,7 @@ it('refuses to guess when the anchor is ambiguous', function () {
     $path = writeProviderFixture(<<<'PHP'
     <?php
 
-    class Two
+    class NodeflowServiceProvider
     {
         protected array $nodes = [
         ];
@@ -439,12 +460,8 @@ it('refuses an attribute method whose body is not a bare return array', function
     expect(file_get_contents($path))->toBe($before);
 });
 
-it('refuses a duplicated trigger anchor and writes nothing', function () {
-    // Counterfactual: drop the >1 check and this fails — two source arrays
-    // means the writer cannot know which one the boot() call spreads.
+it('ignores a trigger anchor mentioned only in a comment', function () {
     $path = providerWithThreeHomes(threeHomesSource().PHP_EOL.'// protected array $triggerSources = [');
-
-    $before = file_get_contents($path);
 
     $outcome = (new NodeRegistrationWriter(new Filesystem))->appendTo(
         $path,
@@ -453,8 +470,139 @@ it('refuses a duplicated trigger anchor and writes nothing', function () {
         '\App\Nodeflow\Triggers\OrderPlaced::class',
     );
 
-    expect($outcome)->toBe(NodeRegistrationOutcome::AnchorAmbiguous);
-    expect(file_get_contents($path))->toBe($before);
+    expect($outcome)->toBe(NodeRegistrationOutcome::Appended);
+    expect(substr_count(file_get_contents($path), 'OrderPlaced::class'))->toBe(1);
+});
+
+it('only treats a unique real provider-owned array property as a registration home', function (string $body, NodeRegistrationOutcome $expected) {
+    $path = writeProviderFixture($body);
+    $before = file_get_contents($path);
+
+    $outcome = (new NodeRegistrationWriter(new Filesystem))->appendTo(
+        $path,
+        NodeRegistrationWriter::TRIGGER_SOURCE_ANCHOR,
+        'App\\Nodeflow\\Triggers\\OrderPlaced::class',
+        '\\App\\Nodeflow\\Triggers\\OrderPlaced::class',
+    );
+
+    expect($outcome)->toBe($expected)
+        ->and(file_get_contents($path))->toBe($before);
+})->with([
+    'string literal' => [<<<'PHP'
+        <?php
+        class NodeflowServiceProvider
+        {
+            public string $example = 'protected array $triggerSources = [';
+        }
+        PHP, NodeRegistrationOutcome::AnchorMissing],
+    'decoy class' => [<<<'PHP'
+        <?php
+        class DecoyProvider
+        {
+            protected array $triggerSources = [];
+        }
+        class NodeflowServiceProvider {}
+        PHP, NodeRegistrationOutcome::AnchorMissing],
+    'trait property' => [<<<'PHP'
+        <?php
+        trait TriggerHomes
+        {
+            protected array $triggerSources = [];
+        }
+        class NodeflowServiceProvider
+        {
+            use TriggerHomes;
+        }
+        PHP, NodeRegistrationOutcome::AnchorMissing],
+    'wrong property type' => [<<<'PHP'
+        <?php
+        class NodeflowServiceProvider
+        {
+            protected string $triggerSources = 'protected array $triggerSources = [';
+        }
+        PHP, NodeRegistrationOutcome::AnchorAmbiguous],
+    'duplicate real properties' => [<<<'PHP'
+        <?php
+        class NodeflowServiceProvider
+        {
+            protected array $triggerSources = [];
+            protected array $triggerSources = [];
+        }
+        PHP, NodeRegistrationOutcome::AnchorAmbiguous],
+]);
+
+it('does not select a helper property over the unique differently named package service provider', function () {
+    $path = writeProviderFixture(<<<'PHP'
+        <?php
+
+        namespace Vendor\Package;
+
+        use Illuminate\Support\ServiceProvider;
+
+        class RegistrationHelper
+        {
+            protected array $triggerSources = [];
+        }
+
+        class PackageServiceProvider extends ServiceProvider
+        {
+        }
+        PHP);
+    $before = file_get_contents($path);
+
+    $outcome = (new NodeRegistrationWriter(new Filesystem))->appendTo(
+        $path,
+        NodeRegistrationWriter::TRIGGER_SOURCE_ANCHOR,
+        'Vendor\\Package\\OrderPlaced::class',
+        '\\Vendor\\Package\\OrderPlaced::class',
+    );
+
+    expect($outcome)->toBe(NodeRegistrationOutcome::AnchorMissing)
+        ->and(file_get_contents($path))->toBe($before);
+});
+
+it('refuses an ambiguous package file containing multiple service providers', function () {
+    $path = writeProviderFixture(<<<'PHP'
+        <?php
+
+        namespace Vendor\Package;
+
+        use Illuminate\Support\ServiceProvider;
+
+        class FirstServiceProvider extends ServiceProvider
+        {
+            protected array $triggerSources = [];
+        }
+
+        class SecondServiceProvider extends ServiceProvider
+        {
+        }
+        PHP);
+    $before = file_get_contents($path);
+
+    $outcome = (new NodeRegistrationWriter(new Filesystem))->appendTo(
+        $path,
+        NodeRegistrationWriter::TRIGGER_SOURCE_ANCHOR,
+        'Vendor\\Package\\OrderPlaced::class',
+        '\\Vendor\\Package\\OrderPlaced::class',
+    );
+
+    expect($outcome)->toBe(NodeRegistrationOutcome::AnchorAmbiguous)
+        ->and(file_get_contents($path))->toBe($before);
+});
+
+it('inserts into the structural provider array without changing CRLF formatting', function () {
+    $path = providerWithThreeHomes(str_replace("\n", "\r\n", threeHomesSource()));
+
+    $outcome = (new NodeRegistrationWriter(new Filesystem))->appendTo(
+        $path,
+        NodeRegistrationWriter::TRIGGER_SOURCE_ANCHOR,
+        'App\\Nodeflow\\Triggers\\OrderPlaced::class',
+        '\\App\\Nodeflow\\Triggers\\OrderPlaced::class',
+    );
+
+    expect($outcome)->toBe(NodeRegistrationOutcome::Appended)
+        ->and(preg_match('/(?<!\r)\n/', file_get_contents($path)))->toBe(0);
 });
 
 it('appends after a docblock example that itself contains "return [", not into it', function () {
@@ -496,7 +644,7 @@ it('appends after a docblock example that itself contains "return [", not into i
     expectParseablePhp($path);
 });
 
-it('refuses a write that would land inside a commented-out anchor, and restores the original bytes', function () {
+it('ignores a commented-out anchor and reports the real provider home missing', function () {
     // C2 / E11. The `$nodes` home's own declaration line is commented out, so
     // ANCHOR still matches once, raw, and the insertion point still looks
     // valid right up until the result is read back — the array it appears to
@@ -528,7 +676,7 @@ it('refuses a write that would land inside a commented-out anchor, and restores 
     $outcome = (new NodeRegistrationWriter(new Filesystem))
         ->register($path, 'App\Nodeflow\Nodes\SendSms');
 
-    expect($outcome)->toBe(NodeRegistrationOutcome::WriteFailed);
+    expect($outcome)->toBe(NodeRegistrationOutcome::AnchorAmbiguous);
     expect($outcome)->not->toBe(NodeRegistrationOutcome::Appended);
     expect(file_get_contents($path))->toBe($before);
 });

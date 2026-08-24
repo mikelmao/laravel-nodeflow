@@ -29,6 +29,8 @@ class MakeTriggerSourceCommand extends GeneratorCommand
     public function handle(): int
     {
         $this->resolvedDriver = $this->resolvedKey = $this->resolvedSelector = null;
+        $registrationOutcome = null;
+        $class = null;
 
         try {
             $this->assertSafeName();
@@ -44,18 +46,27 @@ class MakeTriggerSourceCommand extends GeneratorCommand
             }
             $path = $this->getPath($class);
             $contents = $this->sortImports($this->buildClass($class));
-            $this->laravel->make(VerifiedGeneratorWriter::class)->write(
+            (new VerifiedGeneratorWriter($this->laravel->make('files'), [$this->laravel->basePath('app')]))->write(
                 [$path => $contents],
                 (bool) $this->option('force'),
+                function () use ($class, &$registrationOutcome): void {
+                    $registrationOutcome = $this->registrationOutcome($class);
+                    if (! in_array($registrationOutcome, [NodeRegistrationOutcome::Appended, NodeRegistrationOutcome::AlreadyPresent], true)) {
+                        throw new InvalidArgumentException('Automatic provider registration was unsafe; the generated file was rolled back.');
+                    }
+                },
             );
         } catch (InvalidArgumentException $e) {
             $this->components->error($e->getMessage());
+            if ($class !== null && $registrationOutcome !== null) {
+                $this->manualRegistration($class);
+            }
 
             return self::FAILURE;
         }
 
         $this->components->info("Trigger source [{$path}] created successfully.");
-        $this->register($class);
+        $this->components->info($registrationOutcome === NodeRegistrationOutcome::Appended ? 'Registered trigger source.' : 'Trigger source already registered.');
 
         return self::SUCCESS;
     }
@@ -196,19 +207,18 @@ class MakeTriggerSourceCommand extends GeneratorCommand
         }
     }
 
-    private function register(string $class): void
+    private function registrationOutcome(string $class): NodeRegistrationOutcome
     {
-        $outcome = $this->laravel->make(NodeRegistrationWriter::class)->appendTo(
+        return (new NodeRegistrationWriter($this->laravel->make('files'), [$this->laravel->basePath('app')]))->appendTo(
             $this->laravel->basePath('app/Providers/NodeflowServiceProvider.php'),
             NodeRegistrationWriter::TRIGGER_SOURCE_ANCHOR,
             ltrim($class, '\\').'::class',
             '\\'.ltrim($class, '\\').'::class',
         );
-        if (in_array($outcome, [NodeRegistrationOutcome::Appended, NodeRegistrationOutcome::AlreadyPresent], true)) {
-            $this->components->info($outcome === NodeRegistrationOutcome::Appended ? 'Registered trigger source.' : 'Trigger source already registered.');
-            return;
-        }
+    }
 
+    private function manualRegistration(string $class): void
+    {
         $this->components->warn('Automatic provider registration was unsafe. Register the trigger source yourself:');
         $this->line('    \\Nodeflow\\Nodeflow::registerTriggerSources([');
         $this->line('        \\'.ltrim($class, '\\').'::class,');

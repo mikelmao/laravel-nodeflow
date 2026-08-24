@@ -260,16 +260,43 @@ it('validates a custom provider stub completely before creating the destination'
         "function app(...\$arguments): mixed { return null; }\n\nuse Illuminate\\Support\\ServiceProvider;",
         $stub,
     )],
+    'direct source before driver phase' => [fn (string $stub): string => str_replace(
+        'Nodeflow::register($this->nodes);',
+        "Nodeflow::register(\$this->nodes);\n        Nodeflow::registerTriggerSources([\\App\\EarlySource::class]);",
+        $stub,
+    )],
+    'direct node after source phase' => [fn (string $stub): string => str_replace(
+        'Nodeflow::registerTriggerSources($this->triggerSources);',
+        "Nodeflow::registerTriggerSources(\$this->triggerSources);\n        Nodeflow::registerTriggerNodes([\\App\\LateNode::class]);",
+        $stub,
+    )],
+    'interleaved direct driver after node phase' => [fn (string $stub): string => str_replace(
+        'Nodeflow::registerTriggerNodes($this->triggerNodes);',
+        "Nodeflow::registerTriggerNodes(\$this->triggerNodes);\n        Nodeflow::registerTriggerDrivers([\\App\\LateDriver::class]);",
+        $stub,
+    )],
+    'trigger registration hidden in a closure' => [fn (string $stub): string => str_replace(
+        'Nodeflow::registerTriggerSources($this->triggerSources);',
+        "Nodeflow::registerTriggerSources(\$this->triggerSources);\n        \$hidden = function (): void { Nodeflow::registerTriggerDrivers([\\App\\HiddenDriver::class]); };",
+        $stub,
+    )],
+    'ambiguous dynamic trigger receiver' => [fn (string $stub): string => str_replace(
+        'Nodeflow::registerTriggerSources($this->triggerSources);',
+        "Nodeflow::registerTriggerSources(\$this->triggerSources);\n        (Nodeflow)::registerTriggerSources([\\App\\DynamicSource::class]);",
+        $stub,
+    )],
 ]);
 
 it('removes a partially created provider when its destination write or verification throws', function (string $mode) {
     $files = new class($this->path, $mode) extends Filesystem
     {
+        private bool $failedRead = false;
+
         public function __construct(private string $target, private string $mode) {}
 
         public function put($path, $contents, $lock = false)
         {
-            if ($path === $this->target && $this->mode === 'put') {
+            if (str_contains($path, '.nodeflow-tmp-') && $this->mode === 'put') {
                 parent::put($path, substr($contents, 0, -1), $lock);
 
                 throw new RuntimeException('Injected destination write failure.');
@@ -280,7 +307,8 @@ it('removes a partially created provider when its destination write or verificat
 
         public function get($path, $lock = false)
         {
-            if ($path === $this->target && $this->mode === 'get') {
+            if ($path === $this->target && $this->mode === 'get' && ! $this->failedRead) {
+                $this->failedRead = true;
                 throw new RuntimeException('Injected destination verification failure.');
             }
 
@@ -295,6 +323,33 @@ it('removes a partially created provider when its destination write or verificat
     'write throws after partial bytes' => ['put'],
     'verification read throws after complete write' => ['get'],
 ]);
+
+it('leaves no provider or sibling temp when the atomic create rename fails', function () {
+    $files = new class extends Filesystem
+    {
+        public function move($path, $target)
+        {
+            if (str_contains($path, '.nodeflow-tmp-')) return false;
+
+            return parent::move($path, $target);
+        }
+    };
+
+    $step = new ProviderStep($files, $this->root, 'App\\');
+    expect($step->apply())->toBe(InstallOutcome::CannotWire)
+        ->and($this->path)->not->toBeFile()
+        ->and(glob(dirname($this->path).'/*.nodeflow-tmp-*') ?: [])->toBe([]);
+});
+
+it('preserves a restrictive provider mode through an atomic upgrade', function () {
+    if (DIRECTORY_SEPARATOR === '\\') $this->markTestSkipped('Unix modes are not portable to Windows.');
+
+    file_put_contents($this->path, handWrittenProvider());
+    chmod($this->path, 0600);
+
+    expect($this->step->apply())->toBe(InstallOutcome::Wired)
+        ->and(fileperms($this->path) & 0777)->toBe(0600);
+});
 
 it('accepts a real boot method containing nested closure braces', function () {
     mkdir($this->root.'/stubs', 0777, true);
@@ -322,6 +377,27 @@ it('accepts unrelated direct host registrations in the real boot method', functi
 
     expect($this->step->apply())->toBe(InstallOutcome::Wired);
     expectParseablePhp($this->path);
+});
+
+it('accepts direct trigger registrations when every call stays in driver node source phases', function () {
+    mkdir($this->root.'/stubs', 0777, true);
+    $stub = file_get_contents(__DIR__.'/../../../stubs/nodeflow-provider.stub');
+    $stub = str_replace(
+        [
+            'Nodeflow::registerTriggerDrivers($this->triggerDrivers);',
+            'Nodeflow::registerTriggerNodes($this->triggerNodes);',
+            'Nodeflow::registerTriggerSources($this->triggerSources);',
+        ],
+        [
+            "Nodeflow::registerTriggerDrivers([\\App\\FirstDriver::class]);\n        Nodeflow::registerTriggerDrivers(\$this->triggerDrivers);",
+            "Nodeflow::registerTriggerNodes([\\App\\FirstNode::class]);\n        Nodeflow::registerTriggerNodes(\$this->triggerNodes);",
+            "Nodeflow::registerTriggerSources([\\App\\FirstSource::class]);\n        Nodeflow::registerTriggerSources(\$this->triggerSources);",
+        ],
+        $stub,
+    );
+    file_put_contents($this->root.'/stubs/nodeflow-provider.stub', $stub);
+
+    expect($this->step->apply())->toBe(InstallOutcome::Wired);
 });
 
 it('leaves an existing structurally decoy provider untouched', function () {

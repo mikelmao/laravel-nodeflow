@@ -50,7 +50,14 @@ function seedVersionWithLiveRun(string $tenantId, string $type): FlowVersion
             'version' => 1,
             // Deliberately raw: this fixture probes CheckNodeTypesResolver against
             // historical persisted executable graphs without publishing them.
-            'graph' => ['start' => 'n1', 'nodes' => [['id' => 'n1', 'type' => $type, 'config' => []]], 'edges' => []],
+            'graph' => [
+                'start' => 'trigger',
+                'nodes' => [
+                    ['id' => 'trigger', 'type' => 'test.fake_trigger', 'config' => ['source' => 'test.orders']],
+                    ['id' => 'n1', 'type' => $type, 'config' => []],
+                ],
+                'edges' => [['from' => 'trigger', 'to' => 'n1', 'output' => 'started']],
+            ],
             'content_hash' => 'x',
             'published_at' => now(),
         ]);

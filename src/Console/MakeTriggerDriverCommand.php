@@ -23,6 +23,8 @@ class MakeTriggerDriverCommand extends GeneratorCommand
     public function handle(): int
     {
         $this->resolvedKey = null;
+        $registrationOutcome = null;
+        $driverClass = $nodeClass = null;
 
         try {
             $this->assertSafeName();
@@ -45,12 +47,25 @@ class MakeTriggerDriverCommand extends GeneratorCommand
             ];
 
             $this->assertAvailableClasses([$driverClass, $nodeClass]);
-            $this->laravel->make(VerifiedGeneratorWriter::class)->write(
+            $this->laravel->make('files')->ensureDirectoryExists($this->laravel->basePath('tests'));
+            (new VerifiedGeneratorWriter($this->laravel->make('files'), [
+                $this->laravel->basePath('app'),
+                $this->laravel->basePath('tests'),
+            ]))->write(
                 $paths,
                 (bool) $this->option('force'),
+                function () use ($driverClass, $nodeClass, &$registrationOutcome): void {
+                    $registrationOutcome = $this->registrationOutcome($driverClass, $nodeClass);
+                    if (! in_array($registrationOutcome, [NodeRegistrationOutcome::Appended, NodeRegistrationOutcome::AlreadyPresent], true)) {
+                        throw new InvalidArgumentException('Automatic provider registration was unsafe; the complete extension kit was rolled back.');
+                    }
+                },
             );
         } catch (InvalidArgumentException $e) {
             $this->components->error($e->getMessage());
+            if ($driverClass !== null && $nodeClass !== null && $registrationOutcome !== null) {
+                $this->manualRegistration($driverClass, $nodeClass);
+            }
 
             return self::FAILURE;
         }
@@ -58,7 +73,7 @@ class MakeTriggerDriverCommand extends GeneratorCommand
         $this->components->info("Trigger driver [{$driverClass}] created.");
         $this->components->info("Reference trigger [{$nodeClass}] created with type [{$type}].");
         $this->components->info('Contract test ['.$this->testPath($driverClass).'] created.');
-        $this->registerKit($driverClass, $nodeClass);
+        $this->components->info('Registered trigger driver and reference node in dependency order.');
 
         return self::SUCCESS;
     }
@@ -164,22 +179,19 @@ class MakeTriggerDriverCommand extends GeneratorCommand
         }
     }
 
-    private function registerKit(string $driverClass, string $nodeClass): void
+    private function registrationOutcome(string $driverClass, string $nodeClass): NodeRegistrationOutcome
     {
-        $outcome = $this->laravel->make(NodeRegistrationWriter::class)->appendMany(
+        return (new NodeRegistrationWriter($this->laravel->make('files'), [$this->laravel->basePath('app')]))->appendMany(
             $this->laravel->basePath('app/Providers/NodeflowServiceProvider.php'),
             [
                 ['anchor' => NodeRegistrationWriter::TRIGGER_DRIVER_ANCHOR, 'presence' => $driverClass.'::class', 'entry' => '\\'.$driverClass.'::class'],
                 ['anchor' => NodeRegistrationWriter::TRIGGER_NODE_ANCHOR, 'presence' => $nodeClass.'::class', 'entry' => '\\'.$nodeClass.'::class'],
             ],
         );
+    }
 
-        if (in_array($outcome, [NodeRegistrationOutcome::Appended, NodeRegistrationOutcome::AlreadyPresent], true)) {
-            $this->components->info('Registered trigger driver and reference node in dependency order.');
-
-            return;
-        }
-
+    private function manualRegistration(string $driverClass, string $nodeClass): void
+    {
         $this->components->warn('Automatic provider registration was unsafe. Register the extension kit yourself in this order:');
         $this->line("    \\Nodeflow\\Nodeflow::registerTriggerDrivers([\\{$driverClass}::class]);");
         $this->line("    \\Nodeflow\\Nodeflow::registerTriggerNodes([\\{$nodeClass}::class]);");

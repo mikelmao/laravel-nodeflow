@@ -1760,45 +1760,14 @@ it('refuses a same-named import sitting in a SIBLING provider file, not just the
     expect(hostTreeHash($this->root))->toBe($before);
 });
 
-it('refuses (safe, over-refusal) rather than mis-locate the $nodes array when the anchor text appears more than once in the provider file (Minor 2)', function () {
-    // NodeRegistrationWriter::findClassEntrySpans() guards against the SAME
-    // ambiguity appendTo()/removeFrom() already guard against: a SECOND,
-    // real occurrence of the anchor text 'protected array $nodes = [' --
-    // here, a second class left in the same file -- makes WHICH array a raw
-    // strpos() would find genuinely ambiguous. This is the fixture that
-    // actually discriminates the guard: a string-literal repro (e.g. `const
-    // HINT = 'protected array $nodes = [';`) turned out NOT to, because
-    // arraySpan()'s own token-alignment check (openIndex must land on a REAL
-    // '[' token) already rejects an anchor position landing inside a string
-    // token regardless of this guard -- confirmed by executing that fixture
-    // against a build with the guard removed: it still refused safely, for a
-    // DIFFERENT reason. Two REAL property declarations don't have that
-    // accidental protection: raw strpos() finds the FIRST one, which parses
-    // as a perfectly valid (if wrong) array either way. Counterfactual:
-    // delete the substr_count($contents, $anchor) !== 1 guard from
-    // findClassEntrySpans() and this test fails at exit 0 -- the FIRST
-    // class's $nodes entry is silently exempted, its own ambiguity with the
-    // second occurrence never detected.
-    //
-    // ORDERING IN THIS FIXTURE IS LOAD-BEARING -- do not "tidy" it (e.g. by
-    // alphabetising the two classes, which would put LeftoverDuplicateProvider
-    // first). Raw strpos() always finds the FIRST occurrence of the anchor
-    // text. Putting the DUPLICATE (empty-array) class first would refuse
-    // either way, with or without the guard: without it, strpos() finds the
-    // empty array, parses it successfully, and correctly finds zero matching
-    // elements in it -- the exact same [] result the guard itself would
-    // produce, so that ordering cannot tell the two apart. Only with the
-    // REAL, non-empty class's own array occurring FIRST does removing the
-    // guard actually change the observable outcome (it silently succeeds by
-    // accident instead of refusing on principle), which is why the real
-    // class must stay first for this test to mean anything.
+it('scopes the nodes home to NodeflowServiceProvider when a decoy class owns the same property', function () {
+    // Structural lookup gives the exact NodeflowServiceProvider class priority;
+    // the identically named property in an unrelated class is not its anchor.
     $class = writeAppNode($this->root, 'MinorTwoNode', 'minor.two.node');
 
     $providerDirectory = $this->root.'/app/Providers';
     mkdir($providerDirectory, 0777, true);
 
-    // NodeflowServiceProvider (the REAL, non-empty $nodes array) MUST come
-    // FIRST in this file -- see the ordering note above.
     file_put_contents($providerDirectory.'/NodeflowServiceProvider.php', <<<'PHP'
     <?php
 
@@ -1824,13 +1793,11 @@ it('refuses (safe, over-refusal) rather than mis-locate the $nodes array when th
     }
     PHP);
 
-    $before = hostTreeHash($this->root);
-
     $this->artisan('nodeflow:extract-node', ['class' => $class, '--package' => 'acme/widgets'])
-        ->expectsOutputToContain('NodeflowServiceProvider.php')
-        ->assertFailed();
+        ->assertSuccessful();
 
-    expect(hostTreeHash($this->root))->toBe($before);
+    expect($this->root.'/app/Nodeflow/Nodes/MinorTwoNode.php')->not->toBeFile()
+        ->and($this->root.'/packages/acme/widgets/src/Nodes/MinorTwoNode.php')->toBeFile();
 });
 
 it('does not refuse a node file that names its own FQCN inside itself, not just via self/static', function () {

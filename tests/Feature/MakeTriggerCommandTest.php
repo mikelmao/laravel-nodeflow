@@ -122,9 +122,10 @@ it('prints the exact manual trigger-node registration when its anchor is unsafe'
         'name' => 'ManualNode', '--driver' => 'webhook', '--type' => 'shop.manual_node',
     ]);
 
-    expect($exit)->toBe(0)
+    expect($exit)->toBe(1)
         ->and(Artisan::output())->toContain('\\Nodeflow\\Nodeflow::registerTriggerNodes([')
-        ->toContain('\\App\\Nodeflow\\Triggers\\ManualNode::class,');
+        ->toContain('\\App\\Nodeflow\\Triggers\\ManualNode::class,')
+        ->and($this->root.'/app/Nodeflow/Triggers/ManualNode.php')->not->toBeFile();
 });
 
 it('deduplicates and preserves CRLF provider formatting', function () {
@@ -158,7 +159,7 @@ it('fails and restores generator writes before touching a CRLF provider', functi
 
         public function put($path, $contents, $lock = false)
         {
-            if ($path === $this->target && $this->intercept) {
+            if (str_contains($path, '.nodeflow-tmp-') && $this->intercept) {
                 $this->intercept = false;
                 $written = $this->mode === 'short' ? substr($contents, 0, -1) : '<?php malformed {';
                 parent::put($path, $written, $lock);

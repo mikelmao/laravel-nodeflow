@@ -169,7 +169,7 @@ it('fails and restores generator writes without provider or listener mutation', 
 
         public function put($path, $contents, $lock = false)
         {
-            if ($path === $this->target && $this->intercept) {
+            if (str_contains($path, '.nodeflow-tmp-') && $this->intercept) {
                 $this->intercept = false;
                 $written = $this->mode === 'short' ? substr($contents, 0, -1) : '<?php malformed {';
                 parent::put($path, $written, $lock);

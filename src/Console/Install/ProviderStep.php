@@ -3,6 +3,7 @@
 namespace Nodeflow\Console\Install;
 
 use Illuminate\Filesystem\Filesystem;
+use Nodeflow\Console\AtomicFileWriter;
 use Nodeflow\Console\NodeRegistrationWriter;
 use Nodeflow\Console\SourceText;
 
@@ -187,7 +188,6 @@ final class ProviderStep implements InstallStep
         // Build the complete edit in memory and write once. A later unsafe home
         // can therefore never leave an earlier partial insertion behind.
         $contents = $this->files->get($this->path());
-        $original = $contents;
 
         foreach ($this->homes() as $home) {
             // Same comment-stripped needle match as check(): otherwise a home
@@ -266,18 +266,17 @@ final class ProviderStep implements InstallStep
         }
 
         try {
-            $writtenBytes = $this->files->put($this->path(), $contents);
-            $written = $this->files->exists($this->path()) ? $this->files->get($this->path()) : null;
-            if ($writtenBytes !== strlen($contents)
-                || $written !== $contents
-                || ! $this->isCompleteProvider($written)) {
-                $this->files->put($this->path(), $original);
-
-                return InstallOutcome::CannotWire;
-            }
+            $this->atomicWriter()->write(
+                [$this->path() => $contents],
+                [$this->basePath.'/app'],
+                true,
+                function (string $written): void {
+                    if (! $this->isCompleteProvider($written)) {
+                        throw new \InvalidArgumentException('The upgraded provider is incomplete.');
+                    }
+                },
+            );
         } catch (\Throwable) {
-            $this->files->put($this->path(), $original);
-
             return InstallOutcome::CannotWire;
         }
 
@@ -342,21 +341,17 @@ final class ProviderStep implements InstallStep
         $this->files->ensureDirectoryExists(dirname($this->path()));
 
         try {
-            $writtenBytes = $this->files->put($this->path(), $rendered);
-            $written = $this->files->exists($this->path()) ? $this->files->get($this->path()) : null;
-            if ($writtenBytes !== strlen($rendered)
-                || $written !== $rendered
-                || ! $this->isCompleteProvider($written)) {
-                throw new \RuntimeException('The created provider could not be verified.');
-            }
+            $this->atomicWriter()->write(
+                [$this->path() => $rendered],
+                [$this->basePath.'/app'],
+                false,
+                function (string $written): void {
+                    if (! $this->isCompleteProvider($written)) {
+                        throw new \InvalidArgumentException('The created provider is incomplete.');
+                    }
+                },
+            );
         } catch (\Throwable) {
-            try {
-                $this->files->delete($this->path());
-            } catch (\Throwable) {
-                // CannotWire is still the only safe outcome. Filesystem-level
-                // recovery failures remain visible to the host on inspection.
-            }
-
             return InstallOutcome::CannotWire;
         }
 
@@ -366,6 +361,11 @@ final class ProviderStep implements InstallStep
     private function path(): string
     {
         return $this->basePath.'/'.self::PATH;
+    }
+
+    private function atomicWriter(): AtomicFileWriter
+    {
+        return new AtomicFileWriter($this->files);
     }
 
     /** Host stub overrides, the same convention MakeNodeCommand::resolveStubPath() follows. */

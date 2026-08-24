@@ -103,7 +103,7 @@ it('scaffolds trigger extensions only through the public trigger contracts', fun
         ->toContain('TriggerNodeRegistry');
 
     foreach (['MakeTriggerCommand.php', 'MakeTriggerSourceCommand.php', 'MakeTriggerDriverCommand.php'] as $command) {
-        expect(file_get_contents($root.'src/Console/'.$command))->toContain('VerifiedGeneratorWriter::class');
+        expect(file_get_contents($root.'src/Console/'.$command))->toContain('new VerifiedGeneratorWriter');
     }
     expect(file_get_contents($root.'src/Console/Install/ProviderStep.php'))
         ->toContain('ProviderStructureInspector::valid');

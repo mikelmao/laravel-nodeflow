@@ -137,7 +137,10 @@ class NodeflowServiceProvider extends ServiceProvider
             StartFlowNode::class,
         ]);
 
-        $this->checkNodeTypesOnBoot();
+        // Host providers register custom components in their boot() methods.
+        // Resolve health only after every provider has booted, regardless of
+        // package-provider ordering, while retaining the once-per-process guard.
+        $this->app->booted(fn () => $this->checkNodeTypesOnBoot());
     }
 
     public function checkNodeTypesOnBoot(): void

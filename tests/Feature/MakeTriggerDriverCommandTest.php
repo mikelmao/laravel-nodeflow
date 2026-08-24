@@ -117,7 +117,7 @@ it('rolls back every kit file after a short write', function () {
 
         public function put($path, $contents, $lock = false)
         {
-            if ($this->truncate && str_ends_with($path, '/ShortDriver.php')) {
+            if ($this->truncate && str_contains($path, 'ShortDriver.php.nodeflow-tmp-')) {
                 $this->truncate = false;
                 parent::put($path, substr($contents, 0, -1), $lock);
 
@@ -173,12 +173,14 @@ it('prints exact manual driver then node registration calls when provider insert
     $provider = $this->root.'/app/Providers/NodeflowServiceProvider.php';
     file_put_contents($provider, "<?php\nclass NodeflowServiceProvider {\n    protected array \$triggerDrivers = [\n    ];\n}\n");
     $before = file_get_contents($provider);
-    Artisan::call('nodeflow:make-trigger-driver', ['name' => 'ManualDriver', '--key' => 'shop.manual_driver']);
+    $exit = Artisan::call('nodeflow:make-trigger-driver', ['name' => 'ManualDriver', '--key' => 'shop.manual_driver']);
     $output = Artisan::output();
     expect($output)->toContain('\\Nodeflow\\Nodeflow::registerTriggerDrivers([\\App\\Nodeflow\\TriggerDrivers\\ManualDriver::class]);')
         ->toContain('\\Nodeflow\\Nodeflow::registerTriggerNodes([\\App\\Nodeflow\\Triggers\\ManualDriverTrigger::class]);')
         ->and(strpos($output, 'registerTriggerDrivers'))->toBeLessThan(strpos($output, 'registerTriggerNodes'))
-        ->and(file_get_contents($provider))->toBe($before);
+        ->and(file_get_contents($provider))->toBe($before)
+        ->and($exit)->toBe(1)
+        ->and($this->root.'/app/Nodeflow/TriggerDrivers/ManualDriver.php')->not->toBeFile();
 });
 
 it('preserves CRLF while registering both kit classes in order', function () {

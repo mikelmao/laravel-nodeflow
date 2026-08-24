@@ -3,6 +3,7 @@
 namespace Nodeflow\Console;
 
 use Illuminate\Filesystem\Filesystem;
+use Nodeflow\Console\Install\ProviderStructureInspector;
 
 /**
  * Appends a component class to an exact host NodeflowServiceProvider anchor.
@@ -59,7 +60,8 @@ class NodeRegistrationWriter
     /** Tokens that are legal ANYWHERE between a class-reference element's parts. */
     private const INSIGNIFICANT_TOKEN_IDS = [T_WHITESPACE, T_COMMENT, T_DOC_COMMENT];
 
-    public function __construct(private Filesystem $files) {}
+    /** @param list<string> $allowedRoots */
+    public function __construct(private Filesystem $files, private array $allowedRoots = []) {}
 
     public function register(string $providerPath, string $nodeClass): NodeRegistrationOutcome
     {
@@ -128,18 +130,11 @@ class NodeRegistrationWriter
             $entry = $registration['entry'];
             $indent = $registration['indent'] ?? '        ';
 
-            // Anchor counts stay on the RAW bytes deliberately: a commented-out
-            // anchor (e.g. `// protected array $triggers = [`) must still count
-            // towards ambiguity, because the insertion offset computed below is a
-            // RAW byte offset and a second, commented copy of the anchor text is
-            // exactly the situation that makes "which one?" unanswerable.
-            $occurrences = substr_count($updated, $anchor);
-
-            if ($occurrences === 0) {
+            $location = $this->anchorLocation($updated, $anchor);
+            if ($location['status'] === 'missing') {
                 return NodeRegistrationOutcome::AnchorMissing;
             }
-
-            if ($occurrences > 1) {
+            if ($location['status'] === 'ambiguous') {
                 return NodeRegistrationOutcome::AnchorAmbiguous;
             }
 
@@ -183,15 +178,23 @@ class NodeRegistrationWriter
             }
         }
 
-        $writtenBytes = $this->files->put($providerPath, $updated);
-        $written = $this->files->exists($providerPath) ? $this->files->get($providerPath) : null;
-
-        if ($writtenBytes !== strlen($updated)
-            || $written !== $updated
-            || ! $this->parses($written)
-            || ! $this->hasSafeTriggerTopology($written)) {
-            $this->files->put($providerPath, $contents);
-
+        try {
+            (new AtomicFileWriter($this->files))->write(
+                [$providerPath => $updated],
+                $this->rootsFor($providerPath),
+                true,
+                function (string $written) use ($registrations): void {
+                    if (! $this->parses($written) || ! $this->hasSafeTriggerTopology($written)) {
+                        throw new \InvalidArgumentException('The rendered provider is not structurally safe.');
+                    }
+                    foreach ($registrations as $registration) {
+                        if (! $this->isAlreadyPresent($written, $registration['anchor'], $registration['presence'])) {
+                            throw new \InvalidArgumentException('A rendered registration did not verify in its structural home.');
+                        }
+                    }
+                },
+            );
+        } catch (\Throwable) {
             return NodeRegistrationOutcome::WriteFailed;
         }
 
@@ -201,32 +204,32 @@ class NodeRegistrationWriter
     private function hasSafeTriggerTopology(string $contents): bool
     {
         $stripped = SourceText::withoutPhpComments($contents);
-        $groups = [
-            [self::TRIGGER_DRIVER_ANCHOR, self::TRIGGER_NODE_ANCHOR, self::TRIGGER_SOURCE_ANCHOR],
-            [
-                'Nodeflow::registerTriggerDrivers($this->triggerDrivers);',
-                'Nodeflow::registerTriggerNodes($this->triggerNodes);',
-                'Nodeflow::registerTriggerSources($this->triggerSources);',
-            ],
-        ];
-
-        foreach ($groups as $groupIndex => $needles) {
-            $haystack = $groupIndex === 0 ? $contents : $stripped;
-            $last = -1;
-            foreach ($needles as $needle) {
-                $count = substr_count($haystack, $needle);
-                if ($count > 1) {
-                    return false;
-                }
-                if ($count === 0) {
-                    continue;
-                }
-                $position = strpos($haystack, $needle);
-                if ($position === false || $position <= $last) {
-                    return false;
-                }
-                $last = $position;
+        $last = -1;
+        foreach (['triggerDrivers', 'triggerNodes', 'triggerSources'] as $property) {
+            $home = ProviderStructureInspector::registrationArray($contents, $property);
+            if ($home['status'] === 'ambiguous') {
+                return false;
             }
+            if ($home['status'] === 'valid') {
+                if ($home['position'] <= $last) {
+                    return false;
+                }
+                $last = $home['position'];
+            }
+        }
+
+        $last = -1;
+        foreach ([
+            'Nodeflow::registerTriggerDrivers($this->triggerDrivers);',
+            'Nodeflow::registerTriggerNodes($this->triggerNodes);',
+            'Nodeflow::registerTriggerSources($this->triggerSources);',
+        ] as $needle) {
+            $count = substr_count($stripped, $needle);
+            if ($count > 1) return false;
+            if ($count === 0) continue;
+            $position = strpos($stripped, $needle);
+            if ($position === false || $position <= $last) return false;
+            $last = $position;
         }
 
         return true;
@@ -285,16 +288,11 @@ class NodeRegistrationWriter
 
         $contents = $this->files->get($providerPath);
 
-        // Same reasoning as appendTo(): counts stay on RAW bytes, because a
-        // commented-out second anchor is exactly the situation that makes
-        // "which array?" unanswerable.
-        $occurrences = substr_count($contents, $anchor);
-
-        if ($occurrences === 0) {
+        $location = $this->anchorLocation($contents, $anchor);
+        if ($location['status'] === 'missing') {
             return NodeRemovalOutcome::AnchorMissing;
         }
-
-        if ($occurrences > 1) {
+        if ($location['status'] === 'ambiguous') {
             return NodeRemovalOutcome::AnchorAmbiguous;
         }
 
@@ -392,8 +390,6 @@ class NodeRegistrationWriter
             $updated = substr_replace($updated, '', $deletion['start'], $deletion['end'] - $deletion['start']);
         }
 
-        $this->files->put($providerPath, $updated);
-
         // Re-verify rather than trust the write (E11's rule, applied to a
         // deletion): the result must still COMPILE — not merely parse; see
         // compiles()'s docblock for why token_get_all(TOKEN_PARSE) is not
@@ -403,27 +399,38 @@ class NodeRegistrationWriter
         // remain anywhere in it. Any failure restores the original bytes
         // rather than report a removal that left the host's provider still
         // naming a class that may no longer exist.
-        $written = $this->files->get($providerPath);
-        $remainingParsed = $this->spanElements($written, $anchor);
-
-        $remaining = null;
-
-        if ($remainingParsed !== null && ! $remainingParsed['unsupported']) {
-            $remainingResolver = PhpNameResolver::forSource($written);
-
-            $remaining = array_values(array_filter(
-                $remainingParsed['elements'],
-                static fn (array $element) => $remainingResolver->resolve($element['writtenName']) === $target,
-            ));
-        }
-
-        if (! $this->compiles($providerPath) || $remaining === null || $remaining !== []) {
-            $this->files->put($providerPath, $contents);
-
+        try {
+            (new AtomicFileWriter($this->files))->write(
+                [$providerPath => $updated],
+                $this->rootsFor($providerPath),
+                true,
+                function (string $written) use ($anchor, $target): void {
+                    if (! $this->parses($written)) {
+                        throw new \InvalidArgumentException('The rendered provider does not parse.');
+                    }
+                    $remainingParsed = $this->spanElements($written, $anchor);
+                    if ($remainingParsed === null || $remainingParsed['unsupported']) {
+                        throw new \InvalidArgumentException('The rendered provider registration array is unsupported.');
+                    }
+                    $remainingResolver = PhpNameResolver::forSource($written);
+                    foreach ($remainingParsed['elements'] as $element) {
+                        if ($remainingResolver->resolve($element['writtenName']) === $target) {
+                            throw new \InvalidArgumentException('The removed provider registration remains present.');
+                        }
+                    }
+                },
+            );
+        } catch (\Throwable) {
             return NodeRemovalOutcome::WriteFailed;
         }
 
         return NodeRemovalOutcome::Removed;
+    }
+
+    /** @return list<string> */
+    private function rootsFor(string $path): array
+    {
+        return $this->allowedRoots !== [] ? $this->allowedRoots : [dirname($path)];
     }
 
     /**
@@ -462,7 +469,7 @@ class NodeRegistrationWriter
      */
     public function findClassEntrySpans(string $contents, string $anchor, string $nodeClass): array
     {
-        if (substr_count($contents, $anchor) !== 1) {
+        if ($this->anchorLocation($contents, $anchor)['status'] !== 'valid') {
             return [];
         }
 
@@ -1069,6 +1076,13 @@ class NodeRegistrationWriter
      */
     private function insertionPoint(string $contents, string $anchor): ?int
     {
+        $property = $this->propertyForAnchor($anchor);
+        if ($property !== null) {
+            $home = ProviderStructureInspector::registrationArray($contents, $property);
+
+            return $home['status'] === 'valid' ? $home['openRaw'] + 1 : null;
+        }
+
         $anchorPos = strpos($contents, $anchor);
 
         if ($anchorPos === false) {
@@ -1109,6 +1123,30 @@ class NodeRegistrationWriter
         return array_key_exists($lastMatchedCodeIndex, $offsets)
             ? $offsets[$lastMatchedCodeIndex] + 1
             : null;
+    }
+
+    /** @return array{status: 'valid'|'missing'|'ambiguous'}|array{status: 'valid', position: int, openRaw: int, closeRaw: int} */
+    private function anchorLocation(string $contents, string $anchor): array
+    {
+        $property = $this->propertyForAnchor($anchor);
+        if ($property !== null) {
+            return ProviderStructureInspector::registrationArray($contents, $property);
+        }
+
+        $occurrences = substr_count($contents, $anchor);
+
+        return ['status' => $occurrences === 0 ? 'missing' : ($occurrences === 1 ? 'valid' : 'ambiguous')];
+    }
+
+    private function propertyForAnchor(string $anchor): ?string
+    {
+        return match ($anchor) {
+            self::ANCHOR => 'nodes',
+            self::TRIGGER_DRIVER_ANCHOR => 'triggerDrivers',
+            self::TRIGGER_NODE_ANCHOR => 'triggerNodes',
+            self::TRIGGER_SOURCE_ANCHOR => 'triggerSources',
+            default => null,
+        };
     }
 
     /**

@@ -81,18 +81,33 @@ final class ProviderStructureInspector
             return false;
         }
 
-        $operations = [];
+        $required = [];
+        $lastPhase = -1;
+        $directTriggerCalls = 0;
         foreach (self::directStatements($tokens, $boot['open'], $boot['close']) as $statement) {
             $operation = self::registrationOperation($statement, $resolver);
             if ($operation === false) {
                 return false;
             }
             if ($operation !== null) {
-                $operations[] = $operation;
+                if ($operation['phase'] !== null) {
+                    $directTriggerCalls++;
+                }
+                if ($operation['phase'] !== null && $operation['phase'] < $lastPhase) {
+                    return false;
+                }
+                $lastPhase = max($lastPhase, $operation['phase'] ?? -1);
+                if ($operation['required'] !== null) {
+                    $required[] = $operation['required'];
+                }
             }
         }
 
-        if ($operations !== ['nodes', 'drivers', 'trigger-nodes', 'sources', 'attributes']) {
+        if ($required !== ['nodes', 'drivers', 'trigger-nodes', 'sources', 'attributes']) {
+            return false;
+        }
+        $allTriggerCalls = self::triggerCallCount($tokens, $boot['open'], $boot['close'], $resolver);
+        if ($allTriggerCalls === null || $directTriggerCalls !== $allTriggerCalls) {
             return false;
         }
 
@@ -100,6 +115,160 @@ final class ProviderStructureInspector
 
         return count($attributeStatements) === 1
             && self::isDirectArrayReturn($attributeStatements[0]);
+    }
+
+    /** Count every real trigger-family static call; null means ambiguous receiver. */
+    private static function triggerCallCount(array $tokens, int $open, int $close, PhpNameResolver $resolver): ?int
+    {
+        $count = 0;
+        for ($index = $open + 1; $index < $close; $index++) {
+            $token = $tokens[$index];
+            if (! is_array($token) || $token[0] !== T_STRING
+                || ! in_array($token[1], ['registerTriggerDrivers', 'registerTriggerNodes', 'registerTriggerSources'], true)) {
+                continue;
+            }
+            $separator = self::previousSignificant($tokens, $index - 1);
+            $class = $separator === null ? null : self::previousSignificant($tokens, $separator - 1);
+            $arguments = self::nextSignificant($tokens, $index + 1);
+            if ($separator === null || ! is_array($tokens[$separator]) || $tokens[$separator][0] !== T_DOUBLE_COLON
+                || $arguments === null || $tokens[$arguments] !== '(') {
+                continue;
+            }
+            if ($class === null || ! is_array($tokens[$class])
+                || ! in_array($tokens[$class][0], [T_STRING, T_NAME_QUALIFIED, T_NAME_FULLY_QUALIFIED], true)) {
+                return null;
+            }
+            if ($resolver->resolve($tokens[$class][1]) === 'Nodeflow\\Nodeflow') {
+                $count++;
+            }
+        }
+
+        return $count;
+    }
+
+    /**
+     * Locate one real, direct, non-static protected array property owned by the
+     * exact top-level NodeflowServiceProvider class, or (for generated package
+     * providers) a unique concrete Laravel ServiceProvider-derived class.
+     *
+     * @return array{status: 'valid', position: int, openRaw: int, closeRaw: int}|array{status: 'missing'|'ambiguous'}
+     */
+    public static function registrationArray(string $source, string $property): array
+    {
+        try {
+            $tokens = token_get_all($source, TOKEN_PARSE);
+        } catch (Throwable) {
+            return ['status' => 'ambiguous'];
+        }
+
+        $named = array_values(array_filter(
+            self::classesNamed($tokens, 'NodeflowServiceProvider'),
+            static fn (array $class): bool => $class['topLevel'],
+        ));
+        if ($named !== []) {
+            if (count($named) !== 1) {
+                return ['status' => 'ambiguous'];
+            }
+            $classes = $named;
+        } else {
+            // Extracted/generated package providers may have a package-specific
+            // class name. Only fall back to a unique concrete top-level class
+            // that demonstrably extends Laravel's ServiceProvider; a helper
+            // class must never become a registration target by property shape.
+            if (self::namespaceCount($tokens) > 1) {
+                return ['status' => 'ambiguous'];
+            }
+            $resolver = PhpNameResolver::forSource($source);
+            $classes = array_values(array_filter(
+                self::classesNamed($tokens, null),
+                static fn (array $class): bool => self::isServiceProviderClass($class, $resolver),
+            ));
+            if ($classes === []) {
+                return ['status' => 'missing'];
+            }
+            if (count($classes) !== 1) {
+                return ['status' => 'ambiguous'];
+            }
+        }
+
+        $matches = [];
+        foreach ($classes as $class) {
+            $depth = 0;
+            $memberStart = $class['open'] + 1;
+            for ($index = $class['open'] + 1; $index < $class['close']; $index++) {
+                $token = $tokens[$index];
+                if ($token === '{') { $depth++; continue; }
+                if ($token === '}') { $depth--; continue; }
+                if ($depth !== 0) continue;
+                if ($token === ';') { $memberStart = $index + 1; continue; }
+                if (! is_array($token) || $token[0] !== T_VARIABLE || $token[1] !== '$'.$property) continue;
+
+                $equals = self::nextSignificant($tokens, $index + 1);
+                $open = $equals === null ? null : self::nextSignificant($tokens, $equals + 1);
+                $close = $open === null || $tokens[$open] !== '[' ? null : self::matchingBracket($tokens, $open, $class['close']);
+                $matches[] = [
+                    'valid' => self::compactCode($tokens, $memberStart, $index) === 'protectedarray'
+                        && $equals !== null && $tokens[$equals] === '='
+                        && $open !== null && $tokens[$open] === '[' && $close !== null,
+                    'position' => $index,
+                    'open' => $open,
+                    'close' => $close,
+                ];
+            }
+        }
+
+        if ($matches === []) {
+            return ['status' => 'missing'];
+        }
+        if (count($matches) !== 1 || ! $matches[0]['valid']) {
+            return ['status' => 'ambiguous'];
+        }
+
+        $offsets = self::rawOffsets($tokens);
+
+        return [
+            'status' => 'valid',
+            'position' => $offsets[$matches[0]['position']],
+            'openRaw' => $offsets[$matches[0]['open']],
+            'closeRaw' => $offsets[$matches[0]['close']],
+        ];
+    }
+
+    private static function matchingBracket(array $tokens, int $open, int $limit): ?int
+    {
+        $depth = 0;
+        for ($index = $open; $index < $limit; $index++) {
+            if ($tokens[$index] === '[') {
+                $depth++;
+            } elseif ($tokens[$index] === ']' && --$depth === 0) {
+                return $index;
+            }
+        }
+
+        return null;
+    }
+
+    private static function isServiceProviderClass(array $class, PhpNameResolver $resolver): bool
+    {
+        $name = '(?<parent>\\\\?[A-Za-z_\\x80-\\xff][A-Za-z0-9_\\x80-\\xff]*(?:\\\\[A-Za-z_\\x80-\\xff][A-Za-z0-9_\\x80-\\xff]*)*)';
+
+        return $class['topLevel']
+            && ! $class['abstract']
+            && preg_match('/^class[A-Za-z_\\x80-\\xff][A-Za-z0-9_\\x80-\\xff]*extends'.$name.'(?:implements.+)?$/', $class['declaration'], $match) === 1
+            && $resolver->resolve($match['parent']) === 'Illuminate\\Support\\ServiceProvider';
+    }
+
+    /** @return array<int, int> token index => raw byte offset */
+    private static function rawOffsets(array $tokens): array
+    {
+        $offsets = [];
+        $raw = 0;
+        foreach ($tokens as $index => $token) {
+            $offsets[$index] = $raw;
+            $raw += strlen(is_array($token) ? $token[1] : $token);
+        }
+
+        return $offsets;
     }
 
     private static function namespaceCount(array $tokens): int
@@ -234,7 +403,7 @@ final class ProviderStructureInspector
     }
 
     /** @return array<int, array{namespace: string, open: int, close: int, topLevel: bool, abstract: bool, declaration: string}> */
-    private static function classesNamed(array $tokens, string $wanted): array
+    private static function classesNamed(array $tokens, ?string $wanted): array
     {
         $classes = [];
         $namespace = '';
@@ -290,7 +459,7 @@ final class ProviderStructureInspector
                 return [];
             }
 
-            if ($tokens[$nameIndex][1] === $wanted) {
+            if ($wanted === null || $tokens[$nameIndex][1] === $wanted) {
                 $previous = self::previousSignificant($tokens, $index - 1);
                 $classes[] = [
                     'namespace' => $namespace,
@@ -467,11 +636,8 @@ final class ProviderStructureInspector
         return $statements;
     }
 
-    /**
-     * Return a required registration operation, null for unrelated host code,
-     * or false for a lookalike registration that cannot safely wire Nodeflow.
-     */
-    private static function registrationOperation(string $statement, PhpNameResolver $resolver): string|false|null
+    /** @return array{required: ?string, phase: ?int}|false|null */
+    private static function registrationOperation(string $statement, PhpNameResolver $resolver): array|false|null
     {
         $name = '(?<class>\\\\?[A-Za-z_\\x80-\\xff][A-Za-z0-9_\\x80-\\xff]*(?:\\\\[A-Za-z_\\x80-\\xff][A-Za-z0-9_\\x80-\\xff]*)*)';
         if (preg_match('/^'.$name.'::(?<method>register|registerTriggerDrivers|registerTriggerNodes|registerTriggerSources)\\((?<argument>.*)\\)$/s', $statement, $match) === 1) {
@@ -480,26 +646,27 @@ final class ProviderStructureInspector
             }
 
             $calls = [
-                'register' => ['$this->nodes', 'nodes'],
-                'registerTriggerDrivers' => ['$this->triggerDrivers', 'drivers'],
-                'registerTriggerNodes' => ['$this->triggerNodes', 'trigger-nodes'],
-                'registerTriggerSources' => ['$this->triggerSources', 'sources'],
+                'register' => ['$this->nodes', 'nodes', null],
+                'registerTriggerDrivers' => ['$this->triggerDrivers', 'drivers', 0],
+                'registerTriggerNodes' => ['$this->triggerNodes', 'trigger-nodes', 1],
+                'registerTriggerSources' => ['$this->triggerSources', 'sources', 2],
             ];
-            [$argument, $operation] = $calls[$match['method']];
+            [$argument, $required, $phase] = $calls[$match['method']];
 
             if ($match['argument'] === $argument) {
-                return $operation;
+                return ['required' => $required, 'phase' => $phase];
             }
 
-            // Existing hosts may have additional direct registrations (for
-            // example Nodeflow::register([CustomNode::class])). They are not a
-            // substitute for a registration home, but they are safe to retain.
-            return str_contains($match['argument'], '$this->') ? false : null;
+            if (str_contains($match['argument'], '$this->')) {
+                return false;
+            }
+
+            return $phase === null ? null : ['required' => null, 'phase' => $phase];
         }
 
         if (preg_match('/^app\\('.$name.'::class\\)->register\\(\\.\\.\\.\\$this->subjectAttributes\\(\\)\\)$/', $statement, $match) === 1) {
             return $resolver->resolve($match['class']) === 'Nodeflow\\Schema\\SubjectAttributeRegistry'
-                ? 'attributes'
+                ? ['required' => 'attributes', 'phase' => null]
                 : false;
         }
 
