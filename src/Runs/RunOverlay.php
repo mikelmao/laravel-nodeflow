@@ -3,6 +3,7 @@
 namespace Nodeflow\Runs;
 
 use Nodeflow\Graph\Graph;
+use Nodeflow\Graph\GraphTypeCatalog;
 use Nodeflow\Models\Run;
 
 /**
@@ -26,6 +27,8 @@ class RunOverlay
      * here means the day a failure status exists, the client needs no change.
      */
     private const TERMINAL_STATUSES = ['completed'];
+
+    public function __construct(private GraphTypeCatalog $types) {}
 
     public function snapshot(Run $run, Graph $graph): array
     {
@@ -62,7 +65,8 @@ class RunOverlay
 
         $triggerNodeId = (string) $run->trigger_node_id;
 
-        if (isset($nodes[$triggerNodeId])) {
+        if (isset($nodes[$triggerNodeId])
+            && $this->types->family($graph->node($triggerNodeId)['type'] ?? '') === 'trigger') {
             $origin = in_array((string) $run->started_via, ['manual', 'subflow'], true)
                 ? 'bypassed'
                 : 'triggered';

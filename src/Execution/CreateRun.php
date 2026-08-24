@@ -11,9 +11,15 @@ use Nodeflow\Models\Concerns\TenancyGuardSuspension;
 use Nodeflow\Models\FlowVersion;
 use Nodeflow\Models\Run;
 use Nodeflow\Workflows\FlowInterpreter;
+use Throwable;
 
 class CreateRun
 {
+    private const DISPATCH_FAILURE = 'Workflow dispatch failed; retry the idempotent run start.';
+
+    /** @var array<string, list<Run>> */
+    private static array $pendingDispatches = [];
+
     public function __construct(
         private AudienceMaterialiser $materialiser,
         private WorkflowEngine $engine,
@@ -26,7 +32,7 @@ class CreateRun
         string $entryNodeId,
         array $options,
     ): Run {
-        $key = $options['idempotency_key'] ?? null;
+        $key = $this->validatedIdempotencyKey($options['idempotency_key'] ?? null);
 
         // Preserve the public idempotency contract before consuming a caller's
         // iterable or doing any creation work. A retry returns the already
@@ -36,7 +42,7 @@ class CreateRun
             $existing = $this->existing($version, (string) $key);
 
             if ($existing !== null) {
-                return $existing;
+                return $this->ensureEngineStarted($existing, $entryNodeId);
             }
         }
 
@@ -88,7 +94,16 @@ class CreateRun
                 throw $e;
             }
 
-            return $winner;
+            return $this->ensureEngineStarted($winner, $entryNodeId);
+        }
+
+        return $this->ensureEngineStarted($run, $entryNodeId);
+    }
+
+    private function ensureEngineStarted(Run $run, string $entryNodeId): Run
+    {
+        if ($run->engine_workflow_id !== null) {
+            return $this->clearDispatchFailure($run);
         }
 
         $connection = DB::connection();
@@ -101,11 +116,46 @@ class CreateRun
 
         // An outer caller owns the remaining transaction. Starting now can
         // launch a workflow for a Run that the outer transaction later rolls
-        // back. Laravel discards afterCommit callbacks on rollback and invokes
-        // this exactly once when the outermost commit succeeds.
-        $connection->afterCommit(fn () => $this->startEngine($run, $entryNodeId));
+        // back. Coalesce retries for the same Run into one callback while
+        // retaining every returned model so all callers observe the handle
+        // once the outermost transaction commits.
+        $dispatchKey = spl_object_id($connection).':'.$run->id;
+
+        if (isset(self::$pendingDispatches[$dispatchKey])) {
+            self::$pendingDispatches[$dispatchKey][] = $run;
+
+            return $run;
+        }
+
+        self::$pendingDispatches[$dispatchKey] = [$run];
+
+        try {
+            $connection->afterCommit(function () use ($dispatchKey, $run, $entryNodeId) {
+                try {
+                    $this->startEngine($run, $entryNodeId);
+
+                    foreach (self::$pendingDispatches[$dispatchKey] ?? [] as $pendingRun) {
+                        if ($pendingRun !== $run) {
+                            $pendingRun->setRawAttributes($run->getAttributes(), true);
+                        }
+                    }
+                } finally {
+                    unset(self::$pendingDispatches[$dispatchKey]);
+                }
+            });
+            $connection->afterRollBack(fn () => $this->forgetPendingDispatch($dispatchKey));
+        } catch (Throwable $e) {
+            unset(self::$pendingDispatches[$dispatchKey]);
+
+            throw $e;
+        }
 
         return $run;
+    }
+
+    private function forgetPendingDispatch(string $dispatchKey): void
+    {
+        unset(self::$pendingDispatches[$dispatchKey]);
     }
 
     private function existing(FlowVersion $version, string $key): ?Run
@@ -118,13 +168,75 @@ class CreateRun
 
     private function startEngine(Run $run, string $entryNodeId): void
     {
-        $workflowId = $this->engine->start(FlowInterpreter::class, [
-            'run_id' => $run->id,
-            'max_steps' => (int) config('nodeflow.limits.max_steps_per_run', 1000),
-            'entry_node_id' => $entryNodeId,
-        ]);
+        try {
+            $workflowId = $this->engine->start(FlowInterpreter::class, [
+                'run_id' => $run->id,
+                'max_steps' => (int) config('nodeflow.limits.max_steps_per_run', 1000),
+                'entry_node_id' => $entryNodeId,
+            ], $this->workflowInstanceId($run));
 
-        $run->update(['engine_workflow_id' => $workflowId]);
+            $run->refresh();
+
+            if ($run->engine_workflow_id !== null) {
+                $this->clearDispatchFailure($run);
+
+                return;
+            }
+
+            $run->update([
+                'engine_workflow_id' => $workflowId,
+                'error' => null,
+            ]);
+        } catch (Throwable $e) {
+            $this->recordDispatchFailure($run);
+
+            throw $e;
+        }
+    }
+
+    private function workflowInstanceId(Run $run): string
+    {
+        return "nodeflow-run:{$run->id}";
+    }
+
+    private function recordDispatchFailure(Run $run): void
+    {
+        try {
+            DB::table($run->getTable())
+                ->where('id', $run->id)
+                ->whereNull('engine_workflow_id')
+                ->update(['error' => self::DISPATCH_FAILURE]);
+            $run->refresh();
+        } catch (Throwable) {
+            // Preserve the dispatch exception. A persistence failure must not
+            // replace the actionable cause returned to the caller.
+        }
+    }
+
+    private function clearDispatchFailure(Run $run): Run
+    {
+        if ($run->error === self::DISPATCH_FAILURE) {
+            DB::table($run->getTable())
+                ->where('id', $run->id)
+                ->where('error', self::DISPATCH_FAILURE)
+                ->update(['error' => null]);
+            $run->refresh();
+        }
+
+        return $run;
+    }
+
+    private function validatedIdempotencyKey(mixed $key): ?string
+    {
+        if ($key === null) {
+            return null;
+        }
+
+        if (! is_string($key) || $key === '' || strlen($key) > 255) {
+            throw new InvalidArgumentException('Run idempotency_key must be a non-empty string of at most 255 bytes.');
+        }
+
+        return $key;
     }
 
     private function validatedTriggerData(mixed $data): ?array

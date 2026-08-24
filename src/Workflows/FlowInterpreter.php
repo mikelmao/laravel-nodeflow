@@ -12,6 +12,7 @@ use Nodeflow\Workflows\Activities\ResolveRunEntryNodeActivity;
 use Nodeflow\Workflows\Activities\RunNodeActivity;
 use Workflow\V2\Attributes\Signal;
 use Workflow\V2\Workflow;
+use Workflow\V2\WorkflowStub;
 
 /**
  * Control flow only. No DB, no HTTP, no clock reads: the engine's boot-time
@@ -48,7 +49,11 @@ class FlowInterpreter extends Workflow
     {
         $graph = Graph::fromArray(self::activity(LoadGraphActivity::class, $runId));
 
-        if ($entryNodeId === null) {
+        if ($entryNodeId === null && self::getVersion(
+            'nodeflow.resolve-missing-entry',
+            WorkflowStub::DEFAULT_VERSION,
+            1,
+        ) === 1) {
             $entryNodeId = self::activity(ResolveRunEntryNodeActivity::class, $runId);
         }
 

@@ -23,3 +23,22 @@ it('reports a started workflow as running until cancelled', function () {
 
     expect($engine->isRunning($id))->toBeTrue();
 });
+
+it('reuses a caller supplied workflow instance without recording a second execution', function () {
+    $engine = new FakeWorkflowEngine;
+
+    $first = $engine->start('SomeWorkflow', ['run_id' => 1], 'nodeflow-run:1');
+    $retry = $engine->start('SomeWorkflow', ['run_id' => 1], 'nodeflow-run:1');
+
+    expect($first)->toBe('nodeflow-run:1')
+        ->and($retry)->toBe($first)
+        ->and($engine->started())->toHaveCount(1);
+});
+
+it('preserves generated workflow ids when no deterministic instance is requested', function () {
+    $engine = new FakeWorkflowEngine;
+
+    expect($engine->start('SomeWorkflow', []))->toBe('fake-1')
+        ->and($engine->start('SomeWorkflow', []))->toBe('fake-2')
+        ->and($engine->started())->toHaveCount(2);
+});

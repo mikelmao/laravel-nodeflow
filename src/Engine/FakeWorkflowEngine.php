@@ -12,9 +12,13 @@ class FakeWorkflowEngine implements WorkflowEngine
 
     private int $nextId = 1;
 
-    public function start(string $workflowClass, array $args): string
+    public function start(string $workflowClass, array $args, ?string $instanceId = null): string
     {
-        $id = 'fake-'.$this->nextId++;
+        $id = $instanceId ?? 'fake-'.$this->nextId++;
+
+        if ($instanceId !== null && collect($this->started)->contains(fn ($start) => $start['id'] === $id)) {
+            return $id;
+        }
 
         $this->started[] = ['workflow' => $workflowClass, 'args' => $args, 'id' => $id];
 

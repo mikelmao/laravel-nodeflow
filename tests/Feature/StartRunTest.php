@@ -1,10 +1,14 @@
 <?php
 
+use Illuminate\Database\Events\TransactionBeginning;
 use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Event;
 use Nodeflow\Contracts\TenantResolver;
 use Nodeflow\Engine\WorkflowEngine;
+use Nodeflow\Execution\CrossTenantExecutionException;
 use Nodeflow\Execution\StartRun;
 use Nodeflow\Models\Flow;
+use Nodeflow\Models\InvalidFlowVersionReferenceException;
 use Nodeflow\Nodeflow;
 use Nodeflow\Publishing\PublishFlow;
 use Nodeflow\Workflows\FlowInterpreter;
@@ -43,6 +47,34 @@ it('creates a run pinned to the current version with subjects at the start node'
         ->and($run->engine_workflow_id)->not->toBeNull();
 });
 
+it('refuses a raw same-tenant current-version pointer to another flow', function () {
+    $other = Flow::create(['name' => 'Other', 'status' => 'draft']);
+    app(PublishFlow::class)->publish($other, triggeredExitGraph());
+    $foreignVersionId = $other->fresh()->current_version_id;
+
+    DB::table('nodeflow_flows')->where('id', $this->flow->id)->update([
+        'current_version_id' => $foreignVersionId,
+    ]);
+
+    expect(fn () => app(StartRun::class)->forFlow($this->flow->fresh(), 'user', ['1']))
+        ->toThrow(InvalidFlowVersionReferenceException::class, 'does not belong to Flow');
+
+    expect(\Nodeflow\Models\Run::withoutTenancy()->count())->toBe(0);
+});
+
+it('refuses a raw cross-tenant current version that still belongs to the flow', function () {
+    $versionId = $this->flow->fresh()->current_version_id;
+
+    DB::table('nodeflow_flow_versions')->where('id', $versionId)->update([
+        'tenant_id' => 'org-2',
+    ]);
+
+    expect(fn () => app(StartRun::class)->forFlow($this->flow->fresh(), 'user', ['1']))
+        ->toThrow(CrossTenantExecutionException::class, 'Cross-tenant execution refused');
+
+    expect(\Nodeflow\Models\Run::withoutTenancy()->count())->toBe(0);
+});
+
 it('starts the interpreter workflow with the run id', function () {
     $run = app(StartRun::class)->forFlow($this->flow->fresh(), 'user', ['1']);
 
@@ -58,11 +90,11 @@ it('starts the engine only after its own transaction has committed', function ()
     {
         public array $transactionLevels = [];
 
-        public function start(string $workflowClass, array $args): string
+        public function start(string $workflowClass, array $args, ?string $instanceId = null): string
         {
             $this->transactionLevels[] = DB::connection()->transactionLevel();
 
-            return 'ordered-workflow';
+            return $instanceId ?? 'ordered-workflow';
         }
 
         public function signal(string $workflowId, string $method, array $args = []): void {}
@@ -74,7 +106,205 @@ it('starts the engine only after its own transaction has committed', function ()
     $engine = app(WorkflowEngine::class);
 
     expect($engine->transactionLevels)->toBe([0])
-        ->and($run->engine_workflow_id)->toBe('ordered-workflow');
+        ->and($run->engine_workflow_id)->toBe("nodeflow-run:{$run->id}");
+});
+
+it('recovers an idempotent run after the first engine dispatch fails', function () {
+    app()->singleton(WorkflowEngine::class, fn () => new class implements WorkflowEngine
+    {
+        public int $attempts = 0;
+        public array $executions = [];
+
+        public function start(string $workflowClass, array $args, ?string $instanceId = null): string
+        {
+            $this->attempts++;
+
+            if ($this->attempts === 1) {
+                throw new RuntimeException('secret broker credential was rejected');
+            }
+
+            $id = $instanceId ?? 'generated-'.$this->attempts;
+            $this->executions[$id] ??= compact('workflowClass', 'args');
+
+            return $id;
+        }
+
+        public function signal(string $workflowId, string $method, array $args = []): void {}
+        public function cancel(string $workflowId): void {}
+        public function isRunning(string $workflowId): bool { return isset($this->executions[$workflowId]); }
+    });
+
+    expect(fn () => app(StartRun::class)->forFlow(
+        $this->flow->fresh(),
+        'user',
+        ['1'],
+        ['idempotency_key' => 'recover-dispatch'],
+    ))->toThrow(RuntimeException::class, 'secret broker credential');
+
+    $stranded = \Nodeflow\Models\Run::withoutTenancy()->firstOrFail();
+    expect($stranded->engine_workflow_id)->toBeNull()
+        ->and($stranded->error)->toBe('Workflow dispatch failed; retry the idempotent run start.')
+        ->and($stranded->error)->not->toContain('credential');
+
+    $recovered = app(StartRun::class)->forFlow(
+        $this->flow->fresh(),
+        'user',
+        ['2'],
+        ['idempotency_key' => 'recover-dispatch'],
+    );
+    $engine = app(WorkflowEngine::class);
+
+    expect($recovered->id)->toBe($stranded->id)
+        ->and($recovered->engine_workflow_id)->toBe("nodeflow-run:{$stranded->id}")
+        ->and($recovered->error)->toBeNull()
+        ->and($recovered->subjects()->pluck('subject_id')->all())->toBe(['1'])
+        ->and($engine->executions)->toHaveCount(1);
+});
+
+it('recovers the stable engine handle when persisting it failed after dispatch', function () {
+    $failUpdate = true;
+    \Nodeflow\Models\Run::updating(function (\Nodeflow\Models\Run $run) use (&$failUpdate) {
+        if ($failUpdate && $run->isDirty('engine_workflow_id')) {
+            $failUpdate = false;
+            throw new RuntimeException('secret database write detail');
+        }
+    });
+
+    expect(fn () => app(StartRun::class)->forFlow(
+        $this->flow->fresh(),
+        'user',
+        ['1'],
+        ['idempotency_key' => 'recover-handle'],
+    ))->toThrow(RuntimeException::class, 'secret database write detail');
+
+    $stranded = \Nodeflow\Models\Run::withoutTenancy()->firstOrFail();
+    expect(app(WorkflowEngine::class)->started())->toHaveCount(1)
+        ->and($stranded->engine_workflow_id)->toBeNull()
+        ->and($stranded->error)->toBe('Workflow dispatch failed; retry the idempotent run start.');
+
+    $recovered = app(StartRun::class)->forFlow(
+        $this->flow->fresh(),
+        'user',
+        ['2'],
+        ['idempotency_key' => 'recover-handle'],
+    );
+
+    expect($recovered->id)->toBe($stranded->id)
+        ->and($recovered->engine_workflow_id)->toBe("nodeflow-run:{$stranded->id}")
+        ->and($recovered->error)->toBeNull()
+        ->and($recovered->subjects()->pluck('subject_id')->all())->toBe(['1'])
+        ->and(app(WorkflowEngine::class)->started())->toHaveCount(1);
+});
+
+it('records and recovers a dispatch that fails after an ambient commit', function () {
+    app()->singleton(WorkflowEngine::class, fn () => new class implements WorkflowEngine
+    {
+        public int $attempts = 0;
+        public array $executions = [];
+
+        public function start(string $workflowClass, array $args, ?string $instanceId = null): string
+        {
+            $this->attempts++;
+
+            if ($this->attempts === 1) {
+                throw new RuntimeException('secret after-commit dispatch detail');
+            }
+
+            $id = $instanceId ?? 'generated-'.$this->attempts;
+            $this->executions[$id] ??= compact('workflowClass', 'args');
+
+            return $id;
+        }
+
+        public function signal(string $workflowId, string $method, array $args = []): void {}
+        public function cancel(string $workflowId): void {}
+        public function isRunning(string $workflowId): bool { return isset($this->executions[$workflowId]); }
+    });
+
+    DB::beginTransaction();
+    $created = app(StartRun::class)->forFlow(
+        $this->flow->fresh(),
+        'user',
+        ['1'],
+        ['idempotency_key' => 'recover-after-commit'],
+    );
+
+    expect(fn () => DB::commit())->toThrow(RuntimeException::class, 'secret after-commit');
+
+    $stranded = $created->fresh();
+    expect($stranded->engine_workflow_id)->toBeNull()
+        ->and($stranded->error)->toBe('Workflow dispatch failed; retry the idempotent run start.');
+
+    $recovered = app(StartRun::class)->forFlow(
+        $this->flow->fresh(),
+        'user',
+        ['2'],
+        ['idempotency_key' => 'recover-after-commit'],
+    );
+
+    expect($recovered->id)->toBe($stranded->id)
+        ->and($recovered->engine_workflow_id)->toBe("nodeflow-run:{$stranded->id}")
+        ->and($recovered->error)->toBeNull()
+        ->and($recovered->subjects()->pluck('subject_id')->all())->toBe(['1'])
+        ->and(app(WorkflowEngine::class)->executions)->toHaveCount(1);
+});
+
+it('clears only the package dispatch sentinel once an existing run has an engine handle', function () {
+    $run = app(StartRun::class)->forFlow(
+        $this->flow->fresh(),
+        'user',
+        ['1'],
+        ['idempotency_key' => 'clear-dispatch-sentinel'],
+    );
+    $run->update(['error' => 'Workflow dispatch failed; retry the idempotent run start.']);
+
+    $recovered = app(StartRun::class)->forFlow(
+        $this->flow->fresh(),
+        'user',
+        ['1'],
+        ['idempotency_key' => 'clear-dispatch-sentinel'],
+    );
+    expect($recovered->error)->toBeNull();
+
+    $recovered->update(['error' => 'Node execution failed']);
+    $preserved = app(StartRun::class)->forFlow(
+        $this->flow->fresh(),
+        'user',
+        ['1'],
+        ['idempotency_key' => 'clear-dispatch-sentinel'],
+    );
+
+    expect($preserved->error)->toBe('Node execution failed');
+});
+
+it('does not record a dispatch failure after another actor persisted the stable handle', function () {
+    app()->singleton(WorkflowEngine::class, fn () => new class implements WorkflowEngine
+    {
+        public function start(string $workflowClass, array $args, ?string $instanceId = null): string
+        {
+            DB::table('nodeflow_runs')->where('id', $args['run_id'])->update([
+                'engine_workflow_id' => $instanceId,
+                'error' => null,
+            ]);
+
+            throw new RuntimeException('late losing callback failure');
+        }
+
+        public function signal(string $workflowId, string $method, array $args = []): void {}
+        public function cancel(string $workflowId): void {}
+        public function isRunning(string $workflowId): bool { return true; }
+    });
+
+    expect(fn () => app(StartRun::class)->forFlow(
+        $this->flow->fresh(),
+        'user',
+        ['1'],
+        ['idempotency_key' => 'concurrent-handle'],
+    ))->toThrow(RuntimeException::class, 'late losing callback');
+
+    $run = \Nodeflow\Models\Run::withoutTenancy()->firstOrFail();
+    expect($run->engine_workflow_id)->toBe("nodeflow-run:{$run->id}")
+        ->and($run->error)->toBeNull();
 });
 
 it('defers engine start to an ambient transaction commit and synchronizes the returned run', function () {
@@ -88,8 +318,8 @@ it('defers engine start to an ambient transaction commit and synchronizes the re
     DB::commit();
 
     expect(app(WorkflowEngine::class)->started())->toHaveCount(1)
-        ->and($run->engine_workflow_id)->toBe('fake-1')
-        ->and($run->fresh()->engine_workflow_id)->toBe('fake-1');
+        ->and($run->engine_workflow_id)->toBe("nodeflow-run:{$run->id}")
+        ->and($run->fresh()->engine_workflow_id)->toBe("nodeflow-run:{$run->id}");
 });
 
 it('does not start or update the engine when an ambient transaction rolls back', function () {
@@ -102,18 +332,57 @@ it('does not start or update the engine when an ambient transaction rolls back',
         ->and(\Nodeflow\Models\Run::withoutTenancy()->find($run->id))->toBeNull();
 });
 
+it('can schedule the same idempotency key after an ambient rollback', function () {
+    DB::beginTransaction();
+    app(StartRun::class)->forFlow(
+        $this->flow->fresh(),
+        'user',
+        ['1'],
+        ['idempotency_key' => 'retry-after-rollback'],
+    );
+    DB::rollBack();
+
+    $retry = app(StartRun::class)->forFlow(
+        $this->flow->fresh(),
+        'user',
+        ['1'],
+        ['idempotency_key' => 'retry-after-rollback'],
+    );
+
+    expect(app(WorkflowEngine::class)->started())->toHaveCount(1)
+        ->and($retry->engine_workflow_id)->toBe("nodeflow-run:{$retry->id}")
+        ->and(\Nodeflow\Models\Run::withoutTenancy()->count())->toBe(1);
+});
+
 it('registers only one deferred start for an idempotent retry inside an ambient transaction', function () {
+    app()->singleton(WorkflowEngine::class, fn () => new class implements WorkflowEngine
+    {
+        public int $attempts = 0;
+
+        public function start(string $workflowClass, array $args, ?string $instanceId = null): string
+        {
+            $this->attempts++;
+
+            return $instanceId ?? 'generated';
+        }
+
+        public function signal(string $workflowId, string $method, array $args = []): void {}
+        public function cancel(string $workflowId): void {}
+        public function isRunning(string $workflowId): bool { return true; }
+    });
+
     DB::beginTransaction();
 
     $first = app(StartRun::class)->forFlow($this->flow->fresh(), 'user', ['1'], ['idempotency_key' => 'outer-retry']);
     $retry = app(StartRun::class)->forFlow($this->flow->fresh(), 'user', ['2'], ['idempotency_key' => 'outer-retry']);
 
     expect($retry->id)->toBe($first->id)
-        ->and(app(WorkflowEngine::class)->started())->toBe([]);
+        ->and(app(WorkflowEngine::class)->attempts)->toBe(0);
 
     DB::commit();
 
-    expect(app(WorkflowEngine::class)->started())->toHaveCount(1)
+    expect(app(WorkflowEngine::class)->attempts)->toBe(1)
+        ->and($retry->engine_workflow_id)->toBe("nodeflow-run:{$first->id}")
         ->and($first->subjects()->pluck('subject_id')->all())->toBe(['1']);
 });
 
@@ -139,6 +408,23 @@ it('is idempotent for a repeated trigger identity', function () {
 
     expect($second->id)->toBe($first->id)
         ->and(\Nodeflow\Models\Run::count())->toBe(1);
+});
+
+it('rejects invalid idempotency keys before opening a transaction', function () {
+    $transactions = 0;
+    Event::listen(TransactionBeginning::class, function () use (&$transactions) { $transactions++; });
+
+    foreach (['', str_repeat('x', 256), []] as $invalid) {
+        expect(fn () => app(StartRun::class)->forFlow(
+            $this->flow->fresh(),
+            'user',
+            ['1'],
+            ['idempotency_key' => $invalid],
+        ))->toThrow(InvalidArgumentException::class, 'idempotency_key');
+    }
+
+    expect($transactions)->toBe(0)
+        ->and(\Nodeflow\Models\Run::withoutTenancy()->count())->toBe(0);
 });
 
 it('creates a run for a different tenant than the ambient one via the internal guard suspension', function () {

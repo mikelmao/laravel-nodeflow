@@ -3,9 +3,11 @@
 namespace Nodeflow\Triggers;
 
 use Nodeflow\Execution\CreateRun;
+use Nodeflow\Execution\CrossTenantExecutionException;
 use Nodeflow\Graph\Graph;
 use Nodeflow\Graph\GraphTypeCatalog;
 use Nodeflow\Models\Flow;
+use Nodeflow\Models\InvalidFlowVersionReferenceException;
 use Nodeflow\Models\Run;
 
 class SubFlowStarter
@@ -35,6 +37,21 @@ class SubFlowStarter
         }
 
         $version = $flow->currentVersion()->firstOrFail();
+
+        if ((string) $version->tenant_id !== (string) $flow->tenant_id) {
+            throw CrossTenantExecutionException::forFlowVersion($flow, $version);
+        }
+
+        if ((string) $version->flow_id !== (string) $flow->id) {
+            throw InvalidFlowVersionReferenceException::forFlowMismatch(
+                $flow::class,
+                'current_version_id',
+                $version->id,
+                $version->flow_id,
+                $flow->id,
+            );
+        }
+
         $graph = Graph::fromArray($version->graph);
         $triggerNodeId = $graph->startNodeId();
 

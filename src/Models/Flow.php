@@ -42,7 +42,13 @@ class Flow extends Model
 
     private function assertCurrentVersionReference(): void
     {
-        FlowVersionReferenceGuard::assert($this, 'current_version_id', nullable: true);
+        FlowVersionReferenceGuard::assert(
+            $this,
+            'current_version_id',
+            nullable: true,
+            expectedFlowId: $this->getKey(),
+            requireFlowOwnership: true,
+        );
     }
 
     // Unscoped: reaching this Flow already proved tenant entitlement, so its
@@ -69,15 +75,14 @@ class Flow extends Model
     // own current version is not a second authorization decision — and this
     // must resolve with no ambient tenant at all (console, queue, fan-out).
     //
-    // INVARIANT this depends on: current_version_id points at a version in this
-    // flow's own tenant. Nothing in the database enforces that — there is no
-    // composite foreign key — but Eloquent instance writes validate both the
-    // referenced version's existence and its tenant before persistence.
+    // INVARIANT this depends on: current_version_id points at a version owned by
+    // this exact Flow. Nothing in the database enforces that — there is no
+    // composite foreign key — but Eloquent instance writes validate the
+    // referenced version's existence, tenant, and flow_id before persistence.
     // FlowVersion creation independently validates that its tenant matches its
-    // Flow parent's tenant. This intentionally does not require the referenced
-    // version to belong to this exact Flow: same-Flow identity is not part of
-    // this invariant. Query-builder and raw SQL writes remain the explicit
-    // bypass of these model events.
+    // Flow parent's tenant. Query-builder and raw SQL writes remain the explicit
+    // bypass of these model events, so execution entry points repeat the tuple
+    // check before trusting this relation.
     //
     // Do not "fix" this by constraining the relation to $this->tenant_id: an
     // eager load builds the relation from a fresh model instance whose

@@ -1,8 +1,11 @@
 <?php
 
+use Illuminate\Support\Facades\DB;
 use Nodeflow\Contracts\TenantResolver;
 use Nodeflow\Execution\AudienceContext;
+use Nodeflow\Execution\CrossTenantExecutionException;
 use Nodeflow\Models\Flow;
+use Nodeflow\Models\InvalidFlowVersionReferenceException;
 use Nodeflow\Models\Run;
 use Nodeflow\Nodes\Core\StartFlowNode;
 use Nodeflow\Publishing\PublishFlow;
@@ -60,6 +63,39 @@ it('starts a child run and seeds the lineage chain with the parent run id', func
         ->and($child->subjects()->pluck('current_node_id')->unique()->all())->toBe(['c1'])
         ->and($child->nodeExecutions()->count())->toBe(0)
         ->and($child->subjects()->count())->toBe(2);
+});
+
+it('refuses a raw same-tenant child current-version pointer to another flow', function () {
+    $other = Flow::create(['tenant_id' => 'org-1', 'name' => 'Other child', 'status' => 'draft']);
+    app(PublishFlow::class)->publish($other, triggeredExitGraph());
+
+    DB::table('nodeflow_flows')->where('id', $this->childFlow->id)->update([
+        'current_version_id' => $other->fresh()->current_version_id,
+    ]);
+
+    expect(fn () => app(SubFlowStarter::class)->start(
+        $this->parentRun,
+        $this->childFlow->id,
+        'user',
+        ['1'],
+    ))->toThrow(InvalidFlowVersionReferenceException::class, 'does not belong to Flow');
+
+    expect(Run::withoutTenancy()->count())->toBe(1);
+});
+
+it('refuses a raw cross-tenant child version that still belongs to the child flow', function () {
+    DB::table('nodeflow_flow_versions')->where('id', $this->childFlow->current_version_id)->update([
+        'tenant_id' => 'org-2',
+    ]);
+
+    expect(fn () => app(SubFlowStarter::class)->start(
+        $this->parentRun,
+        $this->childFlow->id,
+        'user',
+        ['1'],
+    ))->toThrow(CrossTenantExecutionException::class, 'Cross-tenant execution refused');
+
+    expect(Run::withoutTenancy()->count())->toBe(1);
 });
 
 it('extends an existing lineage chain rather than replacing it', function () {

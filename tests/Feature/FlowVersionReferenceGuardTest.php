@@ -47,18 +47,35 @@ beforeEach(function () {
     };
 });
 
-it('allows a null or same-tenant current version', function () {
-    $draft = Flow::create(['name' => 'Draft', 'status' => 'draft']);
-    $version = ($this->makeVersion)('org-1');
-
-    $flow = Flow::create([
-        'name' => 'Published',
-        'status' => 'active',
-        'current_version_id' => $version->id,
+it('allows a null current version and a version owned by the exact flow', function () {
+    $flow = Flow::create(['name' => 'Draft', 'status' => 'draft']);
+    $version = FlowVersion::create([
+        'flow_id' => $flow->id,
+        'version' => 1,
+        'graph' => triggeredExitGraph(),
+        'content_hash' => 'own-version',
     ]);
 
-    expect($draft->current_version_id)->toBeNull()
-        ->and($flow->current_version_id)->toBe($version->id);
+    expect($flow->current_version_id)->toBeNull();
+
+    $flow->update(['current_version_id' => $version->id]);
+
+    expect($flow->current_version_id)->toBe($version->id);
+});
+
+it('refuses a same-tenant current version owned by a different flow', function () {
+    $foreign = ($this->makeVersion)('org-1');
+
+    expect(fn () => Flow::create([
+        'name' => 'Unsafe create',
+        'status' => 'active',
+        'current_version_id' => $foreign->id,
+    ]))->toThrow(InvalidFlowVersionReferenceException::class, 'does not belong to Flow');
+
+    $flow = Flow::create(['name' => 'Draft', 'status' => 'draft']);
+
+    expect(fn () => $flow->update(['current_version_id' => $foreign->id]))
+        ->toThrow(InvalidFlowVersionReferenceException::class, 'does not belong to Flow');
 });
 
 it('refuses a missing current version on create and update', function () {
@@ -99,8 +116,13 @@ it('does not let guard suspension create a contradictory flow reference', functi
 });
 
 it('queries the version only when a flow write can change the invariant', function () {
-    $version = ($this->makeVersion)('org-1');
     $flow = Flow::create(['name' => 'Draft', 'status' => 'draft']);
+    $version = FlowVersion::create([
+        'flow_id' => $flow->id,
+        'version' => 1,
+        'graph' => triggeredExitGraph(),
+        'content_hash' => 'query-own-version',
+    ]);
     $versionQueries = [];
 
     DB::listen(function (QueryExecuted $query) use (&$versionQueries) {

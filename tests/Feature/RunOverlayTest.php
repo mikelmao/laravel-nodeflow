@@ -107,6 +107,20 @@ it('decorates the trigger as bypassed for manual and subflow runs and triggered 
         ->and($this->run->nodeExecutions()->where('node_id', 'trigger')->count())->toBe(0);
 });
 
+it('preserves real execution output when a legacy run names an executable start as its trigger origin', function () {
+    $this->run->update([
+        'trigger_node_id' => 'sent',
+        'started_via' => 'manual',
+    ]);
+
+    $nodes = (array) ($this->snapshot)()['nodes'];
+
+    expect($nodes['sent']['reached'])->toBeTrue()
+        ->and((array) $nodes['sent']['byOutput'])->toBe(['sent' => 2])
+        ->and($nodes['sent']['failed'])->toBe(0)
+        ->and($nodes['sent']['error'])->toBeNull();
+});
+
 /**
  * E13's second half. Counterfactual: derive `reached` from execution rows only,
  * and the node holding the entire audience mid-wait renders dimmed with no

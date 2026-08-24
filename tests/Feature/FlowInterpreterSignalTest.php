@@ -5,6 +5,8 @@ use Nodeflow\Workflows\Activities\CompleteRunActivity;
 use Nodeflow\Workflows\Activities\LoadGraphActivity;
 use Nodeflow\Workflows\Activities\ResolveRunEntryNodeActivity;
 use Nodeflow\Workflows\Activities\RunNodeActivity;
+use Workflow\Serializers\Serializer;
+use Workflow\V2\Support\WorkflowFiberRunner;
 use Workflow\V2\Support\WorkflowDefinition;
 use Workflow\V2\WorkflowStub;
 
@@ -75,4 +77,73 @@ it('does not resolve an entry when the workflow start payload already supplied o
     WorkflowStub::assertNotDispatched(ResolveRunEntryNodeActivity::class);
     WorkflowStub::assertDispatched(RunNodeActivity::class, fn (int $runId, string $nodeId): bool => $runId === 44 && $nodeId === 'first-action');
     expect($workflow->refresh()->completed())->toBeTrue();
+});
+
+it('records a version marker before resolving a new missing-entry workflow', function () {
+    $graph = triggeredExitGraph();
+    $runner = WorkflowFiberRunner::forClass(
+        FlowInterpreter::class,
+        'new-missing-entry',
+        'run-1',
+        [42],
+    );
+
+    $load = $runner->step();
+    expect($load->command['activity_type'])->toBe(LoadGraphActivity::class);
+
+    $resolve = $runner->step($graph);
+
+    expect(array_column($resolve->commands, 'type'))->toBe(['record_version_marker', 'schedule_activity'])
+        ->and($resolve->commands[0]['change_id'])->toBe('nodeflow.resolve-missing-entry')
+        ->and($resolve->commands[0]['version'])->toBe(1)
+        ->and($resolve->command['activity_type'])->toBe(ResolveRunEntryNodeActivity::class);
+});
+
+it('cold replays pre-version history through the legacy graph start command shape', function () {
+    $graph = triggeredExitGraph();
+    $scheduled = WorkflowFiberRunner::forClass(
+        FlowInterpreter::class,
+        'legacy-missing-entry',
+        'run-1',
+        [42],
+        'avro',
+        [[
+            'sequence' => 1,
+            'event_type' => 'WorkflowStarted',
+            'payload' => [
+                'workflow_class' => FlowInterpreter::class,
+                'workflow_type' => FlowInterpreter::class,
+            ],
+            'recorded_at' => '2026-08-24T00:00:00+00:00',
+        ], [
+            'sequence' => 2,
+            'event_type' => 'ActivityCompleted',
+            'payload' => [
+                'sequence' => 1,
+                'result' => Serializer::serializeWithCodec('avro', $graph),
+                'payload_codec' => 'avro',
+            ],
+            'recorded_at' => '2026-08-24T00:00:01+00:00',
+        ]],
+    )->step();
+
+    expect(array_column($scheduled->commands, 'type'))->toBe(['schedule_activity'])
+        ->and($scheduled->command['activity_type'])->toBe(RunNodeActivity::class)
+        ->and(Serializer::unserializeWithCodec('avro', $scheduled->command['arguments']))->toBe([42, 'trigger']);
+});
+
+it('does not version or resolve a workflow whose payload has an explicit entry', function () {
+    $runner = WorkflowFiberRunner::forClass(
+        FlowInterpreter::class,
+        'explicit-entry',
+        'run-1',
+        [42, 1000, 'first-action'],
+    );
+
+    $runner->step();
+    $scheduled = $runner->step(triggeredExitGraph());
+
+    expect(array_column($scheduled->commands, 'type'))->toBe(['schedule_activity'])
+        ->and($scheduled->command['activity_type'])->toBe(RunNodeActivity::class)
+        ->and(Serializer::unserializeWithCodec('avro', $scheduled->command['arguments']))->toBe([42, 'first-action']);
 });

@@ -2,6 +2,8 @@
 
 namespace Nodeflow\Engine;
 
+use LogicException;
+use Workflow\V2\StartOptions;
 use Workflow\V2\WorkflowStub;
 
 /**
@@ -18,11 +20,24 @@ use Workflow\V2\WorkflowStub;
  */
 class DurableWorkflowEngine implements WorkflowEngine
 {
-    public function start(string $workflowClass, array $args): string
+    public function start(string $workflowClass, array $args, ?string $instanceId = null): string
     {
-        $stub = WorkflowStub::make($workflowClass);
+        $stub = WorkflowStub::make($workflowClass, $instanceId);
 
-        $stub->start(...array_values($args));
+        if ($instanceId === null) {
+            $stub->start(...array_values($args));
+
+            return $stub->id();
+        }
+
+        $arguments = [...array_values($args), StartOptions::returnExistingActive()];
+        $result = $stub->attemptStart(...$arguments);
+
+        if ($result->rejected() && ! $result->rejectedDuplicate()) {
+            throw new LogicException(
+                $result->message() ?? "Workflow instance [{$instanceId}] could not be started."
+            );
+        }
 
         return $stub->id();
     }

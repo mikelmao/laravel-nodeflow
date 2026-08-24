@@ -261,7 +261,7 @@ it('enforces the actual default trigger data limit at the exact encoded byte bou
         ->and(Run::withoutTenancy()->count())->toBe(1);
 });
 
-it('recovers the committed winner of a real unique-key race without rematerializing or restarting', function () {
+it('recovers and starts a stranded committed winner of a real unique-key race once', function () {
     $version = FlowVersion::withoutTenancy()->findOrFail($this->v1->id);
     $armed = true;
     $winnerId = null;
@@ -282,7 +282,7 @@ it('recovers the committed winner of a real unique-key race without rematerializ
         $winnerId = DB::table('nodeflow_runs')->insertGetId([
             'flow_version_id' => $version->id,
             'tenant_id' => 'org-1',
-            'engine_workflow_id' => 'winner-workflow',
+            'engine_workflow_id' => null,
             'strategy' => 'subject',
             'status' => 'pending',
             'is_test' => false,
@@ -311,11 +311,12 @@ it('recovers the committed winner of a real unique-key race without rematerializ
     ]);
 
     expect($winner->id)->toBe($winnerId)
-        ->and($winner->engine_workflow_id)->toBe('winner-workflow')
+        ->and($winner->engine_workflow_id)->toBe("nodeflow-run:{$winnerId}")
         ->and($winner->trigger_data)->toBe(['winner' => true])
         ->and($winner->subjects()->pluck('subject_id')->all())->toBe(['2'])
         ->and(Run::withoutTenancy()->count())->toBe(1)
-        ->and(app(WorkflowEngine::class)->started())->toBe([]);
+        ->and(app(WorkflowEngine::class)->started())->toHaveCount(1)
+        ->and(app(WorkflowEngine::class)->started()[0]['id'])->toBe("nodeflow-run:{$winnerId}");
 });
 
 it('accepts trigger data at the exact encoded byte limit and rejects invalid limits', function () {
