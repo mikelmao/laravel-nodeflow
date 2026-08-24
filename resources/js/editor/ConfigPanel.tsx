@@ -1,7 +1,7 @@
 import { controlFor } from '../controls'
 import type { ControlMap } from '../controls'
 import { FieldControlIdProvider } from '../controls/FieldControlId'
-import { useFieldOptions } from '../controls/useFieldOptions'
+import { FieldOptionsContext, useFieldOptions, type FieldOptionsSource } from '../controls/useFieldOptions'
 import { cloneJsonValue } from '../graph/json'
 import { useId, useMemo, type FocusEvent } from 'react'
 import type { FieldPayload, GraphComponentPayload, NodeCardData, NodeErrorEntry } from '../graph/types'
@@ -15,9 +15,10 @@ type FieldRowProps = {
     errors: string[]
     onChange: (value: unknown) => void
     onFieldBlur?: () => void
+    optionsSource?: FieldOptionsSource
 }
 
-function FieldRow({ id, nodeType, field, value, controls, errors, onChange, onFieldBlur }: FieldRowProps) {
+function FieldRowContent({ id, nodeType, field, value, controls, errors, onChange, onFieldBlur }: Omit<FieldRowProps, 'optionsSource'>) {
     const controlId = `nf-${useId().replace(/:/g, '')}`
     // Host controls are allowed to use mutable UI models. Give each mounted
     // field a private, stable JSON copy so an in-place edit cannot mutate the
@@ -56,6 +57,12 @@ function FieldRow({ id, nodeType, field, value, controls, errors, onChange, onFi
     )
 }
 
+function FieldRow({ optionsSource, ...props }: FieldRowProps) {
+    return optionsSource === undefined
+        ? <FieldRowContent {...props} />
+        : <FieldOptionsContext.Provider value={optionsSource}><FieldRowContent {...props} /></FieldOptionsContext.Provider>
+}
+
 function copiedControlValue(value: unknown): unknown {
     try {
         return cloneJsonValue(value)
@@ -91,10 +98,11 @@ export type ConfigPanelProps = {
     errors: NodeErrorEntry[]
     onConfigChange: (key: string, value: unknown) => void
     onFieldBlur?: () => void
+    fieldOptionsSources?: Record<string, FieldOptionsSource>
 }
 
 /** Field content only: metadata and node-level actions belong to NodeInspector. */
-export function ConfigPanel({ node, def, controls, errors, onConfigChange, onFieldBlur }: ConfigPanelProps) {
+export function ConfigPanel({ node, def, controls, errors, onConfigChange, onFieldBlur, fieldOptionsSources = {} }: ConfigPanelProps) {
     const instanceId = useId().replace(/:/g, '')
     const nodeErrors = errors.filter((entry) => entry.field === null)
     const fieldRowProps = (definitionField: FieldPayload): FieldRowProps => {
@@ -113,6 +121,9 @@ export function ConfigPanel({ node, def, controls, errors, onConfigChange, onFie
             errors: fieldErrors,
             onChange: (next) => onConfigChange(definitionField.key, next),
             onFieldBlur,
+            optionsSource: Object.prototype.hasOwnProperty.call(fieldOptionsSources, definitionField.key)
+                ? fieldOptionsSources[definitionField.key]
+                : undefined,
         }
     }
 

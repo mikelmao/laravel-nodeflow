@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest'
-import type { NodeCardData, NodeTypePayload } from '../graph/types'
+import type { NodeCardData, NodeTypePayload, TriggerNodeTypePayload } from '../graph/types'
 import { categoryPresentation, categoryClasses, nodeSummary } from './node'
 
 function definition(overrides: Partial<NodeTypePayload> = {}): NodeTypePayload {
@@ -52,6 +52,15 @@ describe('categoryPresentation', () => {
 })
 
 describe('nodeSummary', () => {
+    it('summarizes custom triggers through their server-authored driver and source', () => {
+        const trigger: TriggerNodeTypePayload = {
+            kind: 'trigger', type: 'host.custom', driver: 'host-driver', label: 'Custom', icon: null,
+            description: null, outputs: ['started'], fields: [], default_config: {}, compatible_source_keys: ['host.source'],
+        }
+        expect(nodeSummary({ id: 'trigger', type: trigger.type, kind: 'trigger', config: { source: 'host.source' }, isStart: true }, trigger))
+            .toBe('host-driver · host.source')
+    })
+
     it('uses field definition order rather than configuration insertion order', () => {
         expect(nodeSummary(node({ audiences: 'Everyone', subject: 'Welcome' }), definition())).toBe('Subject: Welcome')
     })

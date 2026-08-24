@@ -26,7 +26,7 @@ import type {
     TriggerSourcesPayload,
     WebhookMetadata,
 } from '../graph/types'
-import { send } from '../http'
+import { send, webhookRotationResponse } from '../http'
 import { canConnect, nextNodeId } from './ids'
 import { closeTransaction, commitHistory, createHistory, redoHistory, resetHistory, undoHistory, type History } from './history'
 import { interpretPublish, type PublishOutcome } from './publish'
@@ -54,6 +54,7 @@ export type EditorActions = {
     selectNode: (id: string | null) => void
     selectEdge: (id: string | null) => void
     configure: (id: string, key: string, value: unknown) => void
+    configureTriggerSource: (id: string, source: string | null, defaults: Record<string, unknown>, priorFieldKeys: string[]) => void
     closeConfigTransaction: () => void
     deleteNode: (id: string) => void
     deleteSelection: () => void
@@ -98,6 +99,31 @@ export type UseEditorControllerResult = {
 
 function copiedConfig(definition: GraphComponentPayload): Record<string, unknown> {
     return cloneGraphConfig(definition.default_config)
+}
+
+function hasRegisteredTriggerSource(definition: TriggerNodeTypePayload, sources: TriggerSourcesPayload): boolean {
+    const allowed = new Set(definition.compatible_source_keys)
+    const registered = Object.prototype.hasOwnProperty.call(sources, definition.driver) ? sources[definition.driver] ?? [] : []
+    return registered.some((source) => source.driver === definition.driver && allowed.has(source.key))
+}
+
+function copiedTriggerConfig(definition: TriggerNodeTypePayload, sources: TriggerSourcesPayload): Record<string, unknown> {
+    const nodeConfig = copiedConfig(definition)
+    const selectedKey = typeof nodeConfig.source === 'string' ? nodeConfig.source : null
+    if (selectedKey === null) return nodeConfig
+    const selected = (Object.prototype.hasOwnProperty.call(sources, definition.driver) ? sources[definition.driver] ?? [] : [])
+        .find((source) => source.driver === definition.driver
+            && definition.compatible_source_keys.includes(source.key)
+            && source.key === selectedKey)
+    if (selected === undefined) return nodeConfig
+
+    const reserved = new Set(definition.fields.map((field) => field.key))
+    const contributed = new Set(selected.fields.filter((field) => !reserved.has(field.key)).map((field) => field.key))
+    const sourceDefaults = cloneGraphConfig(selected.default_config)
+    for (const [key, value] of Object.entries(sourceDefaults)) {
+        if (contributed.has(key) && !Object.prototype.hasOwnProperty.call(nodeConfig, key)) nodeConfig[key] = value
+    }
+    return nodeConfig
 }
 
 function snapshotDocument(document: EditorDocument): EditorDocument {
@@ -195,6 +221,10 @@ export function useEditorController(options: UseEditorControllerOptions): UseEdi
     const [validationState, setValidationState] = useState<ValidationIndicator>({ status: 'unchecked' })
     const [publishing, setPublishing] = useState(false)
     const [publishedVersion, setPublishedVersion] = useState<number | null>(options.flow.version)
+    const [webhookMetadata, setWebhookMetadata] = useState<WebhookMetadata | null>(options.webhook)
+    const [webhookSecret, setWebhookSecret] = useState<string | null>(null)
+    const [webhookRotating, setWebhookRotating] = useState(false)
+    const [webhookRotationError, setWebhookRotationError] = useState<string | null>(null)
     const [issueToFocus, setIssueToFocus] = useState<NodeErrorEntry | null>(null)
     const document = history.present
     const documentRef = useRef(document)
@@ -203,6 +233,7 @@ export function useEditorController(options: UseEditorControllerOptions): UseEdi
     const validationSequence = useRef(0)
     const publishSequence = useRef(0)
     const activePublish = useRef<number | null>(null)
+    const activeRotation = useRef(false)
     const mounted = useRef(true)
     const validateUrl = useRef(options.urls.validate)
     const publishUrl = useRef(options.urls.publish)
@@ -222,6 +253,7 @@ export function useEditorController(options: UseEditorControllerOptions): UseEdi
             validationSequence.current += 1
             publishSequence.current += 1
             activePublish.current = null
+            activeRotation.current = false
         }
     }, [])
 
@@ -284,7 +316,7 @@ export function useEditorController(options: UseEditorControllerOptions): UseEdi
     }, [commit])
 
     const addTrigger = useCallback((definition: TriggerNodeTypePayload, point?: { x: number; y: number }) => {
-        if (definition.kind !== 'trigger') return
+        if (definition.kind !== 'trigger' || !hasRegisteredTriggerSource(definition, options.trigger_sources)) return
         const current = documentRef.current
         if (current.nodes.some((node) => defs[node.data.type]?.kind === 'trigger')) return
         const id = nextNodeId(definition.type, new Set(current.nodes.map((node) => node.id)))
@@ -298,16 +330,16 @@ export function useEditorController(options: UseEditorControllerOptions): UseEdi
             id,
             type: 'nodeflowNode',
             position,
-            data: { id, type: definition.type, kind: 'trigger', config: copiedConfig(definition), isStart: true },
+            data: { id, type: definition.type, kind: 'trigger', config: copiedTriggerConfig(definition, options.trigger_sources), isStart: true },
         }
         if (commit({ nodes: [...current.nodes, next], edges: current.edges, startId: id })) {
             setSelected({ nodeId: id, edgeId: null })
             setView((currentView) => ({ ...currentView, inspectorOpen: true }))
         }
-    }, [commit, defs])
+    }, [commit, defs, options.trigger_sources])
 
     const replaceTrigger = useCallback((definition: TriggerNodeTypePayload) => {
-        if (definition.kind !== 'trigger') return
+        if (definition.kind !== 'trigger' || !hasRegisteredTriggerSource(definition, options.trigger_sources)) return
         const current = documentRef.current
         const triggers = current.nodes.filter((node) => defs[node.data.type]?.kind === 'trigger')
         if (triggers.length === 0) {
@@ -326,7 +358,7 @@ export function useEditorController(options: UseEditorControllerOptions): UseEdi
                         id: retained.id,
                         type: definition.type,
                         kind: 'trigger',
-                        config: copiedConfig(definition),
+                        config: copiedTriggerConfig(definition, options.trigger_sources),
                         isStart: true,
                     },
                 }
@@ -349,7 +381,7 @@ export function useEditorController(options: UseEditorControllerOptions): UseEdi
             })
             setView((currentView) => ({ ...currentView, selectedEdgeId: null }))
         }
-    }, [addTrigger, commit, defs])
+    }, [addTrigger, commit, defs, options.trigger_sources])
 
     const addAtViewportCenter = useCallback((definition: NodeTypePayload) => {
         const actions = canvas.current
@@ -464,6 +496,26 @@ export function useEditorController(options: UseEditorControllerOptions): UseEdi
         commit({ ...current, nodes: current.nodes.map((node) => node.id === id ? { ...node, data: { ...node.data, config: { ...node.data.config, [key]: copiedValue } } } : node) }, `config:${id}:${key}`)
     }, [commit])
 
+    const configureTriggerSource = useCallback((id: string, source: string | null, defaults: Record<string, unknown>, priorFieldKeys: string[]) => {
+        const current = documentRef.current
+        const target = current.nodes.find((node) => node.id === id)
+        if (target === undefined || defs[target.data.type]?.kind !== 'trigger') return
+        let copiedDefaults: Record<string, unknown>
+        try {
+            copiedDefaults = cloneGraphConfig(defaults)
+        } catch {
+            return
+        }
+        const config = cloneGraphConfig(target.data.config)
+        for (const key of priorFieldKeys) delete config[key]
+        config.source = source
+        for (const [key, value] of Object.entries(copiedDefaults)) config[key] = value
+        commit({
+            ...current,
+            nodes: current.nodes.map((node) => node.id === id ? { ...node, data: { ...node.data, config } } : node),
+        }, `config:${id}:source`)
+    }, [commit, defs])
+
     const deleteSelection = useCallback(() => {
         const current = documentRef.current
         if (selected.nodeId !== null) {
@@ -572,15 +624,63 @@ export function useEditorController(options: UseEditorControllerOptions): UseEdi
             const next = interpretPublish(result, new Set(documentRef.current.nodes.map((node) => node.id)))
             autosave.finishPublish(next.kind === 'published' ? next.revision : undefined)
             if (!owns() || publishedGeneration !== generation.current) return
-            if (next.kind === 'published') setPublishedVersion(next.version)
-            setPublishOutcome(next)
+            if (next.kind === 'published') {
+                setPublishedVersion(next.version)
+                // Every successful publication supersedes a previous plaintext
+                // disclosure, including a success that returns no new secret.
+                setWebhookSecret(next.webhookSecret ?? null)
+                const publishedTrigger = documentRef.current.nodes.find((node) => defs[node.data.type]?.kind === 'trigger')
+                const publishedDef = publishedTrigger === undefined ? undefined : defs[publishedTrigger.data.type]
+                setWebhookMetadata((current) => {
+                    const endpointUrl = next.webhookUrl ?? current?.endpoint_url ?? null
+                    const webhookPublished = publishedDef?.kind === 'trigger' && publishedDef.driver === 'webhook'
+                    if (endpointUrl === null && current === null && !webhookPublished) return null
+                    return {
+                        endpoint_url: endpointUrl,
+                        active: webhookPublished,
+                        secret_rotated_at: current?.secret_rotated_at ?? null,
+                    }
+                })
+            }
+            setPublishOutcome(next.kind === 'published'
+                ? { kind: 'published', version: next.version, revision: next.revision }
+                : next)
         } catch (reason: unknown) {
             autosave.finishPublish()
             if (owns() && publishedGeneration === generation.current) setPublishOutcome({ kind: 'failed', message: `Could not reach server to publish this flow: ${String(reason)}` })
         } finally {
             if (owns()) { activePublish.current = null; setPublishing(false) }
         }
-    }, [autosave, options.urls.publish])
+    }, [autosave, defs, options.urls.publish])
+
+    const rotateWebhookSecret = useCallback(async () => {
+        if (!mounted.current || activeRotation.current) return
+        activeRotation.current = true
+        setWebhookRotating(true)
+        setWebhookRotationError(null)
+        try {
+            const result = await send('POST', options.urls.rotate_webhook_secret)
+            if (!mounted.current) return
+            if (!result.ok) {
+                setWebhookRotationError(result.status === 403
+                    ? 'You are not authorized to rotate this webhook secret.'
+                    : 'Could not rotate the webhook secret. Try again.')
+                return
+            }
+            const rotated = webhookRotationResponse(result.data)
+            if (rotated === null) {
+                setWebhookRotationError('Could not rotate the webhook secret because the server response was invalid.')
+                return
+            }
+            setWebhookSecret(rotated.secret)
+            setWebhookMetadata((current) => current === null ? null : { ...current, secret_rotated_at: rotated.rotatedAt })
+        } catch {
+            if (mounted.current) setWebhookRotationError('Could not rotate the webhook secret. Check your connection and try again.')
+        } finally {
+            activeRotation.current = false
+            if (mounted.current) setWebhookRotating(false)
+        }
+    }, [options.urls.rotate_webhook_secret])
 
     const focusIssue = useCallback((nodeId: string | null, field: string | null) => {
         if (nodeId === null || !documentRef.current.nodes.some((node) => node.id === nodeId)) return
@@ -605,6 +705,29 @@ export function useEditorController(options: UseEditorControllerOptions): UseEdi
     const unknownTypes = document.nodes.filter((node) => !Object.prototype.hasOwnProperty.call(defs, node.data.type)).map((node) => ({ nodeId: node.id, type: node.data.type }))
     const triggerNode = document.nodes.find((node) => defs[node.data.type]?.kind === 'trigger')
     const trigger = triggerNode === undefined ? null : defs[triggerNode.data.type] ?? null
+    const availableTriggerDefinitions = options.trigger_nodes.filter((definition) => {
+        const sources = Object.prototype.hasOwnProperty.call(options.trigger_sources, definition.driver)
+            ? options.trigger_sources[definition.driver] ?? []
+            : []
+        return sources.some((source) => source.driver === definition.driver && definition.compatible_source_keys.includes(source.key))
+    })
+    const compatibleSourceKeys = trigger?.kind === 'trigger' ? new Set(trigger.compatible_source_keys) : new Set<string>()
+    const registeredCompatibleSources = trigger?.kind === 'trigger'
+        ? (Object.prototype.hasOwnProperty.call(options.trigger_sources, trigger.driver) ? options.trigger_sources[trigger.driver] ?? [] : [])
+            .filter((source) => source.driver === trigger.driver && compatibleSourceKeys.has(source.key))
+        : []
+    const selectedSourceKey = triggerNode !== undefined && typeof triggerNode.data.config.source === 'string'
+        ? triggerNode.data.config.source
+        : null
+    const publishDisabledReason = options.trigger_nodes.length > 0 && availableTriggerDefinitions.length === 0 && triggerNode === undefined
+        ? 'No compatible trigger source is registered by this application.'
+        : availableTriggerDefinitions.length > 0 && triggerNode === undefined
+            ? 'Add a trigger before publishing this flow.'
+        : trigger?.kind === 'trigger' && registeredCompatibleSources.length === 0
+            ? 'No compatible trigger source is registered by this application.'
+            : trigger?.kind === 'trigger' && (selectedSourceKey === null || !registeredCompatibleSources.some((source) => source.key === selectedSourceKey))
+                ? 'The selected trigger source is not compatible with this trigger.'
+                : null
     const message = outcomeMessages(activeOutcome)
     const save = { status: autosave.status, message: autosave.message ?? undefined } as EditorToolbarProps['save']
     const publishIndicator: PublishIndicator = publishOutcome?.kind === 'published'
@@ -614,12 +737,12 @@ export function useEditorController(options: UseEditorControllerOptions): UseEdi
         : { status: 'idle' }
 
     const actions: EditorActions = useMemo(() => ({
-        addNode, addAtViewportCenter, addTrigger, replaceTrigger, nodesChange, edgesChange, connect, selectNode, selectEdge, configure, closeConfigTransaction,
+        addNode, addAtViewportCenter, addTrigger, replaceTrigger, nodesChange, edgesChange, connect, selectNode, selectEdge, configure, configureTriggerSource, closeConfigTransaction,
         deleteNode, deleteSelection, undo: () => moveHistory('undo'), redo: () => moveHistory('redo'), autoLayout,
         validate, publish, resolveConflict, registerCanvas: (next) => { canvas.current = next }, focusIssue,
         setLibraryOpen: (open) => setView((current) => ({ ...current, libraryOpen: open })),
         setInspectorOpen: (open) => setView((current) => ({ ...current, inspectorOpen: open })),
-    }), [addAtViewportCenter, addNode, addTrigger, autoLayout, closeConfigTransaction, configure, connect, deleteNode, deleteSelection, edgesChange, focusIssue, moveHistory, nodesChange, publish, replaceTrigger, resolveConflict, selectEdge, selectNode, validate])
+    }), [addAtViewportCenter, addNode, addTrigger, autoLayout, closeConfigTransaction, configure, configureTriggerSource, connect, deleteNode, deleteSelection, edgesChange, focusIssue, moveHistory, nodesChange, publish, replaceTrigger, resolveConflict, selectEdge, selectNode, validate])
 
     return {
         document,
@@ -627,11 +750,11 @@ export function useEditorController(options: UseEditorControllerOptions): UseEdi
         view,
         actions,
         optionsSource,
-        canvasProps: { nodes: canvasNodes, edges: canvasEdges, defs, renderers: options.nodeRenderers, nodeErrors, onNodesChange: nodesChange, onEdgesChange: edgesChange, onConnect: connect, onNodeClick: selectNode, onEdgeClick: selectEdge, onPaneClick: () => { selectNode(null) }, onDropNodeType: (type, point) => { const definition = Object.prototype.hasOwnProperty.call(defs, type) ? defs[type] : undefined; if (definition?.kind === 'executable') addNode(definition, point) }, onReady: (next) => { canvas.current = next }, onDispose: (old) => { if (canvas.current === old) canvas.current = null }, interactive: true, deleteKeyCode: null },
+        canvasProps: { nodes: canvasNodes, edges: canvasEdges, defs, renderers: options.nodeRenderers, nodeErrors, onNodesChange: nodesChange, onEdgesChange: edgesChange, onConnect: connect, onNodeClick: selectNode, onEdgeClick: selectEdge, onPaneClick: () => { selectNode(null) }, onDropNodeType: (type, point) => { const definition = Object.prototype.hasOwnProperty.call(defs, type) ? defs[type] : undefined; if (definition?.kind === 'executable') addNode(definition, point); else if (definition?.kind === 'trigger') addTrigger(definition, point) }, onReady: (next) => { canvas.current = next }, onDispose: (old) => { if (canvas.current === old) canvas.current = null }, interactive: true, deleteKeyCode: null },
         canvasHudProps: { nodeCount: document.nodes.length, connectionCount: document.edges.length, validation: validationState },
-        toolbarProps: { flowName: options.flow.name, triggerLabel: trigger?.label ?? 'No trigger', publishedVersion, save, validation: validationState, publish: publishIndicator, canUndo: history.past.length > 0, canRedo: history.future.length > 0, hasSelection: selected.nodeId !== null || selected.edgeId !== null, onUndo: () => moveHistory('undo'), onRedo: () => moveHistory('redo'), onAutoLayout: autoLayout, onFit: () => canvas.current?.fit(), onDeleteSelected: deleteSelection, onValidate: () => { void validate() }, onPublish: () => { void publish() } },
+        toolbarProps: { flowName: options.flow.name, triggerLabel: trigger?.label ?? 'No trigger', publishedVersion, save, validation: validationState, publish: publishIndicator, publishDisabledReason, canUndo: history.past.length > 0, canRedo: history.future.length > 0, hasSelection: selected.nodeId !== null || selected.edgeId !== null, onUndo: () => moveHistory('undo'), onRedo: () => moveHistory('redo'), onAutoLayout: autoLayout, onFit: () => canvas.current?.fit(), onDeleteSelected: deleteSelection, onValidate: () => { void validate() }, onPublish: () => { if (publishDisabledReason === null) void publish() } },
         noticeProps: { save, publish: publishIndicator, validation: validationState, structuralError: message.structural, graphMessages: [...message.graph, ...(message.failed === undefined ? [] : [message.failed])], validationMessage: validation?.kind === 'failed' ? validation.message : undefined, onKeepMine: () => resolveConflict('mine'), onUseTheirs: () => resolveConflict('theirs') },
-        flowOverviewProps: { flow: { name: options.flow.name }, trigger: trigger === null ? null : { label: trigger.label, type: trigger.type }, publishedVersion, nodeCount: document.nodes.length, connectionCount: document.edges.length, startNodeId: document.startId || null, validation: validationState, issues: graphIssues(activeOutcome), warnings: validation?.kind === 'valid' ? validation.warnings : validation?.kind === 'invalid' ? validation.warnings : [], errors: message.graph, unknownTypes, unresolvedOutputs: built.unresolved.map((edge) => ({ from: edge.source, to: edge.target })), onIssueSelect: (issue) => focusIssue(issue.node, issue.field) },
-        nodeInspectorProps: selectedNode === undefined ? null : { node: selectedNode.data, def: defs[selectedNode.data.type], controls, errors: fieldErrors, issueToFocus, onConfigChange: (key, value) => configure(selectedNode.id, key, value), onConfigBlur: closeConfigTransaction, onDelete: () => deleteNode(selectedNode.id) },
+        flowOverviewProps: { flow: { name: options.flow.name }, trigger: trigger === null ? null : { label: trigger.label, type: trigger.type }, triggerReadiness: publishDisabledReason, publishedVersion, nodeCount: document.nodes.length, connectionCount: document.edges.length, startNodeId: document.startId || null, validation: validationState, issues: graphIssues(activeOutcome), warnings: validation?.kind === 'valid' ? validation.warnings : validation?.kind === 'invalid' ? validation.warnings : [], errors: message.graph, unknownTypes, unresolvedOutputs: built.unresolved.map((edge) => ({ from: edge.source, to: edge.target })), onIssueSelect: (issue) => focusIssue(issue.node, issue.field) },
+        nodeInspectorProps: selectedNode === undefined ? null : { node: selectedNode.data, def: defs[selectedNode.data.type], controls, errors: fieldErrors, issueToFocus, triggerSources: options.trigger_sources, triggerOptionsTemplate: options.urls.trigger_options, triggerSourceOptionsTemplate: options.urls.trigger_source_options, onConfigChange: (key, value) => configure(selectedNode.id, key, value), onTriggerSourceChange: (source, defaults, priorFieldKeys) => configureTriggerSource(selectedNode.id, source, defaults, priorFieldKeys), onConfigBlur: closeConfigTransaction, webhook: webhookMetadata, webhookSecret, webhookRotating, webhookRotationError, onAcknowledgeWebhookSecret: () => setWebhookSecret(null), onRotateWebhookSecret: () => { void rotateWebhookSecret() }, onDelete: () => deleteNode(selectedNode.id) },
     }
 }

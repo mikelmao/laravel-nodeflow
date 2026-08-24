@@ -24,6 +24,7 @@ export type EditorToolbarProps = {
     save: SaveIndicator
     validation: ValidationIndicator
     publish: PublishIndicator
+    publishDisabledReason?: string | null
     canUndo: boolean
     canRedo: boolean
     hasSelection: boolean
@@ -113,7 +114,7 @@ export function EditorToolbar(props: EditorToolbarProps) {
                 <span>Validate</span>
                 <span className="text-xs">{validationText}</span>
             </button>
-            <button type="button" aria-label="Publish" title={props.publish.message ?? publishText} disabled={props.publish.status === 'publishing'} onClick={props.onPublish} className="inline-flex items-center gap-1.5 rounded-md bg-primary px-3 py-1.5 text-sm font-medium text-primary-foreground hover:bg-primary/90 disabled:opacity-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring">
+            <button type="button" aria-label="Publish" title={props.publishDisabledReason ?? props.publish.message ?? publishText} disabled={props.publish.status === 'publishing' || props.publishDisabledReason != null} onClick={props.onPublish} className="inline-flex items-center gap-1.5 rounded-md bg-primary px-3 py-1.5 text-sm font-medium text-primary-foreground hover:bg-primary/90 disabled:cursor-not-allowed disabled:opacity-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring">
                 <NodeflowIcon name={props.publish.status === 'error' ? 'alert' : 'play'} className="size-4" />
                 <span>{publishText}</span>
             </button>

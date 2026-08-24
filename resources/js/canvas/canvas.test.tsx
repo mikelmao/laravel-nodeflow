@@ -2,7 +2,7 @@ import { Position, ReactFlowProvider, useStoreApi, type NodeProps, type ReactFlo
 import { fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { useLayoutEffect, useRef } from 'react'
 import { describe, expect, it, vi } from 'vitest'
-import type { CanvasEdge, CanvasNode, NodeCardData, NodeTypePayload } from '../graph/types'
+import type { CanvasEdge, CanvasNode, NodeCardData, NodeTypePayload, TriggerNodeTypePayload } from '../graph/types'
 import { Canvas, canvasActions, canvasBehavior, edgeTypes, interactionProps, prefersReducedMotion, type NodeflowEdge, type NodeflowNode } from './Canvas'
 import { CanvasContext } from './context'
 import { defaultNodeRenderer, NodeCard, rendererFor } from './NodeCard'
@@ -156,6 +156,68 @@ describe('defaultNodeRenderer', () => {
 })
 
 describe('NodeCard', () => {
+    it('renders every trigger kind with badges, no target, and one accessible started output', () => {
+        const customTrigger: TriggerNodeTypePayload = {
+            kind: 'trigger',
+            type: 'host.trigger.custom',
+            driver: 'host-driver',
+            label: 'Host trigger',
+            icon: null,
+            description: 'Starts from the host.',
+            outputs: ['started'],
+            fields: [],
+            default_config: {},
+            compatible_source_keys: ['host.source'],
+        }
+        const triggerData: NodeCardData = {
+            id: 'trigger',
+            type: customTrigger.type,
+            kind: 'trigger',
+            config: { source: 'host.source' },
+            // Presentation follows the authoritative definition even while a
+            // malformed draft's start pointer is being repaired.
+            isStart: false,
+        }
+        const { container } = render(
+            <ReactFlowProvider>
+                <CanvasContext.Provider value={{ defs: { [customTrigger.type]: customTrigger }, renderers: {}, nodeErrors: {}, decorations: {} }}>
+                    <NodeCard {...nodeProps} id="trigger" data={triggerData} />
+                </CanvasContext.Provider>
+            </ReactFlowProvider>,
+        )
+
+        const card = screen.getByRole('article', { name: 'Host trigger' })
+        expect(card).toHaveTextContent('TRIGGER')
+        expect(card).toHaveTextContent('START')
+        expect(container.querySelector('.react-flow__handle-left')).toBeNull()
+        expect(screen.getByLabelText('Output started')).toBeInTheDocument()
+        expect(container.querySelectorAll('.react-flow__handle-right')).toHaveLength(1)
+    })
+
+    it('preserves trigger run decorations and disabled handle behavior', () => {
+        const customTrigger: TriggerNodeTypePayload = {
+            kind: 'trigger', type: 'host.trigger', driver: 'host', label: 'Host trigger', icon: null,
+            description: null, outputs: ['started'], fields: [], default_config: {}, compatible_source_keys: ['host.source'],
+        }
+        const { container } = render(
+            <ReactFlowProvider>
+                <CanvasContext.Provider value={{
+                    defs: { [customTrigger.type]: customTrigger },
+                    renderers: {},
+                    nodeErrors: {},
+                    decorations: { trigger: { dimmed: true, badges: [{ key: 'occurrence', label: 'occurrences', value: 1 }] } },
+                }}>
+                    <NodeCard {...nodeProps} id="trigger" isConnectable={false} data={{ id: 'trigger', type: customTrigger.type, kind: 'trigger', config: {}, isStart: true }} />
+                </CanvasContext.Provider>
+            </ReactFlowProvider>,
+        )
+
+        expect(screen.getByTestId('nodeflow-badges-trigger')).toHaveTextContent('occurrences 1')
+        expect(screen.getByRole('article', { name: 'Host trigger' })).toHaveClass('opacity-40')
+        expect(screen.getByLabelText('Output started')).not.toHaveClass('connectable')
+        expect(container.querySelectorAll('.react-flow__handle-right')).toHaveLength(1)
+    })
+
     // Handles belong to NodeCard. Counterfactual move to default renderer and
     // host override loses wiring.
     it('draws one source handle per declared output even under a host renderer', () => {

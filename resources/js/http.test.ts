@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { csrfHeaders, optionsUrl, send, subjectsUrl } from './http'
+import { csrfHeaders, optionsUrl, send, subjectsUrl, triggerSourceOptionsTemplate, webhookRotationResponse } from './http'
 
 afterEach(() => {
     document.head.innerHTML = ''
@@ -118,6 +118,21 @@ describe('optionsUrl', () => {
             'a',
             'b',
         )).toThrow(/__NODEFLOW_TYPE__/)
+    })
+})
+
+describe('trigger webhook helpers', () => {
+    it('resolves only the encoded trigger source sentinel for later field substitution', () => {
+        expect(triggerSourceOptionsTemplate(
+            '/trigger-nodes/__NODEFLOW_TYPE__/sources/__NODEFLOW_SOURCE__/fields/__NODEFLOW_FIELD__/options',
+            'orders/webhook',
+        )).toBe('/trigger-nodes/__NODEFLOW_TYPE__/sources/orders%2Fwebhook/fields/__NODEFLOW_FIELD__/options')
+    })
+
+    it('accepts only the no-store rotation response data needed by the UI', () => {
+        expect(webhookRotationResponse({ secret: 'new-secret', rotated_at: null })).toEqual({ secret: 'new-secret', rotatedAt: null })
+        expect(webhookRotationResponse({ secret: '', rotated_at: null })).toBeNull()
+        expect(webhookRotationResponse({ secret: 'new-secret', rotated_at: { unsafe: true } })).toBeNull()
     })
 })
 

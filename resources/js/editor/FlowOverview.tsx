@@ -23,6 +23,7 @@ export type FlowOverviewIssue = {
 export type FlowOverviewProps = {
     flow: { name: string }
     trigger: { label: string; type: string } | null
+    triggerReadiness?: string | null
     publishedVersion: number | null
     nodeCount: number
     connectionCount: number
@@ -62,6 +63,7 @@ function DiagnosticList({ title, children }: { title: string; children: React.Re
 export function FlowOverview({
     flow,
     trigger,
+    triggerReadiness = null,
     publishedVersion,
     nodeCount,
     connectionCount,
@@ -96,7 +98,9 @@ export function FlowOverview({
             </dl>
 
             <section aria-label="Validation" className="rounded-md bg-muted p-3 text-sm">
-                <p className="font-medium">{readinessCopy[validation.status]}</p>
+                <p className={`font-medium${triggerReadiness === null ? '' : ' text-destructive'}`}>
+                    {triggerReadiness ?? readinessCopy[validation.status]}
+                </p>
             </section>
 
             {unknownTypes.length > 0 && (

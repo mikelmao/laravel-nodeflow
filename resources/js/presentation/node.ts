@@ -53,7 +53,12 @@ function truncate(text: string, maximum = 78): string {
 /** A single human-readable configuration hint for the compact node body. */
 export function nodeSummary(data: NodeCardData, def?: GraphComponentPayload): string {
     if (def === undefined) return ''
-
+    if (def.kind === 'trigger') {
+        const source = data.config.source
+        return truncate(typeof source === 'string' && source !== ''
+            ? `${def.driver} · ${source}`
+            : `${def.driver} · Needs source`)
+    }
     for (const field of def.fields) {
         const value = data.config[field.key]
         if (empty(value)) {

@@ -5,9 +5,10 @@ const INVALID_SUCCESS_MESSAGE = 'The publish response contained an invalid versi
 const INVALID_NODE_ERRORS_MESSAGE = 'The publish response contained invalid node_errors.'
 const INVALID_STRUCTURAL_ERRORS_MESSAGE = 'The publish response contained invalid structural errors.'
 const INVALID_BANNER_ERRORS_MESSAGE = 'The publish response contained invalid banner errors.'
+const INVALID_WEBHOOK_MESSAGE = 'The publish response contained invalid webhook metadata.'
 
 export type PublishOutcome =
-    | { kind: 'published'; version: number; revision: number }
+    | { kind: 'published'; version: number; revision: number; webhookUrl?: string; webhookSecret?: string }
     | { kind: 'semantic'; banner: string[]; byNode: Record<string, NodeErrorEntry[]>; unplaceable: string[] }
     | { kind: 'structural'; developer: string[] }
     | { kind: 'failed'; message: string }
@@ -30,11 +31,21 @@ export function interpretPublish(
         ) {
             return { kind: 'failed', message: INVALID_SUCCESS_MESSAGE }
         }
+        const webhookUrl = result.data?.webhook_url
+        const webhookSecret = result.data?.webhook_secret
+        if (
+            (webhookUrl !== undefined && (typeof webhookUrl !== 'string' || webhookUrl === ''))
+            || (webhookSecret !== undefined && (typeof webhookSecret !== 'string' || webhookSecret === ''))
+        ) {
+            return { kind: 'failed', message: INVALID_WEBHOOK_MESSAGE }
+        }
 
         return {
             kind: 'published',
             version,
             revision,
+            ...(typeof webhookUrl === 'string' ? { webhookUrl } : {}),
+            ...(typeof webhookSecret === 'string' ? { webhookSecret } : {}),
         }
     }
 

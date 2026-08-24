@@ -38,23 +38,28 @@ export function NodeCard({ id, data, selected, isConnectable }: NodeProps<Nodefl
     const decoration = Object.prototype.hasOwnProperty.call(decorations, id) ? decorations[id]! : undefined
     const dimClassName = decoration?.dimmed === true ? ' opacity-40' : ''
     const presentation = categoryPresentation(def?.kind === 'executable' ? def.group : 'Trigger')
+    const isTrigger = def?.kind === 'trigger'
     const cardClassName = `relative rounded-md border bg-card shadow-sm ${selectionClassName} ${categoryClasses[presentation.accent]}${dimClassName}`
     const label = def?.label ?? data.type
 
     return (
         <article style={{ width: NODE_WIDTH }} aria-label={label} className={cardClassName}>
-            <Handle
-                type="target"
-                position={Position.Left}
-                isConnectable={isConnectable}
-                className="!size-2 !bg-muted-foreground"
-            />
+            {!isTrigger && (
+                <Handle
+                    type="target"
+                    position={Position.Left}
+                    isConnectable={isConnectable}
+                    aria-label="Input"
+                    className="!size-2 !bg-muted-foreground"
+                />
+            )}
             <header className="flex items-center gap-2 px-3 py-2">
                 <span className="flex size-5 shrink-0 items-center justify-center rounded bg-background/70">
                     {def?.icon ? <span aria-hidden="true" className="text-xs leading-none">{def.icon}</span> : <NodeflowIcon name={presentation.icon} className="size-3.5" />}
                 </span>
                 <span className="min-w-0 flex-1 truncate text-xs font-semibold text-foreground">{label}</span>
-                {data.isStart && <span className="rounded bg-primary px-1 text-[10px] font-semibold uppercase text-primary-foreground">START</span>}
+                {isTrigger && <span className="rounded bg-muted px-1 text-[10px] font-semibold uppercase text-foreground">TRIGGER</span>}
+                {(isTrigger || data.isStart) && <span className="rounded bg-primary px-1 text-[10px] font-semibold uppercase text-primary-foreground">START</span>}
                 {errors.length > 0 && <span className="rounded bg-destructive/15 px-1 text-[10px] font-semibold uppercase text-destructive">ISSUE</span>}
             </header>
             <Body data={data} def={def} selected={selected} errors={errors} />
@@ -82,6 +87,7 @@ export function NodeCard({ id, data, selected, isConnectable }: NodeProps<Nodefl
                                 type="source"
                                 position={Position.Right}
                                 isConnectable={isConnectable}
+                                aria-label={`Output ${output}`}
                                 style={{ top: '50%', transform: 'translate(50%, -50%)' }}
                                 className="!size-2 !bg-primary"
                             />

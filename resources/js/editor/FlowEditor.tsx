@@ -164,7 +164,19 @@ function FlowEditorSession({ mode = 'workspace', toolbarSlots, className, ...opt
         return () => document.removeEventListener('keydown', onKeyDown)
     }, [controller.actions, controller.selected, controller.toolbarProps, controller.view.selectedEdgeId])
 
-    const library = <NodeLibrary palette={options.palette} onAdd={controller.actions.addAtViewportCenter} onRequestClose={() => controller.actions.setLibraryOpen(false)} searchInputRef={librarySearchRef} />
+    const triggerTypes = new Set(options.trigger_nodes.map((definition) => definition.type))
+    const hasTrigger = controller.document.nodes.some((node) => triggerTypes.has(node.data.type))
+    const library = <NodeLibrary
+        palette={options.palette}
+        triggers={options.trigger_nodes}
+        triggerSources={options.trigger_sources}
+        hasTrigger={hasTrigger}
+        onAdd={controller.actions.addAtViewportCenter}
+        onAddTrigger={controller.actions.addTrigger}
+        onReplaceTrigger={controller.actions.replaceTrigger}
+        onRequestClose={() => controller.actions.setLibraryOpen(false)}
+        searchInputRef={librarySearchRef}
+    />
     const canvas = <>
         <Canvas {...controller.canvasProps} showMinimap />
         <CanvasHud {...controller.canvasHudProps} />

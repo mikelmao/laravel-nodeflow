@@ -3,7 +3,7 @@ import userEvent from '@testing-library/user-event'
 import { describe, expect, it, vi } from 'vitest'
 import { mergeControls, type FieldControlProps } from '../controls'
 import { FieldOptionsContext } from '../controls/useFieldOptions'
-import type { NodeCardData, NodeTypePayload } from '../graph/types'
+import type { NodeCardData, NodeTypePayload, TriggerNodeTypePayload, TriggerSourcesPayload } from '../graph/types'
 import { FlowOverview, type FlowOverviewProps } from './FlowOverview'
 import { NodeInspector } from './NodeInspector'
 
@@ -143,6 +143,101 @@ describe('FlowOverview', () => {
 })
 
 describe('NodeInspector', () => {
+    it('composes compatible source fields after trigger fields and applies source defaults on selection', async () => {
+        const user = userEvent.setup()
+        const onConfigChange = vi.fn()
+        const triggerDef: TriggerNodeTypePayload = {
+            kind: 'trigger', type: 'host.trigger', driver: 'host', label: 'Host trigger', icon: null,
+            description: 'A custom trigger.', outputs: ['started'], compatible_source_keys: ['source.a'],
+            fields: [
+                { key: 'source', type: 'select', label: 'Source', help: null, default: null, required: true, options: {}, dynamic_options: false },
+                { key: 'event', type: 'select', label: 'Event', help: null, default: 'created', required: true, options: { created: 'Created' }, dynamic_options: false },
+            ],
+            default_config: { source: null, event: 'created' },
+        }
+        const sources: TriggerSourcesPayload = { host: [{
+            key: 'source.a', driver: 'host', label: 'Source A', icon: null, description: null,
+            fields: [{ key: 'filters.status', type: 'select', label: 'Status', help: null, default: 'open', required: false, options: {}, dynamic_options: true }],
+            default_config: { 'filters.status': 'open' },
+        }] }
+        vi.stubGlobal('fetch', vi.fn(async (url: string) => {
+            expect(url).toBe('/trigger-source-options/host.trigger/source.a/filters.status')
+            return Response.json({ options: { open: 'Open', closed: 'Closed' } })
+        }))
+
+        const rendered = inspector({
+            node: { id: 'trigger', type: triggerDef.type, kind: 'trigger', config: { source: null, event: 'created' }, isStart: true },
+            def: triggerDef,
+            triggerSources: sources,
+            triggerOptionsTemplate: '/trigger-options/__NODEFLOW_TYPE__/__NODEFLOW_FIELD__',
+            triggerSourceOptionsTemplate: '/trigger-source-options/__NODEFLOW_TYPE__/__NODEFLOW_SOURCE__/__NODEFLOW_FIELD__',
+            onConfigChange,
+        })
+
+        expect(screen.getByLabelText(/Source/)).toBeInTheDocument()
+        expect(screen.queryByLabelText('Status')).toBeNull()
+        await user.selectOptions(screen.getByLabelText(/Source/), 'source.a')
+        expect(onConfigChange).toHaveBeenCalledWith('source', 'source.a')
+        expect(onConfigChange).toHaveBeenCalledWith('filters.status', 'open')
+
+        rendered.rerender(
+            <FieldOptionsContext.Provider value={{ template: '/options/__NODEFLOW_TYPE__/__NODEFLOW_FIELD__', cache: new Map() }}>
+                <NodeInspector
+                    node={{ id: 'trigger', type: triggerDef.type, kind: 'trigger', config: { source: 'source.a', event: 'created', 'filters.status': 'open' }, isStart: true }}
+                    def={triggerDef}
+                    controls={mergeControls()}
+                    errors={[{ node: 'trigger', field: 'filters.status', message: 'Dotted error' }]}
+                    triggerSources={sources}
+                    triggerOptionsTemplate="/trigger-options/__NODEFLOW_TYPE__/__NODEFLOW_FIELD__"
+                    triggerSourceOptionsTemplate="/trigger-source-options/__NODEFLOW_TYPE__/__NODEFLOW_SOURCE__/__NODEFLOW_FIELD__"
+                    onConfigChange={onConfigChange}
+                    onDelete={vi.fn()}
+                />
+            </FieldOptionsContext.Provider>,
+        )
+        expect(await screen.findByLabelText('Status')).toHaveValue('open')
+        expect(screen.getByText('Dotted error')).toBeInTheDocument()
+        expect(screen.getAllByLabelText(/Source|Event|Status/).map((control) => control.getAttribute('aria-label') ?? control.textContent)).toHaveLength(3)
+    })
+
+    it('reports an incompatible selected source without rendering untrusted fields', () => {
+        const triggerDef: TriggerNodeTypePayload = {
+            kind: 'trigger', type: 'host.trigger', driver: 'host', label: 'Host trigger', icon: null,
+            description: null, outputs: ['started'], compatible_source_keys: ['source.allowed'],
+            fields: [{ key: 'source', type: 'select', label: 'Source', help: null, default: null, required: true, options: {}, dynamic_options: false }],
+            default_config: {},
+        }
+        inspector({
+            node: { id: 'trigger', type: triggerDef.type, kind: 'trigger', config: { source: 'source.unknown' }, isStart: true },
+            def: triggerDef,
+            triggerSources: { host: [{ key: 'source.unknown', driver: 'host', label: 'Unknown', icon: null, description: null, fields: [{ ...definition.fields[0]!, key: 'unsafe', label: 'Unsafe' }], default_config: {} }] },
+        })
+
+        expect(screen.getByRole('alert')).toHaveTextContent(/not compatible/i)
+        expect(screen.queryByLabelText('Unsafe')).toBeNull()
+    })
+
+    it('reports source-field collisions without rendering duplicate controls', () => {
+        const triggerDef: TriggerNodeTypePayload = {
+            kind: 'trigger', type: 'host.trigger', driver: 'host', label: 'Host trigger', icon: null,
+            description: null, outputs: ['started'], compatible_source_keys: ['source.allowed'],
+            fields: [
+                { key: 'source', type: 'select', label: 'Source', help: null, default: null, required: true, options: {}, dynamic_options: false },
+                { key: 'event', type: 'text', label: 'Event', help: null, default: null, required: false, options: {}, dynamic_options: false },
+            ],
+            default_config: {},
+        }
+        inspector({
+            node: { id: 'trigger', type: triggerDef.type, kind: 'trigger', config: { source: 'source.allowed' }, isStart: true },
+            def: triggerDef,
+            triggerSources: { host: [{ key: 'source.allowed', driver: 'host', label: 'Allowed', icon: null, description: null, fields: [{ ...definition.fields[0]!, key: 'event', label: 'Duplicate event' }], default_config: { event: 'unsafe' } }] },
+        })
+
+        expect(screen.getByRole('alert')).toHaveTextContent(/source field.*event.*collides/i)
+        expect(screen.getAllByLabelText(/Event/)).toHaveLength(1)
+        expect(screen.queryByLabelText('Duplicate event')).toBeNull()
+    })
+
     // Moving within a compound control is still editing one field, so it must not split its undo transaction.
     it('only closes configuration when focus leaves a field row', () => {
         const Compound = ({ onChange }: FieldControlProps) => <>

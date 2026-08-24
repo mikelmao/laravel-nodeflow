@@ -43,7 +43,10 @@ function controller(overrides: Partial<Parameters<typeof useEditorController>[0]
         graph,
         palette: [send, exit],
         trigger_nodes: [webhook, event],
-        trigger_sources: { webhook: [], event: [] },
+        trigger_sources: {
+            webhook: [{ key: 'orders', driver: 'webhook', label: 'Orders', icon: null, description: null, fields: [], default_config: {} }],
+            event: [{ key: 'order.placed', driver: 'event', label: 'Order placed', icon: null, description: null, fields: [], default_config: {} }],
+        },
         webhook: null,
         urls,
         autosaveDebounceMs: 1,
@@ -52,6 +55,33 @@ function controller(overrides: Partial<Parameters<typeof useEditorController>[0]
 }
 
 describe('useEditorController', () => {
+    it('changes trigger source and contributed defaults as one undoable graph mutation', () => {
+        const configuredGraph: Graph = {
+            start: 'hook',
+            nodes: [{ id: 'hook', type: webhook.type, config: { source: 'orders', old_filter: { nested: ['old'] }, retained: true }, position: { x: 0, y: 0 } }],
+            edges: [],
+        }
+        const view = controller({ graph: configuredGraph })
+        const defaults = { new_filter: { nested: ['new'] } }
+
+        act(() => view.result.current.actions.configureTriggerSource('hook', 'customers', defaults, ['old_filter']))
+        act(() => view.result.current.actions.closeConfigTransaction())
+        defaults.new_filter.nested.push('outside')
+
+        expect(view.result.current.document.nodes[0]?.data.config).toEqual({
+            source: 'customers',
+            retained: true,
+            new_filter: { nested: ['new'] },
+        })
+        act(() => view.result.current.actions.undo())
+        expect(view.result.current.document.nodes[0]?.data.config).toEqual({
+            source: 'orders',
+            old_filter: { nested: ['old'] },
+            retained: true,
+        })
+        expect(view.result.current.document.nodes[0]?.data.config).not.toBe(configuredGraph.nodes?.[0]?.config)
+    })
+
     it('adds exactly one trigger as start and requires explicit replacement', () => {
         const view = controller({ graph: { start: '', nodes: [], edges: [] } })
 
@@ -75,6 +105,41 @@ describe('useEditorController', () => {
             nodes: [{ id: 'webhook1', position: { x: 20, y: 30 }, data: { kind: 'trigger', type: 'custom.event', config: { source: 'order.placed' } } }],
         })
         expect(view.result.current.document.nodes.filter((node) => node.data.kind === 'trigger')).toHaveLength(1)
+    })
+
+    it('rejects add and replace actions when no allow-listed source is registered', () => {
+        const view = controller({
+            graph: { start: '', nodes: [], edges: [] },
+            trigger_sources: { webhook: [], event: [] },
+        })
+
+        act(() => view.result.current.actions.addTrigger(webhook))
+        act(() => view.result.current.actions.replaceTrigger(event))
+
+        expect(view.result.current.document).toMatchObject({ startId: '', nodes: [], edges: [] })
+    })
+
+    it('materializes contributed defaults for a trigger with a preselected source', () => {
+        const filters = { rules: [{ status: 'open' }] }
+        const preselected = { ...webhook, default_config: { source: 'orders', node_owned: true } }
+        const view = controller({
+            graph: { start: '', nodes: [], edges: [] },
+            trigger_nodes: [preselected],
+            trigger_sources: { webhook: [{
+                key: 'orders', driver: 'webhook', label: 'Orders', icon: null, description: null,
+                fields: [{ key: 'filters', type: 'text', label: 'Filters', help: null, default: null, required: false, options: {}, dynamic_options: false }],
+                default_config: { filters, node_owned: 'source-must-not-overwrite' },
+            }] },
+        })
+
+        act(() => view.result.current.actions.addTrigger(preselected))
+        filters.rules[0]!.status = 'outside'
+
+        expect(view.result.current.document.nodes[0]?.data.config).toEqual({
+            source: 'orders',
+            node_owned: true,
+            filters: { rules: [{ status: 'open' }] },
+        })
     })
 
     it('deep-clones defaults, configured values, and history snapshots', () => {
