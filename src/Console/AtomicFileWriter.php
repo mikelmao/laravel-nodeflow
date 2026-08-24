@@ -2,6 +2,7 @@
 
 namespace Nodeflow\Console;
 
+use Closure;
 use Illuminate\Filesystem\Filesystem;
 use InvalidArgumentException;
 use Throwable;
@@ -24,7 +25,17 @@ final class AtomicFileWriter
 {
     private const RECOVERY_SCAN_LIMIT = 10_000;
 
-    public function __construct(private Filesystem $files) {}
+    private ?Closure $recoveryEntries;
+
+    /**
+     * @param  (callable(string): iterable<object>)|null  $recoveryEntries
+     */
+    public function __construct(private Filesystem $files, ?callable $recoveryEntries = null)
+    {
+        $this->recoveryEntries = $recoveryEntries === null
+            ? null
+            : Closure::fromCallable($recoveryEntries);
+    }
 
     /**
      * @param  array<string, string>  $writes
@@ -107,17 +118,10 @@ final class AtomicFileWriter
                         'basename' => basename($path),
                         'reservation' => true,
                     ];
-                    try {
-                        if (! $this->sameIdentity($path, $placeholder)) {
-                            throw new InvalidArgumentException("Target [{$path}] changed during generation; it was not overwritten.");
-                        }
-                        $this->moveOrVerify($staged[$path]['path'], $path, $stagedIdentity);
-                    } catch (Throwable $e) {
-                        if ($this->sameIdentity($path, $placeholder)) {
-                            @unlink($path);
-                        }
-                        throw $e;
+                    if (! $this->sameIdentity($path, $placeholder)) {
+                        throw new InvalidArgumentException("Target [{$path}] changed during generation; it was not overwritten.");
                     }
+                    $this->moveOrVerify($staged[$path]['path'], $path, $stagedIdentity);
                 } else {
                     if (! $this->matchesSnapshot($path, $snapshot)) {
                         throw new InvalidArgumentException("Target [{$path}] changed during generation; it was not overwritten.");
@@ -517,11 +521,36 @@ final class AtomicFileWriter
                 try {
                     $this->assertAncestors($path, $ancestors[$path], $roots);
                 } catch (Throwable) {
-                    $owned = $this->matchesSnapshot($path, $committed[$path])
-                        ? $path
+                    $search = $this->matchesSnapshot($path, $committed[$path])
+                        ? $this->verifiedRecoveryCandidate($path, $committed[$path]['identity'], $roots)
                         : $this->findIdentity($committed[$path]['identity'], $roots);
-                    if ($owned !== null && (! @unlink($owned) || @lstat($owned) !== false)) {
-                        throw new InvalidArgumentException('Could not remove the operation-owned target after an ancestor swap.');
+
+                    if ($search->status === RecoveryIdentityStatus::Inconclusive) {
+                        $failures[] = $this->recoveryFailure('target', $path, $roots, $search);
+
+                        continue;
+                    }
+
+                    if ($search->status === RecoveryIdentityStatus::Found) {
+                        $verified = $this->verifiedRecoveryCandidate(
+                            $search->foundPath(),
+                            $committed[$path]['identity'],
+                            $roots,
+                        );
+                        if ($verified->status !== RecoveryIdentityStatus::Found) {
+                            $failures[] = $this->recoveryFailure(
+                                'target',
+                                $path,
+                                $roots,
+                                $verified,
+                            );
+
+                            continue;
+                        }
+                        $owned = $verified->foundPath();
+                        if (! @unlink($owned) || @lstat($owned) !== false) {
+                            throw new InvalidArgumentException('Could not remove the operation-owned target after an ancestor swap.');
+                        }
                     }
                     if ($original !== null) {
                         throw new InvalidArgumentException('The original target requires manual recovery after an ancestor swap.');
@@ -539,7 +568,18 @@ final class AtomicFileWriter
                     continue;
                 }
                 if ($original === null) {
-                    if (! @unlink($path) || @lstat($path) !== false) {
+                    $verified = $this->verifiedRecoveryCandidate(
+                        $path,
+                        $committed[$path]['identity'],
+                        $roots,
+                    );
+                    if ($verified->status !== RecoveryIdentityStatus::Found) {
+                        $failures[] = $this->recoveryFailure('target', $path, $roots, $verified);
+
+                        continue;
+                    }
+                    $owned = $verified->foundPath();
+                    if (! @unlink($owned) || @lstat($owned) !== false) {
                         throw new InvalidArgumentException('Could not remove a newly committed target.');
                     }
                     continue;
@@ -570,10 +610,12 @@ final class AtomicFileWriter
                     if ($staged !== null && ! $moved) {
                         $cleanup = $this->cleanupRestorationTemporary($staged, $roots);
                         if ($cleanup !== []) {
-                            throw new InvalidArgumentException('Rollback temporary requires manual recovery ['.implode(', ', $cleanup).'].');
+                            throw new InconclusiveRecoveryException('Rollback temporary requires manual recovery ['.implode(', ', $cleanup).'].');
                         }
                     }
                 }
+            } catch (InconclusiveRecoveryException $e) {
+                $failures[] = $e->getMessage();
             } catch (Throwable) {
                 $failures[] = $path;
             }
@@ -591,18 +633,11 @@ final class AtomicFileWriter
         try {
             $this->assertAncestors($path, $ancestors, $roots);
             $placeholder = $this->exclusiveFile($path);
-            try {
-                if (! $this->sameIdentity($path, $placeholder)) {
-                    throw new InvalidArgumentException('The missing target was raced during rollback.');
-                }
-                $this->moveOrVerify($staged['path'], $path, $staged['identity']);
-                $moved = true;
-            } catch (Throwable $e) {
-                if ($this->sameIdentity($path, $placeholder)) {
-                    @unlink($path);
-                }
-                throw $e;
+            if (! $this->sameIdentity($path, $placeholder)) {
+                throw new InvalidArgumentException('The missing target was raced during rollback.');
             }
+            $this->moveOrVerify($staged['path'], $path, $staged['identity']);
+            $moved = true;
             $this->assertAncestors($path, $ancestors, $roots);
             $this->applyMetadata($path, $original);
             $restored = $this->snapshot($path);
@@ -625,7 +660,10 @@ final class AtomicFileWriter
                 ];
             }
             if ($cleanupFailures !== []) {
-                throw new InvalidArgumentException('Rollback temporary requires manual recovery.', previous: $failure);
+                throw new InconclusiveRecoveryException(
+                    'Rollback temporary requires manual recovery ['.implode(', ', $cleanupFailures).'].',
+                    previous: $failure,
+                );
             }
             throw $failure;
         }
@@ -637,14 +675,42 @@ final class AtomicFileWriter
         $failures = [];
         foreach ($staged as $temporary) {
             try {
-                $owned = $this->sameIdentity($temporary['path'], $temporary['identity'])
-                    ? $temporary['path']
+                $search = $this->sameIdentity($temporary['path'], $temporary['identity'])
+                    ? $this->verifiedRecoveryCandidate($temporary['path'], $temporary['identity'], $roots)
                     : (($temporary['reservation'] ?? false)
                         ? $this->findIdentity($temporary['identity'], $roots)
                         : $this->findTemporary($temporary['identity'], $temporary['basename'] ?? basename($temporary['path']), $roots));
-                if ($owned === null) {
+
+                if ($search->status === RecoveryIdentityStatus::Absent) {
                     continue;
                 }
+                if ($search->status === RecoveryIdentityStatus::Inconclusive) {
+                    $failures[] = $this->recoveryFailure(
+                        ($temporary['reservation'] ?? false) ? 'reservation' : 'temporary',
+                        $temporary['path'],
+                        $roots,
+                        $search,
+                    );
+
+                    continue;
+                }
+
+                $verified = $this->verifiedRecoveryCandidate(
+                    $search->foundPath(),
+                    $temporary['identity'],
+                    $roots,
+                );
+                if ($verified->status !== RecoveryIdentityStatus::Found) {
+                    $failures[] = $this->recoveryFailure(
+                        ($temporary['reservation'] ?? false) ? 'reservation' : 'temporary',
+                        $temporary['path'],
+                        $roots,
+                        $verified,
+                    );
+
+                    continue;
+                }
+                $owned = $verified->foundPath();
                 if (! @unlink($owned) || @lstat($owned) !== false) {
                     $failures[] = $owned;
                 }
@@ -659,62 +725,180 @@ final class AtomicFileWriter
     /**
      * Clean only the exact restoration temporary. If its inode has already
      * been renamed under a non-temporary basename, it is the restored target
-     * and must never be deleted. Absence both inside and outside the allowed
-     * roots cannot be distinguished portably, so it requires manual recovery.
+     * and must never be deleted. A completed scan that finds neither form is
+     * a definitive absence within the allowed roots; interrupted, bounded, or
+     * ambiguous scans remain explicit manual-recovery failures.
      *
      * @return list<string>
      */
     private function cleanupRestorationTemporary(array $temporary, array $roots): array
     {
-        $owned = $this->sameIdentity($temporary['path'], $temporary['identity'])
-            ? $temporary['path']
+        $temporarySearch = $this->sameIdentity($temporary['path'], $temporary['identity'])
+            ? $this->verifiedRecoveryCandidate($temporary['path'], $temporary['identity'], $roots)
             : $this->findTemporary($temporary['identity'], $temporary['basename'], $roots);
-        if ($owned !== null) {
+
+        if ($temporarySearch->status === RecoveryIdentityStatus::Inconclusive) {
+            return [$this->recoveryFailure('temporary', $temporary['path'], $roots, $temporarySearch)];
+        }
+
+        if ($temporarySearch->status === RecoveryIdentityStatus::Found) {
+            $verified = $this->verifiedRecoveryCandidate(
+                $temporarySearch->foundPath(),
+                $temporary['identity'],
+                $roots,
+            );
+            if ($verified->status !== RecoveryIdentityStatus::Found) {
+                return [$this->recoveryFailure(
+                    'temporary',
+                    $temporary['path'],
+                    $roots,
+                    $verified,
+                )];
+            }
+            $owned = $verified->foundPath();
+
             return @unlink($owned) && @lstat($owned) === false ? [] : [$owned];
         }
 
         // A successful rename changes the basename from the private temporary
         // to the real target. Preserve it even if an ancestor moved afterward.
-        if ($this->findIdentity($temporary['identity'], $roots) !== null) {
+        $installedSearch = $this->findIdentity($temporary['identity'], $roots);
+        if ($installedSearch->status === RecoveryIdentityStatus::Inconclusive) {
+            return [$this->recoveryFailure('temporary', $temporary['path'], $roots, $installedSearch)];
+        }
+        if ($installedSearch->status === RecoveryIdentityStatus::Found) {
+            $verified = $this->verifiedRecoveryCandidate(
+                $installedSearch->foundPath(),
+                $temporary['identity'],
+                $roots,
+            );
+            if ($verified->status !== RecoveryIdentityStatus::Found) {
+                return [$this->recoveryFailure(
+                    'temporary',
+                    $temporary['path'],
+                    $roots,
+                    $verified,
+                )];
+            }
+
             return [];
         }
 
-        return [$temporary['path']];
+        return [];
     }
 
     /** Find an exact operation temp by inode and unguessable basename inside allowed roots. */
-    private function findTemporary(array $identity, string $basename, array $roots): ?string
+    private function findTemporary(array $identity, string $basename, array $roots): RecoveryIdentityResult
     {
-        if (! str_contains($basename, '.nodeflow-tmp-')) return null;
+        if (! str_contains($basename, '.nodeflow-tmp-')) return RecoveryIdentityResult::absent();
 
         return $this->findIdentity($identity, $roots, $basename);
     }
 
     /** Find an operation-owned inode stranded by an ancestor rename inside an allowed root. */
-    private function findIdentity(array $identity, array $roots, ?string $basename = null): ?string
+    private function findIdentity(array $identity, array $roots, ?string $basename = null): RecoveryIdentityResult
     {
         $match = null;
         $inspected = 0;
+        $rootIdentities = [];
         foreach ($roots as $root) {
+            $rootStat = @lstat($root);
+            if ($rootStat === false || is_link($root) || ! is_dir($root)) {
+                return RecoveryIdentityResult::inconclusive('allowed root is inaccessible or changed');
+            }
+            $rootIdentities[$root] = $this->identity($rootStat);
+
             try {
-                $iterator = new \RecursiveIteratorIterator(
-                    new \RecursiveDirectoryIterator($root, \FilesystemIterator::SKIP_DOTS),
-                    \RecursiveIteratorIterator::SELF_FIRST,
-                );
+                $iterator = $this->recoveryEntries !== null
+                    ? ($this->recoveryEntries)($root)
+                    : new \RecursiveIteratorIterator(
+                        new \RecursiveDirectoryIterator($root, \FilesystemIterator::SKIP_DOTS),
+                        \RecursiveIteratorIterator::SELF_FIRST,
+                    );
                 foreach ($iterator as $entry) {
-                    if (++$inspected > self::RECOVERY_SCAN_LIMIT) return null;
+                    if (++$inspected > self::RECOVERY_SCAN_LIMIT) {
+                        return RecoveryIdentityResult::inconclusive('entry limit reached');
+                    }
                     $path = $entry->getPathname();
+                    $realParent = realpath(dirname($path));
+                    if ($realParent === false || ! $this->withinRoot($realParent, $root)) {
+                        return RecoveryIdentityResult::inconclusive('iterator entry escaped its allowed root');
+                    }
                     if ($basename !== null && $entry->getBasename() !== $basename) continue;
                     $stat = @lstat($path);
                     if ($stat === false || $this->identity($stat) !== $identity) continue;
-                    if ($match !== null) return null;
+                    if ($match !== null) {
+                        return RecoveryIdentityResult::inconclusive('ambiguous identity matches');
+                    }
                     $match = $path;
                 }
             } catch (Throwable) {
-                return null;
+                return RecoveryIdentityResult::inconclusive('iterator error');
+            }
+
+            $after = @lstat($root);
+            if ($after === false || is_link($root) || ! is_dir($root) || $this->identity($after) !== $rootIdentities[$root]) {
+                return RecoveryIdentityResult::inconclusive('allowed root is inaccessible or changed');
             }
         }
 
-        return $match;
+        foreach ($rootIdentities as $root => $rootIdentity) {
+            $after = @lstat($root);
+            if ($after === false || is_link($root) || ! is_dir($root) || $this->identity($after) !== $rootIdentity) {
+                return RecoveryIdentityResult::inconclusive('allowed root is inaccessible or changed');
+            }
+        }
+
+        return $match === null
+            ? RecoveryIdentityResult::absent()
+            : RecoveryIdentityResult::found($match);
+    }
+
+    /** @param list<string> $roots */
+    private function recoveryFailure(
+        string $kind,
+        string $path,
+        array $roots,
+        RecoveryIdentityResult $result,
+    ): string {
+        $root = $roots[0] ?? '[unavailable root]';
+        foreach ($roots as $candidate) {
+            if ($this->withinRoot($path, $candidate)) {
+                $root = $candidate;
+
+                break;
+            }
+        }
+
+        return sprintf(
+            '%s [%s] under allowed root [%s]: recovery scan was inconclusive (%s)',
+            $kind,
+            basename($path),
+            $root,
+            $result->reason ?? 'unknown reason',
+        );
+    }
+
+    /**
+     * Revalidate both ownership and root confinement immediately before a
+     * recovery action. A matching inode reached through a swapped symlink is
+     * not safe to delete even though the operation originally created it.
+     *
+     * @param  array<string, int>  $identity
+     * @param  list<string>  $roots
+     */
+    private function verifiedRecoveryCandidate(string $path, array $identity, array $roots): RecoveryIdentityResult
+    {
+        try {
+            $this->assertSafePath($path, $roots);
+        } catch (Throwable) {
+            return RecoveryIdentityResult::inconclusive('found path escaped its allowed root');
+        }
+
+        if (! $this->sameIdentity($path, $identity)) {
+            return RecoveryIdentityResult::inconclusive('identity changed after recovery scan');
+        }
+
+        return RecoveryIdentityResult::found($path);
     }
 }

@@ -1,6 +1,7 @@
 <?php
 
 use Illuminate\Filesystem\Filesystem;
+use Nodeflow\Console\AtomicFileWriter;
 use Nodeflow\Console\VerifiedGeneratorWriter;
 
 it('reports malformed generated PHP at the intended boundary without leaking contents or paths', function () {
@@ -161,11 +162,132 @@ it('detects an ancestor swapped to a symlink during rename and removes only its 
 
     expect(fn () => (new VerifiedGeneratorWriter($files, [$root]))->write([
         $target => '<?php final class Generated {}',
-    ]))->toThrow(InvalidArgumentException::class)
-        ->and($outside.'/Target.php')->not->toBeFile()
+    ]))->toThrow(InvalidArgumentException::class, 'manual recovery')
+        ->and(file_get_contents($outside.'/Target.php'))->toBe('<?php final class Generated {}')
         ->and(glob($outside.'/*.nodeflow-tmp-*') ?: [])->toBe([]);
 
     is_link($parent) ? unlink($parent) : rmdir($parent);
+    unlink($outside.'/Target.php');
+    rmdir($parked);
+    rmdir($outside);
+    rmdir($root);
+});
+
+it('never deletes a staged temporary through a swapped symlink ancestor', function () {
+    if (DIRECTORY_SEPARATOR === '\\') {
+        $this->markTestSkipped('Unix symlink semantics are not portable to Windows.');
+    }
+
+    $root = sys_get_temp_dir().'/nodeflow-staged-symlink-'.bin2hex(random_bytes(6));
+    $outside = sys_get_temp_dir().'/nodeflow-staged-symlink-outside-'.bin2hex(random_bytes(6));
+    $parent = $root.'/nested';
+    $parked = $outside.'/nested-parked';
+    mkdir($parent, 0777, true);
+    mkdir($outside, 0777, true);
+    $first = $parent.'/First.php';
+    $second = $root.'/Second.php';
+    $files = new class($parent, $parked) extends Filesystem
+    {
+        private int $temporaryWrites = 0;
+
+        public function __construct(private string $parent, private string $parked) {}
+
+        public function put($path, $contents, $lock = false)
+        {
+            $written = parent::put($path, $contents, $lock);
+            if (str_contains($path, '.nodeflow-tmp-') && ++$this->temporaryWrites === 2) {
+                rename($this->parent, $this->parked);
+                symlink($this->parked, $this->parent);
+                throw new RuntimeException('staging failed after ancestor swap');
+            }
+
+            return $written;
+        }
+    };
+
+    expect(fn () => (new AtomicFileWriter($files))->write(
+        [
+            $first => '<?php final class FirstGenerated {}',
+            $second => '<?php final class SecondGenerated {}',
+        ],
+        [$root],
+        false,
+        static function (): void {},
+    ))->toThrow(InvalidArgumentException::class, 'manual recovery')
+        ->and(count(glob($parked.'/*.nodeflow-tmp-*') ?: []))->toBe(1)
+        ->and($first)->not->toBeFile();
+
+    unlink($parent);
+    foreach (glob($parked.'/*') ?: [] as $path) unlink($path);
+    rmdir($parked);
+    rmdir($outside);
+    rmdir($root);
+});
+
+it('revalidates root confinement immediately before ordinary rollback deletion', function () {
+    if (DIRECTORY_SEPARATOR === '\\') {
+        $this->markTestSkipped('Unix symlink semantics are not portable to Windows.');
+    }
+
+    $root = sys_get_temp_dir().'/nodeflow-rollback-delete-symlink-'.bin2hex(random_bytes(6));
+    $outside = sys_get_temp_dir().'/nodeflow-rollback-delete-symlink-outside-'.bin2hex(random_bytes(6));
+    $parent = $root.'/nested';
+    $parked = $root.'/nested-parked';
+    mkdir($parent, 0777, true);
+    mkdir($outside, 0777, true);
+    $first = $parent.'/First.php';
+    $second = $root.'/Second.php';
+    $files = new class($first, $parent, $parked, $outside) extends Filesystem
+    {
+        private int $moves = 0;
+        private bool $rollingBack = false;
+        private bool $swapped = false;
+
+        public function __construct(
+            private string $first,
+            private string $parent,
+            private string $parked,
+            private string $outside,
+        ) {}
+
+        public function move($path, $target)
+        {
+            if (++$this->moves === 2) {
+                $this->rollingBack = true;
+
+                return false;
+            }
+
+            return parent::move($path, $target);
+        }
+
+        public function get($path, $lock = false)
+        {
+            $contents = parent::get($path, $lock);
+            if ($this->rollingBack && ! $this->swapped && $path === $this->first) {
+                $this->swapped = true;
+                rename($this->parent, $this->parked);
+                rename($this->parked.'/First.php', $this->outside.'/First.php');
+                symlink($this->outside, $this->parent);
+            }
+
+            return $contents;
+        }
+    };
+
+    expect(fn () => (new AtomicFileWriter($files))->write(
+        [
+            $first => '<?php final class FirstGenerated {}',
+            $second => '<?php final class SecondGenerated {}',
+        ],
+        [$root],
+        false,
+        static function (): void {},
+    ))->toThrow(InvalidArgumentException::class, 'manual recovery')
+        ->and(file_get_contents($outside.'/First.php'))->toBe('<?php final class FirstGenerated {}');
+
+    unlink($parent);
+    unlink($outside.'/First.php');
     rmdir($parked);
     rmdir($outside);
     rmdir($root);
@@ -803,5 +925,306 @@ it('cleans the rollback reservation when a missing target parent is replaced bef
     unlink($target);
     rmdir($parent);
     rmdir($parked);
+    rmdir($root);
+});
+
+it('reports an inconclusive bounded scan for a newly committed inode without deleting it', function () {
+    $root = sys_get_temp_dir().'/nodeflow-recovery-limit-'.bin2hex(random_bytes(6));
+    $parent = $root.'/nested';
+    $parked = $root.'/nested-parked';
+    mkdir($parent, 0777, true);
+    $target = $parent.'/Target.php';
+    $external = '<?php final class External {}';
+    $files = new class($parent, $parked, $external) extends Filesystem
+    {
+        public function __construct(private string $parent, private string $parked, private string $external) {}
+
+        public function move($path, $target)
+        {
+            $moved = parent::move($path, $target);
+            rename($this->parent, $this->parked);
+            mkdir($this->parent);
+            file_put_contents($target, $this->external);
+
+            return $moved;
+        }
+    };
+    $entries = static function (string $scanRoot) use ($parked): iterable {
+        for ($i = 0; $i <= 10_000; $i++) {
+            yield new SplFileInfo($scanRoot.'/missing-'.$i);
+        }
+        yield new SplFileInfo($parked.'/Target.php');
+    };
+
+    $operation = fn () => (new AtomicFileWriter($files, $entries))->write(
+        [$target => '<?php final class Generated {}'],
+        [$root],
+        false,
+        static function (): void {},
+    );
+
+    expect($operation)->toThrow(InvalidArgumentException::class, 'entry limit')
+        ->and($parked.'/Target.php')->toBeFile()
+        ->and(file_get_contents($target))->toBe($external);
+
+    unlink($target);
+    unlink($parked.'/Target.php');
+    rmdir($parent);
+    rmdir($parked);
+    rmdir($root);
+});
+
+it('reports bounded scans for stranded rollback temporaries and reservations without deleting them', function () {
+    $root = sys_get_temp_dir().'/nodeflow-recovery-rollback-limit-'.bin2hex(random_bytes(6));
+    $parent = $root.'/nested';
+    $parked = $root.'/nested-parked';
+    mkdir($parent, 0777, true);
+    $target = $parent.'/Target.php';
+    $external = '<?php final class External {}';
+    file_put_contents($target, '<?php final class Original {}');
+    $files = new class($parent, $parked, $external) extends Filesystem
+    {
+        private int $moves = 0;
+
+        public function __construct(private string $parent, private string $parked, private string $external) {}
+
+        public function move($path, $target)
+        {
+            if (++$this->moves === 1) {
+                $moved = parent::move($path, $target);
+                unlink($target);
+
+                return $moved;
+            }
+            if ($this->moves === 2) {
+                rename($this->parent, $this->parked);
+                mkdir($this->parent);
+                file_put_contents($target, $this->external);
+
+                return false;
+            }
+
+            return parent::move($path, $target);
+        }
+    };
+    $entries = static function (string $scanRoot) use ($parked): iterable {
+        for ($i = 0; $i <= 10_000; $i++) {
+            yield new SplFileInfo($scanRoot.'/missing-'.$i);
+        }
+        foreach (glob($parked.'/*') ?: [] as $path) {
+            yield new SplFileInfo($path);
+        }
+    };
+
+    $operation = fn () => (new AtomicFileWriter($files, $entries))->write(
+        [$target => '<?php final class Generated {}'],
+        [$root],
+        true,
+        static function (): void {},
+    );
+
+    try {
+        $operation();
+        $this->fail('The bounded recovery scan must fail the transaction.');
+    } catch (InvalidArgumentException $e) {
+        expect($e->getMessage())->toContain('entry limit')
+            ->toContain('manual recovery')
+            ->not->toContain('<?php');
+    }
+    expect(file_get_contents($target))->toBe($external)
+        ->and($parked.'/Target.php')->toBeFile()
+        ->and(count(glob($parked.'/*.nodeflow-tmp-*') ?: []))->toBe(1);
+
+    unlink($target);
+    foreach (glob($parked.'/*') ?: [] as $path) unlink($path);
+    rmdir($parent);
+    rmdir($parked);
+    rmdir($root);
+});
+
+it('reports duplicate recovery identity matches without deleting either inode name', function () {
+    if (DIRECTORY_SEPARATOR === '\\') {
+        $this->markTestSkipped('Hard-link identity semantics are not portable to Windows.');
+    }
+
+    $root = sys_get_temp_dir().'/nodeflow-recovery-duplicate-'.bin2hex(random_bytes(6));
+    $parent = $root.'/nested';
+    $parked = $root.'/nested-parked';
+    mkdir($parent, 0777, true);
+    $probe = $root.'/probe';
+    $probeLink = $root.'/probe-link';
+    file_put_contents($probe, 'probe');
+    if (! @link($probe, $probeLink)) {
+        unlink($probe);
+        rmdir($parent);
+        rmdir($root);
+        $this->markTestSkipped('This filesystem does not support hard links.');
+    }
+    unlink($probeLink);
+    unlink($probe);
+
+    $target = $parent.'/Target.php';
+    $duplicate = $root.'/Duplicate.php';
+    $files = new class($parent, $parked, $duplicate) extends Filesystem
+    {
+        public function __construct(private string $parent, private string $parked, private string $duplicate) {}
+
+        public function move($path, $target)
+        {
+            $moved = parent::move($path, $target);
+            rename($this->parent, $this->parked);
+            link($this->parked.'/Target.php', $this->duplicate);
+            mkdir($this->parent);
+
+            return $moved;
+        }
+    };
+
+    expect(fn () => (new AtomicFileWriter($files))->write(
+        [$target => '<?php final class Generated {}'],
+        [$root],
+        false,
+        static function (): void {},
+    ))->toThrow(InvalidArgumentException::class, 'ambiguous identity')
+        ->and($parked.'/Target.php')->toBeFile()
+        ->and($duplicate)->toBeFile();
+
+    unlink($duplicate);
+    unlink($parked.'/Target.php');
+    rmdir($parent);
+    rmdir($parked);
+    rmdir($root);
+});
+
+it('reports a recovery iterator error without claiming rollback was clean', function () {
+    $root = sys_get_temp_dir().'/nodeflow-recovery-iterator-'.bin2hex(random_bytes(6));
+    $parent = $root.'/nested';
+    $parked = $root.'/nested-parked';
+    mkdir($parent, 0777, true);
+    $target = $parent.'/Target.php';
+    $files = new class($parent, $parked) extends Filesystem
+    {
+        public function __construct(private string $parent, private string $parked) {}
+
+        public function move($path, $target)
+        {
+            $moved = parent::move($path, $target);
+            rename($this->parent, $this->parked);
+            mkdir($this->parent);
+
+            return $moved;
+        }
+    };
+    $entries = static function (): iterable {
+        throw new RuntimeException('sensitive iterator failure');
+        yield;
+    };
+
+    try {
+        (new AtomicFileWriter($files, $entries))->write(
+            [$target => '<?php final class Generated {}'],
+            [$root],
+            false,
+            static function (): void {},
+        );
+        $this->fail('The inconclusive iterator scan must fail the transaction.');
+    } catch (InvalidArgumentException $e) {
+        expect($e->getMessage())->toContain('iterator error')
+            ->toContain('manual recovery')
+            ->toContain('Target.php')
+            ->toContain($root)
+            ->not->toContain('sensitive iterator failure');
+    }
+
+    expect($parked.'/Target.php')->toBeFile();
+    unlink($parked.'/Target.php');
+    rmdir($parent);
+    rmdir($parked);
+    rmdir($root);
+});
+
+it('treats any recovery iterator entry outside its allowed root as inconclusive', function () {
+    $root = sys_get_temp_dir().'/nodeflow-recovery-iterator-escape-'.bin2hex(random_bytes(6));
+    $outside = sys_get_temp_dir().'/nodeflow-recovery-iterator-escape-outside-'.bin2hex(random_bytes(6));
+    $parent = $root.'/nested';
+    $parked = $root.'/nested-parked';
+    mkdir($parent, 0777, true);
+    mkdir($outside, 0777, true);
+    $target = $parent.'/Target.php';
+    $files = new class($parent, $parked) extends Filesystem
+    {
+        public function __construct(private string $parent, private string $parked) {}
+
+        public function move($path, $target)
+        {
+            $moved = parent::move($path, $target);
+            rename($this->parent, $this->parked);
+            mkdir($this->parent);
+
+            return $moved;
+        }
+    };
+    $entries = static function () use ($outside): iterable {
+        yield new SplFileInfo($outside.'/non-matching-missing-file');
+    };
+
+    expect(fn () => (new AtomicFileWriter($files, $entries))->write(
+        [$target => '<?php final class Generated {}'],
+        [$root],
+        false,
+        static function (): void {},
+    ))->toThrow(InvalidArgumentException::class, 'iterator entry escaped its allowed root')
+        ->and($parked.'/Target.php')->toBeFile()
+        ->and($outside.'/non-matching-missing-file')->not->toBeFile();
+
+    unlink($parked.'/Target.php');
+    rmdir($parent);
+    rmdir($parked);
+    rmdir($outside);
+    rmdir($root);
+});
+
+it('reports an allowed root changed while recovery was scanning', function () {
+    $root = sys_get_temp_dir().'/nodeflow-recovery-root-change-'.bin2hex(random_bytes(6));
+    $movedRoot = $root.'-moved';
+    $parent = $root.'/nested';
+    $parked = $root.'/nested-parked';
+    mkdir($parent, 0777, true);
+    $target = $parent.'/Target.php';
+    $files = new class($parent, $parked) extends Filesystem
+    {
+        public function __construct(private string $parent, private string $parked) {}
+
+        public function move($path, $target)
+        {
+            $moved = parent::move($path, $target);
+            rename($this->parent, $this->parked);
+            mkdir($this->parent);
+
+            return $moved;
+        }
+    };
+    $swapped = false;
+    $entries = static function (string $scanRoot) use (&$swapped, $root, $movedRoot): iterable {
+        if (! $swapped) {
+            $swapped = true;
+            rename($root, $movedRoot);
+            mkdir($root);
+        }
+        if (false) yield new SplFileInfo($scanRoot.'/never');
+    };
+
+    expect(fn () => (new AtomicFileWriter($files, $entries))->write(
+        [$target => '<?php final class Generated {}'],
+        [$root],
+        false,
+        static function (): void {},
+    ))->toThrow(InvalidArgumentException::class, 'allowed root is inaccessible or changed')
+        ->and($movedRoot.'/nested-parked/Target.php')->toBeFile();
+
+    unlink($movedRoot.'/nested-parked/Target.php');
+    rmdir($movedRoot.'/nested');
+    rmdir($movedRoot.'/nested-parked');
+    rmdir($movedRoot);
     rmdir($root);
 });
