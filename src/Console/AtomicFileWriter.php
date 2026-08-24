@@ -732,6 +732,16 @@ final class AtomicFileWriter
                         ? $this->findIdentity($temporary['identity'], $roots)
                         : $this->findTemporary($temporary['identity'], $temporary['basename'] ?? basename($temporary['path']), $roots));
 
+                // A filesystem adapter may have renamed an ordinary staged
+                // inode under another basename before returning false or
+                // throwing. The private basename scan is only a fast path;
+                // scoped absence is not safe until an unfiltered bounded scan
+                // also proves that the known inode is absent.
+                if (! ($temporary['reservation'] ?? false)
+                    && $search->status === RecoveryIdentityStatus::Absent) {
+                    $search = $this->findIdentity($temporary['identity'], $roots);
+                }
+
                 if ($search->status === RecoveryIdentityStatus::Absent) {
                     $absence = $this->verifiedRecoveryAbsence(
                         $temporary['path'],

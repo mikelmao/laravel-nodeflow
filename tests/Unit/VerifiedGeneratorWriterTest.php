@@ -1433,3 +1433,67 @@ it('accepts definitive absence after an adapter unlinks owned files under unchan
     rmdir($parent);
     rmdir($root);
 });
+
+it('removes a staged inode renamed to another basename before move returns false', function () {
+    $root = sys_get_temp_dir().'/nodeflow-renamed-stage-false-'.bin2hex(random_bytes(6));
+    $parent = $root.'/nested';
+    mkdir($parent, 0777, true);
+    $target = $parent.'/Target.php';
+    $stranded = $parent.'/stranded-owned';
+    $files = new class($stranded) extends Filesystem
+    {
+        public function __construct(private string $stranded) {}
+
+        public function move($path, $target)
+        {
+            rename($path, $this->stranded);
+
+            return false;
+        }
+    };
+
+    expect(fn () => (new AtomicFileWriter($files))->write(
+        [$target => '<?php final class Generated {}'],
+        [$root],
+        false,
+        static function (): void {},
+    ))->toThrow(InvalidArgumentException::class, 'Could not atomically install')
+        ->and($stranded)->not->toBeFile()
+        ->and($target)->not->toBeFile()
+        ->and(glob($parent.'/*.nodeflow-tmp-*') ?: [])->toBe([]);
+
+    rmdir($parent);
+    rmdir($root);
+});
+
+it('removes a staged inode renamed to another basename before move throws', function () {
+    $root = sys_get_temp_dir().'/nodeflow-renamed-stage-throw-'.bin2hex(random_bytes(6));
+    $parent = $root.'/nested';
+    mkdir($parent, 0777, true);
+    $target = $parent.'/Target.php';
+    $stranded = $parent.'/stranded-owned';
+    $files = new class($stranded) extends Filesystem
+    {
+        public function __construct(private string $stranded) {}
+
+        public function move($path, $target)
+        {
+            rename($path, $this->stranded);
+
+            throw new RuntimeException('injected move failure');
+        }
+    };
+
+    expect(fn () => (new AtomicFileWriter($files))->write(
+        [$target => '<?php final class Generated {}'],
+        [$root],
+        false,
+        static function (): void {},
+    ))->toThrow(InvalidArgumentException::class, 'no committed files remain changed')
+        ->and($stranded)->not->toBeFile()
+        ->and($target)->not->toBeFile()
+        ->and(glob($parent.'/*.nodeflow-tmp-*') ?: [])->toBe([]);
+
+    rmdir($parent);
+    rmdir($root);
+});
