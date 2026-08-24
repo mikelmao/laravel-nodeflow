@@ -50,6 +50,20 @@ HTTP calls and callbacks may be repeated. Every cross-service message has a stab
 
 An active run is pinned to a published workflow version and immutable content artifact versions. Editing a draft cannot change a running workflow or the page a customer is already viewing.
 
+### Editor nodes map to domain capabilities
+
+Inbox/outbox and durable activities standardize reliable delivery, deduplication, retry, and replay; they do not remove the need for a service to understand a new domain operation. Portia nodes therefore map to a smaller catalogue of typed Yaya capabilities rather than to one Yaya endpoint or handler per editor node.
+
+Portia-only nodes—waits, schedules, transforms, audience splits, and conditions over facts already held in the run—require no Yaya change. Multiple Portia nodes may configure or compose an existing capability such as `send_message` or `issue_offer`. Yaya changes only when a node needs a genuinely new Yaya-owned side effect, authoritative predicate, or artifact-rendering feature.
+
+Conditions use the narrowest sufficient boundary:
+
+1. Evaluate Portia-owned workflow facts locally.
+2. Resolve Yaya-owned facts through typed, batched predicates or Yaya events.
+3. Recheck safety-critical state as an authoritative Yaya command precondition in the same transaction as the effect.
+
+Yaya must not accept arbitrary Portia expressions or execute Portia node classes. That would turn Yaya into a remote workflow interpreter and recreate the coupling this architecture is intended to avoid.
+
 ## Service ownership
 
 | Concern | Rada | Portia | Yaya |
