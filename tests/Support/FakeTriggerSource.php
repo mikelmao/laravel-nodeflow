@@ -2,6 +2,7 @@
 
 namespace Tests\Support;
 
+use Closure;
 use Nodeflow\Contracts\TriggerSource;
 use Nodeflow\Schema\TriggerDefinition;
 use Nodeflow\Triggers\TriggerMatch;
@@ -9,6 +10,8 @@ use Nodeflow\Triggers\TriggerOccurrence;
 
 class FakeTriggerSource implements TriggerSource
 {
+    public static ?Closure $resolver = null;
+
     public static function key(): string
     {
         return 'test.orders';
@@ -26,6 +29,10 @@ class FakeTriggerSource implements TriggerSource
 
     public function resolve(TriggerOccurrence $occurrence, array $config): TriggerMatch
     {
+        if (self::$resolver !== null) {
+            return (self::$resolver)($occurrence, $config);
+        }
+
         $payload = $occurrence->payload;
         $occurrenceId = (string) $payload['occurrence_id'];
 
