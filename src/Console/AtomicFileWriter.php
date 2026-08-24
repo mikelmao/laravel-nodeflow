@@ -103,6 +103,7 @@ final class AtomicFileWriter
                 $this->assertSafePath($path, $roots);
                 $ancestors[$path] = $this->snapshotAncestors($path, $roots);
                 $staged[$path] = $this->stage($path, $contents, $snapshots[$path]['mode'] ?? null, $validator);
+                $staged[$path]['ancestors'] = $ancestors[$path];
             }
 
             foreach ($writes as $path => $contents) {
@@ -117,11 +118,15 @@ final class AtomicFileWriter
                         'identity' => $placeholder,
                         'basename' => basename($path),
                         'reservation' => true,
+                        'ancestors' => $ancestors[$path],
+                        'provenRemoved' => false,
                     ];
                     if (! $this->sameIdentity($path, $placeholder)) {
                         throw new InvalidArgumentException("Target [{$path}] changed during generation; it was not overwritten.");
                     }
                     $this->moveOrVerify($staged[$path]['path'], $path, $stagedIdentity);
+                    $this->assertAncestors($path, $ancestors[$path], $roots);
+                    $reservations[$path]['provenRemoved'] = true;
                 } else {
                     if (! $this->matchesSnapshot($path, $snapshot)) {
                         throw new InvalidArgumentException("Target [{$path}] changed during generation; it was not overwritten.");
@@ -175,8 +180,13 @@ final class AtomicFileWriter
                 }
             }
         } catch (Throwable $failure) {
-            $cleanupFailures = $this->cleanup([...array_values($staged), ...array_values($reservations)], $roots);
-            $rollbackFailures = $this->rollback($snapshots, $committed, $ancestors, $roots);
+            $provenAbsent = [];
+            $cleanupFailures = $this->cleanup(
+                [...array_values($staged), ...array_values($reservations)],
+                $roots,
+                $provenAbsent,
+            );
+            $rollbackFailures = $this->rollback($snapshots, $committed, $ancestors, $roots, $provenAbsent);
             $manual = array_values(array_unique([...$rollbackFailures, ...$cleanupFailures]));
 
             if ($manual !== []) {
@@ -193,7 +203,12 @@ final class AtomicFileWriter
             throw new InvalidArgumentException('Atomic write failed; no committed files remain changed.', previous: $failure);
         }
 
-        $cleanupFailures = $this->cleanup([...array_values($staged), ...array_values($reservations)], $roots);
+        $provenAbsent = [];
+        $cleanupFailures = $this->cleanup(
+            [...array_values($staged), ...array_values($reservations)],
+            $roots,
+            $provenAbsent,
+        );
         if ($cleanupFailures !== []) {
             throw new InvalidArgumentException(
                 'Atomic write completed but temporary files require manual recovery ['.implode(', ', $cleanupFailures).'].',
@@ -510,9 +525,16 @@ final class AtomicFileWriter
      * @param array<string, array> $committed
      * @param array<string, array<string, array<string,int>>> $ancestors
      * @param list<string> $roots
+     * @param array<string, true> $provenAbsent
      * @return list<string>
      */
-    private function rollback(array $snapshots, array $committed, array $ancestors, array $roots): array
+    private function rollback(
+        array $snapshots,
+        array $committed,
+        array $ancestors,
+        array $roots,
+        array $provenAbsent,
+    ): array
     {
         $failures = [];
         foreach (array_reverse(array_keys($committed)) as $path) {
@@ -552,6 +574,17 @@ final class AtomicFileWriter
                             throw new InvalidArgumentException('Could not remove the operation-owned target after an ancestor swap.');
                         }
                     }
+                    if ($search->status === RecoveryIdentityStatus::Absent
+                        && ! isset($provenAbsent[$this->identityKey($committed[$path]['identity'])])) {
+                        $failures[] = $this->recoveryFailure(
+                            'target',
+                            $path,
+                            $roots,
+                            RecoveryIdentityResult::inconclusive('original ancestor chain changed before absence could be proven'),
+                        );
+
+                        continue;
+                    }
                     if ($original !== null) {
                         throw new InvalidArgumentException('The original target requires manual recovery after an ancestor swap.');
                     }
@@ -562,6 +595,16 @@ final class AtomicFileWriter
                         throw new InvalidArgumentException('The committed target changed externally.');
                     }
                     if ($original === null) {
+                        $absence = $this->verifiedRecoveryAbsence(
+                            $path,
+                            $ancestors[$path],
+                            $roots,
+                            isset($provenAbsent[$this->identityKey($committed[$path]['identity'])]),
+                        );
+                        if ($absence->status === RecoveryIdentityStatus::Inconclusive) {
+                            $failures[] = $this->recoveryFailure('target', $path, $roots, $absence);
+                        }
+
                         continue;
                     }
                     $this->restoreMissing($path, $original, $ancestors[$path], $roots);
@@ -608,7 +651,7 @@ final class AtomicFileWriter
                     }
                 } finally {
                     if ($staged !== null && ! $moved) {
-                        $cleanup = $this->cleanupRestorationTemporary($staged, $roots);
+                        $cleanup = $this->cleanupRestorationTemporary($staged, $roots, $ancestors[$path]);
                         if ($cleanup !== []) {
                             throw new InconclusiveRecoveryException('Rollback temporary requires manual recovery ['.implode(', ', $cleanup).'].');
                         }
@@ -647,8 +690,9 @@ final class AtomicFileWriter
                 throw new InvalidArgumentException('The restored target did not verify.');
             }
         } catch (Throwable $failure) {
-            $cleanupFailures = $moved ? [] : $this->cleanupRestorationTemporary($staged, $roots);
+            $cleanupFailures = $moved ? [] : $this->cleanupRestorationTemporary($staged, $roots, $ancestors);
             if ($placeholder !== null && ! $moved) {
+                $placeholderProof = [];
                 $cleanupFailures = [
                     ...$cleanupFailures,
                     ...$this->cleanup([[
@@ -656,7 +700,9 @@ final class AtomicFileWriter
                         'identity' => $placeholder,
                         'basename' => basename($path),
                         'reservation' => true,
-                    ]], $roots),
+                        'ancestors' => $ancestors,
+                        'provenRemoved' => false,
+                    ]], $roots, $placeholderProof),
                 ];
             }
             if ($cleanupFailures !== []) {
@@ -669,8 +715,13 @@ final class AtomicFileWriter
         }
     }
 
-    /** @param array<int|string, array{path:string, identity:array<string,int>, basename?:string, reservation?:bool}> $staged @return list<string> */
-    private function cleanup(array $staged, array $roots = []): array
+    /**
+     * @param array<int|string, array{path:string, identity:array<string,int>, ancestors?:array<string,array<string,int>>, basename?:string, reservation?:bool, provenRemoved?:bool}> $staged
+     * @param list<string> $roots
+     * @param array<string, true> $provenAbsent
+     * @return list<string>
+     */
+    private function cleanup(array $staged, array $roots, array &$provenAbsent): array
     {
         $failures = [];
         foreach ($staged as $temporary) {
@@ -682,6 +733,32 @@ final class AtomicFileWriter
                         : $this->findTemporary($temporary['identity'], $temporary['basename'] ?? basename($temporary['path']), $roots));
 
                 if ($search->status === RecoveryIdentityStatus::Absent) {
+                    $absence = $this->verifiedRecoveryAbsence(
+                        $temporary['path'],
+                        $temporary['ancestors'] ?? null,
+                        $roots,
+                        $temporary['provenRemoved'] ?? false,
+                    );
+                    if ($absence->status === RecoveryIdentityStatus::Inconclusive) {
+                        $failures[] = $this->recoveryFailure(
+                            ($temporary['reservation'] ?? false) ? 'reservation' : 'temporary',
+                            $temporary['path'],
+                            $roots,
+                            $absence,
+                        );
+
+                        continue;
+                    }
+                    // Scoped absence is valid only while this artifact's
+                    // original ancestor chain remains intact. Do not promote
+                    // it to a transaction-wide inode proof: a later rollback
+                    // action may move that ancestor outside the allowed root.
+                    // Only an observed unlink or verified atomic replacement
+                    // is safe to reuse after a subsequent ancestor change.
+                    if ($temporary['provenRemoved'] ?? false) {
+                        $provenAbsent[$this->identityKey($temporary['identity'])] = true;
+                    }
+
                     continue;
                 }
                 if ($search->status === RecoveryIdentityStatus::Inconclusive) {
@@ -713,6 +790,8 @@ final class AtomicFileWriter
                 $owned = $verified->foundPath();
                 if (! @unlink($owned) || @lstat($owned) !== false) {
                     $failures[] = $owned;
+                } else {
+                    $provenAbsent[$this->identityKey($temporary['identity'])] = true;
                 }
             } catch (Throwable) {
                 $failures[] = $temporary['path'];
@@ -726,12 +805,13 @@ final class AtomicFileWriter
      * Clean only the exact restoration temporary. If its inode has already
      * been renamed under a non-temporary basename, it is the restored target
      * and must never be deleted. A completed scan that finds neither form is
-     * a definitive absence within the allowed roots; interrupted, bounded, or
-     * ambiguous scans remain explicit manual-recovery failures.
+     * definitive only while the original ancestor chain is still intact;
+     * interrupted, bounded, ambiguous, or escaped scans remain explicit
+     * manual-recovery failures.
      *
      * @return list<string>
      */
-    private function cleanupRestorationTemporary(array $temporary, array $roots): array
+    private function cleanupRestorationTemporary(array $temporary, array $roots, array $ancestors): array
     {
         $temporarySearch = $this->sameIdentity($temporary['path'], $temporary['identity'])
             ? $this->verifiedRecoveryCandidate($temporary['path'], $temporary['identity'], $roots)
@@ -784,7 +864,11 @@ final class AtomicFileWriter
             return [];
         }
 
-        return [];
+        $absence = $this->verifiedRecoveryAbsence($temporary['path'], $ancestors, $roots);
+
+        return $absence->status === RecoveryIdentityStatus::Absent
+            ? []
+            : [$this->recoveryFailure('temporary', $temporary['path'], $roots, $absence)];
     }
 
     /** Find an exact operation temp by inode and unguessable basename inside allowed roots. */
@@ -900,5 +984,46 @@ final class AtomicFileWriter
         }
 
         return RecoveryIdentityResult::found($path);
+    }
+
+    /**
+     * An allowed-root scan proves only scoped absence. It becomes definitive
+     * for an operation-owned path when the original ancestor chain is intact
+     * and that exact lexical path remains absent, or after this transaction
+     * has already verified an atomic replacement/deletion of the inode.
+     *
+     * @param  array<string, array<string, int>>|null  $ancestors
+     * @param  list<string>  $roots
+     */
+    private function verifiedRecoveryAbsence(
+        string $path,
+        ?array $ancestors,
+        array $roots,
+        bool $provenRemoved = false,
+    ): RecoveryIdentityResult {
+        if ($provenRemoved) {
+            return RecoveryIdentityResult::absent();
+        }
+        if ($ancestors === null) {
+            return RecoveryIdentityResult::inconclusive('original ancestor identity is unavailable');
+        }
+
+        try {
+            $this->assertAncestors($path, $ancestors, $roots);
+        } catch (Throwable) {
+            return RecoveryIdentityResult::inconclusive('original ancestor chain changed before absence could be proven');
+        }
+
+        if (@lstat($path) !== false) {
+            return RecoveryIdentityResult::inconclusive('original lexical path is no longer absent');
+        }
+
+        return RecoveryIdentityResult::absent();
+    }
+
+    /** @param array<string, int> $identity */
+    private function identityKey(array $identity): string
+    {
+        return $identity['dev'].':'.$identity['ino'].':'.$identity['type'];
     }
 }

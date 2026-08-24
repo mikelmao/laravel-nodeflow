@@ -1228,3 +1228,208 @@ it('reports an allowed root changed while recovery was scanning', function () {
     rmdir($movedRoot);
     rmdir($root);
 });
+
+it('reports both a generated temporary and reservation moved outside the allowed root', function () {
+    $root = sys_get_temp_dir().'/nodeflow-absent-outside-'.bin2hex(random_bytes(6));
+    $outside = sys_get_temp_dir().'/nodeflow-absent-outside-destination-'.bin2hex(random_bytes(6));
+    $parent = $root.'/nested';
+    $parked = $outside.'/nested-parked';
+    mkdir($parent, 0777, true);
+    mkdir($outside, 0777, true);
+    $target = $parent.'/Target.php';
+    $files = new class($parent, $parked) extends Filesystem
+    {
+        public function __construct(private string $parent, private string $parked) {}
+
+        public function move($path, $target)
+        {
+            rename($this->parent, $this->parked);
+            mkdir($this->parent);
+
+            return false;
+        }
+    };
+
+    try {
+        (new AtomicFileWriter($files))->write(
+            [$target => '<?php final class Generated {}'],
+            [$root],
+            false,
+            static function (): void {},
+        );
+        $this->fail('An unprovable outside-root absence must require manual recovery.');
+    } catch (InvalidArgumentException $e) {
+        expect($e->getMessage())->toContain('manual recovery')
+            ->toContain('temporary [')
+            ->toContain('reservation [Target.php]')
+            ->not->toContain($outside)
+            ->not->toContain('<?php');
+    }
+
+    expect($parked.'/Target.php')->toBeFile()
+        ->and(count(glob($parked.'/*.nodeflow-tmp-*') ?: []))->toBe(1)
+        ->and($target)->not->toBeFile();
+
+    foreach (glob($parked.'/*') ?: [] as $path) unlink($path);
+    rmdir($parent);
+    rmdir($parked);
+    rmdir($outside);
+    rmdir($root);
+});
+
+it('does not reuse a scoped absence proof after the owned ancestor moves again', function () {
+    $root = sys_get_temp_dir().'/nodeflow-scoped-absence-'.bin2hex(random_bytes(6));
+    $outside = sys_get_temp_dir().'/nodeflow-scoped-absence-outside-'.bin2hex(random_bytes(6));
+    $parent = $root.'/nested';
+    $parked = $outside.'/nested-parked';
+    mkdir($parent, 0777, true);
+    mkdir($outside, 0777, true);
+    $target = $parent.'/Target.php';
+    $files = new class($parent, $parked) extends Filesystem
+    {
+        public function __construct(private string $parent, private string $parked) {}
+
+        public function move($path, $target)
+        {
+            $moved = parent::move($path, $target);
+            rename($this->parent, $this->parked);
+            mkdir($this->parent);
+
+            return $moved;
+        }
+    };
+    $scans = 0;
+    $entries = static function (string $scanRoot) use (&$scans, $parent, $parked): iterable {
+        if (++$scans === 1) {
+            rmdir($parent);
+            rename($parked, $parent);
+        } elseif ($scans === 2) {
+            rename($parent, $parked);
+            mkdir($parent);
+        }
+
+        return new RecursiveIteratorIterator(
+            new RecursiveDirectoryIterator($scanRoot, FilesystemIterator::SKIP_DOTS),
+            RecursiveIteratorIterator::SELF_FIRST,
+        );
+    };
+
+    try {
+        (new AtomicFileWriter($files, $entries))->write(
+            [$target => '<?php final class Generated {}'],
+            [$root],
+            false,
+            static function (): void {},
+        );
+        $this->fail('A scoped absence proof must not survive a later ancestor move.');
+    } catch (InvalidArgumentException $e) {
+        expect($e->getMessage())->toContain('manual recovery')
+            ->toContain('target [Target.php]')
+            ->not->toContain($outside)
+            ->not->toContain('<?php');
+    }
+
+    expect($parked.'/Target.php')->toBeFile();
+
+    unlink($parked.'/Target.php');
+    rmdir($parent);
+    rmdir($parked);
+    rmdir($outside);
+    rmdir($root);
+});
+
+it('reports a rollback restoration temporary moved outside the allowed root', function () {
+    $root = sys_get_temp_dir().'/nodeflow-restoration-absent-outside-'.bin2hex(random_bytes(6));
+    $outside = sys_get_temp_dir().'/nodeflow-restoration-absent-destination-'.bin2hex(random_bytes(6));
+    $parent = $root.'/nested';
+    $parked = $outside.'/nested-parked';
+    mkdir($parent, 0777, true);
+    mkdir($outside, 0777, true);
+    $first = $parent.'/First.php';
+    $second = $root.'/Second.php';
+    file_put_contents($first, '<?php final class Original {}');
+    $files = new class($parent, $parked) extends Filesystem
+    {
+        private int $moves = 0;
+
+        public function __construct(private string $parent, private string $parked) {}
+
+        public function move($path, $target)
+        {
+            if (++$this->moves === 2) {
+                return false;
+            }
+            if ($this->moves === 3) {
+                rename($this->parent, $this->parked);
+                mkdir($this->parent);
+
+                return false;
+            }
+
+            return parent::move($path, $target);
+        }
+    };
+
+    try {
+        (new AtomicFileWriter($files))->write(
+            [
+                $first => '<?php final class Generated {}',
+                $second => '<?php final class SecondGenerated {}',
+            ],
+            [$root],
+            true,
+            static function (): void {},
+        );
+        $this->fail('A stranded outside-root restoration temporary must require manual recovery.');
+    } catch (InvalidArgumentException $e) {
+        expect($e->getMessage())->toContain('manual recovery')
+            ->toContain('temporary [')
+            ->not->toContain($outside)
+            ->not->toContain('<?php');
+    }
+
+    expect(file_get_contents($parked.'/First.php'))->toBe('<?php final class Generated {}')
+        ->and(count(glob($parked.'/*.nodeflow-tmp-*') ?: []))->toBe(1)
+        ->and($second)->not->toBeFile();
+
+    foreach (glob($parked.'/*') ?: [] as $path) unlink($path);
+    rmdir($parent);
+    rmdir($parked);
+    rmdir($outside);
+    rmdir($root);
+});
+
+it('accepts definitive absence after an adapter unlinks owned files under unchanged ancestors', function () {
+    $root = sys_get_temp_dir().'/nodeflow-definitive-absence-'.bin2hex(random_bytes(6));
+    $parent = $root.'/nested';
+    mkdir($parent, 0777, true);
+    $target = $parent.'/Target.php';
+    $files = new class extends Filesystem
+    {
+        public function move($path, $target)
+        {
+            unlink($path);
+            unlink($target);
+
+            return false;
+        }
+    };
+
+    try {
+        (new AtomicFileWriter($files))->write(
+            [$target => '<?php final class Generated {}'],
+            [$root],
+            false,
+            static function (): void {},
+        );
+        $this->fail('The injected move failure must abort the transaction.');
+    } catch (InvalidArgumentException $e) {
+        expect($e->getMessage())->not->toContain('manual recovery');
+    }
+
+    expect($target)->not->toBeFile()
+        ->and(glob($parent.'/*.nodeflow-tmp-*') ?: [])->toBe([]);
+
+    rmdir($parent);
+    rmdir($root);
+});
