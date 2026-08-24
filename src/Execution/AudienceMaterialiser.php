@@ -139,7 +139,7 @@ class AudienceMaterialiser
             throw new InvalidArgumentException("{$kind} must not contain a NUL byte.");
         }
 
-        if (preg_match_all('/./u', $value) > 255) {
+        if (preg_match_all('/./us', $value) > 255) {
             throw new InvalidArgumentException("{$kind} must be at most 255 Unicode characters.");
         }
     }

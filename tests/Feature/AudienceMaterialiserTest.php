@@ -176,6 +176,7 @@ it('rejects identifiers that cannot be persisted losslessly before batch ownersh
         ->and($this->run->subjects()->count())->toBe(0);
 })->with([
     'overlong' => [str_repeat('x', 256), '255 Unicode characters'],
+    'overlong with line feed' => [str_repeat('x', 255)."\n", '255 Unicode characters'],
     'invalid utf-8' => ["\xB1\x31", 'valid UTF-8'],
     'nul byte' => ["valid\0id", 'NUL byte'],
 ]);
@@ -196,7 +197,7 @@ it('rejects an unrepresentable subject type before consuming its audience', func
     app()->instance(TenantResolver::class, $resolver);
     app()->forgetInstance(AudienceMaterialiser::class);
 
-    expect(fn () => app(AudienceMaterialiser::class)->materialise($this->run, str_repeat('t', 256), ['1']))
+    expect(fn () => app(AudienceMaterialiser::class)->materialise($this->run, str_repeat('t', 255)."\n", ['1']))
         ->toThrow(InvalidArgumentException::class, 'subject type');
 
     expect($resolver->calls)->toBe(0)
