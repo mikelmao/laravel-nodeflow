@@ -1,5 +1,6 @@
 <?php
 
+use Illuminate\Support\Facades\Artisan;
 use Nodeflow\Console\MakeTriggerSourceCommand;
 use Nodeflow\Triggers\Webhook\WebhookSourceRejected;
 
@@ -62,14 +63,11 @@ function markdownHeadingAnchors(string $contents): array
 
 it('documents the complete first-class trigger surface without the removed trigger API', function () {
     $docs = triggerDocumentationCorpus();
-    // Build removed names from fragments so the exact repository inventory does
-    // not report the regression test that enforces their absence.
     $removed = [
-        'trigger'.'_type',
-        'trigger'.'_config',
-        'Trigger'.'Registry',
-        'EventTrigger'.'Listener',
-        'extends '.'Trigger',
+        'trigger_type',
+        'trigger_config',
+        'TriggerRegistry',
+        'EventTriggerListener',
     ];
 
     expect($docs)->toContain('core.trigger.webhook')
@@ -87,8 +85,53 @@ it('documents the complete first-class trigger surface without the removed trigg
         ->not->toContain($removed[0])
         ->not->toContain($removed[1])
         ->not->toContain($removed[2])
-        ->not->toContain($removed[3])
-        ->not->toContain($removed[4]);
+        ->not->toContain($removed[3]);
+
+    expect(preg_match('/extends\s+Trigger\b/', $docs))->toBe(0);
+});
+
+it('keeps removed trigger APIs out of production and current documentation precisely', function () {
+    $root = dirname(__DIR__, 2);
+    $files = [$root.'/README.md'];
+
+    foreach (['docs/gitbook', 'src', 'resources'] as $tree) {
+        $iterator = new RecursiveIteratorIterator(
+            new RecursiveDirectoryIterator($root.'/'.$tree, FilesystemIterator::SKIP_DOTS),
+        );
+
+        foreach ($iterator as $file) {
+            if ($file->isFile()) {
+                $files[] = $file->getPathname();
+            }
+        }
+    }
+
+    $corpus = implode("\n", array_map(
+        static fn (string $path): string => (string) file_get_contents($path),
+        $files,
+    ));
+
+    expect(preg_match(
+        '/\b(?:trigger_type|trigger_config|TriggerRegistry|EventTriggerListener)\b|extends\s+Trigger\b/',
+        $corpus,
+    ))->toBe(0);
+});
+
+it('uses the public TriggerSource contract idiomatically in source-family interfaces', function () {
+    $root = dirname(__DIR__, 2);
+
+    foreach ([
+        'src/Triggers/Webhook/WebhookTriggerSource.php',
+        'src/Triggers/ModelObserver/ModelObserverTriggerSource.php',
+        'src/Triggers/LaravelEvent/LaravelEventTriggerSource.php',
+    ] as $relative) {
+        $source = (string) file_get_contents($root.'/'.$relative);
+
+        expect($source, $relative)
+            ->toContain('use Nodeflow\\Contracts\\TriggerSource;')
+            ->toContain('extends TriggerSource')
+            ->not->toContain('SourceContract');
+    }
 });
 
 it('documents the webhook source rejection boundary with the public exception', function () {
@@ -203,10 +246,117 @@ it('provides complete host source and extension examples', function () {
         ->toContain('public function resolve(TriggerOccurrence $occurrence, array $config): TriggerMatch')
         ->toContain('TriggerMatch::make()->forTenant(')
         ->toContain('final class PartnerWebhookTrigger extends AbstractTriggerNode')
-        ->toContain('final class QueueTriggerDriver implements TriggerDriver')
+        ->toContain('class QueueTriggerDriver implements TriggerDriver')
         ->toContain('Nodeflow::registerTriggerDrivers($this->triggerDrivers);')
         ->toContain('Nodeflow::registerTriggerNodes($this->triggerNodes);')
         ->toContain('Nodeflow::registerTriggerSources($this->triggerSources);');
+});
+
+it('preserves source-contributed fields in a compatible custom trigger descriptor', function () {
+    $docs = triggerDocumentationPage('building-automations/writing-triggers.md');
+    preg_match('/## Custom node on a built-in driver.*?```php\s*\n(.*?)(?=\n```)/s', $docs, $snippet);
+
+    token_get_all($snippet[1], TOKEN_PARSE);
+    eval(substr($snippet[1], strlen('<?php')));
+
+    $node = new App\Nodeflow\Triggers\PartnerWebhookTrigger;
+    $descriptor = $node->compile([
+        'source' => 'partner.orders',
+        'region' => 'eu',
+        'signature_profile' => 'strict',
+    ]);
+
+    expect($descriptor->source)->toBe('partner.orders')
+        ->and($descriptor->metadata)->toBe([
+            'region' => 'eu',
+            'signature_profile' => 'strict',
+        ])
+        ->and((new ReflectionMethod($node, 'sourceType'))->isProtected())->toBeTrue()
+        ->and($docs)->toContain('`TriggerSource::resolve()` receives only descriptor metadata')
+        ->toContain('preserve every validated source field')
+        ->toContain('narrower `sourceType()` or `supportsSource()`');
+});
+
+it('keeps the custom driver walkthrough synchronized with the generated extension kit', function () {
+    $root = sys_get_temp_dir().'/nodeflow-doc-driver-'.bin2hex(random_bytes(6));
+    $originalBasePath = app()->basePath();
+    mkdir($root.'/app/Providers', 0777, true);
+    file_put_contents($root.'/composer.json', json_encode(['autoload' => ['psr-4' => ['App\\' => 'app/']]], JSON_THROW_ON_ERROR));
+    file_put_contents($root.'/app/Providers/NodeflowServiceProvider.php', <<<'PHP'
+<?php
+
+class NodeflowServiceProvider extends \Illuminate\Support\ServiceProvider
+{
+    protected array $triggerDrivers = [];
+    protected array $triggerNodes = [];
+    protected array $triggerSources = [];
+
+    public function boot(): void
+    {
+        \Nodeflow\Nodeflow::registerTriggerDrivers($this->triggerDrivers);
+        \Nodeflow\Nodeflow::registerTriggerNodes($this->triggerNodes);
+        \Nodeflow\Nodeflow::registerTriggerSources($this->triggerSources);
+    }
+}
+PHP);
+
+    try {
+        app()->setBasePath($root);
+        $exit = Artisan::call('nodeflow:make-trigger-driver', [
+            'name' => 'QueueTriggerDriver',
+            '--key' => 'queue',
+        ]);
+
+        expect($exit)->toBe(0);
+
+        $driver = (string) file_get_contents($root.'/app/Nodeflow/TriggerDrivers/QueueTriggerDriver.php');
+        $node = (string) file_get_contents($root.'/app/Nodeflow/Triggers/QueueTriggerDriverTrigger.php');
+        $contract = (string) file_get_contents($root.'/tests/Feature/Nodeflow/TriggerDrivers/QueueTriggerDriverTest.php');
+        $provider = (string) file_get_contents($root.'/app/Providers/NodeflowServiceProvider.php');
+        $docs = triggerDocumentationPage('building-automations/writing-triggers.md');
+
+        expect($driver)->toContain('namespace App\\Nodeflow\\TriggerDrivers;')
+            ->toContain('class QueueTriggerDriver implements TriggerDriver')
+            ->toContain('public function occurrence(string $source, mixed $payload, ?string $qualifier = null): TriggerOccurrence')
+            ->and($node)->toContain('namespace App\\Nodeflow\\Triggers;')
+            ->toContain('class QueueTriggerDriverTrigger extends AbstractTriggerNode')
+            ->toContain('$source = $this->source($config);')
+            ->toContain("unset(\$config['source']);")
+            ->toContain('metadata: $config')
+            ->and($contract)->toContain('use App\\Nodeflow\\TriggerDrivers\\QueueTriggerDriver;')
+            ->toContain('use App\\Nodeflow\\Triggers\\QueueTriggerDriverTrigger;')
+            ->and($provider)->toContain('\\App\\Nodeflow\\TriggerDrivers\\QueueTriggerDriver::class,')
+            ->toContain('\\App\\Nodeflow\\Triggers\\QueueTriggerDriverTrigger::class,')
+            ->and($docs)->toContain('`app/Nodeflow/TriggerDrivers/QueueTriggerDriver.php`')
+            ->toContain('`app/Nodeflow/Triggers/QueueTriggerDriverTrigger.php`')
+            ->toContain('`tests/Feature/Nodeflow/TriggerDrivers/QueueTriggerDriverTest.php`')
+            ->toContain('namespace App\\Nodeflow\\TriggerDrivers;')
+            ->toContain('namespace App\\Nodeflow\\Triggers;')
+            ->toContain('class QueueTriggerDriverTrigger extends AbstractTriggerNode')
+            ->toContain('public function occurrence(string $source, mixed $payload, ?string $qualifier = null): TriggerOccurrence')
+            ->toContain('$source = $this->source($config);')
+            ->toContain("unset(\$config['source']);")
+            ->toContain('metadata: $config')
+            ->toContain('Nodeflow::registerTriggerNodes([QueueTriggerDriverTrigger::class]);');
+    } finally {
+        app()->setBasePath($originalBasePath);
+        $delete = function (string $directory) use (&$delete): void {
+            foreach (scandir($directory) ?: [] as $entry) {
+                if ($entry === '.' || $entry === '..') {
+                    continue;
+                }
+
+                $path = $directory.'/'.$entry;
+                is_dir($path) ? $delete($path) : unlink($path);
+            }
+
+            rmdir($directory);
+        };
+
+        if (is_dir($root)) {
+            $delete($root);
+        }
+    }
 });
 
 it('documents webhook, model, event, run, editor, and unsupported behavior', function () {

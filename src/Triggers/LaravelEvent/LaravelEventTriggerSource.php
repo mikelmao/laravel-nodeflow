@@ -2,11 +2,9 @@
 
 namespace Nodeflow\Triggers\LaravelEvent;
 
-// The alias keeps broad legacy base-class inventory scans from mistaking this
-// source-family contract for the removed trigger base API.
-use Nodeflow\Contracts\TriggerSource as SourceContract;
+use Nodeflow\Contracts\TriggerSource;
 
-interface LaravelEventTriggerSource extends SourceContract
+interface LaravelEventTriggerSource extends TriggerSource
 {
     /** @return class-string */
     public static function eventClass(): string;

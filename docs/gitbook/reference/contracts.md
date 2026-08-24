@@ -101,19 +101,19 @@ The stable-key grammar is `[a-z][a-z0-9._-]*`. Driver/source keys are limited to
 ### Built-in source contracts
 
 ```php
-use Nodeflow\Contracts\TriggerSource as SourceContract;
+use Nodeflow\Contracts\TriggerSource;
 
-interface WebhookTriggerSource extends SourceContract
+interface WebhookTriggerSource extends TriggerSource
 {
 }
 
-interface ModelObserverTriggerSource extends SourceContract
+interface ModelObserverTriggerSource extends TriggerSource
 {
     /** @return class-string<\Illuminate\Database\Eloquent\Model> */
     public static function modelClass(): string;
 }
 
-interface LaravelEventTriggerSource extends SourceContract
+interface LaravelEventTriggerSource extends TriggerSource
 {
     /** @return class-string */
     public static function eventClass(): string;

@@ -385,8 +385,8 @@ it('renders the editor props the client is written against', function () {
             'event' => [],
         ])
         ->and($response->json('props.flow'))->not->toHaveKeys([
-            'trigger'.'_type',
-            'trigger'.'_config',
+            'trigger_type',
+            'trigger_config',
         ]);
 });
 

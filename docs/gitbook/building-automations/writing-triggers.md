@@ -6,7 +6,7 @@ Triggers are a three-part extension boundary:
 - a `TriggerDriver` owns how occurrences arrive and validates its descriptors;
 - a `TriggerSource` is a host allowlist entry that turns a typed occurrence into tenant audiences.
 
-At runtime, `TriggerSource::resolve()` receives the activation descriptor metadata compiled by the node, not an untrusted request and not necessarily the complete raw authoring config. A source should branch only on fields its compatible node deliberately compiled.
+At runtime, `TriggerSource::resolve()` receives only descriptor metadata compiled by the node, not the complete raw authoring config. A node that accepts a broad source family must preserve every validated source field in that metadata. Otherwise a source can pass publication validation and then lose the values it requires at runtime. A narrower `sourceType()` or `supportsSource()` implementation may deliberately narrow that shared contract.
 
 Nodeflow registers the `webhook`, `model`, and `event` drivers and their built-in trigger nodes unconditionally. The host registers sources explicitly. Flow authors therefore select stable keys; they never submit a PHP model class, event class, listener class, or arbitrary service name.
 
@@ -324,6 +324,10 @@ Registration order is driver → node → source because source registration cal
 A custom node can reuse webhook delivery while adding an authoring field. `AbstractTriggerNode` supplies source selection and source-registry validation; the subclass owns definition, compatibility, and deterministic compilation.
 
 ```php
+<?php
+
+namespace App\Nodeflow\Triggers;
+
 use Nodeflow\Schema\Field;
 use Nodeflow\Schema\TriggerDefinition;
 use Nodeflow\Triggers\AbstractTriggerNode;
@@ -361,17 +365,20 @@ final class PartnerWebhookTrigger extends AbstractTriggerNode
 
     public function compile(array $config): TriggerActivationDescriptor
     {
+        $source = $this->source($config);
+        unset($config['source']);
+
         return new TriggerActivationDescriptor(
             driver: $this->driver(),
-            source: $this->source($config),
+            source: $source,
             qualifier: null,
-            metadata: ['region' => (string) $config['region']],
+            metadata: $config,
         );
     }
 }
 ```
 
-Register it with `Nodeflow::registerTriggerNodes([PartnerWebhookTrigger::class]);`. Its sources must still implement `WebhookTriggerSource`, and the built-in webhook protocol remains signed.
+Register it with `Nodeflow::registerTriggerNodes([PartnerWebhookTrigger::class]);`. Its broad `WebhookTriggerSource` compatibility means compilation copies every validated flat field except the reserved `source` selector. That includes the node-owned `region` and fields contributed by whichever webhook source is selected. Its sources must still implement `WebhookTriggerSource`, and the built-in webhook protocol remains signed.
 
 ## Custom driver and reference node
 
@@ -381,15 +388,25 @@ Generate an atomic extension kit:
 php artisan nodeflow:make-trigger-driver QueueTriggerDriver --key=queue
 ```
 
-The generated driver implements the public contract and the generated node references its stable key:
+The command creates these three artifacts and inserts the driver before the reference node in the host provider:
+
+- `app/Nodeflow/TriggerDrivers/QueueTriggerDriver.php`
+- `app/Nodeflow/Triggers/QueueTriggerDriverTrigger.php`
+- `tests/Feature/Nodeflow/TriggerDrivers/QueueTriggerDriverTest.php`
+
+The generated driver is:
 
 ```php
+<?php
+
+namespace App\Nodeflow\TriggerDrivers;
+
 use Nodeflow\Contracts\TriggerDriver;
 use Nodeflow\Contracts\TriggerSource;
 use Nodeflow\Triggers\TriggerActivationDescriptor;
 use Nodeflow\Triggers\TriggerOccurrence;
 
-final class QueueTriggerDriver implements TriggerDriver
+class QueueTriggerDriver implements TriggerDriver
 {
     public static function key(): string
     {
@@ -398,30 +415,39 @@ final class QueueTriggerDriver implements TriggerDriver
 
     public function sourceRegistered(TriggerSource $source): void
     {
-        // Attach one deduplicated, extension-owned listener here.
+        // TODO: install one deduplicated listener for this source family.
     }
 
     public function validate(TriggerActivationDescriptor $descriptor): array
     {
-        return $descriptor->driver === self::key()
-            ? []
-            : ['driver' => ['The descriptor belongs to another driver.']];
+        if ($descriptor->driver !== self::key()) {
+            return ['driver' => ['The activation descriptor uses another trigger driver.']];
+        }
+
+        // TODO: validate driver-specific routing metadata.
+        return [];
     }
 
-    public function occurrence(string $source, mixed $payload): TriggerOccurrence
+    public function occurrence(string $source, mixed $payload, ?string $qualifier = null): TriggerOccurrence
     {
-        return new TriggerOccurrence(self::key(), $source, $payload);
+        return new TriggerOccurrence(self::key(), $source, $payload, $qualifier);
     }
 }
 ```
 
+The generated reference node is:
+
 ```php
+<?php
+
+namespace App\Nodeflow\Triggers;
+
 use Nodeflow\Schema\Field;
 use Nodeflow\Schema\TriggerDefinition;
 use Nodeflow\Triggers\AbstractTriggerNode;
 use Nodeflow\Triggers\TriggerActivationDescriptor;
 
-final class QueueTrigger extends AbstractTriggerNode
+class QueueTriggerDriverTrigger extends AbstractTriggerNode
 {
     public static function type(): string
     {
@@ -430,33 +456,68 @@ final class QueueTrigger extends AbstractTriggerNode
 
     public function definition(): TriggerDefinition
     {
-        return TriggerDefinition::make('Queue')->fields([
-            Field::select('source')->required(),
-        ]);
+        return TriggerDefinition::make('Queue Trigger Driver Trigger')
+            ->description('TODO: describe when this trigger starts a flow.')
+            ->fields([Field::select('source')->required()]);
     }
 
     public function driver(): string
     {
-        return QueueTriggerDriver::key();
+        return 'queue';
     }
 
     public function compile(array $config): TriggerActivationDescriptor
     {
+        $source = $this->source($config);
+        unset($config['source']);
+
         return new TriggerActivationDescriptor(
             driver: $this->driver(),
-            source: $this->source($config),
+            source: $source,
             qualifier: null,
-            metadata: [],
+            metadata: $config,
         );
     }
 }
 ```
 
-Register the extension in dependency order:
+The reference node deliberately copies every validated flat config field except `source` into descriptor metadata. A custom node may transform fields, but it must retain the runtime contract of every source it declares compatible.
+
+The generated Pest contract is immediately runnable and verifies the stable driver and graph keys plus occurrence routing:
 
 ```php
+<?php
+
+use App\Nodeflow\TriggerDrivers\QueueTriggerDriver;
+use App\Nodeflow\Triggers\QueueTriggerDriverTrigger;
+use Nodeflow\Triggers\TriggerDriverRegistry;
+use Nodeflow\Triggers\TriggerNodeRegistry;
+
+it('registers the queue trigger extension kit', function () {
+    app(TriggerDriverRegistry::class)->register(QueueTriggerDriver::class);
+    app(TriggerNodeRegistry::class)->register(QueueTriggerDriverTrigger::class);
+
+    $driver = app(TriggerDriverRegistry::class)->resolve('queue');
+    $node = app(TriggerNodeRegistry::class)->resolve('queue.trigger');
+    $occurrence = $driver->occurrence('example.source', ['id' => 1]);
+
+    expect($node->driver())->toBe('queue')
+        ->and($node->definition()->label)->not->toBeEmpty()
+        ->and($occurrence->driver)->toBe('queue')
+        ->and($occurrence->source)->toBe('example.source');
+});
+```
+
+After generating or registering a compatible source, the dependency order is driver → node → source:
+
+```php
+use App\Nodeflow\TriggerDrivers\QueueTriggerDriver;
+use App\Nodeflow\Triggers\QueueTriggerDriverTrigger;
+use App\Nodeflow\TriggerSources\QueueMessageSource;
+use Nodeflow\Nodeflow;
+
 Nodeflow::registerTriggerDrivers([QueueTriggerDriver::class]);
-Nodeflow::registerTriggerNodes([QueueTrigger::class]);
+Nodeflow::registerTriggerNodes([QueueTriggerDriverTrigger::class]);
 Nodeflow::registerTriggerSources([QueueMessageSource::class]);
 ```
 
