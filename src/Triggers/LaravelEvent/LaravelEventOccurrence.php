@@ -56,7 +56,7 @@ final readonly class LaravelEventOccurrence
 
         $normalized = [];
 
-        foreach (array_keys($value) as $key) {
+        foreach ($value as $key => $item) {
             $values++;
 
             if ($values > self::MAX_VALUES) {
@@ -69,7 +69,7 @@ final readonly class LaravelEventOccurrence
 
             if ($reference === null) {
                 $normalized[$key] = self::normalizeValue(
-                    $value[$key],
+                    $item,
                     $depth + 1,
                     $activeReferences,
                     $values,
@@ -90,7 +90,7 @@ final readonly class LaravelEventOccurrence
 
             try {
                 $normalized[$key] = self::normalizeValue(
-                    $value[$key],
+                    $item,
                     $depth + 1,
                     $activeReferences,
                     $values,

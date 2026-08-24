@@ -578,6 +578,31 @@ it('rejects oversized event value trees at a deterministic boundary', function (
     ))->toThrow(InvalidArgumentException::class, 'maximum value count');
 });
 
+it('rejects a very wide event value tree without exhausting the PHP process', function () {
+    $autoload = realpath(__DIR__.'/../../vendor/autoload.php');
+    $code = sprintf(<<<'PHP'
+    require %s;
+
+    $data = array_fill(0, 650000, null);
+
+    try {
+        new \Nodeflow\Triggers\LaravelEvent\LaravelEventOccurrence(\stdClass::class, $data);
+    } catch (\InvalidArgumentException $e) {
+        echo $e->getMessage();
+        exit(0);
+    }
+
+    exit(2);
+    PHP, var_export($autoload, true));
+    $output = [];
+    $exitCode = 0;
+
+    exec(escapeshellarg(PHP_BINARY).' -d memory_limit=32M -r '.escapeshellarg($code).' 2>&1', $output, $exitCode);
+
+    expect($exitCode)->toBe(0)
+        ->and(implode(PHP_EOL, $output))->toContain('maximum value count');
+});
+
 it('rejects self-referential event value trees without exhausting the PHP process', function () {
     $autoload = realpath(__DIR__.'/../../vendor/autoload.php');
     $code = sprintf(<<<'PHP'
