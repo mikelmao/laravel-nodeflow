@@ -1,5 +1,5 @@
 import { createPortal } from 'react-dom'
-import { useEffect, useId, useRef, type RefObject } from 'react'
+import { useId, useLayoutEffect, useRef, useState, type RefObject } from 'react'
 import type { KeyboardEvent as ReactKeyboardEvent } from 'react'
 import { containDialogFocus } from './dialogFocus'
 
@@ -27,6 +27,10 @@ function focusFirst(root: HTMLElement): void {
     ;(root.querySelector<HTMLElement>('[data-nodeflow-dialog-initial-focus]')
         ?? root.querySelector<HTMLElement>(focusableSelector)
         ?? root).focus({ preventScroll: true })
+}
+
+function isNode(value: EventTarget | null): value is Node {
+    return typeof value === 'object' && value !== null && 'nodeType' in value
 }
 
 function restore(element: HTMLElement, snapshot: IsolationSnapshot): void {
@@ -66,20 +70,20 @@ function refreshIsolation(document: Document, registry: ModalRegistry): void {
 function installListeners(document: Document, registry: ModalRegistry): () => void {
     const keydown = (event: KeyboardEvent) => {
         const top = registry.entries.at(-1)
-        if (top === undefined || (event.target instanceof Node && top.root.contains(event.target))) return
+        if (top === undefined || (isNode(event.target) && top.root.contains(event.target))) return
         event.preventDefault()
         event.stopImmediatePropagation()
         if (event.key === 'Escape') top.cancel()
     }
     const blockBackground = (event: Event) => {
         const top = registry.entries.at(-1)
-        if (top === undefined || (event.target instanceof Node && top.root.contains(event.target))) return
+        if (top === undefined || (isNode(event.target) && top.root.contains(event.target))) return
         event.preventDefault()
         event.stopImmediatePropagation()
     }
     const containFocus = (event: FocusEvent) => {
         const top = registry.entries.at(-1)
-        if (top === undefined || (event.target instanceof Node && top.root.contains(event.target))) return
+        if (top === undefined || (isNode(event.target) && top.root.contains(event.target))) return
         event.preventDefault()
         event.stopImmediatePropagation()
         focusFirst(top.root)
@@ -131,12 +135,18 @@ export type ConfirmationDialogProps = {
 /** Shared confirmation surface with real modal isolation, focus ownership, and shortcut containment. */
 export function ConfirmationDialog({ open, title, description, confirmLabel, openerRef, onCancel, onConfirm, destructive = false }: ConfirmationDialogProps) {
     const rootRef = useRef<HTMLDivElement>(null)
+    const [portalDocument, setPortalDocument] = useState<Document | null>(null)
     const cancelRef = useRef(onCancel)
     cancelRef.current = onCancel
     const titleId = `nodeflow-confirmation-${useId().replace(/:/g, '')}`
     const descriptionId = `${titleId}-description`
 
-    useEffect(() => {
+    useLayoutEffect(() => {
+        const next = open ? openerRef.current?.ownerDocument ?? null : null
+        setPortalDocument((current) => current === next ? current : next)
+    }, [open, openerRef])
+
+    useLayoutEffect(() => {
         const root = rootRef.current
         if (!open || root === null) return
         const release = registerModal(root.ownerDocument, { token: Symbol('nodeflow-modal'), root, cancel: () => cancelRef.current() })
@@ -145,9 +155,9 @@ export function ConfirmationDialog({ open, title, description, confirmLabel, ope
             if (remaining !== null) focusFirst(remaining)
             else openerRef.current?.focus({ preventScroll: true })
         }
-    }, [open, openerRef])
+    }, [open, openerRef, portalDocument])
 
-    if (!open || typeof document === 'undefined') return null
+    if (!open || portalDocument === null) return null
 
     function handleKeyDown(event: ReactKeyboardEvent<HTMLDivElement>): void {
         event.stopPropagation()
@@ -168,6 +178,6 @@ export function ConfirmationDialog({ open, title, description, confirmLabel, ope
                 </div>
             </div>
         </div>,
-        document.body,
+        portalDocument.body,
     )
 }

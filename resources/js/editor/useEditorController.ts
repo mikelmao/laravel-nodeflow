@@ -6,7 +6,7 @@ import {
     type EdgeChange,
     type NodeChange,
 } from '@xyflow/react'
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import type { CanvasActions, CanvasProps, NodeflowEdge, NodeflowNode } from '../canvas/Canvas'
 import { CANVAS_ORIGIN, NODE_MIN_HEIGHT, NODE_WIDTH, ROW_GAP } from '../canvas/layout'
 import type { NodeRendererMap } from '../canvas/context'
@@ -204,6 +204,70 @@ function outcomeMessages(outcome: ValidationOutcome | PublishOutcome | null): { 
     return { graph: [] }
 }
 
+type WebhookCredentialIdentity = {
+    endpointUrl: string | null
+    rotatedAt: string | null
+    version: number | null
+}
+
+type WebhookSecretDisclosure = {
+    secret: string
+    credential: WebhookCredentialIdentity
+}
+
+type WebhookClientState = {
+    metadata: WebhookMetadata | null
+    disclosure: WebhookSecretDisclosure | null
+}
+
+type CredentialRelation = 'same' | 'older' | 'newer' | 'different' | 'unknown'
+
+function parsedTimestamp(value: string | null): number | null {
+    if (value === null) return null
+    const parsed = Date.parse(value)
+    return Number.isFinite(parsed) ? parsed : null
+}
+
+function credentialRelation(
+    current: Pick<WebhookCredentialIdentity, 'endpointUrl' | 'rotatedAt'>,
+    incoming: Pick<WebhookCredentialIdentity, 'endpointUrl' | 'rotatedAt'>,
+): CredentialRelation {
+    if (current.endpointUrl !== incoming.endpointUrl) return 'different'
+    if (current.rotatedAt === null && incoming.rotatedAt === null) return 'same'
+    const currentTime = parsedTimestamp(current.rotatedAt)
+    const incomingTime = parsedTimestamp(incoming.rotatedAt)
+    if (currentTime === null || incomingTime === null) return 'unknown'
+    if (incomingTime < currentTime) return 'older'
+    if (incomingTime > currentTime) return 'newer'
+    return 'same'
+}
+
+function metadataIdentity(metadata: WebhookMetadata | null): Pick<WebhookCredentialIdentity, 'endpointUrl' | 'rotatedAt'> | null {
+    return metadata === null ? null : { endpointUrl: metadata.endpoint_url, rotatedAt: metadata.secret_rotated_at }
+}
+
+function reconcileWebhookMetadata(current: WebhookClientState, incoming: WebhookMetadata | null): WebhookClientState {
+    if (current.metadata === null || incoming === null) {
+        if (current.metadata === null && incoming === null) return { metadata: null, disclosure: current.disclosure }
+        return { metadata: incoming, disclosure: null }
+    }
+    const currentIdentity = metadataIdentity(current.metadata)
+    const incomingIdentity = metadataIdentity(incoming)
+    if (currentIdentity === null || incomingIdentity === null) return { metadata: incoming, disclosure: null }
+    const relation = credentialRelation(currentIdentity, incomingIdentity)
+    const disclosureMatchesCurrent = current.disclosure === null
+        || credentialRelation(current.disclosure.credential, currentIdentity) === 'same'
+    const disclosure = disclosureMatchesCurrent ? current.disclosure : null
+    if (relation === 'older') {
+        return {
+            metadata: { ...incoming, secret_rotated_at: current.metadata.secret_rotated_at },
+            disclosure,
+        }
+    }
+    if (relation === 'same') return { metadata: incoming, disclosure }
+    return { metadata: incoming, disclosure: null }
+}
+
 /** Controller boundary: graph history is canonical; panels, selection and requests are deliberately not undoable. */
 export function useEditorController(options: UseEditorControllerOptions): UseEditorControllerResult {
     const defs = useMemo(
@@ -221,8 +285,9 @@ export function useEditorController(options: UseEditorControllerOptions): UseEdi
     const [validationState, setValidationState] = useState<ValidationIndicator>({ status: 'unchecked' })
     const [publishing, setPublishing] = useState(false)
     const [publishedVersion, setPublishedVersion] = useState<number | null>(options.flow.version)
-    const [webhookMetadata, setWebhookMetadata] = useState<WebhookMetadata | null>(options.webhook)
-    const [webhookSecret, setWebhookSecret] = useState<string | null>(null)
+    const [webhookState, setWebhookState] = useState<WebhookClientState>({ metadata: options.webhook, disclosure: null })
+    const webhookMetadata = webhookState.metadata
+    const webhookSecret = webhookState.disclosure?.secret ?? null
     const [webhookRotating, setWebhookRotating] = useState(false)
     const [webhookRotationError, setWebhookRotationError] = useState<string | null>(null)
     const [issueToFocus, setIssueToFocus] = useState<NodeErrorEntry | null>(null)
@@ -253,7 +318,7 @@ export function useEditorController(options: UseEditorControllerOptions): UseEdi
     const applyPendingWebhookMetadata = useCallback(() => {
         const pending = pendingWebhookMetadata.current
         pendingWebhookMetadata.current = null
-        if (pending !== null) setWebhookMetadata(pending.value)
+        if (pending !== null) setWebhookState((current) => reconcileWebhookMetadata(current, pending.value))
     }, [])
 
     useEffect(() => {
@@ -309,14 +374,14 @@ export function useEditorController(options: UseEditorControllerOptions): UseEdi
         }
     }, [applyPendingWebhookMetadata, options.urls.rotate_webhook_secret])
 
-    useEffect(() => {
+    useLayoutEffect(() => {
         const value = options.webhook === null ? null : { ...options.webhook }
         if (activeCredentialOperation.current !== null) {
             pendingWebhookMetadata.current = { value }
             return
         }
         pendingWebhookMetadata.current = null
-        setWebhookMetadata(value)
+        setWebhookState((current) => reconcileWebhookMetadata(current, value))
     }, [options.webhook])
 
     const clearValidation = useCallback(() => {
@@ -710,19 +775,30 @@ export function useEditorController(options: UseEditorControllerOptions): UseEdi
                     // disclosure, including a success that returns no new secret.
                     // Credential metadata belongs to the still-owned editor session,
                     // not to the graph generation used for outcome presentation.
-                    setWebhookSecret(next.webhookSecret ?? null)
                     const publishedTrigger = currentBuilt.graph.nodes?.find((node) => defs[node.type]?.kind === 'trigger')
                     const publishedDef = publishedTrigger === undefined ? undefined : defs[publishedTrigger.type]
-                    setWebhookMetadata((current) => {
-                        const base = pending === null ? current : pending.value
-                        const endpointUrl = next.webhookUrl ?? base?.endpoint_url ?? null
+                    setWebhookState((current) => {
+                        const endpointUrl = next.webhookUrl ?? current.metadata?.endpoint_url ?? null
                         const webhookPublished = publishedDef?.kind === 'trigger' && publishedDef.driver === 'webhook'
-                        if (endpointUrl === null && base === null && !webhookPublished) return null
-                        return {
-                            endpoint_url: endpointUrl,
-                            active: webhookPublished,
-                            secret_rotated_at: base?.secret_rotated_at ?? null,
+                        const metadata = endpointUrl === null && current.metadata === null && !webhookPublished
+                            ? null
+                            : {
+                                endpoint_url: endpointUrl,
+                                active: webhookPublished,
+                                secret_rotated_at: current.metadata?.secret_rotated_at ?? null,
+                            }
+                        const operation: WebhookClientState = {
+                            metadata,
+                            disclosure: next.webhookSecret === undefined ? null : {
+                                secret: next.webhookSecret,
+                                credential: {
+                                    endpointUrl,
+                                    rotatedAt: metadata?.secret_rotated_at ?? null,
+                                    version: next.version,
+                                },
+                            },
                         }
+                        return pending === null ? operation : reconcileWebhookMetadata(operation, pending.value)
                     })
                 }
             }
@@ -775,10 +851,20 @@ export function useEditorController(options: UseEditorControllerOptions): UseEdi
             const pending = pendingWebhookMetadata.current
             pendingWebhookMetadata.current = null
             credentialMetadataCommitted = true
-            setWebhookSecret(rotated.secret)
-            setWebhookMetadata((current) => {
-                const base = pending === null ? current : pending.value
-                return base === null ? null : { ...base, secret_rotated_at: rotated.rotatedAt }
+            setWebhookState((current) => {
+                const metadata = current.metadata === null ? null : { ...current.metadata, secret_rotated_at: rotated.rotatedAt }
+                const operation: WebhookClientState = {
+                    metadata,
+                    disclosure: metadata === null ? null : {
+                        secret: rotated.secret,
+                        credential: {
+                            endpointUrl: metadata?.endpoint_url ?? null,
+                            rotatedAt: rotated.rotatedAt,
+                            version: publishedVersion,
+                        },
+                    },
+                }
+                return pending === null ? operation : reconcileWebhookMetadata(operation, pending.value)
             })
         } catch {
             if (owns()) setWebhookRotationError('Could not rotate the webhook secret. Check your connection and try again.')
@@ -790,7 +876,7 @@ export function useEditorController(options: UseEditorControllerOptions): UseEdi
                 setWebhookRotating(false)
             }
         }
-    }, [applyPendingWebhookMetadata, options.urls.rotate_webhook_secret])
+    }, [applyPendingWebhookMetadata, options.urls.rotate_webhook_secret, publishedVersion])
 
     const focusIssue = useCallback((nodeId: string | null, field: string | null) => {
         if (nodeId === null || !documentRef.current.nodes.some((node) => node.id === nodeId)) return
@@ -868,6 +954,6 @@ export function useEditorController(options: UseEditorControllerOptions): UseEdi
         toolbarProps: { flowName: options.flow.name, triggerLabel: trigger?.label ?? 'No trigger', publishedVersion, save, validation: validationState, publish: publishIndicator, publishDisabledReason, credentialBusy: publishing || webhookRotating, canUndo: history.past.length > 0, canRedo: history.future.length > 0, hasSelection: selected.nodeId !== null || selected.edgeId !== null, onUndo: () => moveHistory('undo'), onRedo: () => moveHistory('redo'), onAutoLayout: autoLayout, onFit: () => canvas.current?.fit(), onDeleteSelected: deleteSelection, onValidate: () => { void validate() }, onPublish: () => { if (publishDisabledReason === null) void publish() } },
         noticeProps: { save, publish: publishIndicator, validation: validationState, structuralError: message.structural, graphMessages: [...message.graph, ...(message.failed === undefined ? [] : [message.failed])], validationMessage: validation?.kind === 'failed' ? validation.message : undefined, onKeepMine: () => resolveConflict('mine'), onUseTheirs: () => resolveConflict('theirs') },
         flowOverviewProps: { flow: { name: options.flow.name }, trigger: trigger === null ? null : { label: trigger.label, type: trigger.type }, triggerReadiness: publishDisabledReason, publishedVersion, nodeCount: document.nodes.length, connectionCount: document.edges.length, startNodeId: document.startId || null, validation: validationState, issues: graphIssues(activeOutcome), warnings: validation?.kind === 'valid' ? validation.warnings : validation?.kind === 'invalid' ? validation.warnings : [], errors: message.graph, unknownTypes, unresolvedOutputs: built.unresolved.map((edge) => ({ from: edge.source, to: edge.target })), onIssueSelect: (issue) => focusIssue(issue.node, issue.field) },
-        nodeInspectorProps: selectedNode === undefined ? null : { node: selectedNode.data, def: defs[selectedNode.data.type], controls, errors: fieldErrors, issueToFocus, triggerSources: options.trigger_sources, triggerOptionsTemplate: options.urls.trigger_options, triggerSourceOptionsTemplate: options.urls.trigger_source_options, onConfigChange: (key, value) => configure(selectedNode.id, key, value), onTriggerSourceChange: (source) => configureTriggerSource(selectedNode.id, source), onConfigBlur: closeConfigTransaction, webhook: webhookMetadata, webhookSecret, webhookPublishing: publishing, webhookRotating, webhookRotationError, onAcknowledgeWebhookSecret: () => setWebhookSecret(null), onRotateWebhookSecret: () => { void rotateWebhookSecret() }, onDelete: () => deleteNode(selectedNode.id) },
+        nodeInspectorProps: selectedNode === undefined ? null : { node: selectedNode.data, def: defs[selectedNode.data.type], controls, errors: fieldErrors, issueToFocus, triggerSources: options.trigger_sources, triggerOptionsTemplate: options.urls.trigger_options, triggerSourceOptionsTemplate: options.urls.trigger_source_options, onConfigChange: (key, value) => configure(selectedNode.id, key, value), onTriggerSourceChange: (source) => configureTriggerSource(selectedNode.id, source), onConfigBlur: closeConfigTransaction, webhook: webhookMetadata, webhookSecret, webhookPublishing: publishing, webhookRotating, webhookRotationError, onAcknowledgeWebhookSecret: () => setWebhookState((current) => ({ ...current, disclosure: null })), onRotateWebhookSecret: () => { void rotateWebhookSecret() }, onDelete: () => deleteNode(selectedNode.id) },
     }
 }

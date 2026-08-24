@@ -838,7 +838,7 @@ describe('useEditorController', () => {
         expect(view.result.current.nodeInspectorProps?.webhook?.endpoint_url).toBe('https://example.test/hooks/new')
     })
 
-    it('syncs same-session webhook metadata prop changes without clearing a newer disclosed secret', async () => {
+    it('clears a disclosed publish secret when metadata identifies a different endpoint credential', async () => {
         let currentWebhook = { endpoint_url: 'https://example.test/hooks/old', active: false, secret_rotated_at: null as string | null }
         vi.stubGlobal('fetch', vi.fn((url: string) => url === urls.publish
             ? Promise.resolve(Response.json({
@@ -875,12 +875,12 @@ describe('useEditorController', () => {
         view.rerender()
 
         expect(view.result.current.nodeInspectorProps?.webhook).toEqual(currentWebhook)
-        expect(view.result.current.nodeInspectorProps?.webhookSecret).toBe('transient-secret')
+        expect(view.result.current.nodeInspectorProps?.webhookSecret).toBeNull()
     })
 
     it('reconciles metadata props received during rotation without clobbering the newer rotation result', async () => {
         let resolveRotation!: (response: Response) => void
-        let currentWebhook = { endpoint_url: 'https://example.test/hooks/old', active: false, secret_rotated_at: null as string | null }
+        let currentWebhook = { endpoint_url: 'https://example.test/hooks/refreshed', active: false, secret_rotated_at: null as string | null }
         vi.stubGlobal('fetch', vi.fn((url: string) => url === urls.rotate_webhook_secret
             ? new Promise<Response>((resolve) => { resolveRotation = resolve })
             : Promise.resolve(Response.json({ draft_revision: 8 }))))
@@ -920,6 +920,114 @@ describe('useEditorController', () => {
             secret_rotated_at: '2026-08-24T16:00:00Z',
         })
         expect(view.result.current.nodeInspectorProps?.webhookSecret).toBe('new-secret')
+    })
+
+    it('orders post-rotation metadata without regressing or retaining an invalid disclosure', async () => {
+        let currentWebhook = { endpoint_url: 'https://example.test/hooks/current', active: true, secret_rotated_at: '2026-08-24T14:00:00Z' }
+        vi.stubGlobal('fetch', vi.fn(async (url: string) => url === urls.rotate_webhook_secret
+            ? Response.json({ secret: 'secret-b', rotated_at: '2026-08-24T16:00:00Z' })
+            : Response.json({ draft_revision: 8 })))
+        const triggered: Graph = {
+            start: 'hook',
+            nodes: [{ id: 'hook', type: webhook.type, config: { source: 'orders' }, position: { x: 0, y: 0 } }],
+            edges: [],
+        }
+        const view = renderHook(() => useEditorController({
+            flow,
+            graph: triggered,
+            palette: [send, exit],
+            trigger_nodes: [webhook],
+            trigger_sources: { webhook: [{ key: 'orders', driver: 'webhook', label: 'Orders', icon: null, description: null, fields: [], default_config: {} }] },
+            webhook: currentWebhook,
+            urls,
+            autosaveDebounceMs: 1,
+        }))
+        act(() => view.result.current.actions.selectNode('hook'))
+        act(() => view.result.current.nodeInspectorProps?.onRotateWebhookSecret?.())
+        await waitFor(() => expect(view.result.current.nodeInspectorProps?.webhookSecret).toBe('secret-b'))
+
+        currentWebhook = { ...currentWebhook, active: false, secret_rotated_at: '2026-08-24T15:00:00Z' }
+        view.rerender()
+        expect(view.result.current.nodeInspectorProps?.webhook).toEqual({ ...currentWebhook, secret_rotated_at: '2026-08-24T16:00:00Z' })
+        expect(view.result.current.nodeInspectorProps?.webhookSecret).toBe('secret-b')
+
+        currentWebhook = { ...currentWebhook, active: true, secret_rotated_at: '2026-08-24T16:00:00Z' }
+        view.rerender()
+        expect(view.result.current.nodeInspectorProps?.webhook).toEqual(currentWebhook)
+        expect(view.result.current.nodeInspectorProps?.webhookSecret).toBe('secret-b')
+
+        currentWebhook = { ...currentWebhook, secret_rotated_at: '2026-08-24T17:00:00Z' }
+        view.rerender()
+        expect(view.result.current.nodeInspectorProps?.webhook).toEqual(currentWebhook)
+        expect(view.result.current.nodeInspectorProps?.webhookSecret).toBeNull()
+    })
+
+    it('clears a rotated disclosure on endpoint or ambiguous timestamp identity changes', async () => {
+        let currentWebhook = { endpoint_url: 'https://example.test/hooks/current', active: true, secret_rotated_at: '2026-08-24T14:00:00Z' }
+        vi.stubGlobal('fetch', vi.fn(async (url: string) => url === urls.rotate_webhook_secret
+            ? Response.json({ secret: 'rotated-secret', rotated_at: '2026-08-24T16:00:00Z' })
+            : Response.json({ draft_revision: 8 })))
+        const triggered: Graph = {
+            start: 'hook',
+            nodes: [{ id: 'hook', type: webhook.type, config: { source: 'orders' }, position: { x: 0, y: 0 } }],
+            edges: [],
+        }
+        const view = renderHook(() => useEditorController({
+            flow,
+            graph: triggered,
+            palette: [send, exit],
+            trigger_nodes: [webhook],
+            trigger_sources: { webhook: [{ key: 'orders', driver: 'webhook', label: 'Orders', icon: null, description: null, fields: [], default_config: {} }] },
+            webhook: currentWebhook,
+            urls,
+            autosaveDebounceMs: 1,
+        }))
+        act(() => view.result.current.actions.selectNode('hook'))
+        act(() => view.result.current.nodeInspectorProps?.onRotateWebhookSecret?.())
+        await waitFor(() => expect(view.result.current.nodeInspectorProps?.webhookSecret).toBe('rotated-secret'))
+
+        currentWebhook = { endpoint_url: 'https://example.test/hooks/replaced', active: true, secret_rotated_at: '2026-08-24T16:00:00Z' }
+        view.rerender()
+        expect(view.result.current.nodeInspectorProps?.webhookSecret).toBeNull()
+
+        act(() => view.result.current.nodeInspectorProps?.onRotateWebhookSecret?.())
+        await waitFor(() => expect(view.result.current.nodeInspectorProps?.webhookSecret).toBe('rotated-secret'))
+        currentWebhook = { ...currentWebhook, secret_rotated_at: 'not-a-timestamp' }
+        view.rerender()
+        expect(view.result.current.nodeInspectorProps?.webhookSecret).toBeNull()
+    })
+
+    it('retains a first-publish disclosure only across the same null timestamp boundary', async () => {
+        let currentWebhook: Parameters<typeof useEditorController>[0]['webhook'] = null
+        vi.stubGlobal('fetch', vi.fn(async (url: string) => url === urls.publish
+            ? Response.json({ version: 4, draft_revision: 8, webhook_url: 'https://example.test/hooks/first', webhook_secret: 'first-secret' })
+            : Response.json({ draft_revision: 8 })))
+        const triggered: Graph = {
+            start: 'hook',
+            nodes: [{ id: 'hook', type: webhook.type, config: { source: 'orders' }, position: { x: 0, y: 0 } }],
+            edges: [],
+        }
+        const view = renderHook(() => useEditorController({
+            flow,
+            graph: triggered,
+            palette: [send, exit],
+            trigger_nodes: [webhook],
+            trigger_sources: { webhook: [{ key: 'orders', driver: 'webhook', label: 'Orders', icon: null, description: null, fields: [], default_config: {} }] },
+            webhook: currentWebhook,
+            urls,
+            autosaveDebounceMs: 1,
+        }))
+        act(() => view.result.current.actions.selectNode('hook'))
+        await act(async () => view.result.current.actions.publish())
+        expect(view.result.current.nodeInspectorProps?.webhookSecret).toBe('first-secret')
+
+        currentWebhook = { endpoint_url: 'https://example.test/hooks/first', active: true, secret_rotated_at: null }
+        view.rerender()
+        expect(view.result.current.nodeInspectorProps?.webhookSecret).toBe('first-secret')
+
+        currentWebhook = { ...currentWebhook, secret_rotated_at: 'invalid' }
+        view.rerender()
+        expect(view.result.current.nodeInspectorProps?.webhookSecret).toBeNull()
     })
 
     it('blocks publish while rotation owns the credential operation and still displays the rotation secret', async () => {

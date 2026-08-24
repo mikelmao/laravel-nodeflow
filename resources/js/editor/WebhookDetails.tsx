@@ -1,4 +1,4 @@
-import { useEffect, useId, useRef, useState } from 'react'
+import { useEffect, useId, useLayoutEffect, useRef, useState } from 'react'
 import type { WebhookMetadata } from '../graph/types'
 import { NodeflowIcon } from '../presentation/icons'
 import { ConfirmationDialog } from './ConfirmationDialog'
@@ -35,14 +35,6 @@ export function WebhookDetails({
     const endpointIdentity = useRef(metadata?.endpoint_url ?? null)
     const endpointGeneration = useRef(0)
     const endpointCopyRequest = useRef(0)
-    if (secretIdentity.current !== oneTimeSecret) {
-        secretIdentity.current = oneTimeSecret
-        secretGeneration.current += 1
-    }
-    if (endpointIdentity.current !== (metadata?.endpoint_url ?? null)) {
-        endpointIdentity.current = metadata?.endpoint_url ?? null
-        endpointGeneration.current += 1
-    }
     const rotationDescription = rotating
         ? 'Webhook secret rotation is in progress.'
         : publishing ? 'Publishing is in progress.' : 'Rotate the webhook signing secret.'
@@ -56,12 +48,19 @@ export function WebhookDetails({
         }
     }, [])
 
-    useEffect(() => {
+    useLayoutEffect(() => {
+        if (secretIdentity.current === oneTimeSecret) return
+        secretIdentity.current = oneTimeSecret
+        secretGeneration.current += 1
         secretCopyRequest.current += 1
         setSecretCopy(null)
     }, [oneTimeSecret])
 
-    useEffect(() => {
+    useLayoutEffect(() => {
+        const endpoint = metadata?.endpoint_url ?? null
+        if (endpointIdentity.current === endpoint) return
+        endpointIdentity.current = endpoint
+        endpointGeneration.current += 1
         endpointCopyRequest.current += 1
         setEndpointCopy(null)
     }, [metadata?.endpoint_url])

@@ -1,4 +1,4 @@
-import { StrictMode, useState } from 'react'
+import { StrictMode, Suspense, startTransition, useState } from 'react'
 import { act, fireEvent, render, screen } from '@testing-library/react'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { WebhookDetails } from './WebhookDetails'
@@ -42,6 +42,43 @@ describe('WebhookDetails clipboard lifecycle', () => {
         expect(screen.getByText('Secret copied.')).toBeInTheDocument()
         expect(writeText).toHaveBeenNthCalledWith(1, 'secret-a')
         expect(writeText).toHaveBeenNthCalledWith(2, 'secret-b')
+    })
+
+    it('keeps valid copy feedback when a different disclosure render is interrupted', async () => {
+        let resolveCopy!: () => void
+        let changeSecret!: (secret: string) => void
+        const suspended = new Promise<void>(() => {})
+        Object.defineProperty(navigator, 'clipboard', {
+            configurable: true,
+            value: { writeText: vi.fn(() => new Promise<void>((resolve) => { resolveCopy = resolve })) },
+        })
+        function BlockCommit({ secret }: { secret: string }) {
+            if (secret === 'secret-b') throw suspended
+            return null
+        }
+        function Harness() {
+            const [secret, setSecret] = useState('secret-a')
+            changeSecret = setSecret
+            return <Suspense fallback={<p>Loading disclosure</p>}>
+                <WebhookDetails
+                    metadata={metadata}
+                    oneTimeSecret={secret}
+                    rotating={false}
+                    rotationError={null}
+                    onAcknowledgeSecret={() => {}}
+                    onRotate={() => {}}
+                />
+                <BlockCommit secret={secret} />
+            </Suspense>
+        }
+        render(<Harness />)
+        fireEvent.click(screen.getByRole('button', { name: 'Copy webhook secret' }))
+        act(() => startTransition(() => changeSecret('secret-b')))
+        expect(screen.getByText('secret-a')).toBeInTheDocument()
+
+        await act(async () => resolveCopy())
+
+        expect(screen.getByText('Secret copied.')).toBeInTheDocument()
     })
 
     it('announces a sanitized copy failure without rendering rejection details', async () => {
