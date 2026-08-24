@@ -32,6 +32,7 @@ use Nodeflow\Schema\TriggerDefinition;
 use Nodeflow\Triggers\TriggerMatch;
 use Nodeflow\Triggers\TriggerOccurrence;
 use Nodeflow\Triggers\Webhook\WebhookOccurrence;
+use Nodeflow\Triggers\Webhook\WebhookSourceRejected;
 use Nodeflow\Triggers\Webhook\WebhookTriggerDriver;
 use Nodeflow\Triggers\Webhook\WebhookTriggerSource;
 
@@ -64,7 +65,7 @@ final class OrderWebhookSource implements WebhookTriggerSource
         $orderId = $payload['order_id'] ?? null;
 
         if (! is_string($tenantId) || ! is_string($orderId)) {
-            throw new InvalidArgumentException('The webhook payload is incomplete.');
+            throw new WebhookSourceRejected('The webhook payload is incomplete.');
         }
 
         return TriggerMatch::make()->forTenant(
@@ -80,7 +81,9 @@ final class OrderWebhookSource implements WebhookTriggerSource
 }
 ```
 
-For each webhook activation the source must return exactly one non-empty audience for that activation's tenant. A missing audience, a second audience, a tenant mismatch, or a subject rejected by `TenantResolver::ownsSubject()` produces a sanitized `422` response. Keep validation messages free of secrets and raw payloads.
+For each webhook activation the source must return exactly one non-empty audience for that activation's tenant. A missing audience, a second audience, a tenant mismatch, or a subject rejected by `TenantResolver::ownsSubject()` produces a sanitized `422` response. Explicit source rejection is a payload-level `422`: throw `Nodeflow\Triggers\Webhook\WebhookSourceRejected` with a safe internal message when a validly delivered payload cannot be accepted. The public response does not expose that message.
+
+`InvalidArgumentException` and every other unexpected source exception represent an incompatible occurrence, source bug, dependency failure, or other infrastructure/unexpected condition. Nodeflow removes the original exception from the webhook boundary and returns a sanitized `503`; reports and responses must never include the raw payload. Keep every exception message free of secrets because host reporting still observes unexpected failures elsewhere in the trigger pipeline.
 
 ### Sign and send the request
 

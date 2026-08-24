@@ -9,10 +9,9 @@ Use the following minimum data contract. The application may have additional col
 | Model/table | Required columns and relationships | Why it is needed |
 | --- | --- | --- |
 | `Organization` / `organizations` | Bigint primary key `id`; a stable, non-null `name`. | Its primary key is cast to a string whenever it becomes a Nodeflow tenant ID. |
-| `User` / `users` | Bigint primary key `id`; indexed `organization_id` foreign key; `name`; unique `email`; non-null `password`; boolean `is_nodeflow_admin` defaulting to false; nullable timestamp `clicked_offer_at`; `organization()` belongs-to relationship. Cast the final two columns to `boolean` and `datetime`. | A `User` is the `user` subject. `is_nodeflow_admin` supplies the example's administration rule, and `clicked_offer_at` is the source for `clicked_offer`. |
+| `User` / `users` | Bigint primary key `id`; indexed `organization_id` foreign key; `name`; unique `email`; non-null `password`; boolean `is_nodeflow_admin` defaulting to false; `organization()` belongs-to relationship. Cast the administration column to `boolean`. | A `User` is the `user` subject and `is_nodeflow_admin` supplies the example's administration rule. |
 | `FloodAlert` / `flood_alerts` | Bigint primary key `id`; `severity` string; nullable `dispatched_at` timestamp. | The event carries the durable alert ID and severity. Do not create a new alert record for a redelivery. |
 | `DemoMessage` / `demo_messages` | Bigint primary key `id`; indexed `organization_id`; `user_id`; `run_id`; `node_id`; `message` string; `body` text; timestamps; a unique index on `run_id`, `node_id`, and `user_id`. | This host-owned operational delivery record makes the illustrative message write idempotent. |
-| `FloodAlertWorkflow` / `flood_alert_workflows` | Bigint primary key `id`; unique `organization_id`; nullable `flow_id` foreign key. | This is the stable, one-per-organization provisioning record for the flood-alert flow. |
 
 This concrete migration uses Laravel `id()` and `foreignId()`, so its application identities are bigint keys. Nodeflow stores tenant and subject identities as strings, so cast `getKey()`, `organization_id`, and event map keys to strings at the integration boundary. `User::organization_id` must identify the same organization checked by the tenant resolver; a relationship alone is not an ownership check.
 
@@ -45,7 +44,6 @@ return new class extends Migration
                 ->cascadeOnDelete();
             $table->index('organization_id');
             $table->boolean('is_nodeflow_admin')->default(false);
-            $table->timestamp('clicked_offer_at')->nullable();
         });
 
         Schema::create('flood_alerts', function (Blueprint $table): void {
@@ -75,30 +73,16 @@ return new class extends Migration
             $table->unique(['run_id', 'node_id', 'user_id']);
         });
 
-        Schema::create('flood_alert_workflows', function (Blueprint $table): void {
-            $table->id();
-            $table->foreignId('organization_id')
-                ->constrained()
-                ->cascadeOnDelete();
-            $table->foreignId('flow_id')
-                ->nullable()
-                ->constrained('nodeflow_flows')
-                ->nullOnDelete();
-            $table->timestamps();
-
-            $table->unique('organization_id');
-        });
     }
 
     public function down(): void
     {
-        Schema::dropIfExists('flood_alert_workflows');
         Schema::dropIfExists('demo_messages');
         Schema::dropIfExists('flood_alerts');
 
         Schema::table('users', function (Blueprint $table): void {
             $table->dropForeign(['organization_id']);
-            $table->dropColumn(['organization_id', 'is_nodeflow_admin', 'clicked_offer_at']);
+            $table->dropColumn(['organization_id', 'is_nodeflow_admin']);
         });
 
         Schema::dropIfExists('organizations');
@@ -121,7 +105,6 @@ namespace App\Models;
 
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\HasMany;
-use Illuminate\Database\Eloquent\Relations\HasOne;
 
 class Organization extends Model
 {
@@ -132,10 +115,6 @@ class Organization extends Model
         return $this->hasMany(User::class);
     }
 
-    public function floodAlertWorkflow(): HasOne
-    {
-        return $this->hasOne(FloodAlertWorkflow::class);
-    }
 }
 ```
 
@@ -197,33 +176,6 @@ class DemoMessage extends Model
 }
 ```
 
-**File: `app/Models/FloodAlertWorkflow.php`**
-
-```php
-<?php
-
-namespace App\Models;
-
-use Illuminate\Database\Eloquent\Model;
-use Illuminate\Database\Eloquent\Relations\BelongsTo;
-use Nodeflow\Models\Flow;
-
-class FloodAlertWorkflow extends Model
-{
-    protected $fillable = ['organization_id', 'flow_id'];
-
-    public function organization(): BelongsTo
-    {
-        return $this->belongsTo(Organization::class);
-    }
-
-    public function flow(): BelongsTo
-    {
-        return $this->belongsTo(Flow::class);
-    }
-}
-```
-
 **File: `app/Models/User.php` (modifications to the existing Laravel model)**
 
 ```php
@@ -232,7 +184,6 @@ use Illuminate\Database\Eloquent\Relations\BelongsTo;
 
 // Merge these entries into the existing $casts property or casts() method.
 // Preserve every existing cast.
-'clicked_offer_at' => 'datetime',
 'is_nodeflow_admin' => 'boolean',
 
 // Add these methods inside the existing User class.
@@ -396,7 +347,6 @@ use Illuminate\Support\ServiceProvider;
 use Nodeflow\Contracts\SubjectResolver;
 use Nodeflow\Contracts\TenantResolver;
 use Nodeflow\Nodeflow;
-use Nodeflow\Schema\SubjectAttribute;
 use Nodeflow\Schema\SubjectAttributeRegistry;
 
 class NodeflowServiceProvider extends ServiceProvider
@@ -448,14 +398,7 @@ class NodeflowServiceProvider extends ServiceProvider
     /** @return \Nodeflow\Schema\SubjectAttribute[] */
     protected function subjectAttributes(): array
     {
-        return [
-            SubjectAttribute::make(
-                'clicked_offer',
-                'Clicked offer',
-                'boolean',
-                fn (?User $user): bool => $user?->clicked_offer_at !== null,
-            ),
-        ];
+        return [];
     }
 
     protected function mayManageNodeflow(?User $user, mixed $resource = null): bool
@@ -469,8 +412,6 @@ class NodeflowServiceProvider extends ServiceProvider
     }
 }
 ```
-
-`clicked_offer` reads only `users.clicked_offer_at`. It returns `false` when a user has been deleted since audience materialization, which makes the condition safely take the `no` branch only if that subject is still active. In normal operation, the conversion listener on the next page removes a converted user before the follow-up wait completes.
 
 The gates are intentionally separate from tenant scoping: a cross-organization row should not be reachable, and a reachable row still needs a role decision. See [Authorization](../integration/authorization.md) before changing their permissions.
 
@@ -490,9 +431,6 @@ Route::middleware(['web', 'auth'])
     ->prefix('admin')
     ->group(function (): void {
         Nodeflow::routes();
-
-        Route::post('flood-alert-workflow', [\App\Http\Controllers\FloodAlertFlowController::class, 'store'])
-            ->name('flood-alert-workflow.store');
     });
 ```
 
@@ -500,4 +438,4 @@ Create the thin adapters at `resources/js/pages/nodeflow/editor.tsx` and `resour
 
 ## Next step
 
-Implement the node, trigger, graph, and conversion cancellation in [Flood-alert workflow](flood-alert-workflow.md).
+Continue with [Flood-alert workflow](flood-alert-workflow.md) to implement the allowlisted event source and trigger-first graph, then publish and dispatch it from application-owned code.

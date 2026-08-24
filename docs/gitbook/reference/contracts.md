@@ -92,7 +92,9 @@ interface TriggerSource
 }
 ```
 
-`AbstractTriggerNode` is the recommended base for host nodes. It implements empty defaults, reads the flat `source` key, checks driver/source compatibility, and validates combined node/source fields. Subclasses provide a stable type, definition, driver, optional narrower `sourceType()`, and pure deterministic `compile()`.
+`AbstractTriggerNode` is the recommended base for host nodes. `AbstractTriggerNode` owns the node-level fields and rules, empty defaults, flat `source` selection, source-registry lookup, and driver/source compatibility. A subclass provides its stable type, node definition, driver, optional narrower `sourceType()`, and pure deterministic `compile()`; the base class does not merge the selected source's definition into the node definition.
+
+`TriggerDefinitionContext` snapshots each node and source definition once for an authoring or publication operation. `GraphValidator` combines the selected compatible source definition with the node definition, rejects field-key collisions, validates both sets of flat fields, and then performs the node's custom validation before publication. `CompileTriggerActivation` independently resolves the node, driver, source, definitions, compatibility, collisions, descriptor, and driver validation before it persists an immutable activation. A custom compiler or validation override must not assume an earlier editor request established those facts.
 
 The stable-key grammar is `[a-z][a-z0-9._-]*`. Driver/source keys are limited to 191 bytes; trigger node types are limited to 255 bytes. A trigger definition has exactly one output, `started`.
 

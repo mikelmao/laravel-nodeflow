@@ -1,6 +1,6 @@
 # Health checks
 
-Use three separate checks: `nodeflow:install --check` verifies host integration, `nodeflow:check-node-types` protects live Nodeflow graphs at deploy time, and `workflow:v2:doctor` inspects the durable engine backend. None substitutes for the others.
+Use three separate checks: `nodeflow:install --check` verifies host integration, `nodeflow:check-node-types` protects active activations and live pinned graphs, and `workflow:v2:doctor` inspects the durable engine backend. None substitutes for the others.
 
 ## Verify installation wiring
 
@@ -10,50 +10,67 @@ Run this read-only command after installation and in a deployment check:
 php artisan nodeflow:install --check
 ```
 
-It reports Nodeflow configuration as optional and healthy whether the host copy is absent or customized. It checks the drift state of any published Nodeflow migration copies, provider wiring and registration anchors, Tailwind source scanning, Vite alias and React dedupe, TypeScript paths, and the `@xyflow/react` dependency. It does not report whether Laravel migrations have already run. It prints a requirement/status table and returns zero only when every required integration is wired or already present.
+It reports Nodeflow configuration as optional and healthy whether the host copy is absent or customized. It checks the drift state of published Nodeflow migration copies, provider wiring and registration anchors, Tailwind source scanning, Vite alias and React dedupe, TypeScript paths, and the `@xyflow/react` dependency. It does not report whether Laravel migrations have already run. It prints a requirement/status table and returns zero only when every required integration is wired or already present.
 
 `NOT WIRED (would be written)` means a safe writable change was found but `--check` did not write it. `NOT WIRED` means a verify-only or non-automatable requirement is missing. Both are non-zero outcomes. Authorization gates and tenancy mode are reported for operators but do not determine this command's exit code.
 
-## Protect live node types
+## Protect trigger registrations and pinned graphs
 
-Run this command against the released code before or while enabling workers:
+Run the command after migrations and after every application provider has registered its Nodeflow components. Put it in the release check before enabling or restarting workers:
 
 ```bash
 php artisan nodeflow:check-node-types
 ```
 
-It has no options. It scans every flow version across tenants, but reports only versions with at least one run in a live status: `pending`, `running`, `waiting`, or `blocked`. For each graph node, it checks whether its type resolves in `NodeRegistry`.
+The command is read-only, has no options, bypasses ambient tenancy for its system-wide liveness scan, and checks two reachable sets:
 
-It prints `All node types referenced by live runs resolve.` and exits 0 when successful. Each missing entry is printed as `Unresolvable node type: version {id} node {nodeId} type {type}`, followed by alias recovery guidance, and the command exits 1. Completed-only versions do not fail the check.
+- Every active flow activation must resolve the activation's trigger node, driver, and source. The trigger node type is read from the activation's immutable pinned version and `trigger_node_id`; driver/source routing comes from the activation snapshot.
+- Every version pinned by a live `pending`, `running`, `waiting`, or `blocked` run must have a structurally usable graph and every executable downstream type must resolve. For trigger-origin runs it also resolves the pinned start trigger node and derives that node's driver/source against the pinned config. Completed-only historical versions are ignored.
 
-When renaming a type, register the replacement and map every historical type directly to it:
+For manual and sub-flow live runs, Nodeflow bypasses trigger matching, so those origins do not keep the trigger node/driver/source registrations alive by themselves. Their executable downstream types are still required. If one pinned version has both a trigger-origin live run and a manual or sub-flow live run, the trigger-origin run makes the trigger components required.
 
-```php
-// Partial snippet: App\Providers\NodeflowServiceProvider::boot().
+Success exits `0` and prints exactly:
 
-Nodeflow::register([\App\Nodeflow\Nodes\SendOrderReceipt::class]);
-Nodeflow::nodes()->alias('shop.send_receipt', 'shop.send_order_receipt');
+```text
+All active trigger and live-run component registrations resolve.
 ```
 
-Aliases are one hop. Do not chain aliases, and do not remove the replacement class until no live version references it.
+A failure exits `1` and writes one deterministic line per issue. After the `Nodeflow health check failed:` prefix, every issue includes the exact identity `flow {flowId} version {versionId} node {nodeId}`. Malformed graph/trigger metadata tells the operator to restore the pinned version metadata. Missing registrations include their stable keys and one of these remedies:
+
+```php
+Nodeflow::registerTriggerNodes([\App\Nodeflow\Triggers\OrderTrigger::class]);
+Nodeflow::registerTriggerDrivers([\App\Nodeflow\TriggerDrivers\OrderDriver::class]);
+Nodeflow::registerTriggerSources([\App\Nodeflow\TriggerSources\OrderSource::class]);
+```
+
+Trigger registries have no alias API. Restore or re-register the exact trigger node, driver, or source required by an active activation or trigger-origin live run.
+
+Executable nodes do support a direct alias. When a pinned graph names a retired executable type, register the replacement class first and map the old type directly to its current canonical type:
+
+```php
+Nodeflow::register([\App\Nodeflow\Nodes\SendOrderReceipt::class]);
+Nodeflow::nodes()->alias('old.type', 'current.type');
+```
+
+The facade call above invokes `NodeRegistry::alias('old.type', 'current.type')`, which is also the remediation form printed by the health check.
+
+Aliases are one hop. Do not chain aliases, and keep the replacement registered until no live version references the old type.
 
 ## Optional boot-time scan
 
-Set `nodeflow.check_node_types_on_boot` to `true` to scan live versions during application boot. It defaults to `false` to avoid the query cost on every web request.
+Set `nodeflow.check_node_types_on_boot` to `true` to run the same trigger-aware resolver once per PHP process. It defaults to `false` to avoid the database query cost on every process startup. The package schedules the scan through Laravel's `booted` callback, after all application providers have had an opportunity to register drivers, nodes, and sources.
 
-When enabled, unresolved live types produce one error log line per type beginning `Unresolvable nodeflow type:`. An exception while checking produces a warning beginning `Could not verify nodeflow node types at boot:`; the application does not fail boot in either case. The service provider has a static once-per-process guard, so a long-lived worker process checks only once after it starts.
-
-This is a startup diagnostic, not a replacement for a deploy gate. A worker can remain alive across a code change, and a web process might not boot at the moment a bad release is introduced.
+Each issue is logged as an error beginning `Unresolvable nodeflow type:`. An exception while querying or resolving is logged as a warning beginning `Could not verify nodeflow node types at boot:`. Neither condition fails application boot. A long-lived process checks only once, so use the Artisan command—not a boot log—as the authoritative deploy gate.
 
 ## Use a deploy sequence
 
-1. Deploy migrations once before bringing up code that needs them.
-2. Deploy the new application code with every live node type or a direct alias.
+1. Apply the Nodeflow migrations needed by the released code.
+2. Deploy code that registers every active trigger component and live executable type, including direct executable aliases for renamed types.
 3. Run `php artisan nodeflow:install --check` and `php artisan nodeflow:check-node-types` from the release.
 4. Run `php artisan workflow:v2:doctor --strict` to validate the durable engine's database, queue, cache, and codec capabilities.
 5. Restart or roll workers, then inspect worker logs and an authorized run view.
 
-The durable doctor is dependency-specific. It also reports matching-role and topology information, and `--strict` fails only on its required backend capabilities; it does not know Nodeflow's registered node types or frontend wiring.
+The durable doctor is dependency-specific. It does not know Nodeflow's graph registrations, trigger activations, or frontend wiring.
 
 ## Next step
 

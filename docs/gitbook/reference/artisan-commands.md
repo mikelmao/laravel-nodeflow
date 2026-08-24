@@ -55,7 +55,9 @@ nodeflow:make-trigger {name}
     {--force|-f : Overwrite the trigger node if it exists}
 ```
 
-**Outcome:** generates a `TriggerNode` subclass in `app/Nodeflow/Triggers`, using `stubs/trigger-node.stub` when the host supplies it. The required driver must already be registered. The type defaults from the name when omitted, must use the stable graph-key grammar, must not use the reserved `core.` prefix, and cannot collide with executable or trigger types. Safe provider editing appends it to `$triggerNodes`; otherwise the command prints `Nodeflow::registerTriggerNodes(...)` for manual registration.
+**Outcome:** generates a `TriggerNode` subclass in `app/Nodeflow/Triggers`, using `stubs/trigger-node.stub` when the host supplies it. The required driver key must use `[a-z][a-z0-9._-]*`, fit 191 bytes, and already be registered; `manual` and `subflow` are run origins, not registered trigger drivers. The graph type uses the same grammar with a 255-byte limit, defaults from the class basename when omitted, may not use the package-reserved `core.` prefix, and may not collide in the shared executable/trigger graph catalog. The command also refuses unsafe PHP names, path traversal, a loaded generated class, and an occupied output path without `--force`.
+
+Safe provider editing appends the class to `$triggerNodes`. A missing or structurally ambiguous provider/anchor uses the manual registration fallback, leaves the provider unchanged, writes the verified class, and exits `0`. A real generation/provider write failure rolls back the class and provider bytes and exits `1`; generation is an atomic generation transaction rather than a best-effort pair of writes.
 
 ```bash
 php artisan nodeflow:make-trigger PartnerWebhook \
@@ -73,7 +75,9 @@ nodeflow:make-trigger-source {name}
     {--force|-f : Overwrite the source if it exists}
 ```
 
-**Outcome:** generates a host allowlist source, selects the specialized interface and typed payload guard for each built-in driver, and appends it to `$triggerSources` when safe. `--model` is required for `model`; `--event` is required for `event`; those two options are rejected for nonmatching drivers. A source key is unique within its driver and uses the 191-byte stable-key grammar.
+**Outcome:** generates `app/Nodeflow/TriggerSources/{Name}.php`, selects the specialized interface and typed payload guard for each built-in driver, and appends it to `$triggerSources` when safe. Driver and source keys use `[a-z][a-z0-9._-]*` with a 191-byte limit; the driver must already be registered, the source key may not use the package-reserved `core.` prefix, and `(driver, source)` must not collide in the source registry. `--model` is required for `model`; `--event` is required for `event`; each selector must name a compatible concrete class, and those options are rejected for nonmatching drivers. Unsafe PHP names, path traversal, loaded-class collisions, and occupied paths are refused before mutation.
+
+Safe provider editing appends to `$triggerSources`. If the provider or its unique structural anchor is unavailable, the manual registration fallback prints the exact facade call, leaves the provider unchanged, writes the verified source, and exits `0`. A true filesystem/provider failure restores every changed file and exits `1`.
 
 ```bash
 php artisan nodeflow:make-trigger-source FloodAlertSource \
@@ -89,7 +93,9 @@ nodeflow:make-trigger-driver {name}
     {--force|-f : Overwrite the complete extension kit}
 ```
 
-**Outcome:** atomically generates a driver, a reference trigger node, and a Pest registration test. The reference node type is `{key}.trigger`. Provider editing registers driver then node; a manual fallback prints those two facade calls in the same order. `--force` applies to the complete kit, not one file.
+**Outcome:** generates one kit: `app/Nodeflow/TriggerDrivers/{Name}.php`, `app/Nodeflow/Triggers/{Name}Trigger.php`, and `tests/Feature/Nodeflow/TriggerDrivers/{Name}Test.php`. The driver key uses `[a-z][a-z0-9._-]*` with a 191-byte limit. Built-in keys `webhook`, `model`, and `event`, run-origin keys `manual` and `subflow`, and the `core.` prefix are reserved. The derived reference graph type `{key}.trigger` must fit the 255-byte graph-type limit. A class, path, registry, or shared graph-catalog collision aborts before mutation.
+
+All three artifacts and provider registration are one atomic generation transaction. Provider editing registers driver then node. When safe automatic editing cannot prove both homes, the manual registration fallback prints those two facade calls in the same order, leaves the provider unchanged, and still writes the complete kit. A real write or verification failure rolls back every kit artifact and provider change. `--force` applies to the complete kit, never one artifact in isolation.
 
 ```bash
 php artisan nodeflow:make-trigger-driver QueueTriggerDriver --key=queue

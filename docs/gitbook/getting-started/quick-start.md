@@ -42,14 +42,14 @@ php artisan nodeflow:make-trigger-source OrderPlacedSource \
   --event='App\Events\OrderPlaced'
 ```
 
-Implement the generated source using the complete Laravel event example in [Writing triggers](../building-automations/writing-triggers.md#laravel-event-source). In the host provider, keep the registration arrays explicit:
+The generator writes `app/Nodeflow/TriggerSources/OrderPlacedSource.php` in the `App\Nodeflow\TriggerSources` namespace. Keep that generated path and namespace while implementing its methods from the complete Laravel event example in [Writing triggers](../building-automations/writing-triggers.md#laravel-event-source). In the host provider, keep the registration arrays explicit:
 
 ```php
 <?php
 
 namespace App\Providers;
 
-use App\Nodeflow\Triggers\OrderPlacedSource;
+use App\Nodeflow\TriggerSources\OrderPlacedSource;
 use Illuminate\Support\ServiceProvider;
 use Nodeflow\Nodeflow;
 

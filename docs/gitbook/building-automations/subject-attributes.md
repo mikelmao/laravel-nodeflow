@@ -24,7 +24,7 @@ When the generated provider has exactly one `subjectAttributes()` registration h
 
 **File: `app/Providers/NodeflowServiceProvider.php` (partial `subjectAttributes()` method)**
 
-Add the imports below to the existing generated provider. Keep its resolver bindings, `$nodes` and `$triggers` arrays, `boot()` registrations, and authorization gates; this method supplements that provider and does not replace it.
+Add the imports below to the existing generated provider. Keep its resolver bindings, `$nodes`, `$triggerDrivers`, `$triggerNodes`, and `$triggerSources` arrays, their `boot()` registrations in driver → node → source order, and the authorization gates. This method supplements that provider and does not replace it.
 
 ```php
 use App\Models\Resident;

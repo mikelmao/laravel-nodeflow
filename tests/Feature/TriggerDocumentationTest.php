@@ -1,5 +1,8 @@
 <?php
 
+use Nodeflow\Console\MakeTriggerSourceCommand;
+use Nodeflow\Triggers\Webhook\WebhookSourceRejected;
+
 function triggerDocumentationFiles(): array
 {
     $root = dirname(__DIR__, 2);
@@ -28,6 +31,11 @@ function triggerDocumentationCorpus(): string
     ));
 }
 
+function triggerDocumentationPage(string $relative): string
+{
+    return (string) file_get_contents(dirname(__DIR__, 2).'/docs/gitbook/'.$relative);
+}
+
 function markdownHeadingAnchors(string $contents): array
 {
     preg_match_all('/^#{1,6}\s+(.+?)\s*#*$/m', $contents, $matches);
@@ -54,6 +62,8 @@ function markdownHeadingAnchors(string $contents): array
 
 it('documents the complete first-class trigger surface without the removed trigger API', function () {
     $docs = triggerDocumentationCorpus();
+    // Build removed names from fragments so the exact repository inventory does
+    // not report the regression test that enforces their absence.
     $removed = [
         'trigger'.'_type',
         'trigger'.'_config',
@@ -79,6 +89,106 @@ it('documents the complete first-class trigger surface without the removed trigg
         ->not->toContain($removed[2])
         ->not->toContain($removed[3])
         ->not->toContain($removed[4]);
+});
+
+it('documents the webhook source rejection boundary with the public exception', function () {
+    $docs = triggerDocumentationPage('building-automations/writing-triggers.md');
+    preg_match('/## Webhook source.*?```php\s*\n(<\?php.*?)(?=\n```)/s', $docs, $snippet);
+    token_get_all($snippet[1], TOKEN_PARSE);
+    eval(substr($snippet[1], strlen('<?php')));
+
+    $resolve = new ReflectionMethod(App\Nodeflow\Triggers\OrderWebhookSource::class, 'resolve');
+    $parameters = $resolve->getParameters();
+    $rejection = new WebhookSourceRejected('safe rejection');
+
+    expect(is_a(WebhookSourceRejected::class, RuntimeException::class, true))->toBeTrue()
+        ->and($rejection->getMessage())->toBe('safe rejection')
+        ->and($parameters)->toHaveCount(2)
+        ->and((string) $parameters[0]->getType())->toBe(Nodeflow\Triggers\TriggerOccurrence::class)
+        ->and((string) $parameters[1]->getType())->toBe('array')
+        ->and((string) $resolve->getReturnType())->toBe(Nodeflow\Triggers\TriggerMatch::class)
+        ->and($docs)->toContain('use Nodeflow\\Triggers\\Webhook\\WebhookSourceRejected;')
+        ->toContain("throw new WebhookSourceRejected('The webhook payload is incomplete.');")
+        ->toContain('Explicit source rejection is a payload-level `422`')
+        ->toContain('`InvalidArgumentException` and every other unexpected source exception')
+        ->toContain('sanitized `503`')
+        ->toContain('never include the raw payload');
+});
+
+it('documents the current trigger-aware node type health check', function () {
+    $docs = triggerDocumentationPage('operations/health-checks.md');
+
+    expect($docs)->toContain('active flow activation')
+        ->toContain('trigger node, driver, and source')
+        ->toContain('flow {flowId} version {versionId} node {nodeId}')
+        ->toContain('Nodeflow health check failed:')
+        ->toContain('All active trigger and live-run component registrations resolve.')
+        ->toContain('manual and sub-flow live runs')
+        ->toContain('Nodeflow::registerTriggerNodes')
+        ->toContain('Nodeflow::registerTriggerDrivers')
+        ->toContain('Nodeflow::registerTriggerSources')
+        ->toContain("NodeRegistry::alias('old.type', 'current.type')")
+        ->not->toContain('All node types referenced by live runs resolve.')
+        ->not->toContain('Unresolvable node type: version');
+});
+
+it('keeps the quick-start source namespace aligned with the generator', function () {
+    $command = app(MakeTriggerSourceCommand::class);
+    $namespace = new ReflectionMethod($command, 'getDefaultNamespace');
+    $generatedNamespace = $namespace->invoke($command, 'App');
+    $docs = triggerDocumentationPage('getting-started/quick-start.md');
+
+    expect($generatedNamespace)->toBe('App\\Nodeflow\\TriggerSources')
+        ->and($docs)->toContain('`app/Nodeflow/TriggerSources/OrderPlacedSource.php`')
+        ->toContain('`App\\Nodeflow\\TriggerSources`')
+        ->and($docs)->toContain('use App\\Nodeflow\\TriggerSources\\OrderPlacedSource;')
+        ->not->toContain('use App\\Nodeflow\\Triggers\\OrderPlacedSource;');
+});
+
+it('keeps the flood example setup consistent with the trigger-first walkthrough', function () {
+    $docs = triggerDocumentationPage('example-application/application-setup.md');
+
+    expect($docs)->toContain('Nodeflow::routes();')
+        ->toContain('Continue with [Flood-alert workflow](flood-alert-workflow.md)')
+        ->not->toContain('FloodAlertFlowController')
+        ->not->toContain('conversion listener')
+        ->not->toContain('follow-up wait')
+        ->not->toContain('conversion cancellation');
+});
+
+it('uses only current source and provider diagnostics throughout current docs', function () {
+    $docs = triggerDocumentationCorpus();
+    $removed = [
+        'matches'.'Config(',
+        '`event'.'()`',
+        '$'.'triggers arrays',
+    ];
+
+    expect($docs)->toContain('eventClass()')
+        ->toContain('snapshot()')
+        ->toContain('resolve()')
+        ->toContain('immutable activation')
+        ->toContain('nodeflow:check-node-types')
+        ->not->toContain($removed[0])
+        ->not->toContain($removed[1])
+        ->not->toContain($removed[2]);
+});
+
+it('documents trigger authoring responsibilities and generator safety limits accurately', function () {
+    $contracts = triggerDocumentationPage('reference/contracts.md');
+    $commands = triggerDocumentationPage('reference/artisan-commands.md');
+
+    expect($contracts)->toContain('`AbstractTriggerNode` owns the node-level fields')
+        ->toContain('`TriggerDefinitionContext` snapshots')
+        ->toContain('`GraphValidator` combines')
+        ->toContain('`CompileTriggerActivation` independently')
+        ->and($commands)->toContain('`[a-z][a-z0-9._-]*`')
+        ->toContain('191')
+        ->toContain('255')
+        ->toContain('`manual` and `subflow`')
+        ->toContain('class, path, registry, or shared graph-catalog collision')
+        ->toContain('atomic generation transaction')
+        ->toContain('manual registration fallback');
 });
 
 it('provides complete host source and extension examples', function () {
