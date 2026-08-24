@@ -12,6 +12,7 @@ class TriggerOccurrenceDispatcher
         private readonly TriggerActivationRepository $activations,
         private readonly TriggerSourceRegistry $sources,
         private readonly TriggerRunStarter $runs,
+        private readonly TriggerActivationSnapshotComparator $snapshots,
     ) {}
 
     /** @return Run[] */
@@ -19,16 +20,17 @@ class TriggerOccurrenceDispatcher
     {
         try {
             $source = $this->sources->resolve($occurrence->driver, $occurrence->source);
-            $activations = $occurrence->activations
+            $candidates = $occurrence->activations
                 ?? $this->activations->forDriverSource(
                     $occurrence->driver,
                     $occurrence->source,
                     $occurrence->qualifier,
                 );
+            $activations = $this->normalizeCandidates($candidates);
         } catch (Throwable $e) {
             $this->reportSafely($e);
 
-            return [];
+            throw $e;
         }
 
         $started = [];
@@ -50,6 +52,60 @@ class TriggerOccurrenceDispatcher
         }
 
         return $started;
+    }
+
+    /**
+     * @param  array<mixed>  $candidates
+     * @return TriggerActivationSnapshot[]
+     */
+    private function normalizeCandidates(array $candidates): array
+    {
+        $normalized = [];
+        $byActivationId = [];
+        $byLogicalTuple = [];
+
+        foreach ($candidates as $candidate) {
+            if (! $candidate instanceof TriggerActivationSnapshot) {
+                throw new InvalidArgumentException(
+                    'Every trigger occurrence activation candidate must be a trigger activation snapshot.'
+                );
+            }
+
+            $activationKey = (string) $candidate->activationId;
+            $tupleKey = $candidate->flowVersionId
+                ."\0".strlen($candidate->triggerNodeId)
+                ."\0".$candidate->triggerNodeId;
+
+            if (isset($byActivationId[$activationKey])) {
+                if (! $this->snapshots->sameSnapshot($byActivationId[$activationKey], $candidate)) {
+                    throw new InvalidArgumentException(
+                        "Conflicting trigger activation snapshots share activation ID [{$candidate->activationId}]."
+                    );
+                }
+
+                continue;
+            }
+
+            if (isset($byLogicalTuple[$tupleKey])) {
+                $existing = $byLogicalTuple[$tupleKey];
+
+                if (! $this->snapshots->sameLogicalSnapshot($existing, $candidate)) {
+                    throw new InvalidArgumentException(
+                        'Conflicting trigger activation snapshots share a flow-version and trigger-node tuple.'
+                    );
+                }
+
+                $byActivationId[$activationKey] = $existing;
+
+                continue;
+            }
+
+            $normalized[] = $candidate;
+            $byActivationId[$activationKey] = $candidate;
+            $byLogicalTuple[$tupleKey] = $candidate;
+        }
+
+        return $normalized;
     }
 
     private function assertCoherent(

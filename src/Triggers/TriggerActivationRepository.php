@@ -55,7 +55,8 @@ class TriggerActivationRepository
                 '=',
                 'nodeflow_trigger_activations.flow_id',
             )
-            ->where('activation_flows.status', 'active');
+            ->where('activation_flows.status', 'active')
+            ->orderBy('nodeflow_trigger_activations.id');
     }
 
     private function snapshot(TriggerActivation $activation): TriggerActivationSnapshot

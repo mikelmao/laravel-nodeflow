@@ -3,6 +3,7 @@
 use Illuminate\Contracts\Debug\ExceptionHandler;
 use Nodeflow\Contracts\TenantResolver;
 use Nodeflow\Contracts\TriggerSource;
+use Nodeflow\Engine\WorkflowEngine;
 use Nodeflow\Models\Flow;
 use Nodeflow\Models\Run;
 use Nodeflow\Publishing\PublishFlow;
@@ -180,19 +181,59 @@ it('uses supplied snapshots without repository lookup and enforces their routing
     $mismatched = snapshotWith($snapshot, source: 'test.returns');
     $wrongQualifier = snapshotWith($snapshot, qualifier: 'different');
 
-    $runs = app(TriggerOccurrenceDispatcher::class)->dispatch(new TriggerOccurrence(
+    $dispatcher = app(TriggerOccurrenceDispatcher::class);
+    $occurrence = fn (TriggerActivationSnapshot $activation) => new TriggerOccurrence(
         'test.fake',
         'test.orders',
         ['tenant_id' => 'org-1', 'subject_id' => '42', 'occurrence_id' => 'supplied-1'],
-        activations: [$mismatched, $wrongQualifier, $snapshot],
-    ));
+        activations: [$activation],
+    );
 
-    expect($runs)->toHaveCount(1)
+    $sourceMismatch = $dispatcher->dispatch($occurrence($mismatched));
+    $qualifierMismatch = $dispatcher->dispatch($occurrence($wrongQualifier));
+    $runs = $dispatcher->dispatch($occurrence($snapshot));
+
+    expect($sourceMismatch)->toBe([])
+        ->and($qualifierMismatch)->toBe([])
+        ->and($runs)->toHaveCount(1)
         ->and(Run::withoutTenancy()->count())->toBe(1)
         ->and($reported->reported)->toHaveCount(2)
         ->and($reported->reported[0])->toBeInstanceOf(InvalidArgumentException::class)
         ->and($reported->reported[0]->getMessage())->toContain('source')
         ->and($reported->reported[1]->getMessage())->toContain('qualifier');
+});
+
+it('rejects a supplied snapshot whose routing metadata contradicts its pinned graph', function () {
+    app(TriggerSourceRegistry::class)->register(AlternateFakeTriggerSource::class);
+    publishCustomTriggerFlow('org-1', 'Pinned authority', 'test.orders', ['account' => 'retail']);
+    $snapshot = app(TriggerActivationRepository::class)
+        ->forDriverSource('test.fake', 'test.orders')[0];
+    $forged = new TriggerActivationSnapshot(
+        activationId: 999_999,
+        flowId: $snapshot->flowId,
+        flowVersionId: $snapshot->flowVersionId,
+        tenantId: $snapshot->tenantId,
+        driver: 'test.fake',
+        source: 'test.returns',
+        qualifier: null,
+        triggerNodeId: $snapshot->triggerNodeId,
+        descriptor: ['account' => 'forged'],
+    );
+    $reported = captureReportedExceptions();
+
+    $runs = app(TriggerOccurrenceDispatcher::class)->dispatch(new TriggerOccurrence(
+        'test.fake',
+        'test.returns',
+        ['tenant_id' => 'org-1', 'subject_id' => '42', 'occurrence_id' => 'forged-1'],
+        activations: [$forged],
+    ));
+
+    expect($runs)->toBe([])
+        ->and(Run::withoutTenancy()->count())->toBe(0)
+        ->and(app(WorkflowEngine::class)->started())->toBe([])
+        ->and($reported->reported)->toHaveCount(1)
+        ->and($reported->reported[0])->toBeInstanceOf(InvalidArgumentException::class)
+        ->and($reported->reported[0]->getMessage())->toContain('pinned graph');
 });
 
 it('repository dispatch ignores inactive activations', function () {
@@ -254,6 +295,115 @@ it('uses the last immutable match for a duplicate tenant and ignores other tenan
         ->and($runs[0]->subjects()->pluck('subject_id')->all())->toBe(['3']);
 });
 
+it('deduplicates exact supplied candidates before resolving or starting them', function () {
+    publishCustomTriggerFlow('org-1', 'Duplicate candidate', 'test.orders', [
+        'filters' => ['country' => 'RO', 'tier' => 'gold'],
+        'steps' => [['field' => 'email', 'operator' => 'present']],
+    ]);
+    $snapshot = app(TriggerActivationRepository::class)
+        ->forDriverSource('test.fake', 'test.orders')[0];
+    $resolutions = 0;
+    FakeTriggerSource::$resolver = function () use (&$resolutions): TriggerMatch {
+        $resolutions++;
+
+        return TriggerMatch::make()->forTenant('org-1', 'user', ['1']);
+    };
+
+    $sameLogicalSnapshot = new TriggerActivationSnapshot(
+        activationId: $snapshot->activationId + 100,
+        flowId: $snapshot->flowId,
+        flowVersionId: $snapshot->flowVersionId,
+        tenantId: $snapshot->tenantId,
+        driver: $snapshot->driver,
+        source: $snapshot->source,
+        qualifier: $snapshot->qualifier,
+        triggerNodeId: $snapshot->triggerNodeId,
+        descriptor: [
+            'steps' => [['operator' => 'present', 'field' => 'email']],
+            'filters' => ['tier' => 'gold', 'country' => 'RO'],
+        ],
+    );
+
+    $runs = app(TriggerOccurrenceDispatcher::class)->dispatch(new TriggerOccurrence(
+        'test.fake', 'test.orders', [], activations: [$snapshot, $snapshot, $sameLogicalSnapshot],
+    ));
+
+    expect($runs)->toHaveCount(1)
+        ->and($resolutions)->toBe(1)
+        ->and(Run::withoutTenancy()->count())->toBe(1)
+        ->and(app(WorkflowEngine::class)->started())->toHaveCount(1);
+});
+
+it('rejects conflicting supplied candidates as one occurrence-level failure before fan-out', function () {
+    publishCustomTriggerFlow('org-1', 'Conflicting candidate', 'test.orders', [
+        'sequence' => ['first', 'second'],
+    ]);
+    $snapshot = app(TriggerActivationRepository::class)
+        ->forDriverSource('test.fake', 'test.orders')[0];
+    $sameIdConflict = snapshotWith($snapshot, source: 'test.conflict');
+    $tupleConflict = new TriggerActivationSnapshot(
+        activationId: $snapshot->activationId + 100,
+        flowId: $snapshot->flowId,
+        flowVersionId: $snapshot->flowVersionId,
+        tenantId: 'org-2',
+        driver: $snapshot->driver,
+        source: $snapshot->source,
+        qualifier: $snapshot->qualifier,
+        triggerNodeId: $snapshot->triggerNodeId,
+        descriptor: $snapshot->descriptor,
+    );
+    $listOrderConflict = new TriggerActivationSnapshot(
+        activationId: $snapshot->activationId + 101,
+        flowId: $snapshot->flowId,
+        flowVersionId: $snapshot->flowVersionId,
+        tenantId: $snapshot->tenantId,
+        driver: $snapshot->driver,
+        source: $snapshot->source,
+        qualifier: $snapshot->qualifier,
+        triggerNodeId: $snapshot->triggerNodeId,
+        descriptor: ['sequence' => ['second', 'first']],
+    );
+    $resolutions = 0;
+    FakeTriggerSource::$resolver = function () use (&$resolutions): TriggerMatch {
+        $resolutions++;
+
+        return TriggerMatch::make()->forTenant('org-1', 'user', ['1']);
+    };
+    $reported = captureReportedExceptions();
+
+    foreach ([
+        [$snapshot, $sameIdConflict],
+        [$snapshot, $tupleConflict],
+        [$snapshot, $listOrderConflict],
+    ] as $candidates) {
+        expect(fn () => app(TriggerOccurrenceDispatcher::class)->dispatch(new TriggerOccurrence(
+            'test.fake', 'test.orders', [], activations: $candidates,
+        )))->toThrow(InvalidArgumentException::class, 'Conflicting trigger activation snapshots');
+    }
+
+    expect($resolutions)->toBe(0)
+        ->and(Run::withoutTenancy()->count())->toBe(0)
+        ->and(app(WorkflowEngine::class)->started())->toBe([])
+        ->and($reported->reported)->toHaveCount(3);
+});
+
+it('rejects malformed supplied candidates before resolving any source match', function () {
+    $reported = captureReportedExceptions();
+    $resolutions = 0;
+    FakeTriggerSource::$resolver = function () use (&$resolutions): TriggerMatch {
+        $resolutions++;
+
+        return TriggerMatch::make();
+    };
+
+    expect(fn () => app(TriggerOccurrenceDispatcher::class)->dispatch(new TriggerOccurrence(
+        'test.fake', 'test.orders', [], activations: ['not-a-snapshot'],
+    )))->toThrow(InvalidArgumentException::class, 'snapshot');
+
+    expect($resolutions)->toBe(0)
+        ->and($reported->reported)->toHaveCount(1);
+});
+
 it('isolates source resolution failures per activation descriptor', function () {
     publishCustomTriggerFlow('org-1', 'Broken descriptor', 'test.orders', ['mode' => 'fail']);
     publishCustomTriggerFlow('org-2', 'Healthy descriptor', 'test.orders', ['mode' => 'ok']);
@@ -276,17 +426,86 @@ it('isolates source resolution failures per activation descriptor', function () 
         ->and($reported->reported[0]->getMessage())->toBe('source descriptor failed');
 });
 
-it('reports an unknown source once at the occurrence boundary', function () {
+it('reports and rethrows an unknown source at the occurrence boundary', function () {
+    $reported = captureReportedExceptions(throwWhileReporting: true);
+    $caught = null;
+
+    try {
+        app(TriggerOccurrenceDispatcher::class)->dispatch(new TriggerOccurrence(
+            'test.fake', 'test.unknown', [], activations: [],
+        ));
+    } catch (Throwable $exception) {
+        $caught = $exception;
+    }
+
+    expect($caught)->toBeInstanceOf(RuntimeException::class)
+        ->and($caught->getMessage())->toContain('Unknown nodeflow trigger source')
+        ->and($reported->reported)->toHaveCount(1)
+        ->and($reported->reported[0])->toBe($caught);
+});
+
+it('reports and rethrows the original repository failure even when reporting fails', function () {
+    $failure = new RuntimeException('activation repository unavailable');
+    app()->instance(TriggerActivationRepository::class, new class($failure) extends TriggerActivationRepository
+    {
+        public function __construct(private readonly Throwable $failure) {}
+
+        public function forDriverSource(string $driver, string $source, ?string $qualifier = null): array
+        {
+            throw $this->failure;
+        }
+    });
+    $reported = captureReportedExceptions(throwWhileReporting: true);
+    $caught = null;
+
+    try {
+        app(TriggerOccurrenceDispatcher::class)->dispatch(new TriggerOccurrence(
+            'test.fake', 'test.orders', [],
+        ));
+    } catch (Throwable $exception) {
+        $caught = $exception;
+    }
+
+    expect($caught)->toBe($failure)
+        ->and($reported->reported)->toHaveCount(1)
+        ->and($reported->reported[0])->toBe($failure);
+});
+
+it('isolates malformed extension matches before creating a run', function (Closure $resolver, string $message) {
+    publishCustomTriggerFlow('org-1', 'Malformed match');
     $reported = captureReportedExceptions();
+    FakeTriggerSource::$resolver = $resolver;
 
     $runs = app(TriggerOccurrenceDispatcher::class)->dispatch(new TriggerOccurrence(
-        'test.fake', 'test.unknown', [], activations: [],
+        'test.fake', 'test.orders', [],
     ));
 
     expect($runs)->toBe([])
+        ->and(Run::withoutTenancy()->count())->toBe(0)
+        ->and(app(WorkflowEngine::class)->started())->toBe([])
         ->and($reported->reported)->toHaveCount(1)
-        ->and($reported->reported[0])->toBeInstanceOf(RuntimeException::class)
-        ->and($reported->reported[0]->getMessage())->toContain('Unknown nodeflow trigger source');
+        ->and($reported->reported[0])->toBeInstanceOf(InvalidArgumentException::class)
+        ->and($reported->reported[0]->getMessage())->toContain($message);
+})->with([
+    'blank tenant' => [fn () => TriggerMatch::make()->forTenant('  ', 'user', ['1']), 'tenant'],
+    'blank subject type' => [fn () => TriggerMatch::make()->forTenant('org-1', ' ', ['1']), 'subject type'],
+    'blank subject id' => [fn () => TriggerMatch::make()->forTenant('org-1', 'user', ['1', '  ']), 'subject ID'],
+    'blank occurrence id' => [fn () => TriggerMatch::make()->forTenant('org-1', 'user', ['1'], [], ' '), 'occurrence ID'],
+]);
+
+it('allows an explicitly empty extension audience to record an occurrence', function () {
+    publishCustomTriggerFlow('org-1', 'Empty audience');
+    FakeTriggerSource::$resolver = fn () => TriggerMatch::make()
+        ->forTenant('org-1', 'user', [], ['empty' => true], 'empty-occurrence');
+
+    $runs = app(TriggerOccurrenceDispatcher::class)->dispatch(new TriggerOccurrence(
+        'test.fake', 'test.orders', [],
+    ));
+
+    expect($runs)->toHaveCount(1)
+        ->and($runs[0]->subjects()->count())->toBe(0)
+        ->and($runs[0]->trigger_data)->toBe(['empty' => true])
+        ->and(app(WorkflowEngine::class)->started())->toHaveCount(1);
 });
 
 function publishCustomTriggerFlow(

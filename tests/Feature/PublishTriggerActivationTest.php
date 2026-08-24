@@ -755,6 +755,7 @@ it('returns pinned immutable snapshots in one query even if current version late
     $snapshots = app(TriggerActivationRepository::class)->forDriverSource('event', 'orders');
 
     expect($queries)->toHaveCount(1)
+        ->and(strtolower($queries[0]))->toContain('order by')
         ->and($snapshots)->toHaveCount(1)
         ->and($snapshots[0]->flowVersionId)->toBe($activation->flow_version_id)
         ->and($snapshots[0]->flowVersionId)->not->toBe($later->id)

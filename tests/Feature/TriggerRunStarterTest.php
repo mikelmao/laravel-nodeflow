@@ -116,23 +116,95 @@ it('rejects missing and mismatched activation version tuples', function (array $
     'wrong trigger node' => [['triggerNodeId' => 'other'], 'trigger'],
 ]);
 
-it('uses a fixed namespaced occurrence identity and leaves null occurrences non-idempotent', function () {
+it('rejects activation routing metadata that differs from the pinned graph descriptor', function (array $changes) {
+    $snapshot = new TriggerActivationSnapshot(
+        activationId: 999_999,
+        flowId: $this->snapshot->flowId,
+        flowVersionId: $this->snapshot->flowVersionId,
+        tenantId: $this->snapshot->tenantId,
+        driver: $changes['driver'] ?? $this->snapshot->driver,
+        source: $changes['source'] ?? $this->snapshot->source,
+        qualifier: $changes['qualifier'] ?? $this->snapshot->qualifier,
+        triggerNodeId: $this->snapshot->triggerNodeId,
+        descriptor: $changes['descriptor'] ?? $this->snapshot->descriptor,
+    );
+
+    expect(fn () => app(TriggerRunStarter::class)->start(
+        $snapshot,
+        new TriggerTenantMatch('org-1', 'user', ['1']),
+    ))->toThrow(InvalidArgumentException::class, 'pinned graph');
+
+    expect(Run::withoutTenancy()->count())->toBe(0)
+        ->and(app(WorkflowEngine::class)->started())->toBe([]);
+})->with([
+    'driver' => [['driver' => 'forged.driver']],
+    'source' => [['source' => 'forged.source']],
+    'qualifier' => [['qualifier' => 'forged-qualifier']],
+    'descriptor' => [['descriptor' => ['forged' => true]]],
+]);
+
+it('accepts recursively reordered descriptor object keys from JSON storage', function () {
+    $flow = Flow::create(['tenant_id' => 'org-1', 'name' => 'Reordered descriptor', 'status' => 'draft']);
+    $version = app(PublishFlow::class)->publish($flow, triggeredExitGraph('test.orders', [
+        'filters' => ['country' => 'RO', 'tier' => 'gold'],
+        'rules' => [['field' => 'email', 'operator' => 'present']],
+    ]))->version;
+    $activation = new TriggerActivationSnapshot(
+        activationId: 999_999,
+        flowId: $flow->id,
+        flowVersionId: $version->id,
+        tenantId: 'org-1',
+        driver: 'test.fake',
+        source: 'test.orders',
+        qualifier: null,
+        triggerNodeId: 'trigger',
+        descriptor: [
+            'rules' => [['operator' => 'present', 'field' => 'email']],
+            'filters' => ['tier' => 'gold', 'country' => 'RO'],
+        ],
+    );
+
+    $run = app(TriggerRunStarter::class)->start(
+        $activation,
+        new TriggerTenantMatch('org-1', 'user', ['1']),
+    );
+
+    expect($run->flow_version_id)->toBe($version->id)
+        ->and($run->engine_workflow_id)->not->toBeNull();
+});
+
+it('rejects descriptor value and list-order changes from the pinned graph', function (array $descriptor) {
+    $flow = Flow::create(['tenant_id' => 'org-1', 'name' => 'Changed descriptor', 'status' => 'draft']);
+    $version = app(PublishFlow::class)->publish($flow, triggeredExitGraph('test.orders', [
+        'mode' => 'strict',
+        'sequence' => ['first', 'second'],
+    ]))->version;
+    $activation = new TriggerActivationSnapshot(
+        activationId: 999_999,
+        flowId: $flow->id,
+        flowVersionId: $version->id,
+        tenantId: 'org-1',
+        driver: 'test.fake',
+        source: 'test.orders',
+        qualifier: null,
+        triggerNodeId: 'trigger',
+        descriptor: $descriptor,
+    );
+
+    expect(fn () => app(TriggerRunStarter::class)->start(
+        $activation,
+        new TriggerTenantMatch('org-1', 'user', ['1']),
+    ))->toThrow(InvalidArgumentException::class, 'pinned graph');
+})->with([
+    'changed scalar value' => [['mode' => 'relaxed', 'sequence' => ['first', 'second']]],
+    'changed list order' => [['mode' => 'strict', 'sequence' => ['second', 'first']]],
+]);
+
+it('uses a fixed occurrence identity and leaves null occurrences non-idempotent', function () {
     $match = new TriggerTenantMatch('org-1', 'user', ['1'], [], str_repeat('x', 1000));
     $first = app(TriggerRunStarter::class)->start($this->snapshot, $match);
     $retry = app(TriggerRunStarter::class)->start($this->snapshot, $match);
 
-    $otherSource = new TriggerActivationSnapshot(
-        activationId: 42,
-        flowId: $this->snapshot->flowId,
-        flowVersionId: $this->snapshot->flowVersionId,
-        tenantId: $this->snapshot->tenantId,
-        driver: $this->snapshot->driver,
-        source: 'test.other-source',
-        qualifier: null,
-        triggerNodeId: $this->snapshot->triggerNodeId,
-        descriptor: [],
-    );
-    $differentNamespace = app(TriggerRunStarter::class)->start($otherSource, $match);
     $withoutOccurrenceA = app(TriggerRunStarter::class)->start(
         $this->snapshot,
         new TriggerTenantMatch('org-1', 'user', ['1']),
@@ -144,11 +216,9 @@ it('uses a fixed namespaced occurrence identity and leaves null occurrences non-
 
     expect($retry->id)->toBe($first->id)
         ->and($first->idempotency_key)->toHaveLength(64)
-        ->and($differentNamespace->id)->not->toBe($first->id)
-        ->and($differentNamespace->idempotency_key)->not->toBe($first->idempotency_key)
         ->and($withoutOccurrenceA->idempotency_key)->toBeNull()
         ->and($withoutOccurrenceB->id)->not->toBe($withoutOccurrenceA->id)
-        ->and(app(WorkflowEngine::class)->started())->toHaveCount(4);
+        ->and(app(WorkflowEngine::class)->started())->toHaveCount(3);
 });
 
 it('length-prefixes idempotency components so delimiter bytes cannot alias identities', function () {
@@ -175,17 +245,14 @@ it('length-prefixes idempotency components so delimiter bytes cannot alias ident
         descriptor: [],
     );
 
-    $first = app(TriggerRunStarter::class)->start(
-        $firstSnapshot,
-        new TriggerTenantMatch('org-1', 'user', ['1'], [], 'd'),
-    );
-    $second = app(TriggerRunStarter::class)->start(
-        $secondSnapshot,
-        new TriggerTenantMatch('org-1', 'user', ['1'], [], "c\0d"),
-    );
+    $starter = app(TriggerRunStarter::class);
+    $method = new ReflectionMethod($starter, 'idempotencyKey');
+    $first = $method->invoke($starter, $firstSnapshot, 'd');
+    $second = $method->invoke($starter, $secondSnapshot, "c\0d");
 
-    expect($second->id)->not->toBe($first->id)
-        ->and($second->idempotency_key)->not->toBe($first->idempotency_key);
+    expect($first)->toHaveLength(64)
+        ->and($second)->toHaveLength(64)
+        ->and($second)->not->toBe($first);
 });
 
 it('allows an empty matched audience and still records the occurrence', function () {

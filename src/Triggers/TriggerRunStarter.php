@@ -17,6 +17,8 @@ class TriggerRunStarter
         private CreateRun $createRun,
         private GraphTypeCatalog $types,
         private TenantResolver $tenants,
+        private TriggerNodeRegistry $triggerNodes,
+        private TriggerActivationSnapshotComparator $snapshots,
     ) {}
 
     public function start(TriggerActivationSnapshot $activation, TriggerTenantMatch $match): Run
@@ -62,6 +64,8 @@ class TriggerRunStarter
             throw new InvalidArgumentException("Graph start node [{$triggerNodeId}] is not a trigger node.");
         }
 
+        $this->assertPinnedDescriptor($graph, $triggerNodeId, $activation);
+
         return $this->createRun->forVersion(
             $version,
             $match->subjectType,
@@ -74,6 +78,22 @@ class TriggerRunStarter
                 'idempotency_key' => $this->idempotencyKey($activation, $match->occurrenceId),
             ],
         );
+    }
+
+    private function assertPinnedDescriptor(
+        Graph $graph,
+        string $triggerNodeId,
+        TriggerActivationSnapshot $activation,
+    ): void {
+        $node = $graph->node($triggerNodeId);
+        $trigger = $this->triggerNodes->resolve($node['type']);
+        $descriptor = $trigger->compile($node['config'] ?? []);
+
+        if (! $this->snapshots->matchesDescriptor($activation, $descriptor)) {
+            throw new InvalidArgumentException(
+                'Trigger activation routing metadata does not match the descriptor compiled from its pinned graph.'
+            );
+        }
     }
 
     private function idempotencyKey(TriggerActivationSnapshot $activation, ?string $occurrenceId): ?string
