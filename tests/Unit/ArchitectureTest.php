@@ -1,6 +1,6 @@
 <?php
 
-it('confines the engine dependency to src/Engine and src/Workflows', function () {
+it('confines durable workflow imports to src/Engine and src/Workflows except the published activity policy adapter', function () {
     $offenders = [];
 
     $files = new RecursiveIteratorIterator(new RecursiveDirectoryIterator(__DIR__.'/../../src'));
@@ -13,6 +13,12 @@ it('confines the engine dependency to src/Engine and src/Workflows', function ()
         $path = str_replace('\\', '/', $file->getPathname());
 
         if (str_contains($path, '/src/Engine/') || str_contains($path, '/src/Workflows/')) {
+            continue;
+        }
+
+        // The immutable published-policy value is the sole Execution-level
+        // durable-options adapter required by Nodeflow's public API.
+        if (str_ends_with($path, '/src/Execution/NodeActivityPolicy.php')) {
             continue;
         }
 
