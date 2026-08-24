@@ -4,6 +4,7 @@ namespace Nodeflow\Http\Controllers;
 
 use Illuminate\Foundation\Auth\Access\AuthorizesRequests;
 use Illuminate\Http\JsonResponse;
+use Illuminate\Http\Request;
 use Illuminate\Routing\Controller;
 use Nodeflow\Models\Flow;
 use Nodeflow\Triggers\Webhook\WebhookCredentials;
@@ -12,10 +13,18 @@ class WebhookSecretController extends Controller
 {
     use AuthorizesRequests;
 
-    public function __invoke(Flow $flow, WebhookCredentials $credentials): JsonResponse
+    public function __invoke(Request $request): JsonResponse
     {
+        $flow = $request->route('flow');
+
+        if (! $flow instanceof Flow) {
+            $flow = (new Flow)->resolveRouteBinding($flow);
+        }
+
+        abort_unless($flow instanceof Flow, 404);
+
         $this->authorize('update', $flow);
-        $rotated = $credentials->rotate($flow);
+        $rotated = app(WebhookCredentials::class)->rotate($flow);
 
         $response = response()->json([
             'secret' => $rotated['secret'],

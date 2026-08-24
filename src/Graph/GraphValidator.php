@@ -322,15 +322,7 @@ class GraphValidator
             return;
         }
 
-        $reservedKeys = array_map(
-            fn ($field): string => $field->key,
-            $definition->fieldObjects(),
-        );
-        $sourceKeys = array_map(
-            fn ($field): string => $field->key,
-            $sourceDefinition->fieldObjects(),
-        );
-        $collisions = array_values(array_intersect($reservedKeys, $sourceKeys));
+        $collisions = $definition->collidingFieldKeys($sourceDefinition);
 
         foreach ($collisions as $field) {
             $message = "The source field [{$field}] collides with a reserved trigger field.";
@@ -342,10 +334,10 @@ class GraphValidator
             try {
                 $fieldErrors = $this->mergeFieldErrors(
                     $fieldErrors,
-                    Validator::make($config, array_merge(
-                        $definition->rules(),
-                        $sourceDefinition->rules(),
-                    ))->errors()->toArray(),
+                    Validator::make(
+                        $config,
+                        $definition->combinedWith($sourceDefinition)->rules(),
+                    )->errors()->toArray(),
                 );
             } catch (Throwable) {
                 $this->addTriggerError(

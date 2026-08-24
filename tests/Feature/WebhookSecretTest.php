@@ -1,6 +1,7 @@
 <?php
 
 use Illuminate\Foundation\Auth\User;
+use Illuminate\Routing\RouteCollection;
 use Illuminate\Support\Facades\Gate;
 use Illuminate\Support\Facades\Route;
 use Nodeflow\Contracts\TenantResolver;
@@ -82,6 +83,27 @@ it('rotates a webhook secret and returns the plaintext only once', function () {
         ->and($response->json('secret'))->toHaveLength(64)
         ->and($endpoint->fresh()->signing_secret)->toBe($response->json('secret'))
         ->and($endpoint->fresh()->toArray())->not->toHaveKey('signing_secret');
+});
+
+it('rotates through a host parameterized domain route', function () {
+    Gate::define('nodeflow.update', fn () => true);
+    $flow = Flow::create(['name' => 'Domain rotation', 'status' => 'draft']);
+    WebhookEndpoint::create([
+        'flow_id' => $flow->id,
+        'token' => str_repeat('d', 64),
+        'signing_secret' => 'old-secret',
+    ]);
+    Route::setRoutes(new RouteCollection);
+    Route::middleware('web')
+        ->domain('{workspace}.example.test')
+        ->prefix('admin')
+        ->name('tenant.')
+        ->group(fn () => Nodeflow::routes());
+
+    $this->actingAs($this->user)
+        ->postJson("http://acme.example.test/admin/flows/{$flow->id}/webhook-secret/rotate")
+        ->assertOk()
+        ->assertJsonStructure(['secret', 'rotated_at']);
 });
 
 it('denies unauthorized rotation and 404s cross-tenant or missing endpoints', function () {
@@ -176,15 +198,15 @@ it('returns secret-free webhook endpoint metadata and a named rotation URL to th
 
     $response = secretManagementEditPage($this, "/nodeflow/flows/{$flow->id}/edit")
         ->assertOk()
-        ->assertJsonPath('props.webhook.url', $result->webhookUrl)
+        ->assertJsonPath('props.webhook.endpoint_url', $result->webhookUrl)
         ->assertJsonPath('props.webhook.active', true)
         ->assertJsonPath('props.webhook.secret_rotated_at', $endpoint->secret_rotated_at?->toIso8601String())
         ->assertJsonPath(
-            'props.urls.webhook_secret_rotate',
+            'props.urls.rotate_webhook_secret',
             "http://localhost/nodeflow/flows/{$flow->id}/webhook-secret/rotate",
         );
 
-    expect(array_keys($response->json('props.webhook')))->toBe(['url', 'active', 'secret_rotated_at'])
+    expect(array_keys($response->json('props.webhook')))->toBe(['endpoint_url', 'active', 'secret_rotated_at'])
         ->and($response->getContent())->not->toContain('signing_secret', $result->webhookSecret);
 });
 
@@ -195,7 +217,7 @@ it('marks retained webhook metadata inactive after publishing another trigger', 
 
     secretManagementEditPage($this, "/nodeflow/flows/{$flow->id}/edit")
         ->assertOk()
-        ->assertJsonPath('props.webhook.url', $result->webhookUrl)
+        ->assertJsonPath('props.webhook.endpoint_url', $result->webhookUrl)
         ->assertJsonPath('props.webhook.active', false);
 });
 
@@ -209,9 +231,9 @@ it('resolves prefixed rotation routes while safely omitting an unresolvable publ
 
     secretManagementEditPage($this, "/admin/flows/{$flow->id}/edit")
         ->assertOk()
-        ->assertJsonPath('props.webhook.url', null)
+        ->assertJsonPath('props.webhook.endpoint_url', null)
         ->assertJsonPath(
-            'props.urls.webhook_secret_rotate',
+            'props.urls.rotate_webhook_secret',
             "http://localhost/admin/flows/{$flow->id}/webhook-secret/rotate",
         );
 });

@@ -16,6 +16,9 @@ use Nodeflow\Models\Flow;
 use Nodeflow\Nodes\NodeRegistry;
 use Nodeflow\Publishing\GraphInvalidException;
 use Nodeflow\Publishing\PublishFlow;
+use Nodeflow\Triggers\TriggerDriverRegistry;
+use Nodeflow\Triggers\TriggerNodeRegistry;
+use Nodeflow\Triggers\TriggerSourceRegistry;
 use Nodeflow\Triggers\Webhook\WebhookCredentials;
 use Nodeflow\Triggers\Webhook\WebhookTriggerDriver;
 
@@ -52,8 +55,11 @@ class FlowEditorController extends Controller
 
     private const FIELD_PLACEHOLDER = '__NODEFLOW_FIELD__';
 
-    public function edit(Request $request, Flow $flow): \Inertia\Response
+    private const SOURCE_PLACEHOLDER = '__NODEFLOW_SOURCE__';
+
+    public function edit(Request $request): \Inertia\Response
     {
+        $flow = $this->boundFlow($request);
         $this->authorize('update', $flow);
         $endpoint = $flow->webhookEndpoint()->first();
         $activation = $flow->triggerActivation()->first();
@@ -73,13 +79,18 @@ class FlowEditorController extends Controller
             'graph' => $flow->draft_graph
                 ?? $flow->currentVersion?->graph
                 ?? ['start' => '', 'nodes' => [], 'edges' => []],
-            'palette' => app(NodeRegistry::class)->palette(),
+            'palette' => array_map(
+                fn (array $definition): array => ['kind' => 'executable'] + $definition,
+                app(NodeRegistry::class)->palette(),
+            ),
+            'trigger_nodes' => app(TriggerNodeRegistry::class)->palette(),
+            'trigger_sources' => $this->triggerSources(),
             // Retained only as a compatibility-shaped array until the editor
             // consumes server-authored trigger-node metadata. There is no
             // mutable flow-level trigger registry behind it.
             'triggers' => [],
             'webhook' => $endpoint === null ? null : [
-                'url' => app(WebhookCredentials::class)->url($endpoint),
+                'endpoint_url' => app(WebhookCredentials::class)->url($endpoint),
                 'active' => $flow->status === 'active'
                     && $activation?->driver === WebhookTriggerDriver::key(),
                 'secret_rotated_at' => $endpoint->secret_rotated_at?->toIso8601String(),
@@ -88,27 +99,82 @@ class FlowEditorController extends Controller
             // The client must consume these resolved endpoints rather than revive
             // the prototype's hardcoded /nodeflow route assumptions.
             'urls' => [
-                'draft' => route($this->routeName($request, 'nodeflow.flows.draft', 'nodeflow.flows.edit'), ['flow' => $flow]),
-                'validate' => route(
-                    $this->routeName($request, 'nodeflow.flows.validate', 'nodeflow.flows.edit'),
+                'draft' => $this->editorUrl($request, 'nodeflow.flows.draft', ['flow' => $flow]),
+                'validate' => $this->editorUrl(
+                    $request,
+                    'nodeflow.flows.validate',
                     ['flow' => $flow],
                 ),
-                'publish' => route($this->routeName($request, 'nodeflow.flows.publish', 'nodeflow.flows.edit'), ['flow' => $flow]),
-                'webhook_secret_rotate' => route(
-                    $this->routeName($request, 'nodeflow.webhooks.secret.rotate', 'nodeflow.flows.edit'),
+                'publish' => $this->editorUrl($request, 'nodeflow.flows.publish', ['flow' => $flow]),
+                'rotate_webhook_secret' => $this->editorUrl(
+                    $request,
+                    'nodeflow.webhooks.secret.rotate',
                     ['flow' => $flow],
                 ),
-                'options' => route($this->routeName($request, 'nodeflow.fields.options', 'nodeflow.flows.edit'), [
+                'options' => $this->editorUrl($request, 'nodeflow.fields.options', [
                     'flow' => $flow,
                     'type' => self::TYPE_PLACEHOLDER,
                     'field' => self::FIELD_PLACEHOLDER,
                 ]),
+                'trigger_options' => $this->editorUrl(
+                    $request,
+                    'nodeflow.trigger-fields.options',
+                    [
+                        'flow' => $flow,
+                        'type' => self::TYPE_PLACEHOLDER,
+                        'field' => self::FIELD_PLACEHOLDER,
+                    ],
+                ),
+                'trigger_source_options' => $this->editorUrl(
+                    $request,
+                    'nodeflow.trigger-source-fields.options',
+                    [
+                        'flow' => $flow,
+                        'type' => self::TYPE_PLACEHOLDER,
+                        'source' => self::SOURCE_PLACEHOLDER,
+                        'field' => self::FIELD_PLACEHOLDER,
+                    ],
+                ),
             ],
         ]);
     }
 
-    public function draft(Request $request, Flow $flow): JsonResponse
+    /**
+     * Allowlisted source metadata grouped by stable driver key. Empty groups are
+     * intentional: built-in trigger nodes remain authorable before a host adds
+     * compatible sources, and the client can render that state without guessing.
+     */
+    private function triggerSources(): array
     {
+        $drivers = app(TriggerDriverRegistry::class);
+        $sources = app(TriggerSourceRegistry::class);
+        $grouped = array_fill_keys(array_keys($drivers->all()), []);
+
+        foreach ($grouped as $driver => $_) {
+            foreach ($sources->forDriver($driver) as $source) {
+                $definition = $source->definition();
+                $grouped[$driver][] = array_merge($definition->toArray(), [
+                    'key' => $source::key(),
+                    'driver' => $driver,
+                    'default_config' => $definition->defaultConfig(),
+                ]);
+            }
+        }
+
+        return $grouped;
+    }
+
+    private function editorUrl(Request $request, string $name, array $parameters): string
+    {
+        return route(
+            $this->routeName($request, $name, 'nodeflow.flows.edit'),
+            array_merge($request->route()?->parameters() ?? [], $parameters),
+        );
+    }
+
+    public function draft(Request $request): JsonResponse
+    {
+        $flow = $this->boundFlow($request);
         $this->authorize('update', $flow);
 
         $request->validate(array_merge($this->graphRules(), [
@@ -150,12 +216,13 @@ class FlowEditorController extends Controller
         return response()->json(['draft_revision' => $revision]);
     }
 
-    public function validate(Request $request, Flow $flow, GraphValidator $validator): JsonResponse
+    public function validate(Request $request): JsonResponse
     {
+        $flow = $this->boundFlow($request);
         $this->authorize('publish', $flow);
         $request->validate($this->graphRules());
 
-        $result = $validator->validate(Graph::fromArray($request->input('graph')));
+        $result = app(GraphValidator::class)->validate(Graph::fromArray($request->input('graph')));
         $body = [
             'valid' => $result->passes(),
             'warnings' => $result->warnings(),
@@ -172,8 +239,9 @@ class FlowEditorController extends Controller
         ], 422);
     }
 
-    public function publish(Request $request, Flow $flow): JsonResponse
+    public function publish(Request $request): JsonResponse
     {
+        $flow = $this->boundFlow($request);
         $this->authorize('publish', $flow);
 
         $request->validate($this->graphRules() + [
@@ -267,5 +335,18 @@ class FlowEditorController extends Controller
             // validation failure. Publish requires it; draft does not (see there).
             'graph.edges.*.output' => ['required', 'string'],
         ];
+    }
+
+    private function boundFlow(Request $request): Flow
+    {
+        $flow = $request->route('flow');
+
+        if (! $flow instanceof Flow) {
+            $flow = (new Flow)->resolveRouteBinding($flow);
+        }
+
+        abort_unless($flow instanceof Flow, 404);
+
+        return $flow;
     }
 }
