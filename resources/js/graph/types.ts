@@ -111,7 +111,7 @@ export type OverlaySnapshot = { status: string; terminal: boolean; nodes: Record
 
 // Source: RunViewController::show(). `version` is the pinned version, which may
 // be older than the flow's current one.
-export type RunSummary = { id: number; status: string; terminal: boolean; strategy: string; is_test: boolean; started_at: string | null; ended_at: string | null; error: string | null; version: number; flow: { id: number; name: string } }
+export type RunSummary = { id: number; status: string; terminal: boolean; strategy: string; is_test: boolean; started_via: string; trigger_node_id: string; started_at: string | null; ended_at: string | null; error: string | null; version: number; flow: { id: number; name: string } }
 
 // `subjects` carries the __NODEFLOW_NODE__ sentinel; the client substitutes it.
 export type RunUrls = { overlay: string; subjects: string }

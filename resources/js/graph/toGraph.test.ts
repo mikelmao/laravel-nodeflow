@@ -68,6 +68,21 @@ describe('toGraph', () => {
     expect(converted.unresolved).toEqual([])
   })
 
+  it('emits nested config references independently from the canvas', () => {
+    const canvas = toCanvas({
+      start: 'n1',
+      nodes: [{ id: 'n1', type: 'app.send', config: { routing: { tags: ['vip'] } }, position: { x: 0, y: 0 } }],
+      edges: [],
+    })
+
+    const converted = toGraph(canvas, 'n1', defs).graph
+    const emitted = converted.nodes![0]!.config as { routing: { tags: string[] } }
+    emitted.routing.tags.push('new')
+
+    expect(canvas.nodes[0]!.data.config).toEqual({ routing: { tags: ['vip'] } })
+    expect(emitted).not.toBe(canvas.nodes[0]!.data.config)
+  })
+
   // The round-trip case §9 asks for, with positions present on every node so
   // the assertion is identity rather than "close enough".
   // Counterfactual: drop `position` from the emitted node, or drop `config`, or

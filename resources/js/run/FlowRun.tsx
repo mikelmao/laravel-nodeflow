@@ -3,7 +3,7 @@ import { Canvas, type NodeflowEdge, type NodeflowNode } from '../canvas/Canvas'
 import type { NodeRendererMap } from '../canvas/context'
 import { toCanvas } from '../graph/toCanvas'
 import { defsByType } from '../graph/toGraph'
-import type { Graph, NodeTypePayload, OverlaySnapshot, RunSummary, RunUrls } from '../graph/types'
+import type { Graph, GraphComponentPayload, NodeTypePayload, OverlaySnapshot, RunSummary, RunUrls } from '../graph/types'
 import { decorationsFor, normalizeOverlay, overlayFor } from './overlay'
 import { SubjectPanel } from './SubjectPanel'
 import { useOverlayPolling } from './useOverlayPolling'
@@ -11,9 +11,9 @@ import { useOverlayPolling } from './useOverlayPolling'
 export type FlowRunProps = {
     run: RunSummary
     graph: Graph
-    // RunViewController's pinned executable palette predates the editor's kind
-    // discriminator. This boundary supplies its one known family explicitly.
-    palette: (NodeTypePayload | Omit<NodeTypePayload, 'kind'>)[]
+    // Missing-kind executable entries remain accepted for hosts rendering an
+    // older run payload. Discriminated trigger definitions pass through intact.
+    palette: (GraphComponentPayload | Omit<NodeTypePayload, 'kind'>)[]
     overlay: OverlaySnapshot
     urls: RunUrls
     nodeRenderers?: NodeRendererMap
@@ -54,10 +54,9 @@ function FlowRunSession({
     const initial = useMemo(() => normalizeOverlay(overlay), [overlay])
     const { snapshot, error } = useOverlayPolling(urls.overlay, initial, pollIntervalMs)
 
-    const defs = useMemo(
-        () => defsByType(palette.map((definition): NodeTypePayload => ({ ...definition, kind: 'executable' }))),
-        [palette],
-    )
+    const defs = useMemo(() => defsByType(palette.map((definition): GraphComponentPayload => (
+        'kind' in definition ? definition : { ...definition, kind: 'executable' }
+    ))), [palette])
     const canvas = useMemo(() => toCanvas(graph, defs), [defs, graph])
     const [selectedId, setSelectedId] = useState<string | null>(null)
 

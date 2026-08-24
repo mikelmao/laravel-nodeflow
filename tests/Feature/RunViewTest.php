@@ -167,6 +167,21 @@ it('carries an overlay entry for every node in the pinned graph', function () {
         ->and($overlay['terminal'])->toBeFalse();
 });
 
+it('supplies discriminated executable and trigger definitions for the pinned graph', function () {
+    allowRunViewing();
+
+    $palette = collect(runPage($this, $this->run->id)->assertOk()->json('props.palette'));
+
+    expect($palette->firstWhere('type', 'core.exit')['kind'])->toBe('executable')
+        ->and($palette->firstWhere('type', 'test.fake_trigger'))
+        ->toMatchArray([
+            'kind' => 'trigger',
+            'driver' => 'test.fake',
+            'outputs' => ['started'],
+            'default_config' => ['source' => 'test.orders'],
+        ]);
+});
+
 it('exposes safe origin fields without leaking execution-only trigger data', function () {
     allowRunViewing();
     $this->run->update([

@@ -1,9 +1,10 @@
 import { CANVAS_ORIGIN } from '../canvas/layout'
 import { positionsForGraph } from './layout'
+import { cloneGraphConfig } from './json'
 import type { CanvasEdge, CanvasNode, Graph, GraphComponentPayload, GraphNode } from './types'
 
 function toConfig(config: GraphNode['config']): Record<string, unknown> {
-  return config !== null && config !== undefined && !Array.isArray(config) ? config : {}
+  return cloneGraphConfig(config)
 }
 
 /** A pure graph adapter: the same stored draft always produces the same canvas. */

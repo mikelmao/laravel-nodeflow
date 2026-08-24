@@ -12,6 +12,7 @@ import { CANVAS_ORIGIN, NODE_MIN_HEIGHT, NODE_WIDTH, ROW_GAP } from '../canvas/l
 import type { NodeRendererMap } from '../canvas/context'
 import { mergeControls, type ControlMap } from '../controls'
 import { toCanvas } from '../graph/toCanvas'
+import { cloneGraphConfig, cloneJsonValue } from '../graph/json'
 import { hierarchicalLayout } from '../graph/layout'
 import { defsByType, toGraph } from '../graph/toGraph'
 import type {
@@ -96,7 +97,19 @@ export type UseEditorControllerResult = {
 }
 
 function copiedConfig(definition: GraphComponentPayload): Record<string, unknown> {
-    return Array.isArray(definition.default_config) ? {} : { ...definition.default_config }
+    return cloneGraphConfig(definition.default_config)
+}
+
+function snapshotDocument(document: EditorDocument): EditorDocument {
+    return {
+        nodes: document.nodes.map((node) => ({
+            ...node,
+            position: { ...node.position },
+            data: { ...node.data, config: cloneGraphConfig(node.data.config) },
+        })),
+        edges: document.edges.map((edge) => ({ ...edge })),
+        startId: document.startId,
+    }
 }
 
 function sameDocument(left: EditorDocument, right: EditorDocument): boolean {
@@ -240,9 +253,10 @@ export function useEditorController(options: UseEditorControllerOptions): UseEdi
     const commit = useCallback((next: EditorDocument, transaction: string | null = null) => {
         const current = historyRef.current
         if (sameDocument(current.present, next)) return false
-        const nextHistory = commitHistory(current, next, transaction)
+        const snapshot = snapshotDocument(next)
+        const nextHistory = commitHistory(current, snapshot, transaction)
         historyRef.current = nextHistory
-        documentRef.current = next
+        documentRef.current = snapshot
         setHistory(nextHistory)
         generation.current += 1
         clearValidation()
@@ -384,13 +398,15 @@ export function useEditorController(options: UseEditorControllerOptions): UseEdi
             setSelected((current) => current.nodeId !== null && selectionChanges.some((change) => change.id === current.nodeId && !change.selected) ? { nodeId: null, edgeId: null } : current)
             setView((current) => ({ ...current, selectedEdgeId: null }))
         }
+        // Topology creation/replacement belongs to addNode/addTrigger/
+        // replaceTrigger/connect, where component and graph invariants are
+        // enforced. React Flow change batches are only authoritative for
+        // controlled-state updates such as movement, dimensions and removal.
+        if (graphChanges.some((change) => change.type === 'add' || change.type === 'replace')) return
         const removed = new Set(graphChanges.filter((change) => change.type === 'remove').map((change) => change.id))
         if (graphChanges.every((change) => change.type === 'dimensions')) return
         const current = documentRef.current
         const nodes = stripNodeSelection(applyNodeChanges(graphChanges, current.nodes))
-        const currentTriggers = current.nodes.filter((node) => defs[node.data.type]?.kind === 'trigger').length
-        const nextTriggers = nodes.filter((node) => defs[node.data.type]?.kind === 'trigger').length
-        if (nextTriggers > 1 && nextTriggers > currentTriggers) return
         const removesTrigger = current.nodes.some((node) => removed.has(node.id) && defs[node.data.type]?.kind === 'trigger')
         const position = graphChanges.find((change) => change.type === 'position')
         const transaction = position?.type === 'position' ? `move:${position.id}` : null
@@ -408,6 +424,9 @@ export function useEditorController(options: UseEditorControllerOptions): UseEdi
             setSelected((current) => current.edgeId !== null && selectionChanges.some((change) => change.id === current.edgeId && !change.selected) ? { nodeId: null, edgeId: null } : current)
             setView((current) => ({ ...current, selectedEdgeId: null }))
         }
+        // New and replacement connections must pass through connect(), which
+        // owns handle, component-kind, cardinality and cycle validation.
+        if (graphChanges.some((change) => change.type === 'add' || change.type === 'replace')) return
         if (graphChanges.length === 0) return
         const current = documentRef.current
         const edges = stripEdgeSelection(applyEdgeChanges(graphChanges, current.edges))
@@ -436,7 +455,13 @@ export function useEditorController(options: UseEditorControllerOptions): UseEdi
     const configure = useCallback((id: string, key: string, value: unknown) => {
         const current = documentRef.current
         if (!current.nodes.some((node) => node.id === id)) return
-        commit({ ...current, nodes: current.nodes.map((node) => node.id === id ? { ...node, data: { ...node.data, config: { ...node.data.config, [key]: value } } } : node) }, `config:${id}:${key}`)
+        let copiedValue: ReturnType<typeof cloneJsonValue>
+        try {
+            copiedValue = cloneJsonValue(value)
+        } catch {
+            return
+        }
+        commit({ ...current, nodes: current.nodes.map((node) => node.id === id ? { ...node, data: { ...node.data, config: { ...node.data.config, [key]: copiedValue } } } : node) }, `config:${id}:${key}`)
     }, [commit])
 
     const deleteSelection = useCallback(() => {

@@ -12,6 +12,8 @@ use Nodeflow\Http\ResolvesRouteNames;
 use Nodeflow\Models\Run;
 use Nodeflow\Nodes\NodeRegistry;
 use Nodeflow\Runs\RunOverlay;
+use Nodeflow\Triggers\TriggerDefinitionContext;
+use Nodeflow\Triggers\TriggerNodeRegistry;
 
 /**
  * The run view's server half — read-only, in every sense.
@@ -51,6 +53,7 @@ class RunViewController extends Controller
         // Once, not once per prop: this is two grouped queries, and reading it
         // twice to fill `run.terminal` and `overlay` would silently double them.
         $overlay = $this->snapshotFor($run, $graph);
+        $definitions = new TriggerDefinitionContext;
 
         return Inertia::render('nodeflow/run', [
             'run' => [
@@ -79,7 +82,13 @@ class RunViewController extends Controller
                 'flow' => ['id' => $version->flow->id, 'name' => $version->flow->name],
             ],
             'graph' => $version->graph,
-            'palette' => app(NodeRegistry::class)->palette(),
+            'palette' => array_merge(
+                array_map(
+                    fn (array $definition): array => ['kind' => 'executable'] + $definition,
+                    app(NodeRegistry::class)->palette(),
+                ),
+                app(TriggerNodeRegistry::class)->palette($definitions),
+            ),
             'overlay' => $overlay,
             'urls' => [
                 'overlay' => route($this->routeName($request, 'nodeflow.runs.overlay', self::OWN_ROUTE), ['run' => $run]),

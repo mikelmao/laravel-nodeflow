@@ -1,6 +1,6 @@
 import { act, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import type { Graph, NodeTypePayload, RunSummary, RunUrls } from '../graph/types'
+import type { Graph, GraphComponentPayload, NodeTypePayload, RunSummary, RunUrls } from '../graph/types'
 import { FlowRun } from './FlowRun'
 
 const urls: RunUrls = {
@@ -10,6 +10,7 @@ const urls: RunUrls = {
 
 const run: RunSummary = {
     id: 9, status: 'running', terminal: false, strategy: 'cohort', is_test: false,
+    started_via: 'test.fake', trigger_node_id: 'trigger',
     started_at: null, ended_at: null, error: null, version: 1, flow: { id: 1, name: 'Flood alert' },
 }
 
@@ -55,6 +56,34 @@ beforeEach(() => vi.useFakeTimers({ shouldAdvanceTime: true }))
 afterEach(() => vi.useRealTimers())
 
 describe('FlowRun', () => {
+    it('preserves custom trigger definitions while normalizing legacy executables', () => {
+        vi.stubGlobal('fetch', vi.fn().mockResolvedValue(Response.json(overlay())))
+        const componentPalette = [
+            {
+                kind: 'trigger', type: 'custom.trigger', driver: 'custom', label: 'Custom trigger', icon: null,
+                description: null, outputs: ['started'], fields: [], default_config: {}, compatible_source_keys: [],
+            },
+            ...palette,
+        ] satisfies (GraphComponentPayload | Omit<NodeTypePayload, 'kind'>)[]
+        const triggerGraph: Graph = {
+            start: 'trigger',
+            nodes: [
+                { id: 'trigger', type: 'custom.trigger', config: {}, position: { x: 0, y: 0 } },
+                { id: 'sent', type: 'app.send', config: {}, position: { x: 200, y: 0 } },
+            ],
+            edges: [{ from: 'trigger', to: 'sent', output: 'started' }],
+        }
+        const renderers = {
+            'custom.trigger': ({ data, def }: { data: { kind: string | null }; def: GraphComponentPayload | undefined }) => <span data-testid="trigger-kind">{data.kind}:{def?.kind}</span>,
+            'app.send': ({ data, def }: { data: { kind: string | null }; def: GraphComponentPayload | undefined }) => <span data-testid="executable-kind">{data.kind}:{def?.kind}</span>,
+        }
+
+        render(<FlowRun run={run} graph={triggerGraph} palette={componentPalette} overlay={{ ...overlay(), nodes: {} }} urls={urls} nodeRenderers={renderers} />)
+
+        expect(screen.getByTestId('trigger-kind')).toHaveTextContent('trigger:trigger')
+        expect(screen.getByTestId('executable-kind')).toHaveTextContent('executable:executable')
+    })
+
     /**
      * The DOM half of the counterfactual RunOverlayTest kills server-side and
      * overlay.test.ts kills at the data level. All three are needed: a correct

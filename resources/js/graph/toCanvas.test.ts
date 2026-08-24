@@ -61,6 +61,23 @@ describe('toCanvas', () => {
     expect(canvas.edges[0]).toMatchObject({ source: 'trigger1', sourceHandle: 'started', target: 'send1' })
   })
 
+  it('deep-clones nested JSON config at the graph ingress boundary', () => {
+    const config = { filters: [{ field: 'status', values: ['open'] }], enabled: true }
+    const graph: Graph = {
+      start: 'trigger1',
+      nodes: [{ id: 'trigger1', type: 'custom.trigger', config, position: { x: 1, y: 2 } }],
+      edges: [],
+    }
+
+    const canvas = toCanvas(graph, definitions)
+    const canvasConfig = canvas.nodes[0]!.data.config as typeof config
+    canvasConfig.filters[0]!.values.push('closed')
+
+    expect(config.filters[0]!.values).toEqual(['open'])
+    expect(canvasConfig).not.toBe(config)
+    expect(canvasConfig.filters).not.toBe(config.filters)
+  })
+
   it('keeps every valid stored node position exactly', () => {
     // Counterfactual: regenerating stored positions would move a saved canvas on reload.
     const graph: Graph = {

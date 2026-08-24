@@ -77,6 +77,64 @@ describe('useEditorController', () => {
         expect(view.result.current.document.nodes.filter((node) => node.data.kind === 'trigger')).toHaveLength(1)
     })
 
+    it('deep-clones defaults, configured values, and history snapshots', () => {
+        const triggerDefault = { source: 'orders', filters: [{ values: ['open'] }] }
+        const executableDefault = { delivery: { channels: ['mail'] } }
+        const nestedWebhook: TriggerNodeTypePayload = { ...webhook, default_config: triggerDefault }
+        const nestedSend: NodeTypePayload = { ...send, default_config: executableDefault }
+        const view = controller({ graph: { start: '', nodes: [], edges: [] }, palette: [nestedSend, exit], trigger_nodes: [nestedWebhook, event] })
+
+        act(() => view.result.current.actions.addTrigger(nestedWebhook))
+        act(() => view.result.current.actions.addNode(nestedSend))
+        const afterAdds = view.result.current.document
+        triggerDefault.filters[0]!.values.push('closed')
+        executableDefault.delivery.channels.push('sms')
+        expect(afterAdds.nodes[0]!.data.config).toEqual({ source: 'orders', filters: [{ values: ['open'] }] })
+        expect(afterAdds.nodes[1]!.data.config).toEqual({ delivery: { channels: ['mail'] } })
+
+        const configured = { rules: [{ tags: ['vip'] }] }
+        act(() => view.result.current.actions.configure('webhook1', 'nested', configured))
+        act(() => view.result.current.actions.closeConfigTransaction())
+        const firstCommit = view.result.current.document
+        configured.rules[0]!.tags.push('mutated-outside')
+        expect(firstCommit.nodes[0]!.data.config).toMatchObject({ nested: { rules: [{ tags: ['vip'] }] } })
+
+        act(() => view.result.current.actions.configure('webhook1', 'nested', { rules: [{ tags: ['second'] }] }))
+        act(() => view.result.current.actions.closeConfigTransaction())
+        expect(view.result.current.document).not.toBe(firstCommit)
+        act(() => view.result.current.actions.undo())
+        expect(view.result.current.document).toEqual(firstCommit)
+        act(() => view.result.current.actions.redo())
+        expect(view.result.current.document.nodes[0]!.data.config).toMatchObject({ nested: { rules: [{ tags: ['second'] }] } })
+    })
+
+    it('isolates nested graph and config input while committing and autosaving once', async () => {
+        const fetchMock = vi.fn(async () => Response.json({ draft_revision: 8 }))
+        vi.stubGlobal('fetch', fetchMock)
+        const input: Graph = {
+            start: 'hook',
+            nodes: [{ id: 'hook', type: 'custom.webhook', config: { nested: { tags: ['original'] } }, position: { x: 0, y: 0 } }],
+            edges: [],
+        }
+        const view = controller({ graph: input })
+        const initial = view.result.current.document
+        const inputConfig = input.nodes![0]!.config as { nested: { tags: string[] } }
+        inputConfig.nested.tags.push('outside')
+        expect(initial.nodes[0]!.data.config).toEqual({ nested: { tags: ['original'] } })
+
+        const value = { tags: ['changed'] }
+        act(() => view.result.current.actions.configure('hook', 'nested', value))
+        act(() => view.result.current.actions.closeConfigTransaction())
+        value.tags.push('outside')
+        expect(view.result.current.document.nodes[0]!.data.config).toEqual({ nested: { tags: ['changed'] } })
+        await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(1))
+
+        act(() => view.result.current.actions.undo())
+        expect(view.result.current.document).toEqual(initial)
+        act(() => view.result.current.actions.redo())
+        expect(view.result.current.document.nodes[0]!.data.config).toEqual({ nested: { tags: ['changed'] } })
+    })
+
     it('replaces a trigger without losing its position or sole outgoing target and undoes once', () => {
         const view = controller({
             graph: {
@@ -341,6 +399,68 @@ describe('useEditorController', () => {
         const before = view.result.current.document
 
         act(() => view.result.current.actions.connect({ source: 'send1', sourceHandle: 'sent', target: 'hook', targetHandle: null }))
+        expect(view.result.current.document).toBe(before)
+        await new Promise((resolve) => setTimeout(resolve, 10))
+        expect(fetchMock).not.toHaveBeenCalled()
+    })
+
+    it('rejects generic node add and replace changes without history or autosave', async () => {
+        const fetchMock = vi.fn()
+        vi.stubGlobal('fetch', fetchMock)
+        const view = controller({
+            graph: {
+                start: 'hook',
+                nodes: [
+                    { id: 'hook', type: 'custom.webhook', config: {}, position: { x: 0, y: 0 } },
+                    { id: 'send1', type: 'app.send', config: {}, position: { x: 200, y: 0 } },
+                ],
+                edges: [{ from: 'hook', to: 'send1', output: 'started' }],
+            },
+        })
+        const before = view.result.current.document
+        const injected = { ...before.nodes[0]!, id: 'injected', data: { ...before.nodes[0]!.data, id: 'injected' } }
+
+        act(() => view.result.current.actions.nodesChange([{ type: 'add', item: injected }]))
+        expect(view.result.current.document).toBe(before)
+        act(() => view.result.current.actions.nodesChange([{ type: 'replace', id: 'send1', item: injected }]))
+        expect(view.result.current.document).toBe(before)
+        act(() => view.result.current.actions.undo())
+        expect(view.result.current.document).toBe(before)
+        await new Promise((resolve) => setTimeout(resolve, 10))
+        expect(fetchMock).not.toHaveBeenCalled()
+    })
+
+    it('rejects generic edge add and replace changes that bypass connection rules', async () => {
+        const fetchMock = vi.fn()
+        vi.stubGlobal('fetch', fetchMock)
+        const view = controller({
+            graph: {
+                start: 'hook',
+                nodes: [
+                    { id: 'hook', type: 'custom.webhook', config: {}, position: { x: 0, y: 0 } },
+                    { id: 'first', type: 'app.send', config: {}, position: { x: 200, y: 0 } },
+                    { id: 'second', type: 'app.send', config: {}, position: { x: 400, y: 0 } },
+                ],
+                edges: [
+                    { from: 'hook', to: 'first', output: 'started' },
+                    { from: 'first', to: 'second', output: 'sent' },
+                ],
+            },
+        })
+        const before = view.result.current.document
+        const existing = before.edges[0]!
+        const attempts = [
+            { type: 'add' as const, item: { ...existing, id: 'target-trigger', source: 'first', sourceHandle: 'sent', target: 'hook' } },
+            { type: 'add' as const, item: { ...existing, id: 'wrong-trigger-handle', source: 'hook', sourceHandle: 'wrong', target: 'second' } },
+            { type: 'add' as const, item: { ...existing, id: 'max-output', source: 'hook', sourceHandle: 'started', target: 'second' } },
+            { type: 'replace' as const, id: existing.id, item: { ...existing, source: 'second', sourceHandle: 'sent', target: 'first' } },
+        ]
+
+        for (const change of attempts) {
+            act(() => view.result.current.actions.edgesChange([change]))
+            expect(view.result.current.document).toBe(before)
+        }
+        act(() => view.result.current.actions.undo())
         expect(view.result.current.document).toBe(before)
         await new Promise((resolve) => setTimeout(resolve, 10))
         expect(fetchMock).not.toHaveBeenCalled()

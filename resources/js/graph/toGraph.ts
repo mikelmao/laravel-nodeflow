@@ -1,4 +1,5 @@
 import type { CanvasEdge, CanvasNode, Graph, GraphComponentPayload } from './types'
+import { cloneGraphConfig } from './json'
 
 /** The palette as a lookup. One place builds it, so one place decides what a missing type means. */
 export function defsByType(palette: GraphComponentPayload[]): Record<string, GraphComponentPayload> {
@@ -75,7 +76,7 @@ export function toGraph(
       nodes: canvas.nodes.map((node) => ({
         id: node.id,
         type: node.data.type,
-        config: node.data.config,
+        config: cloneGraphConfig(node.data.config),
         // Positions are a stored client concern that the package promises
         // to round-trip untouched. A fractional coordinate is data, not
         // noise to normalise away.
