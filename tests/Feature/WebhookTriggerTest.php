@@ -589,6 +589,55 @@ it('keeps a start-failure response retryable when the host reporter also fails',
     )->assertStatus(503)->assertJsonPath('message', 'The webhook run could not be started.');
 });
 
+it('reports downstream workflow failures without source audience sanitization', function () {
+    $reported = new class implements ExceptionHandler
+    {
+        public array $exceptions = [];
+
+        public function report(Throwable $e) { $this->exceptions[] = $e; }
+
+        public function shouldReport(Throwable $e) { return true; }
+
+        public function render($request, Throwable $e) { throw $e; }
+
+        public function renderForConsole($output, Throwable $e): void {}
+    };
+    app()->instance(ExceptionHandler::class, $reported);
+    $failure = new RuntimeException('workflow infrastructure unavailable');
+    app()->instance(WorkflowEngine::class, new class($failure) implements WorkflowEngine
+    {
+        public function __construct(private RuntimeException $failure) {}
+
+        public function start(string $workflowClass, array $args, ?string $instanceId = null): string
+        {
+            throw $this->failure;
+        }
+
+        public function signal(string $workflowId, string $method, array $args = []): void {}
+
+        public function cancel(string $workflowId): void {}
+
+        public function isRunning(string $workflowId): bool { return false; }
+    });
+    app()->forgetInstance(\Nodeflow\Execution\CreateRun::class);
+    app()->forgetInstance(\Nodeflow\Triggers\TriggerRunStarter::class);
+    app()->forgetInstance(\Nodeflow\Triggers\Webhook\WebhookTriggerDriver::class);
+    [$url, $secret] = publishedHttpContractWebhook();
+    $body = json_encode(['user_id' => '42'], JSON_THROW_ON_ERROR);
+    $timestamp = (string) now()->timestamp;
+
+    $this->call(
+        'POST',
+        $url,
+        server: signedWebhookHeaders($timestamp, $body, $secret, 'workflow-infrastructure'),
+        content: $body,
+    )->assertStatus(503)->assertJsonPath('message', 'The webhook run could not be started.');
+
+    expect($reported->exceptions)->toHaveCount(2)
+        ->and($reported->exceptions[0])->toBe($failure)
+        ->and($reported->exceptions[1])->toBe($failure);
+});
+
 it('reports unexpected source failures as sanitized retryable infrastructure errors', function () {
     [$url, $secret] = publishedHttpContractWebhook();
     $reported = new class implements ExceptionHandler

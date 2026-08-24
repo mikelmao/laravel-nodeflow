@@ -5,6 +5,7 @@ namespace Nodeflow\Triggers\Webhook;
 use Nodeflow\Contracts\TriggerDriver;
 use Nodeflow\Contracts\TriggerSource;
 use Nodeflow\Execution\CrossTenantSubjectException;
+use Nodeflow\Execution\ReplayableSubjectIds;
 use Nodeflow\Models\Run;
 use Nodeflow\Triggers\TriggerActivationDescriptor;
 use Nodeflow\Triggers\TriggerActivationSnapshot;
@@ -94,36 +95,44 @@ class WebhookTriggerDriver implements TriggerDriver
             throw new WebhookSourceFailure('Webhook source resolution failed.');
         }
 
-        try {
-            $matches = $match->tenants();
+        $matches = $match->tenants();
 
-            if (count($matches) !== 1
-                || $matches[0]->tenantId !== $activation->tenantId
-                || $matches[0]->subjectIds->isEmpty()) {
-                throw new WebhookSourceRejected('The webhook source must return one non-empty audience for this flow.');
-            }
-        } catch (WebhookSourceRejected $e) {
-            throw $e;
-        } catch (Throwable) {
-            throw new WebhookSourceFailure('Webhook source resolution failed.');
+        if (count($matches) !== 1 || $matches[0]->tenantId !== $activation->tenantId) {
+            throw new WebhookSourceRejected('The webhook source must return one non-empty audience for this flow.');
         }
 
         $resolved = $matches[0];
+        $subjectIds = $this->sanitisedAudience($resolved->subjectIds);
+
+        if ($subjectIds->isEmpty()) {
+            throw new WebhookSourceRejected('The webhook source must return one non-empty audience for this flow.');
+        }
 
         try {
             return $this->runs->start($activation, new TriggerTenantMatch(
                 tenantId: $resolved->tenantId,
                 subjectType: $resolved->subjectType,
-                subjectIds: $resolved->subjectIds,
+                subjectIds: $subjectIds,
                 triggerData: $resolved->triggerData,
                 occurrenceId: $payload->deliveryId,
             ));
-        } catch (WebhookSourceRejected $e) {
-            throw $e;
         } catch (CrossTenantSubjectException) {
             throw new WebhookSourceRejected('The webhook audience is outside the activation tenant boundary.');
-        } catch (Throwable) {
-            throw new WebhookSourceFailure('Webhook source processing failed.');
         }
+    }
+
+    private function sanitisedAudience(ReplayableSubjectIds $subjectIds): ReplayableSubjectIds
+    {
+        return ReplayableSubjectIds::from(function () use ($subjectIds): \Generator {
+            try {
+                yield from $subjectIds;
+            } catch (WebhookSourceRejected|CrossTenantSubjectException $e) {
+                throw $e;
+            } catch (Throwable) {
+                // Never retain a lazy source exception as `previous`: it may
+                // contain request payload data in its message or context.
+                throw new WebhookSourceFailure('Webhook source resolution failed.');
+            }
+        });
     }
 }
