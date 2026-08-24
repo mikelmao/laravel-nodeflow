@@ -62,13 +62,17 @@ it('starts the exact activation version at its executable entry with trigger ori
         'edges' => [],
     ]));
 
-    $run = app(TriggerRunStarter::class)->start($this->snapshot, new TriggerTenantMatch(
+    $match = new TriggerTenantMatch(
         tenantId: 'org-1',
         subjectType: 'user',
         subjectIds: [1, '2'],
         triggerData: ['delivery' => 'd-1'],
         occurrenceId: 'external-occurrence',
-    ));
+    );
+
+    expect(iterator_to_array($match->subjectIds, false))->toBe(['1', '2']);
+
+    $run = app(TriggerRunStarter::class)->start($this->snapshot, $match);
 
     expect($run->flow_version_id)->toBe($this->v1->id)
         ->and($run->started_via)->toBe('test.fake')

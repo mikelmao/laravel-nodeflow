@@ -98,7 +98,7 @@ class WebhookTriggerDriver implements TriggerDriver
 
         if (count($matches) !== 1
             || $matches[0]->tenantId !== $activation->tenantId
-            || $matches[0]->subjectIds === []) {
+            || $matches[0]->subjectIds->isEmpty()) {
             throw new WebhookSourceRejected('The webhook source must return one non-empty audience for this flow.');
         }
 

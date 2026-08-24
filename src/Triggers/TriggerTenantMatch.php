@@ -2,15 +2,17 @@
 
 namespace Nodeflow\Triggers;
 
+use Closure;
 use InvalidArgumentException;
+use Nodeflow\Execution\ReplayableSubjectIds;
 
 final readonly class TriggerTenantMatch
 {
     public function __construct(
         string $tenantId,
         string $subjectType,
-        array $subjectIds,
-        public array $triggerData = [],
+        iterable|Closure $subjectIds,
+        array $triggerData = [],
         ?string $occurrenceId = null,
     ) {
         if (trim($tenantId) === '') {
@@ -21,24 +23,14 @@ final readonly class TriggerTenantMatch
             throw new InvalidArgumentException('A trigger tenant match must have a nonblank subject type.');
         }
 
-        $subjectIds = array_values(array_map(
-            static fn (mixed $subjectId): string => (string) $subjectId,
-            $subjectIds,
-        ));
-
-        foreach ($subjectIds as $subjectId) {
-            if (trim($subjectId) === '') {
-                throw new InvalidArgumentException('A trigger tenant match must not contain a blank subject ID.');
-            }
-        }
-
         if ($occurrenceId !== null && trim($occurrenceId) === '') {
             throw new InvalidArgumentException('A trigger tenant match occurrence ID must be null or nonblank.');
         }
 
         $this->tenantId = $tenantId;
         $this->subjectType = $subjectType;
-        $this->subjectIds = $subjectIds;
+        $this->subjectIds = ReplayableSubjectIds::from($subjectIds);
+        $this->triggerData = $triggerData;
         $this->occurrenceId = $occurrenceId;
     }
 
@@ -46,8 +38,9 @@ final readonly class TriggerTenantMatch
 
     public string $subjectType;
 
-    /** @var string[] */
-    public array $subjectIds;
+    public ReplayableSubjectIds $subjectIds;
+
+    public array $triggerData;
 
     public ?string $occurrenceId;
 }

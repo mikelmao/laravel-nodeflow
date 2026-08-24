@@ -417,6 +417,65 @@ it('returns a retryable failure and recovers the same idempotent run after engin
         ->and($engine->calls)->toBe(2);
 });
 
+it('preserves a nonempty lazy webhook audience after checking it for emptiness', function () {
+    [$url, $secret] = publishedHttpContractWebhook();
+    $replays = 0;
+    HttpContractWebhookSource::$resolver = function () use (&$replays): TriggerMatch {
+        return TriggerMatch::make()->forTenant('org-1', 'user', function () use (&$replays): array {
+            $replays++;
+
+            return [10, 20];
+        });
+    };
+    $body = json_encode(['user_id' => '42'], JSON_THROW_ON_ERROR);
+    $timestamp = (string) now()->timestamp;
+
+    $this->call(
+        'POST',
+        $url,
+        server: signedWebhookHeaders($timestamp, $body, $secret, 'lazy-nonempty'),
+        content: $body,
+    )->assertAccepted();
+
+    expect($replays)->toBe(2)
+        ->and(Run::withoutTenancy()->sole()->subjects()->pluck('subject_id')->all())->toBe(['10', '20']);
+});
+
+it('rejects an empty lazy webhook audience', function () {
+    [$url, $secret] = publishedHttpContractWebhook();
+    HttpContractWebhookSource::$resolver = fn (): TriggerMatch => TriggerMatch::make()
+        ->forTenant('org-1', 'user', fn (): array => []);
+    $body = json_encode(['user_id' => '42'], JSON_THROW_ON_ERROR);
+    $timestamp = (string) now()->timestamp;
+
+    $this->call(
+        'POST',
+        $url,
+        server: signedWebhookHeaders($timestamp, $body, $secret, 'lazy-empty'),
+        content: $body,
+    )->assertUnprocessable();
+
+    expect(Run::withoutTenancy()->count())->toBe(0);
+});
+
+it('translates malformed lazy webhook audiences as source failures', function () {
+    [$url, $secret] = publishedHttpContractWebhook();
+    HttpContractWebhookSource::$resolver = fn (): TriggerMatch => TriggerMatch::make()
+        ->forTenant('org-1', 'user', fn (): array => ['  ']);
+    $body = json_encode(['user_id' => '42'], JSON_THROW_ON_ERROR);
+    $timestamp = (string) now()->timestamp;
+
+    $response = $this->call(
+        'POST',
+        $url,
+        server: signedWebhookHeaders($timestamp, $body, $secret, 'lazy-malformed'),
+        content: $body,
+    )->assertStatus(503);
+
+    expect($response->getContent())->not->toContain('blank subject ID')
+        ->and(Run::withoutTenancy()->count())->toBe(0);
+});
+
 it('keeps a start-failure response retryable when the host reporter also fails', function () {
     Queue::fake();
     app()->instance(ExceptionHandler::class, new class implements ExceptionHandler

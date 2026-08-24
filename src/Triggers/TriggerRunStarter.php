@@ -31,7 +31,7 @@ class TriggerRunStarter
 
         $subjectIds = array_values(array_map(
             static fn (mixed $subjectId): string => (string) $subjectId,
-            $match->subjectIds,
+            iterator_to_array($match->subjectIds, false),
         ));
 
         foreach ($subjectIds as $subjectId) {
