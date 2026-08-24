@@ -10,6 +10,11 @@ use Nodeflow\Triggers\TriggerSourceRegistry;
 
 class ModelObserverTriggerNode extends AbstractTriggerNode
 {
+    protected function sourceType(): string
+    {
+        return ModelObserverTriggerSource::class;
+    }
+
     public static function type(): string
     {
         return 'core.trigger.model_observer';
@@ -42,7 +47,6 @@ class ModelObserverTriggerNode extends AbstractTriggerNode
         $errors = $this->validateForSourceType(
             $config,
             $sources,
-            ModelObserverTriggerSource::class,
             ['changed_fields.*' => ['string']],
         );
 

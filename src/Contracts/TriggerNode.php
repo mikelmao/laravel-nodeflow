@@ -16,6 +16,12 @@ interface TriggerNode
 
     public function defaultConfig(): array;
 
+    /** The stable source key selected by this validated configuration. */
+    public function source(array $config): string;
+
+    /** Whether this node can be authored with the registered source. */
+    public function supportsSource(TriggerSource $source): bool;
+
     public function validate(array $config, TriggerSourceRegistry $sources): array;
 
     /**

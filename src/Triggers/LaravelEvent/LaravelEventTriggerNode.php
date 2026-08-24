@@ -10,6 +10,11 @@ use Nodeflow\Triggers\TriggerSourceRegistry;
 
 class LaravelEventTriggerNode extends AbstractTriggerNode
 {
+    protected function sourceType(): string
+    {
+        return LaravelEventTriggerSource::class;
+    }
+
     public static function type(): string
     {
         return 'core.trigger.laravel_event';
@@ -32,7 +37,7 @@ class LaravelEventTriggerNode extends AbstractTriggerNode
 
     public function validate(array $config, TriggerSourceRegistry $sources): array
     {
-        return $this->validateForSourceType($config, $sources, LaravelEventTriggerSource::class);
+        return $this->validateForSourceType($config, $sources);
     }
 
     public function compile(array $config): TriggerActivationDescriptor

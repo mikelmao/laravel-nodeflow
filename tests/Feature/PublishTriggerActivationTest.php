@@ -48,6 +48,16 @@ class UnsafeMetadataPublicationTriggerNode implements TriggerNode
         return [];
     }
 
+    public function source(array $config): string
+    {
+        return 'test.orders';
+    }
+
+    public function supportsSource(TriggerSource $source): bool
+    {
+        return $source::driver() === $this->driver();
+    }
+
     public function validate(array $config, TriggerSourceRegistry $sources): array
     {
         return [];
@@ -220,6 +230,11 @@ trait PublicationBoundaryNode
         return [];
     }
 
+    public function supportsSource(TriggerSource $source): bool
+    {
+        return $source::driver() === $this->driver();
+    }
+
     public function validate(array $config, TriggerSourceRegistry $sources): array
     {
         return [];
@@ -233,6 +248,8 @@ class PublicationBoundaryDriver191Node implements TriggerNode
     public static function type(): string { return 'test.driver-boundary-191'; }
 
     public function driver(): string { return PublicationBoundaryDriver191::key(); }
+
+    public function source(array $config): string { return PublicationBoundaryDriver191Source::key(); }
 
     public function compile(array $config): TriggerActivationDescriptor
     {
@@ -248,6 +265,8 @@ class PublicationBoundaryDriver192Node implements TriggerNode
 
     public function driver(): string { return PublicationBoundaryDriver192::key(); }
 
+    public function source(array $config): string { return PublicationBoundaryDriver192Source::key(); }
+
     public function compile(array $config): TriggerActivationDescriptor
     {
         return new TriggerActivationDescriptor($this->driver(), PublicationBoundaryDriver192Source::key(), null, []);
@@ -261,6 +280,8 @@ class PublicationBoundaryWhitespaceDriverNode implements TriggerNode
     public static function type(): string { return 'test.driver-boundary-whitespace'; }
 
     public function driver(): string { return PublicationBoundaryWhitespaceDriver::key(); }
+
+    public function source(array $config): string { return PublicationBoundaryWhitespaceDriverSource::key(); }
 
     public function compile(array $config): TriggerActivationDescriptor
     {
@@ -276,6 +297,8 @@ class PublicationInvalidUtf8DriverNode implements TriggerNode
 
     public function driver(): string { return PublicationInvalidUtf8Driver::key(); }
 
+    public function source(array $config): string { return PublicationInvalidUtf8DriverSource::key(); }
+
     public function compile(array $config): TriggerActivationDescriptor
     {
         return new TriggerActivationDescriptor($this->driver(), PublicationInvalidUtf8DriverSource::key(), null, []);
@@ -289,6 +312,8 @@ class PublicationInvalidUtf8SourceNode implements TriggerNode
     public static function type(): string { return 'test.source-invalid-utf8'; }
 
     public function driver(): string { return 'test.fake'; }
+
+    public function source(array $config): string { return PublicationInvalidUtf8Source::key(); }
 
     public function compile(array $config): TriggerActivationDescriptor
     {
@@ -304,6 +329,8 @@ class PublicationInvalidUtf8QualifierNode implements TriggerNode
 
     public function driver(): string { return 'test.fake'; }
 
+    public function source(array $config): string { return 'test.orders'; }
+
     public function compile(array $config): TriggerActivationDescriptor
     {
         return new TriggerActivationDescriptor($this->driver(), 'test.orders', "\xFF", []);
@@ -317,6 +344,8 @@ class PublicationInvalidUtf8ValidationMessageNode implements TriggerNode
     public static function type(): string { return 'test.invalid-utf8-validation-message'; }
 
     public function driver(): string { return PublicationInvalidUtf8ValidationMessageDriver::key(); }
+
+    public function source(array $config): string { return PublicationInvalidUtf8ValidationMessageSource::key(); }
 
     public function compile(array $config): TriggerActivationDescriptor
     {
@@ -337,6 +366,8 @@ class PublicationBoundarySourceNode implements TriggerNode
 
     public function driver(): string { return 'test.fake'; }
 
+    public function source(array $config): string { return (string) ($config['routing_key'] ?? ''); }
+
     public function compile(array $config): TriggerActivationDescriptor
     {
         return new TriggerActivationDescriptor($this->driver(), $config['routing_key'], null, []);
@@ -350,6 +381,8 @@ class PublicationBoundaryQualifierNode implements TriggerNode
     public static function type(): string { return 'test.qualifier-boundary'; }
 
     public function driver(): string { return 'test.fake'; }
+
+    public function source(array $config): string { return 'test.orders'; }
 
     public function compile(array $config): TriggerActivationDescriptor
     {

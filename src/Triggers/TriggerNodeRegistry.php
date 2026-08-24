@@ -64,6 +64,7 @@ class TriggerNodeRegistry
                 'driver' => $node->driver(),
                 'outputs' => $node->definition()->outputNames(),
                 'default_config' => $node->defaultConfig(),
+                'compatible_source_keys' => app(TriggerSourceCompatibility::class)->sourceKeys($node),
             ]);
         }, $this->types, array_keys($this->types)));
     }

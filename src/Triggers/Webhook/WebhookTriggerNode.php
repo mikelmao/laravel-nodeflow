@@ -10,6 +10,11 @@ use Nodeflow\Triggers\TriggerSourceRegistry;
 
 class WebhookTriggerNode extends AbstractTriggerNode
 {
+    protected function sourceType(): string
+    {
+        return WebhookTriggerSource::class;
+    }
+
     public static function type(): string
     {
         return 'core.trigger.webhook';
@@ -32,7 +37,7 @@ class WebhookTriggerNode extends AbstractTriggerNode
 
     public function validate(array $config, TriggerSourceRegistry $sources): array
     {
-        return $this->validateForSourceType($config, $sources, WebhookTriggerSource::class);
+        return $this->validateForSourceType($config, $sources);
     }
 
     public function compile(array $config): TriggerActivationDescriptor

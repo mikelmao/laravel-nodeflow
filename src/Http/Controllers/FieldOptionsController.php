@@ -12,6 +12,7 @@ use Nodeflow\Schema\Field;
 use Nodeflow\Schema\OptionSource;
 use Nodeflow\Schema\UnknownOptionSourceException;
 use Nodeflow\Triggers\TriggerNodeRegistry;
+use Nodeflow\Triggers\TriggerSourceCompatibility;
 use Nodeflow\Triggers\TriggerSourceRegistry;
 use Symfony\Component\HttpKernel\Exception\NotFoundHttpException;
 
@@ -92,7 +93,6 @@ class FieldOptionsController extends Controller
         }
 
         $trigger = $triggers->resolve($type);
-        $triggerDefinition = $trigger->definition();
         $driver = $trigger->driver();
         $sources = app(TriggerSourceRegistry::class);
 
@@ -100,17 +100,14 @@ class FieldOptionsController extends Controller
             throw new NotFoundHttpException("Unknown trigger source [{$source}] for node type [{$type}].");
         }
 
-        $compatibility = $trigger->validate(['source' => $source], $sources);
+        $resolvedSource = $sources->resolve($driver, $source);
+        $compatibility = app(TriggerSourceCompatibility::class);
 
-        if (isset($compatibility['source'])) {
+        if (! $compatibility->authorable($trigger, $resolvedSource)) {
             throw new NotFoundHttpException("Trigger source [{$source}] is incompatible with node type [{$type}].");
         }
 
-        $sourceDefinition = $sources->resolve($driver, $source)->definition();
-
-        if ($triggerDefinition->collidingFieldKeys($sourceDefinition) !== []) {
-            throw new NotFoundHttpException("Trigger source [{$source}] collides with reserved fields on [{$type}].");
-        }
+        $sourceDefinition = $resolvedSource->definition();
 
         $declared = $this->field($sourceDefinition->fieldObjects(), $field);
 

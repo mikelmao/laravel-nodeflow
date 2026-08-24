@@ -8,6 +8,7 @@ use Nodeflow\Nodes\HandlesSubject;
 use Nodeflow\Nodes\NodeRegistry;
 use Nodeflow\Triggers\TriggerDriverRegistry;
 use Nodeflow\Triggers\TriggerNodeRegistry;
+use Nodeflow\Triggers\TriggerSourceCompatibility;
 use Nodeflow\Triggers\TriggerSourceRegistry;
 use Throwable;
 
@@ -18,6 +19,7 @@ class GraphValidator
         private TriggerNodeRegistry $triggers,
         private TriggerDriverRegistry $drivers,
         private TriggerSourceRegistry $sources,
+        private TriggerSourceCompatibility $sourceCompatibility,
         private GraphTypeCatalog $types,
     ) {}
 
@@ -254,9 +256,88 @@ class GraphValidator
             $canCompile = false;
         }
 
+        if (! $canCompile || $fieldErrors !== [] || $definition === null || $driverKey === null) {
+            $this->addTriggerFieldErrors($id, $fieldErrors, $errors, $nodeErrors);
+
+            return;
+        }
+
+        try {
+            $sourceKey = $trigger->source($config);
+        } catch (Throwable) {
+            $this->addTriggerError(
+                $id,
+                "Trigger node [{$id}] could not select its trigger source.",
+                $errors,
+                $nodeErrors,
+            );
+
+            return;
+        }
+
+        if (! $this->sources->has($driverKey, $sourceKey)) {
+            $this->addTriggerError(
+                $id,
+                "Trigger node [{$id}] selected source [{$sourceKey}], which is not registered for driver [{$driverKey}].",
+                $errors,
+                $nodeErrors,
+            );
+
+            return;
+        }
+
+        try {
+            $source = $this->sources->resolve($driverKey, $sourceKey);
+
+            if (! $this->sourceCompatibility->supports($trigger, $source)) {
+                $fieldErrors = $this->mergeFieldErrors($fieldErrors, [
+                    'source' => ["The selected source is not compatible with trigger node [{$node['type']}]."],
+                ]);
+            }
+
+            $sourceDefinition = $source->definition();
+        } catch (Throwable) {
+            $this->addTriggerError(
+                $id,
+                "Trigger node [{$id}] source definition could not be validated.",
+                $errors,
+                $nodeErrors,
+            );
+
+            return;
+        }
+
+        $collisions = $definition->collidingFieldKeys($sourceDefinition);
+
+        foreach ($collisions as $field) {
+            $message = "The source field [{$field}] collides with a reserved trigger field.";
+            $errors[] = "Trigger node [{$id}]: {$message}";
+            $nodeErrors[] = ['node' => $id, 'field' => $field, 'message' => $message];
+        }
+
+        if ($collisions === []) {
+            try {
+                $fieldErrors = $this->mergeFieldErrors(
+                    $fieldErrors,
+                    Validator::make(
+                        $config,
+                        $this->sourceCompatibility->combinedDefinition($trigger, $source)->rules(),
+                    )->errors()->toArray(),
+                );
+            } catch (Throwable) {
+                $this->addTriggerError(
+                    $id,
+                    "Trigger node [{$id}] source fields could not be validated.",
+                    $errors,
+                    $nodeErrors,
+                );
+                $canCompile = false;
+            }
+        }
+
         $this->addTriggerFieldErrors($id, $fieldErrors, $errors, $nodeErrors);
 
-        if (! $canCompile || $fieldErrors !== [] || $definition === null || $driverKey === null) {
+        if (! $canCompile || $collisions !== [] || $fieldErrors !== []) {
             return;
         }
 
@@ -284,10 +365,10 @@ class GraphValidator
             return;
         }
 
-        if (! $this->sources->has($descriptor->driver, $descriptor->source)) {
+        if ($descriptor->source !== $sourceKey) {
             $this->addTriggerError(
                 $id,
-                "Trigger node [{$id}] selected source [{$descriptor->source}], which is not registered for driver [{$descriptor->driver}].",
+                "Trigger node [{$id}] compiled source [{$descriptor->source}] but selected source [{$sourceKey}].",
                 $errors,
                 $nodeErrors,
             );
@@ -305,48 +386,6 @@ class GraphValidator
                 $errors,
                 $nodeErrors,
             );
-        }
-
-        try {
-            $source = $this->sources->resolve($descriptor->driver, $descriptor->source);
-            $sourceDefinition = $source->definition();
-        } catch (Throwable) {
-            $this->addTriggerError(
-                $id,
-                "Trigger node [{$id}] source definition could not be validated.",
-                $errors,
-                $nodeErrors,
-            );
-            $this->addTriggerFieldErrors($id, $fieldErrors, $errors, $nodeErrors);
-
-            return;
-        }
-
-        $collisions = $definition->collidingFieldKeys($sourceDefinition);
-
-        foreach ($collisions as $field) {
-            $message = "The source field [{$field}] collides with a reserved trigger field.";
-            $errors[] = "Trigger node [{$id}]: {$message}";
-            $nodeErrors[] = ['node' => $id, 'field' => $field, 'message' => $message];
-        }
-
-        if ($collisions === []) {
-            try {
-                $fieldErrors = $this->mergeFieldErrors(
-                    $fieldErrors,
-                    Validator::make(
-                        $config,
-                        $definition->combinedWith($sourceDefinition)->rules(),
-                    )->errors()->toArray(),
-                );
-            } catch (Throwable) {
-                $this->addTriggerError(
-                    $id,
-                    "Trigger node [{$id}] source fields could not be validated.",
-                    $errors,
-                    $nodeErrors,
-                );
-            }
         }
 
         $this->addTriggerFieldErrors($id, $fieldErrors, $errors, $nodeErrors);

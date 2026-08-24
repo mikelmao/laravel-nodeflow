@@ -7,6 +7,7 @@ use Nodeflow\Nodeflow;
 use Nodeflow\Nodes\NodeRegistry;
 use Nodeflow\Triggers\TriggerDriverRegistry;
 use Nodeflow\Triggers\TriggerNodeRegistry;
+use Nodeflow\Triggers\TriggerSourceCompatibility;
 use Nodeflow\Triggers\TriggerSourceRegistry;
 use Tests\Support\FakeSendNode;
 
@@ -257,6 +258,7 @@ it('rejects a graph referencing a node type that implements neither cardinality 
         app(TriggerNodeRegistry::class),
         app(TriggerDriverRegistry::class),
         app(TriggerSourceRegistry::class),
+        app(TriggerSourceCompatibility::class),
         $types,
     ))->validate(Graph::fromArray(triggeredGraph([
         'start' => 'n1',

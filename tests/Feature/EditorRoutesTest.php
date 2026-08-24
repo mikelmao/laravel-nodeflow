@@ -5,6 +5,7 @@ use Illuminate\Routing\RouteCollection;
 use Illuminate\Support\Facades\Gate;
 use Illuminate\Support\Facades\Route;
 use Nodeflow\Contracts\TenantResolver;
+use Nodeflow\Contracts\TriggerSource;
 use Nodeflow\Editor\SaveDraft;
 use Nodeflow\Editor\StaleDraftException;
 use Nodeflow\Models\Concerns\TenancyGuardSuspension;
@@ -15,6 +16,7 @@ use Nodeflow\Schema\TriggerDefinition;
 use Nodeflow\Triggers\TriggerMatch;
 use Nodeflow\Triggers\TriggerOccurrence;
 use Nodeflow\Triggers\Webhook\WebhookTriggerSource;
+use Tests\Support\FakeOptionSource;
 use Tests\Support\FakeTriggerDriver;
 use Tests\Support\FakeTriggerNode;
 use Tests\Support\FakeTriggerSource;
@@ -64,12 +66,100 @@ class EditorWebhookSource implements WebhookTriggerSource
                 Field::select('account')->default('primary')->options([
                     'primary' => 'Primary',
                 ]),
+                Field::select('template')->optionsFrom(FakeOptionSource::class),
             ]);
     }
 
     public function resolve(TriggerOccurrence $occurrence, array $config): TriggerMatch
     {
         return TriggerMatch::make();
+    }
+}
+
+interface EditorNarrowWebhookSource extends WebhookTriggerSource
+{
+}
+
+class EditorGenericSameDriverSource implements TriggerSource
+{
+    public static function key(): string
+    {
+        return 'test.editor-generic-webhook';
+    }
+
+    public static function driver(): string
+    {
+        return 'webhook';
+    }
+
+    public function definition(): TriggerDefinition
+    {
+        return TriggerDefinition::make('Generic same-driver source');
+    }
+
+    public function resolve(TriggerOccurrence $occurrence, array $config): TriggerMatch
+    {
+        return TriggerMatch::make();
+    }
+}
+
+class EditorNarrowWebhookSourceImplementation implements EditorNarrowWebhookSource
+{
+    public static function key(): string
+    {
+        return 'test.editor-narrow-webhook';
+    }
+
+    public static function driver(): string
+    {
+        return 'webhook';
+    }
+
+    public function definition(): TriggerDefinition
+    {
+        return TriggerDefinition::make('Narrow webhook source')->fields([
+            Field::select('template')->optionsFrom(FakeOptionSource::class),
+        ]);
+    }
+
+    public function resolve(TriggerOccurrence $occurrence, array $config): TriggerMatch
+    {
+        return TriggerMatch::make();
+    }
+}
+
+class EditorNarrowWebhookTriggerNode extends \Nodeflow\Triggers\AbstractTriggerNode
+{
+    public static function type(): string
+    {
+        return 'test.editor-narrow-trigger';
+    }
+
+    public function definition(): TriggerDefinition
+    {
+        return TriggerDefinition::make('Narrow webhook trigger')->fields([
+            Field::select('source')->required(),
+        ]);
+    }
+
+    public function driver(): string
+    {
+        return 'webhook';
+    }
+
+    protected function sourceType(): string
+    {
+        return EditorNarrowWebhookSource::class;
+    }
+
+    public function compile(array $config): \Nodeflow\Triggers\TriggerActivationDescriptor
+    {
+        return new \Nodeflow\Triggers\TriggerActivationDescriptor(
+            'webhook',
+            (string) $config['source'],
+            null,
+            [],
+        );
     }
 }
 
@@ -263,6 +353,41 @@ it('exposes custom trigger nodes and allowlisted sources without class names', f
         'options' => ['primary' => 'Primary'],
     ])->and($response->getContent())
         ->not->toContain(FakeTriggerNode::class, FakeTriggerSource::class, FakeTriggerDriver::class);
+});
+
+it('authors compatible source keys per trigger node without same-driver guesses', function () {
+    allowEverything();
+    Nodeflow::registerTriggerNodes([EditorNarrowWebhookTriggerNode::class]);
+    Nodeflow::registerTriggerSources([
+        EditorWebhookSource::class,
+        EditorGenericSameDriverSource::class,
+        EditorNarrowWebhookSourceImplementation::class,
+    ]);
+
+    $response = editPage($this, $this->flow->id)->assertOk();
+    $nodes = collect($response->json('props.trigger_nodes'));
+
+    expect($nodes->firstWhere('type', 'core.trigger.webhook')['compatible_source_keys'])
+        ->toBe(['test.editor-webhook', 'test.editor-narrow-webhook'])
+        ->and($nodes->firstWhere('type', EditorNarrowWebhookTriggerNode::type())['compatible_source_keys'])
+        ->toBe(['test.editor-narrow-webhook'])
+        ->and($nodes->firstWhere('type', 'core.trigger.model_observer')['compatible_source_keys'])
+        ->toBe([])
+        ->and(collect($response->json('props.trigger_sources.webhook'))->pluck('key')->all())
+        ->toBe([
+            'test.editor-webhook',
+            'test.editor-generic-webhook',
+            'test.editor-narrow-webhook',
+        ]);
+
+    $this->actingAs($this->user)
+        ->getJson("/nodeflow/flows/{$this->flow->id}/trigger-nodes/test.editor-narrow-trigger/sources/test.editor-narrow-webhook/fields/template/options")
+        ->assertOk()
+        ->assertJsonPath('options.welcome', 'Welcome message');
+
+    $this->actingAs($this->user)
+        ->getJson("/nodeflow/flows/{$this->flow->id}/trigger-nodes/test.editor-narrow-trigger/sources/test.editor-webhook/fields/template/options")
+        ->assertNotFound();
 });
 
 it('returns structured collision errors and does not partially publish', function () {
