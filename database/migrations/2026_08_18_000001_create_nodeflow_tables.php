@@ -48,12 +48,15 @@ return new class extends Migration
             $t->foreignId('flow_id')->unique()->constrained('nodeflow_flows')->cascadeOnDelete();
             $t->foreignId('flow_version_id')->unique()->constrained('nodeflow_flow_versions')->cascadeOnDelete();
             $t->string('tenant_id')->index();
-            $t->string('driver')->index();
-            $t->string('source')->index();
-            $t->string('qualifier')->nullable()->index();
+            // Three utf8mb4 columns at 191 characters each total 2,292 bytes,
+            // under MySQL's 3,072-byte index limit while leaving stable IDs roomy.
+            $t->string('driver', 191)->index();
+            $t->string('source', 191)->index();
+            $t->string('qualifier', 191)->nullable()->index();
             $t->string('trigger_node_id');
             $t->json('descriptor');
             $t->timestamps();
+            $t->index(['driver', 'source', 'qualifier']);
         });
 
         Schema::create('nodeflow_webhook_endpoints', function (Blueprint $t) {
