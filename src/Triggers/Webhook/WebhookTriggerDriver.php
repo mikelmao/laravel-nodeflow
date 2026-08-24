@@ -126,8 +126,6 @@ class WebhookTriggerDriver implements TriggerDriver
         return ReplayableSubjectIds::from(function () use ($subjectIds): \Generator {
             try {
                 yield from $subjectIds;
-            } catch (WebhookSourceRejected|CrossTenantSubjectException $e) {
-                throw $e;
             } catch (Throwable) {
                 // Never retain a lazy source exception as `previous`: it may
                 // contain request payload data in its message or context.

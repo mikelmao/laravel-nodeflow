@@ -493,6 +493,45 @@ it('sanitizes a lazy webhook audience failure during the empty check', function 
         ->and($reported->exceptions[0]->getMessage())->not->toContain('secret-before-yield', 'raw-body');
 });
 
+it('sanitizes a source-thrown cross-tenant exception during the empty check', function () {
+    [$url, $secret] = publishedHttpContractWebhook();
+    $reported = new class implements ExceptionHandler
+    {
+        public array $exceptions = [];
+
+        public function report(Throwable $e) { $this->exceptions[] = $e; }
+
+        public function shouldReport(Throwable $e) { return true; }
+
+        public function render($request, Throwable $e) { throw $e; }
+
+        public function renderForConsole($output, Throwable $e): void {}
+    };
+    app()->instance(ExceptionHandler::class, $reported);
+    HttpContractWebhookSource::$resolver = fn (TriggerOccurrence $occurrence): TriggerMatch => TriggerMatch::make()
+        ->forTenant('org-1', 'user', fn (): array => throw new \Nodeflow\Execution\CrossTenantSubjectException(
+            'org-1',
+            'user',
+            (string) $occurrence->payload->payload['user_id'],
+        ));
+    $body = json_encode(['user_id' => 'payload-derived-secret'], JSON_THROW_ON_ERROR);
+    $timestamp = (string) now()->timestamp;
+
+    $response = $this->call(
+        'POST',
+        $url,
+        server: signedWebhookHeaders($timestamp, $body, $secret, 'lazy-source-cross-tenant'),
+        content: $body,
+    )->assertStatus(503)->assertJsonPath('message', 'The webhook run could not be started.');
+
+    expect($response->getContent())->not->toContain('payload-derived-secret')
+        ->and($reported->exceptions)->toHaveCount(1)
+        ->and($reported->exceptions[0])->toBeInstanceOf(WebhookSourceFailure::class)
+        ->and($reported->exceptions[0]->getPrevious())->toBeNull()
+        ->and(get_object_vars($reported->exceptions[0]))->not->toHaveKey('subjectId')
+        ->and($reported->exceptions[0]->getMessage())->not->toContain('payload-derived-secret');
+});
+
 it('sanitizes a lazy webhook audience failure during run traversal', function () {
     [$url, $secret] = publishedHttpContractWebhook();
     $reported = new class implements ExceptionHandler
