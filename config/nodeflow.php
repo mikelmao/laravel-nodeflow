@@ -7,6 +7,7 @@ return [
         'max_steps_per_run' => 1000,
         'subject_chunk' => 500,
         'audience_chunk' => 5000,
+        'materialise_chunk' => 1000,
         'subject_page' => 50,
         'trigger_data_bytes' => 65_536,
     ],

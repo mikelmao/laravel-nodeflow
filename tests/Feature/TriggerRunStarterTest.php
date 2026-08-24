@@ -5,6 +5,7 @@ use Illuminate\Database\Events\TransactionBeginning;
 use Illuminate\Database\Events\QueryExecuted;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Event;
+use Nodeflow\Contracts\BatchTenantResolver;
 use Nodeflow\Contracts\TenantResolver;
 use Nodeflow\Engine\WorkflowEngine;
 use Nodeflow\Execution\CreateRun;
@@ -273,6 +274,59 @@ it('allows an empty matched audience and still records the occurrence', function
         ->and($run->strategy)->toBe('cohort')
         ->and($run->trigger_data)->toBe(['empty' => true])
         ->and($run->engine_workflow_id)->not->toBeNull();
+});
+
+it('checks trigger audiences only once in bounded materialiser batches', function () {
+    config()->set('nodeflow.limits.materialise_chunk', 2);
+    $resolver = new class implements BatchTenantResolver {
+        public array $calls = [];
+
+        public function currentTenantId(): ?string { return null; }
+
+        public function ownsSubject(string $tenantId, string $subjectType, string $subjectId): bool
+        {
+            throw new RuntimeException('Trigger ownership must be checked only by the materialiser.');
+        }
+
+        public function ownedSubjectIds(string $tenantId, string $subjectType, array $subjectIds): array
+        {
+            $this->calls[] = $subjectIds;
+
+            return $subjectIds;
+        }
+    };
+    app()->instance(TenantResolver::class, $resolver);
+    app()->forgetInstance(\Nodeflow\Execution\AudienceMaterialiser::class);
+    app()->forgetInstance(CreateRun::class);
+    app()->forgetInstance(TriggerRunStarter::class);
+
+    $run = app(TriggerRunStarter::class)->start(
+        $this->snapshot,
+        new TriggerTenantMatch('org-1', 'user', ['1', '2', '3']),
+    );
+
+    expect($resolver->calls)->toBe([['1', '2'], ['3']])
+        ->and($run->subjects()->pluck('subject_id')->all())->toBe(['1', '2', '3']);
+});
+
+it('does not consume a lazy audience when an idempotency winner already exists', function () {
+    $first = app(TriggerRunStarter::class)->start(
+        $this->snapshot,
+        new TriggerTenantMatch('org-1', 'user', ['1'], [], 'lazy-winner'),
+    );
+    $consumed = 0;
+    $retry = app(TriggerRunStarter::class)->start(
+        $this->snapshot,
+        new TriggerTenantMatch('org-1', 'user', function () use (&$consumed): array {
+            $consumed++;
+
+            return ['2'];
+        }, [], 'lazy-winner'),
+    );
+
+    expect($retry->id)->toBe($first->id)
+        ->and($consumed)->toBe(0)
+        ->and($retry->subjects()->pluck('subject_id')->all())->toBe(['1']);
 });
 
 it('validates trigger data JSON and byte limits before creating anything', function () {

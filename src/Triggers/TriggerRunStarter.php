@@ -3,16 +3,13 @@
 namespace Nodeflow\Triggers;
 
 use InvalidArgumentException;
-use Nodeflow\Contracts\TenantResolver;
 use Nodeflow\Execution\CreateRun;
-use Nodeflow\Execution\CrossTenantSubjectException;
 use Nodeflow\Models\Run;
 
 class TriggerRunStarter
 {
     public function __construct(
         private CreateRun $createRun,
-        private TenantResolver $tenants,
         private TriggerActivationValidator $activationValidator,
     ) {}
 
@@ -29,21 +26,10 @@ class TriggerRunStarter
             );
         }
 
-        $subjectIds = array_values(array_map(
-            static fn (mixed $subjectId): string => (string) $subjectId,
-            iterator_to_array($match->subjectIds, false),
-        ));
-
-        foreach ($subjectIds as $subjectId) {
-            if (! $this->tenants->ownsSubject($activation->tenantId, $match->subjectType, $subjectId)) {
-                throw new CrossTenantSubjectException($activation->tenantId, $match->subjectType, $subjectId);
-            }
-        }
-
         return $this->createRun->forVersion(
             $version,
             $match->subjectType,
-            $subjectIds,
+            $match->subjectIds,
             $entryNodeId,
             [
                 'started_via' => $activation->driver,
