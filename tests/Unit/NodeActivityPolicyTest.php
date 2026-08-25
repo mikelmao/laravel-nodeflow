@@ -63,3 +63,23 @@ it('rejects invalid non-retryable error type lists', function (mixed $value) {
     ['   '],
     [123],
 ]);
+
+it('rejects a loaded non-throwable non-retryable error type', function () {
+    expect(fn () => NodeActivityPolicy::fromArray([
+        'non_retryable_error_types' => [\stdClass::class],
+    ]))->toThrow(\InvalidArgumentException::class, 'non_retryable_error_types');
+});
+
+it('preserves an unavailable host exception class name for runtime matching', function () {
+    $exception = 'Vendor\\OptionalHost\\UnavailableException';
+
+    expect(NodeActivityPolicy::fromArray([
+        'non_retryable_error_types' => [$exception],
+    ])->toArray()['non_retryable_error_types'])->toBe([$exception]);
+});
+
+it('accepts a loaded throwable non-retryable error type', function () {
+    expect(NodeActivityPolicy::fromArray([
+        'non_retryable_error_types' => [\RuntimeException::class],
+    ])->toArray()['non_retryable_error_types'])->toBe([\RuntimeException::class]);
+});

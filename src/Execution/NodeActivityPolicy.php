@@ -10,7 +10,11 @@ final readonly class NodeActivityPolicy
 {
     /**
      * @param int|list<int> $backoff
-     * @param list<string> $nonRetryableErrorTypes
+     * @param list<class-string<\Throwable>> $nonRetryableErrorTypes
+     *
+     * Loaded symbols must be Throwable types. Unresolved class names are kept
+     * deliberately: optional host exception packages need not be installed at
+     * publication time, and runtime matching uses the stored name exactly.
      */
     private function __construct(
         public int $maxAttempts,
@@ -134,6 +138,11 @@ final readonly class NodeActivityPolicy
         foreach ($errorTypes as $errorType) {
             if (! is_string($errorType) || trim($errorType) === '') {
                 throw new InvalidArgumentException('Activity policy non_retryable_error_types must be a list of non-empty strings.');
+            }
+
+            if ((class_exists($errorType) || interface_exists($errorType))
+                && ! is_a($errorType, \Throwable::class, true)) {
+                throw new InvalidArgumentException('Activity policy non_retryable_error_types must contain Throwable class names.');
             }
         }
     }

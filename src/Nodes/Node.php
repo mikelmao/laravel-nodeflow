@@ -31,7 +31,12 @@ abstract class Node
     /** Per-attempt activity start-to-close timeout in seconds. */
     public ?int $timeout = null;
 
-    /** @var list<class-string<\Throwable>> Error types that must not be retried. */
+    /**
+     * @var list<class-string<\Throwable>> Error types that must not be retried.
+     *
+     * Unavailable class names remain publishable for optional host packages;
+     * runtime matching uses their stored name exactly.
+     */
     public array $nonRetryableErrorTypes = [];
 
     /** @return array<string, array<string>> field key => messages */
