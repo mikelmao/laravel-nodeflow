@@ -418,14 +418,14 @@ it('returns a retryable failure and recovers the same idempotent run after engin
         ->and($engine->calls)->toBe(2);
 });
 
-it('preserves a nonempty lazy webhook audience after checking it for emptiness', function () {
+it('admits the first nonempty lazy webhook audience without replaying its factory', function () {
     [$url, $secret] = publishedHttpContractWebhook();
     $replays = 0;
     HttpContractWebhookSource::$resolver = function () use (&$replays): TriggerMatch {
         return TriggerMatch::make()->forTenant('org-1', 'user', function () use (&$replays): array {
             $replays++;
 
-            return [10, 20];
+            return $replays === 1 ? [10, 20] : [];
         });
     };
     $body = json_encode(['user_id' => '42'], JSON_THROW_ON_ERROR);
@@ -438,8 +438,40 @@ it('preserves a nonempty lazy webhook audience after checking it for emptiness',
         content: $body,
     )->assertAccepted();
 
-    expect($replays)->toBe(2)
+    expect($replays)->toBe(1)
         ->and(Run::withoutTenancy()->sole()->subjects()->pluck('subject_id')->all())->toBe(['10', '20']);
+});
+
+it('does not consume a lazy webhook audience when an idempotent delivery already has a run', function () {
+    [$url, $secret] = publishedHttpContractWebhook();
+    $resolutions = 0;
+    $retryAudienceCalls = 0;
+    HttpContractWebhookSource::$resolver = function () use (&$resolutions, &$retryAudienceCalls): TriggerMatch {
+        $resolutions++;
+
+        if ($resolutions === 1) {
+            return TriggerMatch::make()->forTenant('org-1', 'user', ['42']);
+        }
+
+        return TriggerMatch::make()->forTenant('org-1', 'user', function () use (&$retryAudienceCalls): array {
+            $retryAudienceCalls++;
+
+            throw new RuntimeException('a redelivery audience must not be consumed');
+        });
+    };
+    $body = json_encode(['user_id' => '42'], JSON_THROW_ON_ERROR);
+    $timestamp = (string) now()->timestamp;
+    $headers = signedWebhookHeaders($timestamp, $body, $secret, 'lazy-idempotent-winner');
+
+    $first = $this->call('POST', $url, server: $headers, content: $body)->assertAccepted();
+    $retry = $this->call('POST', $url, server: $headers, content: $body)
+        ->assertAccepted()
+        ->assertJsonPath('duplicate', true)
+        ->assertJsonPath('run_id', $first->json('run_id'));
+
+    expect($retryAudienceCalls)->toBe(0)
+        ->and(Run::withoutTenancy()->count())->toBe(1)
+        ->and(Run::withoutTenancy()->sole()->subjects()->pluck('subject_id')->all())->toBe(['42']);
 });
 
 it('rejects an empty lazy webhook audience', function () {
@@ -459,7 +491,7 @@ it('rejects an empty lazy webhook audience', function () {
     expect(Run::withoutTenancy()->count())->toBe(0);
 });
 
-it('sanitizes a lazy webhook audience failure during the empty check', function () {
+it('sanitizes a lazy webhook audience failure before the first subject', function () {
     [$url, $secret] = publishedHttpContractWebhook();
     $reported = new class implements ExceptionHandler
     {
@@ -490,10 +522,11 @@ it('sanitizes a lazy webhook audience failure during the empty check', function 
         ->and($reported->exceptions)->toHaveCount(1)
         ->and($reported->exceptions[0])->toBeInstanceOf(WebhookSourceFailure::class)
         ->and($reported->exceptions[0]->getPrevious())->toBeNull()
-        ->and($reported->exceptions[0]->getMessage())->not->toContain('secret-before-yield', 'raw-body');
+        ->and($reported->exceptions[0]->getMessage())->not->toContain('secret-before-yield', 'raw-body')
+        ->and(Run::withoutTenancy()->count())->toBe(0);
 });
 
-it('sanitizes a source-thrown cross-tenant exception during the empty check', function () {
+it('sanitizes a source-thrown cross-tenant exception before the first subject', function () {
     [$url, $secret] = publishedHttpContractWebhook();
     $reported = new class implements ExceptionHandler
     {
@@ -529,7 +562,8 @@ it('sanitizes a source-thrown cross-tenant exception during the empty check', fu
         ->and($reported->exceptions[0])->toBeInstanceOf(WebhookSourceFailure::class)
         ->and($reported->exceptions[0]->getPrevious())->toBeNull()
         ->and(get_object_vars($reported->exceptions[0]))->not->toHaveKey('subjectId')
-        ->and($reported->exceptions[0]->getMessage())->not->toContain('payload-derived-secret');
+        ->and($reported->exceptions[0]->getMessage())->not->toContain('payload-derived-secret')
+        ->and(Run::withoutTenancy()->count())->toBe(0);
 });
 
 it('sanitizes a lazy webhook audience failure during run traversal', function () {
@@ -567,7 +601,8 @@ it('sanitizes a lazy webhook audience failure during run traversal', function ()
         ->and($reported->exceptions)->toHaveCount(1)
         ->and($reported->exceptions[0])->toBeInstanceOf(WebhookSourceFailure::class)
         ->and($reported->exceptions[0]->getPrevious())->toBeNull()
-        ->and($reported->exceptions[0]->getMessage())->not->toContain('secret-after-yield', 'raw-body');
+        ->and($reported->exceptions[0]->getMessage())->not->toContain('secret-after-yield', 'raw-body')
+        ->and(Run::withoutTenancy()->count())->toBe(0);
 });
 
 it('translates malformed lazy webhook audiences as source failures', function () {

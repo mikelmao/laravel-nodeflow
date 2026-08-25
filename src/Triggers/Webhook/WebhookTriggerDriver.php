@@ -104,10 +104,6 @@ class WebhookTriggerDriver implements TriggerDriver
         $resolved = $matches[0];
         $subjectIds = $this->sanitisedAudience($resolved->subjectIds);
 
-        if ($subjectIds->isEmpty()) {
-            throw new WebhookSourceRejected('The webhook source must return one non-empty audience for this flow.');
-        }
-
         try {
             return $this->runs->start($activation, new TriggerTenantMatch(
                 tenantId: $resolved->tenantId,
@@ -124,12 +120,22 @@ class WebhookTriggerDriver implements TriggerDriver
     private function sanitisedAudience(ReplayableSubjectIds $subjectIds): ReplayableSubjectIds
     {
         return ReplayableSubjectIds::from(function () use ($subjectIds): \Generator {
+            $empty = true;
+
             try {
-                yield from $subjectIds;
+                foreach ($subjectIds as $subjectId) {
+                    $empty = false;
+
+                    yield $subjectId;
+                }
             } catch (Throwable) {
                 // Never retain a lazy source exception as `previous`: it may
                 // contain request payload data in its message or context.
                 throw new WebhookSourceFailure('Webhook source resolution failed.');
+            }
+
+            if ($empty) {
+                throw new WebhookSourceRejected('The webhook source must return one non-empty audience for this flow.');
             }
         });
     }
