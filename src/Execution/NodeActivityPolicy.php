@@ -8,6 +8,8 @@ use Workflow\V2\Support\ActivityOptions;
 
 final readonly class NodeActivityPolicy
 {
+    public const SNAPSHOT_VERSION = 1;
+
     /**
      * @param int|list<int> $backoff
      * @param list<class-string<\Throwable>> $nonRetryableErrorTypes
@@ -21,20 +23,16 @@ final readonly class NodeActivityPolicy
         public int|array $backoff,
         public ?int $startToCloseTimeout,
         public array $nonRetryableErrorTypes,
-    ) {
-        self::assertMaxAttempts($this->maxAttempts);
-        self::assertBackoff($this->backoff);
-        self::assertTimeout($this->startToCloseTimeout);
-        self::assertNonRetryableErrorTypes($this->nonRetryableErrorTypes);
-    }
+    ) {}
 
     public static function fromNode(Node $node): self
     {
-        return new self(
+        return self::fromValues(
             maxAttempts: $node->tries,
             backoff: $node->backoff,
             startToCloseTimeout: $node->timeout,
             nonRetryableErrorTypes: $node->nonRetryableErrorTypes,
+            validateLoadedThrowableTypes: true,
         );
     }
 
@@ -53,21 +51,61 @@ final readonly class NodeActivityPolicy
             ? $policy['non_retryable_error_types']
             : [];
 
-        self::assertMaxAttempts($maxAttempts);
-        self::assertBackoff($backoff);
-        self::assertTimeout($startToCloseTimeout);
-        self::assertNonRetryableErrorTypes($nonRetryableErrorTypes);
-
-        return new self(
+        return self::fromValues(
             maxAttempts: $maxAttempts,
             backoff: $backoff,
             startToCloseTimeout: $startToCloseTimeout,
             nonRetryableErrorTypes: $nonRetryableErrorTypes,
+            validateLoadedThrowableTypes: true,
+        );
+    }
+
+    /**
+     * Decode an activity policy frozen by this package at publication time.
+     *
+     * Unmarked values predate the reserved runtime snapshot and are author
+     * metadata, not executable policy. This method intentionally performs
+     * structural validation only: workflow replay must not depend on which
+     * optional exception classes happen to be loaded by the current worker.
+     */
+    public static function fromPublishedSnapshot(mixed $snapshot): self
+    {
+        if (! is_array($snapshot) || ! array_key_exists('snapshot_version', $snapshot)) {
+            return self::defaults();
+        }
+
+        if ($snapshot['snapshot_version'] !== self::SNAPSHOT_VERSION) {
+            throw new InvalidArgumentException(sprintf(
+                'Unsupported activity policy snapshot_version [%s].',
+                is_scalar($snapshot['snapshot_version']) || $snapshot['snapshot_version'] === null
+                    ? var_export($snapshot['snapshot_version'], true)
+                    : get_debug_type($snapshot['snapshot_version']),
+            ));
+        }
+
+        foreach ([
+            'max_attempts',
+            'backoff',
+            'start_to_close_timeout',
+            'non_retryable_error_types',
+        ] as $field) {
+            if (! array_key_exists($field, $snapshot)) {
+                throw new InvalidArgumentException("Published activity policy snapshot is missing [{$field}].");
+            }
+        }
+
+        return self::fromValues(
+            maxAttempts: $snapshot['max_attempts'],
+            backoff: $snapshot['backoff'],
+            startToCloseTimeout: $snapshot['start_to_close_timeout'],
+            nonRetryableErrorTypes: $snapshot['non_retryable_error_types'],
+            validateLoadedThrowableTypes: false,
         );
     }
 
     /**
      * @return array{
+     *     snapshot_version: int,
      *     max_attempts: int,
      *     backoff: int|list<int>,
      *     start_to_close_timeout: int|null,
@@ -77,11 +115,47 @@ final readonly class NodeActivityPolicy
     public function toArray(): array
     {
         return [
+            'snapshot_version' => self::SNAPSHOT_VERSION,
             'max_attempts' => $this->maxAttempts,
             'backoff' => $this->backoff,
             'start_to_close_timeout' => $this->startToCloseTimeout,
             'non_retryable_error_types' => $this->nonRetryableErrorTypes,
         ];
+    }
+
+    /**
+     * @param int|list<int> $backoff
+     * @param list<class-string<\Throwable>> $nonRetryableErrorTypes
+     */
+    private static function fromValues(
+        mixed $maxAttempts,
+        mixed $backoff,
+        mixed $startToCloseTimeout,
+        mixed $nonRetryableErrorTypes,
+        bool $validateLoadedThrowableTypes,
+    ): self {
+        self::assertMaxAttempts($maxAttempts);
+        self::assertBackoff($backoff);
+        self::assertTimeout($startToCloseTimeout);
+        self::assertNonRetryableErrorTypes($nonRetryableErrorTypes, $validateLoadedThrowableTypes);
+
+        return new self(
+            maxAttempts: $maxAttempts,
+            backoff: $backoff,
+            startToCloseTimeout: $startToCloseTimeout,
+            nonRetryableErrorTypes: $nonRetryableErrorTypes,
+        );
+    }
+
+    private static function defaults(): self
+    {
+        return self::fromValues(
+            maxAttempts: Node::DEFAULT_TRIES,
+            backoff: Node::DEFAULT_BACKOFF,
+            startToCloseTimeout: null,
+            nonRetryableErrorTypes: [],
+            validateLoadedThrowableTypes: false,
+        );
     }
 
     public function activityOptions(): ActivityOptions
@@ -129,7 +203,10 @@ final readonly class NodeActivityPolicy
         }
     }
 
-    private static function assertNonRetryableErrorTypes(mixed $errorTypes): void
+    private static function assertNonRetryableErrorTypes(
+        mixed $errorTypes,
+        bool $validateLoadedThrowableTypes,
+    ): void
     {
         if (! is_array($errorTypes) || ! array_is_list($errorTypes)) {
             throw new InvalidArgumentException('Activity policy non_retryable_error_types must be a list of non-empty strings.');
@@ -140,7 +217,8 @@ final readonly class NodeActivityPolicy
                 throw new InvalidArgumentException('Activity policy non_retryable_error_types must be a list of non-empty strings.');
             }
 
-            if ((class_exists($errorType) || interface_exists($errorType))
+            if ($validateLoadedThrowableTypes
+                && (class_exists($errorType) || interface_exists($errorType))
                 && ! is_a($errorType, \Throwable::class, true)) {
                 throw new InvalidArgumentException('Activity policy non_retryable_error_types must contain Throwable class names.');
             }

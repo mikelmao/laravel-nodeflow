@@ -78,9 +78,8 @@ class FlowInterpreter extends Workflow
                 $send = null;
             } elseif ($step instanceof RunNodeStep) {
                 $definition = $graph->node($step->nodeId);
-                $policy = NodeActivityPolicy::fromArray(
-                    $definition['runtime']['activity'] ?? [],
-                );
+                $runtime = is_array($definition['runtime'] ?? null) ? $definition['runtime'] : [];
+                $policy = NodeActivityPolicy::fromPublishedSnapshot($runtime['activity'] ?? null);
 
                 $send = self::activity(
                     RunNodeActivity::class,

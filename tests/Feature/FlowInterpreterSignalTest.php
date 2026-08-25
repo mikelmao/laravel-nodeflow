@@ -177,6 +177,50 @@ it('keeps an in-flight legacy node activity waiting during replay', function () 
         ->and($step->commands)->toBe([]);
 });
 
+it('cold replays unmarked malformed activity metadata without replacing its legacy activity', function () {
+    $graph = triggeredExitGraph();
+    $graph['nodes'][1]['runtime'] = ['activity' => 'legacy author metadata'];
+
+    $step = WorkflowFiberRunner::forClass(
+        FlowInterpreter::class,
+        'legacy-malformed-node-activity',
+        'run-1',
+        [42],
+        'avro',
+        [[
+            'sequence' => 1,
+            'event_type' => 'WorkflowStarted',
+            'payload' => [
+                'workflow_class' => FlowInterpreter::class,
+                'workflow_type' => FlowInterpreter::class,
+            ],
+            'recorded_at' => '2026-08-24T00:00:00+00:00',
+        ], [
+            'sequence' => 2,
+            'event_type' => 'ActivityCompleted',
+            'payload' => [
+                'sequence' => 1,
+                'result' => Serializer::serializeWithCodec('avro', $graph),
+                'payload_codec' => 'avro',
+            ],
+            'recorded_at' => '2026-08-24T00:00:01+00:00',
+        ], [
+            'sequence' => 3,
+            'event_type' => 'ActivityScheduled',
+            'payload' => [
+                'sequence' => 2,
+                'activity_class' => RunNodeActivity::class,
+                'activity_type' => RunNodeActivity::class,
+            ],
+            'recorded_at' => '2026-08-24T00:00:02+00:00',
+        ]],
+    )->step();
+
+    expect($step->activity?->activity)->toBe(RunNodeActivity::class)
+        ->and($step->command)->toBeNull()
+        ->and($step->commands)->toBe([]);
+});
+
 it('does not version or resolve a workflow whose payload has an explicit entry', function () {
     $runner = WorkflowFiberRunner::forClass(
         FlowInterpreter::class,

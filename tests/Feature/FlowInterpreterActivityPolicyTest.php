@@ -93,6 +93,33 @@ it('uses stable Nodeflow defaults when a legacy graph has no activity policy', f
         ->and($execution->activityArguments())->toBe([$runId, 'retrying']);
 });
 
+it('uses stable Nodeflow defaults for unmarked legacy activity metadata', function () {
+    $flow = Flow::create(['name' => 'Unmarked policy', 'status' => 'draft']);
+    app(PublishFlow::class)->publish($flow, triggeredGraph([
+        'start' => 'retrying',
+        'nodes' => [
+            ['id' => 'retrying', 'type' => 'test.retrying-audience', 'config' => []],
+            ['id' => 'exit', 'type' => 'core.exit', 'config' => []],
+        ],
+        'edges' => [['from' => 'retrying', 'output' => 'accepted', 'to' => 'exit']],
+    ]));
+
+    $version = $flow->fresh()->currentVersion()->sole();
+    $graph = $version->graph;
+    $graph['nodes'][1]['runtime']['activity'] = ['max_attempts' => 99];
+    $version->update(['graph' => $graph]);
+
+    [$execution, $runId] = scheduleFlowInterpreterNodeActivity($flow);
+
+    expect($execution->retry_policy)->toMatchArray([
+        'max_attempts' => 3,
+        'backoff_seconds' => [1, 2, 5, 10, 15, 30, 60, 120],
+        'start_to_close_timeout' => null,
+        'non_retryable_error_types' => [],
+    ])
+        ->and($execution->activityArguments())->toBe([$runId, 'retrying']);
+});
+
 /** @return array{0: ActivityExecution, 1: int} */
 function scheduleFlowInterpreterNodeActivity(Flow $flow): array
 {

@@ -8,6 +8,7 @@ it('creates activity options from a node policy snapshot', function () {
     $policy = NodeActivityPolicy::fromNode(new FakeRetryingAudienceNode);
 
     expect($policy->toArray())->toBe([
+        'snapshot_version' => 1,
         'max_attempts' => 5,
         'backoff' => [1, 5, 30, 120],
         'start_to_close_timeout' => 90,
@@ -25,11 +26,70 @@ it('creates activity options from a node policy snapshot', function () {
 
 it('uses node defaults for a legacy policy snapshot with no fields', function () {
     expect(NodeActivityPolicy::fromArray([])->toArray())->toBe([
+        'snapshot_version' => 1,
         'max_attempts' => 3,
         'backoff' => [1, 2, 5, 10, 15, 30, 60, 120],
         'start_to_close_timeout' => null,
         'non_retryable_error_types' => [],
     ]);
+});
+
+it('uses stable defaults for unmarked published activity metadata', function (mixed $legacyMetadata) {
+    expect(NodeActivityPolicy::fromPublishedSnapshot($legacyMetadata)->toArray())->toBe([
+        'snapshot_version' => 1,
+        'max_attempts' => 3,
+        'backoff' => [1, 2, 5, 10, 15, 30, 60, 120],
+        'start_to_close_timeout' => null,
+        'non_retryable_error_types' => [],
+    ]);
+})->with([
+    [['max_attempts' => 99]],
+    ['legacy author metadata'],
+    [['max_attempts' => 'not a policy']],
+]);
+
+it('rejects malformed or unsupported marked published snapshots', function (array $snapshot, string $message) {
+    expect(fn () => NodeActivityPolicy::fromPublishedSnapshot($snapshot))
+        ->toThrow(\InvalidArgumentException::class, $message);
+})->with([
+    [[
+        'snapshot_version' => 1,
+        'max_attempts' => 5,
+        'backoff' => [1, 5],
+        'start_to_close_timeout' => 90,
+    ], 'non_retryable_error_types'],
+    [[
+        'snapshot_version' => 1,
+        'max_attempts' => 5,
+        'backoff' => [1, 5],
+        'start_to_close_timeout' => 90,
+        'non_retryable_error_types' => 'not-a-list',
+    ], 'non_retryable_error_types'],
+    [[
+        'snapshot_version' => 2,
+        'max_attempts' => 5,
+        'backoff' => [1, 5],
+        'start_to_close_timeout' => 90,
+        'non_retryable_error_types' => [],
+    ], 'snapshot_version'],
+]);
+
+it('decodes a marked published snapshot without consulting the live class table', function () {
+    $suffix = str_replace('.', '', uniqid('', true));
+    $exception = 'Nodeflow\\Tests\\RuntimePolicyNonThrowable'.$suffix;
+    $snapshot = [
+        'snapshot_version' => 1,
+        'max_attempts' => 5,
+        'backoff' => [1, 5],
+        'start_to_close_timeout' => 90,
+        'non_retryable_error_types' => [$exception],
+    ];
+
+    $before = NodeActivityPolicy::fromPublishedSnapshot($snapshot)->toArray();
+    eval('namespace Nodeflow\\Tests; class RuntimePolicyNonThrowable'.$suffix.' {}');
+    $after = NodeActivityPolicy::fromPublishedSnapshot($snapshot)->toArray();
+
+    expect($before)->toBe($after);
 });
 
 it('rejects invalid max attempts', function (mixed $value) {

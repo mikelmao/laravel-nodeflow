@@ -47,6 +47,7 @@ it('increments the version on each publish and leaves earlier versions untouched
 
     expect($second->version)->toBe(2)
         ->and($first->fresh()->graph['nodes'][1]['runtime']['activity'])->toBe([
+            'snapshot_version' => 1,
             'max_attempts' => 3,
             'backoff' => [1, 2, 5, 10, 15, 30, 60, 120],
             'start_to_close_timeout' => null,
@@ -77,6 +78,7 @@ it('persists activity policy snapshots for executable nodes without changing tri
     expect($nodes['retrying']['runtime'])->toBe([
         'trace_id' => 'author-trace',
         'activity' => [
+            'snapshot_version' => 1,
             'max_attempts' => 5,
             'backoff' => [1, 5, 30, 120],
             'start_to_close_timeout' => 90,
@@ -105,6 +107,7 @@ it('resolves executable aliases before snapshotting their activity policies', fu
 
     expect($retrying['type'])->toBe('test.legacy-retrying-audience')
         ->and($retrying['runtime']['activity'])->toBe([
+            'snapshot_version' => 1,
             'max_attempts' => 5,
             'backoff' => [1, 5, 30, 120],
             'start_to_close_timeout' => 90,
