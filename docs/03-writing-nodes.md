@@ -284,6 +284,11 @@ Node bodies run as durable activities. Each publication validates and freezes th
 policy. The durable engine applies the frozen policy when it executes and, when eligible, retries the
 same logical node activity. Changing the node class later does not change an already-published version.
 
+When upgrading, a legacy published version without a marked activity snapshot uses Nodeflow's current
+defaults for activities scheduled after the upgrade: three attempts and the default backoff, rather
+than the previous runtime's one attempt. Activities already scheduled durably retain their recorded
+policy. Drain live legacy runs first, or ensure their external effects are idempotent across retries.
+
 An uncaught subject-node exception is isolated to that subject by `NodeRunner`; it does not retry the
 whole activity. An audience-node exception propagates and can retry the whole durable node activity.
 There is no automatic `(run, node, subject, attempt)` deduplication key.
