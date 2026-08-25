@@ -28,6 +28,8 @@ php artisan config:cache
 
 No shipped setting other than `nodeflow.tenancy` reads an environment variable directly. You may add host-specific `env()` calls to a published config file, but that becomes application configuration rather than a package-defined variable.
 
+Audience materialization happens as part of run creation, whether that start originates in an HTTP request, a trigger worker, or another queued application path. Keep `materialise_chunk` within the ownership resolver's and database's measured capacity; it bounds one admission batch, not later node-execution chunks.
+
 ## Trigger and webhook limits
 
 `trigger_data_bytes` is the one numeric setting that deliberately accepts a digit-only string, which is useful when a published host config reads an environment value. Nodeflow casts that form to an integer, requires a value greater than zero, JSON-encodes the source-owned array with exceptions enabled, and compares the encoded byte length with the limit. A non-array, non-null value or non-JSON-safe data is rejected separately.

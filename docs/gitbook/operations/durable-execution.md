@@ -32,6 +32,8 @@ The loop is sequential. If two branches each reach a wait, their waits do not ov
 | Audience node | `nodeflow.limits.audience_chunk` | 5000 subjects |
 | Run-subject view page | `nodeflow.limits.subject_page` | 50 subjects |
 
+Run-audience admission is separately bounded by `nodeflow.limits.materialise_chunk` (default `1000`): ownership and inserts happen per materialization batch. For six-figure audiences, bind `BatchTenantResolver` in the host so those ownership checks stay set-based; see [Required contracts](../integration/required-contracts.md).
+
 An audience node is preferred when a class implements both audience and subject interfaces. It receives one audience chunk at a time. A subject node resolves and invokes each subject in its chunk individually. Do not assume one audience node invocation represents the whole run.
 
 ## Wait and resume safely
@@ -61,11 +63,15 @@ There is no persisted “signal already sent” marker. A duplicate or concurren
 
 Cancelling a subject is not a workflow-wide cancellation. It removes that subject from its current cursor; remaining subjects keep progressing. The engine facade also has `cancel()`, but Nodeflow does not expose a run-level cancellation service or promise a run-status transition for it.
 
-## Replay, failure, and deploy safety
+## Replay, retry, failure, and deploy safety
 
 On a restart, the durable engine replays `FlowInterpreter` history and re-runs only deterministic control flow. Its activity boundaries keep Nodeflow database writes and node side effects outside that replayed workflow code. Preserve the `FlowInterpreter` class and registered node types required by live versions when deploying; check them before workers take work with [Health checks](health-checks.md).
 
-The current interpreter writes Nodeflow run status `pending` → `running` → `completed`. A missing node type or activity exception can fail the durable engine execution while the Nodeflow `Run` remains `running`; there is no automatic transition to `failed` or `blocked`, status reconciliation, or packaged resume/recovery service. A direct alias prevents a future affected activity from failing only when it is registered before that activity attempts resolution; it does not automatically recover an execution that already failed.
+Each `RunNodeActivity` is one logical durable activity. Its retry count, backoff, timeout, and non-retryable error names are frozen when the graph is published and persisted with the activity execution. A retry may repeat the activity body after an externally visible action has already succeeded but before the activity recorded completion. Give every external action a deterministic idempotency key derived from stable run, node, and subject/chunk identity.
+
+The normal interpreter writes Nodeflow run status `pending` → `running` → `completed`. A terminal durable `WorkflowFailed` for `FlowInterpreter` is projected by a queued, after-commit listener: it atomically marks the Nodeflow run `failed`, records the bounded run error and durable event time in `ended_at`, and marks any still-active subjects failed while clearing their cursors. That projection job retries transient failures.
+
+This is deliberately not an atomic outbox. If broker publication of the after-commit listener fails after the durable transaction commits, the durable failure may not reach Nodeflow until queue/runtime operations or a future reconciliation process repairs it. Monitor durable failures and queued projection jobs together, and include reconciliation in the operational roadmap before relying on failure status for a deadline.
 
 For an already failed engine execution, inspect its durable history, current engine state, and `workflow:v2:doctor` output after fixing the root cause. Then use an application-defined repair process, or start a safe new idempotent run when the business operation permits it. Do not invent a generic resume command or mark the Nodeflow run complete by hand.
 

@@ -99,7 +99,13 @@ class SendMessage extends Node implements HandlesSubject
 }
 ```
 
-`type()` is the stable graph identifier. `definition()` supplies the palette label, outputs, and fields; those output names are the only labels an outgoing edge may use. `defaultConfig()` supplies initial editor configuration. `Node` also exposes `public int $tries = 3`, but the current runner does not read it: changing `$tries` does not configure retries in this version. Register the class with `Nodeflow::register([SendMessage::class])` in the host provider.
+`type()` is the stable graph identifier. `definition()` supplies the palette label, outputs, and fields; those output names are the only labels an outgoing edge may use. `defaultConfig()` supplies initial editor configuration. Register the class with `Nodeflow::register([SendMessage::class])` in the host provider.
+
+## Declare durable activity policy
+
+Every executable node inherits these public properties: `$tries` (default `3`), `$backoff` (default `[1, 2, 5, 10, 15, 30, 60, 120]` seconds), `$timeout` (per-attempt start-to-close seconds, default `null`), and `$nonRetryableErrorTypes` (default `[]`). Nodeflow validates them and freezes their values into the published graph's `runtime.activity` snapshot. A new publication overwrites author metadata with a fresh marked snapshot; an unmarked legacy `runtime.activity` value defaults safely at execution. The interpreter uses the immutable snapshot for the durable `RunNodeActivity`; changing a node class later affects only a newly published version, never an existing run.
+
+Keep overrides public and type-compatible with the base declarations: `int $tries`, `int|array $backoff`, `?int $timeout`, and `array $nonRetryableErrorTypes`. Publication rejects malformed values. A loaded name in `$nonRetryableErrorTypes` must name a `Throwable`; an unresolved optional class name is allowed and is matched by its stored name at runtime. Published snapshots are structurally decoded during replay, so optional-package availability on a worker cannot change a recorded workflow command.
 
 ## Choose cardinality deliberately
 
@@ -159,11 +165,11 @@ Contexts intentionally do not expose the mutable `Run` model. Keep application w
 | `failures(): array` | Return `subjectId => message`; numeric subject IDs become integer PHP array keys. |
 | `subjectCount(): int` | Count IDs across outputs only, excluding failures. |
 
-For subject nodes, an uncaught exception becomes `ClassName: message` on that subject, marks it failed, and the remaining subjects continue. Returning `fail()` has the same per-subject isolation with your chosen message. An exception from an audience node propagates from `NodeRunner`; batch implementations must decide whether to partition recoverable failures or abort the batch.
+For subject nodes, an uncaught exception becomes `ClassName: message` on that subject, marks it failed, and the remaining subjects continue. Returning `fail()` has the same per-subject isolation with your chosen message. An exception from an audience node propagates from `NodeRunner`, so it fails the node activity and the durable engine retries that one logical node activity under its published policy. Batch implementations must decide whether to partition recoverable failures or abort the batch.
 
 An audience result may contain only IDs from that call's `subjectIds()`, and each ID may appear at most once across all outputs and failures. Any current chunk ID absent from both outputs and failures completes and leaves the flow, even when another ID has an output. Current runner updates do not constrain returned IDs to the node that just ran, so an extraneous active ID in the same run and subject type can advance or fail a subject at another node. Validate or filter IDs in node code before returning the result.
 
-Every node that sends, charges, or writes to another system must return a no-side-effect test result when `isTest()` is true. The current runtime does not consume `$tries`, so do not rely on it for retries. Still make external work idempotent with a stable key such as run ID, node ID, and subject ID: a host can invoke a node again and a future retry policy must not duplicate a completed side effect. Report provider exceptions server-side and return a safe failure message. Do not pass raw provider messages to `fail()` or let them escape unhandled: they may persist in `last_error` and the run view.
+Every node that sends, charges, or writes to another system must return a no-side-effect test result when `isTest()` is true. Make external work idempotent with a stable key such as run ID, node ID, and subject ID (and, for audience work, a stable per-subject or per-chunk key): an audience-node transport or infrastructure exception retries the whole durable node activity and must not duplicate a completed side effect. A stable business rejection should instead return a `NodeResult` failure; it is a recorded business outcome, not a retry signal. Report provider exceptions server-side and return a safe failure message. Do not pass raw provider messages to `fail()` or let them escape unhandled: they may persist in `last_error` and the run view.
 
 ## Node review checklist
 
@@ -171,7 +177,7 @@ Every node that sends, charges, or writes to another system must return a no-sid
 - Does it implement at least one cardinality interface and register with `Nodeflow::register()`?
 - Does each field have server-side rules appropriate to its value?
 - Does test mode avoid every external side effect?
-- Are side effects safe if the host invokes the node again or adds a retry policy?
+- Are side effects safe when this published node activity retries?
 - Does each subject receive an output, a failure, or deliberate completion?
 - Does an audience result contain each current chunk ID at most once and no external IDs?
 - If it implements both interfaces, do audience and subject paths have identical outcomes?

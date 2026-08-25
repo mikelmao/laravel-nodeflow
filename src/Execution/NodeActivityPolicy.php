@@ -12,11 +12,12 @@ final readonly class NodeActivityPolicy
 
     /**
      * @param int|list<int> $backoff
-     * @param list<class-string<\Throwable>> $nonRetryableErrorTypes
+     * @param list<string> $nonRetryableErrorTypes
      *
-     * Loaded symbols must be Throwable types. Unresolved class names are kept
-     * deliberately: optional host exception packages need not be installed at
-     * publication time, and runtime matching uses the stored name exactly.
+     * This is a storage boundary, so type names remain strings. fromNode() and
+     * fromArray() enforce that loaded names are Throwable types; unresolved
+     * optional host names remain valid. fromPublishedSnapshot() deliberately
+     * performs structural validation only so replay does not vary by worker.
      */
     private function __construct(
         public int $maxAttempts,
@@ -125,7 +126,10 @@ final readonly class NodeActivityPolicy
 
     /**
      * @param int|list<int> $backoff
-     * @param list<class-string<\Throwable>> $nonRetryableErrorTypes
+     * @param list<string> $nonRetryableErrorTypes
+     *
+     * @internal Strict loaded-Throwable validation belongs to authoring and
+     * publication inputs; published snapshots use structural validation only.
      */
     private static function fromValues(
         mixed $maxAttempts,
