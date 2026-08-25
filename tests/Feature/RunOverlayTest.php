@@ -184,16 +184,17 @@ it('ignores execution rows for a node id that is not in the pinned graph', funct
         ->toBe(['trigger', 'sent', 'segment', 'parked', 'nobody']);
 });
 
-it('marks only a completed run terminal', function () {
-    // E17 and C-1: 'completed' is the only status the engine ever writes as an
-    // end state. Counterfactual: treat 'running' as terminal and polling stops
-    // on the first response, so the view never updates.
+it('marks completed, failed, and cancelled runs terminal', function () {
+    // Durable failures and operator cancellations must stop polling just like a
+    // completed run. A live status remains non-terminal so it can still update.
     expect(($this->snapshot)()['terminal'])->toBeFalse();
 
-    $this->run->update(['status' => 'completed']);
+    foreach (['completed', 'failed', 'cancelled'] as $status) {
+        $this->run->update(['status' => $status]);
 
-    expect(($this->snapshot)()['terminal'])->toBeTrue()
-        ->and(($this->snapshot)()['status'])->toBe('completed');
+        expect(($this->snapshot)()['terminal'])->toBeTrue()
+            ->and(($this->snapshot)()['status'])->toBe($status);
+    }
 });
 
 it('aggregates with exactly two queries regardless of how many nodes the graph has', function () {
