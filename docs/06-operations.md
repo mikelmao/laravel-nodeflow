@@ -75,10 +75,9 @@ Default window is `nodeflow.retention.runs_days` (90). Dry-run reports the same 
 delete, computed from the same query.
 
 **Only terminal runs are pruned** — `completed`, `failed`, `cancelled`. Specifically **not** `blocked`,
-because a blocked run is recoverable once a missing node type is re-registered, and pruning it would
-destroy state a fix could still resume. The consequence: a run stuck `blocked` forever is never pruned
-at any age. Clearing genuinely abandoned blocked runs is a deliberate operator decision, not something
-the command will do for you.
+which is application-reserved and has no current package writer. The consequence: a host-written blocked
+run is never pruned at any age. Clearing a genuinely abandoned blocked run is a deliberate operator
+decision, not something the command will do for you.
 
 A run's `run_subjects` and `node_executions` rows are deleted explicitly along with it, so this does not
 depend on database cascade behaviour.
@@ -110,11 +109,16 @@ Budget for it before you are at six figures per alert.
 | `completed` | terminal, prunable |
 | `failed` | terminal, prunable |
 | `cancelled` | terminal, prunable |
-| `blocked` | recoverable — a node type could not be resolved. Never pruned. |
+| `blocked` | application-reserved; no current package writer. Never pruned. |
 
-**Be aware:** only `running` and `completed` are actually written today. An activity exception leaves a
-run `running`, and a run exhausting the step guard is recorded `completed`. Do not build alerting that
-assumes `failed` appears — see [Execution model](05-execution-model.md#runs-do-not-reach-a-failure-state).
+**Be aware:** the interpreter writes `pending`, `running`, and `completed`; the queued,
+after-commit `ProjectWorkflowFailure` listener writes `failed` for matching terminal durable failures.
+It atomically fails still-active subjects and clears their cursors, while the run-level durable error is
+separate from node-failure counts. `completed`, `failed`, and `cancelled` are terminal for polling and
+pruning; no current package service writes run-level `cancelled` or `blocked`. The projection job retries,
+but queue publication after the durable commit is not an atomic outbox: monitor failed jobs and reconcile
+durable terminal state safely if publication is missed. A run exhausting the step guard still records
+`completed` — see [Execution model](05-execution-model.md#terminal-durable-failures-are-projected).
 
 ### `run_subjects.status`
 

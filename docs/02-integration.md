@@ -75,14 +75,14 @@ class OrganizationTenantResolver implements TenantResolver
 `currentTenantId()` returns the ambient tenant, or `null` in a console or queue context where there
 isn't one. It is called on every scoped query, so keep it cheap — cache it per request.
 
-`ownsSubject()` is the **mandatory audience check**. It is called for every subject before a single
-audience row is written, and if it returns false the whole materialisation aborts with nothing
-written. This is the control that stops one customer's people receiving another customer's messages.
-Never implement it as `return true`.
+Ownership is the **mandatory audience check**. It is enforced centrally while a run transaction
+materialises the audience in fixed-size batches. A host can implement `BatchTenantResolver::ownedSubjectIds()`
+for each batch; `ownsSubject()` remains the safe scalar fallback. Any rejection aborts and rolls back the
+whole run creation. This is the control that stops one customer's people receiving another customer's
+messages. Never implement either check as unconditional acceptance.
 
-> **Performance note.** `ownsSubject()` is currently called once per subject. At six-figure audiences
-> that is a lot of round trips. Implement it against an indexed column. A set-shaped variant of this
-> contract is a known follow-up.
+> **Performance note.** Bind `BatchTenantResolver` for six-figure audiences so ownership stays set-based.
+> The scalar `ownsSubject()` fallback remains correct but can make one lookup per distinct subject.
 
 ### Which kind of null you mean
 

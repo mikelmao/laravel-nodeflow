@@ -18,7 +18,7 @@ A driver captures or loads an immutable `TriggerActivationSnapshot`, then a regi
 
 Source occurrence identities should be stable for redelivery: the webhook driver requires `Idempotency-Key`; model and Laravel-event sources may supply `occurrenceId`. The database unique key `(flow_version_id, idempotency_key)` makes the same occurrence idempotent per published version. A duplicate returns the existing run and repairs its engine dispatch if necessary; it does not rematerialize a possibly different audience.
 
-Sources must return tenant-scoped subjects. `TenantResolver::ownsSubject()` is checked for every selected subject before run creation. A source may fan out tenants for model/event occurrences, but each activation starts only from the audience whose tenant equals that activation's stored tenant. The webhook driver is narrower: exactly one non-empty audience for its one activation.
+Sources must return tenant-scoped subjects. Run creation enforces ownership centrally while it transactionally materializes the audience: `BatchTenantResolver::ownedSubjectIds()` is used for each bounded batch when the host provides it, otherwise `TenantResolver::ownsSubject()` is the safe scalar fallback. An ownership rejection rolls back the run creation. A source may fan out tenants for model/event occurrences, but each activation starts only from the audience whose tenant equals that activation's stored tenant. The webhook driver is narrower: exactly one non-empty audience for its one activation. See [Required contracts](../integration/required-contracts.md).
 
 ## Manual starts
 

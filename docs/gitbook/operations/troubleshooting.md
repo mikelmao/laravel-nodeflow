@@ -17,7 +17,7 @@ php artisan nodeflow:check-node-types
 
 When the host uses Laravel failed-job storage and has its `failed_jobs` table, also run `php artisan queue:failed`.
 
-**Correct:** start or restore the host's queue workers, repair the backend capability reported by the doctor, and register or alias a missing type before its next affected activity. A missing type or activity exception can leave the Nodeflow run `running` while the durable execution has failed. Preserve that failed/current run for durable-history diagnosis and an application-defined recovery decision after fixing the root cause; a safe new idempotent run may be appropriate when the business operation permits it. Do not mark the Nodeflow run complete manually or invent a packaged resume command. See [Queues and workers](queues-and-workers.md).
+**Correct:** start or restore the host's queue workers, repair the backend capability reported by the doctor, and register or alias a missing type before its next affected activity. A matching terminal `FlowInterpreter` failure queues an after-commit projection that marks the Nodeflow run `failed`; preserve the durable history for diagnosis and an application-defined recovery decision after fixing the root cause. A safe new idempotent run may be appropriate when the business operation permits it. Do not mark the Nodeflow run complete manually or invent a packaged resume command. See [Queues and workers](queues-and-workers.md).
 
 ## An audience is empty
 
@@ -105,11 +105,11 @@ php artisan nodeflow:check-node-types
 
 ## Overlay polling halts while the run looks unfinished
 
-**Likely cause:** the overlay treats only `completed` as terminal. A failed or otherwise halted engine execution may not receive a Nodeflow terminal status, so the client can keep polling; this package currently has no automatic status-reconciliation fix.
+**Likely cause:** the overlay stops polling for `completed`, `failed`, and `cancelled`. If it still shows a live run after a durable failure, the queued failure projection may be waiting, retrying, or absent because queue publication failed after the durable transaction committed.
 
-**Verify:** inspect the authorized run overlay, worker logs, and durable doctor output.
+**Verify:** inspect the authorized run overlay, durable history and doctor output, the queue worker, and failed jobs for `ProjectWorkflowFailure`.
 
-**Correct:** diagnose the durable failure and preserve the run for recovery. Do not configure a client interval to mask the state mismatch; follow [known limitations](../experimental/known-limitations.md).
+**Correct:** restore and retry the projection job when it exists, then diagnose the durable failure and preserve the run for safe recovery. The listener is queued after commit, not through an atomic outbox; if publication was missed, reconcile durable terminal state and Nodeflow runs with an application-owned, idempotent procedure. Do not configure a client interval to mask the state mismatch; follow [known limitations](../experimental/known-limitations.md).
 
 ## Subjects remain active at a node
 

@@ -110,7 +110,7 @@ Do not accept `flow_id`, `current_version_id`, or `flow_version_id` from untrust
 
 ## Trigger fan-out and tenant audiences
 
-Trigger activation discovery is intentionally a tenant-neutral system read across active flows. Isolation is restored at the source boundary: each `TriggerActivationSnapshot` carries its persisted tenant, `TriggerOccurrenceDispatcher` selects only that tenant's `TriggerMatch`, and `TriggerRunStarter` verifies every subject with `TenantResolver::ownsSubject()` before creating a run. A source that returns audiences for several tenants therefore cannot move one activation into another tenant.
+Trigger activation discovery is intentionally a tenant-neutral system read across active flows. Isolation is restored at the source boundary: each `TriggerActivationSnapshot` carries its persisted tenant, `TriggerOccurrenceDispatcher` selects only that tenant's `TriggerMatch`, and transactional materialization centrally verifies every subject before creating a run. Hosts may implement `BatchTenantResolver::ownedSubjectIds()` for each bounded batch; `TenantResolver::ownsSubject()` is the safe scalar fallback. A rejected subject rolls back run creation, so a source that returns audiences for several tenants cannot move one activation into another tenant. See [Required contracts](required-contracts.md).
 
 Model and Laravel-event listeners can fan out across active tenant activations. They snapshot the matching activation rows before source extension code runs. Webhook delivery resolves one token to one active activation and requires exactly one non-empty audience for its tenant. Do not use ambient request tenancy to narrow a system trigger listener; return explicit tenant IDs from trusted, value-only source data instead.
 

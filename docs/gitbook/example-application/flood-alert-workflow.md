@@ -87,7 +87,7 @@ final class FloodAlertSource implements LaravelEventTriggerSource
 }
 ```
 
-The application creates one activation per tenant flow. The shared listener snapshots every matching activation before it calls source code, then selects the audience with the same tenant ID. `TenantResolver::ownsSubject()` verifies every user before materialization. An incorrect organization map is therefore rejected for that activation and isolated from the others.
+The application creates one activation per tenant flow. The shared listener snapshots every matching activation before it calls source code, then selects the audience with the same tenant ID. Transactional materialization centrally verifies every user: this sample's scalar `TenantResolver::ownsSubject()` is the safe fallback, while a large deployment should add `BatchTenantResolver::ownedSubjectIds()` for bounded batches. An incorrect organization map is therefore rejected for that activation and the whole run creation rolls back in isolation from the others. See [Required contracts](../integration/required-contracts.md).
 
 Laravel events are synchronous. Dispatch `FloodAlertDispatched` only after the application data is committed, or make the event use Laravel's after-commit event contract. Nodeflow does not impose a second transaction-timing policy on host events.
 

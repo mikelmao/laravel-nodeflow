@@ -15,6 +15,15 @@ interface TenantResolver
     ): bool;
 }
 
+interface BatchTenantResolver extends TenantResolver
+{
+    /**
+     * @param list<string> $subjectIds
+     * @return list<string>
+     */
+    public function ownedSubjectIds(string $tenantId, string $subjectType, array $subjectIds): array;
+}
+
 interface SubjectResolver
 {
     /** @return array<string, mixed> keyed by subject ID */
@@ -28,7 +37,7 @@ interface AudienceResolver
 }
 ```
 
-`TenantResolver::ownsSubject()` is a mandatory security boundary for every subject materialized by trigger starts. Bind resolvers unconditionally in a provider's `register()` method so requests, listeners, queue workers, and console commands share the same behavior.
+Ownership is a mandatory security boundary for every subject materialized by trigger starts. Nodeflow enforces it centrally during transactional materialization: `BatchTenantResolver::ownedSubjectIds()` is optional and receives one bounded batch; `TenantResolver::ownsSubject()` remains the safe scalar fallback. Any rejected subject rolls back run creation. Bind resolvers unconditionally in a provider's `register()` method so requests, listeners, queue workers, and console commands share the same behavior. See [Required contracts](../integration/required-contracts.md).
 
 ## Executable nodes
 
