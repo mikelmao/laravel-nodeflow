@@ -3,6 +3,7 @@
 namespace Nodeflow\Workflows;
 
 use Carbon\CarbonImmutable;
+use Illuminate\Contracts\Queue\ShouldQueueAfterCommit;
 use Illuminate\Support\Facades\DB;
 use Nodeflow\Models\Run;
 use Workflow\V2\Events\WorkflowFailed;
@@ -13,9 +14,19 @@ use Workflow\V2\Events\WorkflowFailed;
  * The durable engine can deliver an event before CreateRun has persisted its
  * returned handle. The instance id is therefore the durable correlation key;
  * a non-null stored handle is only an additional exact-match guard.
+ *
+ * Laravel queues this listener after commit, isolating durable terminal state
+ * from projection failures. This is not an outbox: if queue publication itself
+ * fails after commit, recovery is the queue/runtime operator's responsibility.
  */
-final class ProjectWorkflowFailure
+final class ProjectWorkflowFailure implements ShouldQueueAfterCommit
 {
+    /** A transient projection failure must not leave a durable run unreported. */
+    public int $tries = 3;
+
+    /** @var list<int> */
+    public array $backoff = [5, 30, 120];
+
     private const LIVE_STATUSES = ['pending', 'running', 'waiting', 'blocked'];
 
     private const INSTANCE_PREFIX = 'nodeflow-run:';
@@ -46,8 +57,8 @@ final class ProjectWorkflowFailure
             }
 
             $error = $this->boundedError($event);
-            // WorkflowFailed is emitted after the durable history event commits.
-            // Parse its ISO timestamp once, rather than substituting listener time.
+            // This queued listener runs after the durable task transaction has
+            // committed. Preserve the event timestamp rather than listener time.
             $endedAt = CarbonImmutable::parse($event->committedAt)->utc();
 
             $run->subjects()->where('status', 'active')->update([

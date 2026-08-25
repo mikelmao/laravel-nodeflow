@@ -1,14 +1,31 @@
 <?php
 
+use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Event;
 use Nodeflow\Contracts\TenantResolver;
+use Nodeflow\Engine\DurableWorkflowEngine;
+use Nodeflow\Engine\WorkflowEngine;
+use Nodeflow\Execution\StartRun;
 use Nodeflow\Models\Concerns\TenancyGuardSuspension;
 use Nodeflow\Models\Flow;
 use Nodeflow\Models\FlowVersion;
 use Nodeflow\Models\Run;
 use Nodeflow\Models\RunSubject;
+use Nodeflow\Publishing\PublishFlow;
 use Nodeflow\Workflows\FlowInterpreter;
+use Nodeflow\Workflows\ProjectWorkflowFailure;
+use Workflow\Providers\WorkflowServiceProvider;
+use Workflow\Serializers\Serializer;
+use Workflow\V2\Enums\HistoryEventType;
+use Workflow\V2\Enums\RunStatus;
+use Workflow\V2\Enums\TaskStatus;
+use Workflow\V2\Enums\TaskType;
 use Workflow\V2\Events\WorkflowFailed;
+use Workflow\V2\Jobs\RunWorkflowTask;
+use Workflow\V2\Models\WorkflowFailure;
+use Workflow\V2\Models\WorkflowHistoryEvent;
+use Workflow\V2\Models\WorkflowRun;
+use Workflow\V2\Models\WorkflowTask;
 
 beforeEach(function () {
     app()->bind(TenantResolver::class, fn () => new class implements TenantResolver
@@ -81,6 +98,64 @@ function workflowFailureFor(Run $run, ?string $instanceId = null, ?string $workf
         message: $message ?? 'Yaya remained unavailable',
         committedAt: $committedAt ?? '2026-08-25T14:15:16+00:00',
     );
+}
+
+function prepareFailureProjectionDurableRuntime($test): void
+{
+    app()->register(WorkflowServiceProvider::class);
+    $test->artisan('migrate', [
+        '--path' => realpath(__DIR__.'/../../vendor/durable-workflow/workflow/src/migrations'),
+        '--realpath' => true,
+    ])->assertSuccessful();
+    config()->set('workflows.v2.task_dispatch_mode', 'poll');
+    config()->set('queue.default', 'sync');
+    app()->bind(WorkflowEngine::class, DurableWorkflowEngine::class);
+}
+
+/** @return array{0: Run, 1: WorkflowRun, 2: WorkflowTask} */
+function prepareFailingFlowInterpreterTask(): array
+{
+    $flow = Flow::create(['name' => 'Durable failure', 'status' => 'draft']);
+    app(PublishFlow::class)->publish($flow, triggeredGraph([
+        'start' => 'exit',
+        'nodes' => [
+            ['id' => 'exit', 'type' => 'core.exit', 'config' => []],
+        ],
+        'edges' => [],
+    ]));
+
+    $run = app(StartRun::class)->forFlow($flow->fresh(), 'user', ['1']);
+    $engineRun = WorkflowRun::query()
+        ->where('workflow_instance_id', $run->engine_workflow_id)
+        ->sole();
+
+    // The durable run still names FlowInterpreter, but this corrupted argument
+    // forces its typed entrypoint to fail in the real RunWorkflowTask before it
+    // can suspend. It is a compact way to exercise terminal event delivery.
+    $engineRun->update([
+        'arguments' => Serializer::serializeWithCodec((string) $engineRun->payload_codec, [
+            'not-an-integer',
+            1000,
+            $run->engine_entry_node_id,
+        ]),
+    ]);
+
+    $initial = WorkflowTask::query()
+        ->where('workflow_run_id', $engineRun->id)
+        ->where('task_type', TaskType::Workflow->value)
+        ->where('status', TaskStatus::Ready->value)
+        ->sole();
+
+    return [$run, $engineRun, $initial];
+}
+
+/** @return array{0: Run, 1: WorkflowRun} */
+function runFailingFlowInterpreterLifecycle(): array
+{
+    [$run, $engineRun, $task] = prepareFailingFlowInterpreterTask();
+    app()->call([new RunWorkflowTask($task->id), 'handle']);
+
+    return [$run, $engineRun];
 }
 
 it('projects a duplicate durable failure while the start handle has not yet been persisted', function () {
@@ -198,4 +273,73 @@ it('bounds projected errors to portable text capacity without splitting valid ut
     expect(strlen($error))->toBeLessThanOrEqual(65_535)
         ->and(preg_match('//u', $error))->toBe(1)
         ->and($error)->toStartWith(RuntimeException::class.': ');
+});
+
+it('queues real durable failure projection after the workflow task transaction commits', function () {
+    prepareFailureProjectionDurableRuntime($this);
+    $projectionJobTransactionLevels = [];
+
+    Event::listen(\Illuminate\Queue\Events\JobProcessing::class, function () use (&$projectionJobTransactionLevels): void {
+        $projectionJobTransactionLevels[] = DB::transactionLevel();
+    });
+
+    [$run, $engineRun] = runFailingFlowInterpreterLifecycle();
+
+    expect(WorkflowRun::query()->findOrFail($engineRun->id)->status)->toBe(RunStatus::Failed)
+        ->and(WorkflowFailure::query()->where('workflow_run_id', $engineRun->id)->count())->toBe(1)
+        ->and(WorkflowHistoryEvent::query()
+            ->where('workflow_run_id', $engineRun->id)
+            ->where('event_type', HistoryEventType::WorkflowFailed->value)
+            ->count())->toBe(1)
+        ->and(Run::withoutTenancy()->findOrFail($run->id)->status)->toBe('failed')
+        ->and($projectionJobTransactionLevels)->toBe([0]);
+});
+
+it('does not emit a failure projection from a rolled-back transaction', function () {
+    $run = failureProjectionRun();
+    $statusBeforeRollback = null;
+
+    try {
+        DB::transaction(function () use ($run, &$statusBeforeRollback): void {
+            Event::dispatch(workflowFailureFor($run));
+
+            $statusBeforeRollback = Run::withoutTenancy()->findOrFail($run->id)->status;
+
+            throw new RuntimeException('rollback event delivery');
+        });
+    } catch (RuntimeException $exception) {
+        expect($exception->getMessage())->toBe('rollback event delivery');
+    }
+
+    expect($statusBeforeRollback)->toBe('running')
+        ->and(Run::withoutTenancy()->findOrFail($run->id)->status)->toBe('running');
+});
+
+it('keeps durable terminal records committed when the queued projection fails', function () {
+    prepareFailureProjectionDurableRuntime($this);
+    [$run, $engineRun, $task] = prepareFailingFlowInterpreterTask();
+    DB::unprepared(<<<'SQL'
+        CREATE TRIGGER nodeflow_reject_failure_projection
+        BEFORE UPDATE ON nodeflow_runs
+        BEGIN
+            SELECT RAISE(ABORT, 'projection blocked');
+        END;
+    SQL);
+
+    try {
+        expect(fn () => app()->call([new RunWorkflowTask($task->id), 'handle']))
+            ->toThrow(\Illuminate\Database\QueryException::class);
+    } finally {
+        DB::unprepared('DROP TRIGGER IF EXISTS nodeflow_reject_failure_projection');
+    }
+
+    expect((new ProjectWorkflowFailure)->tries)->toBe(3)
+        ->and((new ProjectWorkflowFailure)->backoff)->toBe([5, 30, 120])
+        ->and($engineRun->fresh()->status)->toBe(RunStatus::Failed)
+        ->and(Run::withoutTenancy()->findOrFail($run->id)->status)->toBe('pending')
+        ->and(WorkflowFailure::query()->where('workflow_run_id', $engineRun->id)->count())->toBe(1)
+        ->and(WorkflowHistoryEvent::query()
+            ->where('workflow_run_id', $engineRun->id)
+            ->where('event_type', HistoryEventType::WorkflowFailed->value)
+            ->count())->toBe(1);
 });
