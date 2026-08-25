@@ -130,6 +130,22 @@ it('rejects a loaded non-throwable non-retryable error type', function () {
     ]))->toThrow(\InvalidArgumentException::class, 'non_retryable_error_types');
 });
 
+it('rejects whitespace around non-retryable error type names during authoring validation', function () {
+    expect(fn () => NodeActivityPolicy::fromArray([
+        'non_retryable_error_types' => [' '.\stdClass::class.' '],
+    ]))->toThrow(\InvalidArgumentException::class, 'non_retryable_error_types');
+});
+
+it('structurally rejects whitespace around published non-retryable type names', function () {
+    expect(fn () => NodeActivityPolicy::fromPublishedSnapshot([
+        'snapshot_version' => 1,
+        'max_attempts' => 3,
+        'backoff' => [1],
+        'start_to_close_timeout' => null,
+        'non_retryable_error_types' => [' Vendor\\Optional\\Exception '],
+    ]))->toThrow(\InvalidArgumentException::class, 'non_retryable_error_types');
+});
+
 it('preserves an unavailable host exception class name for runtime matching', function () {
     $exception = 'Vendor\\OptionalHost\\UnavailableException';
 

@@ -12,7 +12,8 @@ it('admits a lazy audience in fixed ownership batches', function () {
     $total = scaleSubjectCount();
     config()->set('nodeflow.limits.materialise_chunk', 1000);
 
-    $resolver = new RecordingBatchTenantResolver;
+    $probe = new AudienceAdmissionProbe;
+    $resolver = new RecordingBatchTenantResolver($probe);
     app()->instance(TenantResolver::class, $resolver);
     app()->forgetInstance(AudienceMaterialiser::class);
 
@@ -22,8 +23,10 @@ it('admits a lazy audience in fixed ownership batches', function () {
     $run = app(CreateRun::class)->forVersion(
         $version,
         'yaya-user',
-        ReplayableSubjectIds::from(function () use ($total): iterable {
+        ReplayableSubjectIds::from(function () use ($total, $probe): iterable {
             for ($id = 1; $id <= $total; $id++) {
+                $probe->recordYield();
+
                 yield (string) $id;
             }
         }),
@@ -35,8 +38,12 @@ it('admits a lazy audience in fixed ownership batches', function () {
     );
 
     expect($run->subjects()->count())->toBe($total)
+        ->and($probe->validated)->toBe($total)
+        ->and($probe->batchCalls)->toBe((int) ceil($total / 1000))
         ->and($resolver->largestBatch)->toBeLessThanOrEqual(1000)
-        ->and($resolver->scalarCalls)->toBe(0);
+        ->and($resolver->largestBatch)->toBeGreaterThan(0)
+        ->and($resolver->scalarCalls)->toBe(0)
+        ->and($probe->maxOutstanding)->toBeLessThanOrEqual(1000);
 })->group('scale');
 
 function scaleSubjectCount(): int
@@ -57,11 +64,30 @@ function scaleSubjectCount(): int
     return (int) $value;
 }
 
+final class AudienceAdmissionProbe
+{
+    public int $yielded = 0;
+
+    public int $validated = 0;
+
+    public int $batchCalls = 0;
+
+    public int $maxOutstanding = 0;
+
+    public function recordYield(): void
+    {
+        $this->yielded++;
+        $this->maxOutstanding = max($this->maxOutstanding, $this->yielded - $this->validated);
+    }
+}
+
 final class RecordingBatchTenantResolver implements BatchTenantResolver
 {
     public int $largestBatch = 0;
 
     public int $scalarCalls = 0;
+
+    public function __construct(private AudienceAdmissionProbe $probe) {}
 
     public function currentTenantId(): ?string
     {
@@ -78,6 +104,8 @@ final class RecordingBatchTenantResolver implements BatchTenantResolver
     public function ownedSubjectIds(string $tenantId, string $subjectType, array $subjectIds): array
     {
         $this->largestBatch = max($this->largestBatch, count($subjectIds));
+        $this->probe->batchCalls++;
+        $this->probe->validated += count($subjectIds);
 
         return $subjectIds;
     }

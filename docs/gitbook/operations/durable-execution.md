@@ -32,7 +32,7 @@ The loop is sequential. If two branches each reach a wait, their waits do not ov
 | Audience node | `nodeflow.limits.audience_chunk` | 5000 subjects |
 | Run-subject view page | `nodeflow.limits.subject_page` | 50 subjects |
 
-Run-audience admission is separately bounded by `nodeflow.limits.materialise_chunk` (default `1000`): ownership and inserts happen per materialization batch. For six-figure audiences, bind `BatchTenantResolver` in the host so those ownership checks stay set-based; see [Required contracts](../integration/required-contracts.md).
+Run-audience admission is separately bounded by `nodeflow.limits.materialise_chunk` (default `1000`): ownership and inserts happen per materialization batch. For six-figure audiences, make the concrete resolver bound under `TenantResolver::class` implement `BatchTenantResolver`; a separate batch-only binding is not used by the runtime. See [Required contracts](../integration/required-contracts.md).
 
 An audience node is preferred when a class implements both audience and subject interfaces. It receives one audience chunk at a time. A subject node resolves and invokes each subject in its chunk individually. Do not assume one audience node invocation represents the whole run.
 

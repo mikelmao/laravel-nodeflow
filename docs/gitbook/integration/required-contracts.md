@@ -41,7 +41,7 @@ class OrganizationTenantResolver implements TenantResolver
 
 `currentTenantId(): ?string` returns the ambient tenant for the current context. Return `null` only when no tenant can be resolved; how Nodeflow treats that value is configured by the tenancy mode described in [Tenancy](tenancy.md). Cast the application key to a string. Nodeflow stores tenant and subject identities as strings, so a consistent representation avoids treating an integer key and its string form as different identities.
 
-`ownsSubject()` is a mandatory isolation check, not an optional eligibility rule. It is the safe scalar fallback: during audience materialization, Nodeflow string-normalizes and de-duplicates supplied IDs, checks ownership, and inserts in fixed-size batches. If any check returns `false`, it raises `CrossTenantSubjectException`; the run transaction rolls back, so no part of that audience is materialized. Reject unknown subject types rather than accepting a type the resolver does not understand.
+`ownsSubject()` is a mandatory isolation check, not an optional eligibility rule. It is the safe scalar fallback: during audience materialization, Nodeflow string-normalizes IDs, checks ownership, and inserts in fixed-size batches. IDs are de-duplicated only within one materialization batch; a later duplicate is checked again and database uniqueness prevents a second row. If any check returns `false`, it raises `CrossTenantSubjectException`; the run transaction rolls back, so no part of that audience is materialized. Reject unknown subject types rather than accepting a type the resolver does not understand.
 
 > **Warning:** Do not implement `ownsSubject()` as a membership check that ignores `$tenantId`. Returning `true` for a subject owned by another organization admits that subject to the run.
 
@@ -72,7 +72,7 @@ class OrganizationTenantResolver implements BatchTenantResolver
 }
 ```
 
-`BatchTenantResolver` is optional: hosts that bind only `TenantResolver` retain the scalar behavior. Hosts that fetch large audiences from another service should bind the batch contract to avoid one remote ownership lookup per subject. `TriggerMatch`, `TriggerTenantMatch`, `TriggerRunStarter`, and the webhook driver preserve a replayable subject stream instead of eagerly building one audience array. Ownership is enforced centrally only when that stream is materialized into the run; subject identifiers must be valid UTF-8, contain no NUL byte, and be at most 255 Unicode characters.
+`BatchTenantResolver` is optional: hosts that bind only `TenantResolver` retain the scalar behavior. Hosts that fetch large audiences from another service should make that concrete `TenantResolver` implementation also implement `BatchTenantResolver`; do not add a separate batch-contract-only binding, because runtime resolution starts from `TenantResolver`. `TriggerMatch`, `TriggerTenantMatch`, `TriggerRunStarter`, and the webhook driver preserve a replayable subject stream instead of eagerly building one audience array. Ownership is enforced centrally only when that stream is materialized into the run; subject identifiers must be valid UTF-8, contain no NUL byte, and be at most 255 Unicode code points.
 
 ## Implement the subject resolver
 

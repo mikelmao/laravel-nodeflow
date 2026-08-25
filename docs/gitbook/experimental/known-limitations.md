@@ -26,7 +26,7 @@ Nodeflow is experimental. Use these current boundaries to decide what must be ha
 
 **Impact:** Nodeflow materializes replayable trigger audiences in fixed-size batches, but a host that implements only scalar `TenantResolver::ownsSubject()` still incurs one ownership lookup per distinct subject. That can be impractical for a remote user system.
 
-**Mitigation:** Bind `BatchTenantResolver` so one bounded `ownedSubjectIds()` call validates each batch, and measure representative audiences against your supported database. Do not weaken the ownership check. The package scale proof is opt-in; run `NODEFLOW_SCALE_SUBJECTS=100000 vendor/bin/pest tests/Feature/LargeAudienceAdmissionTest.php --compact` against PostgreSQL in the Portia integration environment and expect exactly 100,000 persisted subjects, no scalar ownership calls, and batches no larger than 1,000. See [Required contracts](../integration/required-contracts.md).
+**Mitigation:** Make the concrete resolver bound under `TenantResolver::class` implement `BatchTenantResolver` so one bounded `ownedSubjectIds()` call validates each batch, and measure representative audiences against your supported database. Do not weaken the ownership check. The opt-in package scale test is an SQLite streaming/batch proof; before rollout, run an equivalent 100,000-subject Portia host integration test against that host's configured PostgreSQL connection and expect no scalar ownership calls and batches no larger than 1,000. See [Required contracts](../integration/required-contracts.md).
 
 ### Child flows are keyless per chunk
 
@@ -61,12 +61,6 @@ Nodeflow is experimental. Use these current boundaries to decide what must be ha
 **Impact:** Nodeflow services do not edit a published graph, but the model and database do not prevent host code from updating or deleting a `FlowVersion`. Changing or removing a version required by a live run can invalidate its pinned history.
 
 **Mitigation:** Treat published versions as append-only records in application code and protect them from direct update and delete paths. See [Flows and versions](../building-automations/flows-and-versions.md).
-
-### Publishing does not compare the draft revision
-
-**Impact:** Draft saving uses compare-and-swap, but publishing does not accept the revision. A save that arrives after the final draft save and before the publish can be cleared by that publish.
-
-**Mitigation:** Serialize draft-save and publish requests per flow, or restrict each flow to one active editor/author. Restricting publishers alone is insufficient. See [Publishing flows](../building-automations/publishing-flows.md).
 
 ### Failure projection has no atomic outbox
 

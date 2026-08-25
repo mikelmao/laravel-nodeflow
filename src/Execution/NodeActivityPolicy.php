@@ -217,7 +217,9 @@ final readonly class NodeActivityPolicy
         }
 
         foreach ($errorTypes as $errorType) {
-            if (! is_string($errorType) || trim($errorType) === '') {
+            if (! is_string($errorType)
+                || trim($errorType) === ''
+                || trim($errorType) !== $errorType) {
                 throw new InvalidArgumentException('Activity policy non_retryable_error_types must be a list of non-empty strings.');
             }
 

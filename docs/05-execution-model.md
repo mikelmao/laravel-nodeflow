@@ -25,8 +25,9 @@ edge matching the output it returned.
 
 1. A trigger fires (or you call `StartRun`). One run is created per tenant, pinning `flow_version_id`.
 2. The audience is materialised transactionally into `run_subjects`. Ownership is enforced centrally
-   in fixed-size batches through optional `BatchTenantResolver::ownedSubjectIds()` or the safe scalar
-   `TenantResolver::ownsSubject()` fallback; any rejection rolls back run creation.
+   in fixed-size batches when the concrete resolver implements `BatchTenantResolver` and is bound under
+   `TenantResolver::class`; `ownsSubject()` is the safe scalar fallback. Any rejection rolls back run
+   creation.
 3. The engine starts the interpreter with the run id. The graph is loaded through an activity, so its
    contents land in the workflow's replay history rather than being re-read.
 4. The cursor begins at the start node. For each node: if it is a wait, the workflow suspends; then
@@ -129,12 +130,11 @@ after the other rather than concurrently. Total elapsed time is the sum, not the
 warns at publish when it detects this shape. Concurrent branch waits need nested generators under the
 engine's `all()` and are deferred.
 
-### The interpreter has not run against a real engine
+### End-to-end queue-worker validation remains host-owned
 
-Every signature is verified against the installed engine source and the control flow is covered by
-tests, but nothing in this package's suite has executed the interpreter on a real queue worker with the
-real durable engine. Two API-shape corrections were already found this way during development. **Run
-the canonical journey on a real worker before trusting it in production.**
+The package suite exercises the durable task lifecycle, but it cannot prove a host's external queue
+worker, durable storage, cache, tenancy binding, or domain side effects work together. **Run the
+canonical journey through the configured external queue worker before trusting it in production.**
 
 ### Terminal durable failures are projected
 
@@ -170,8 +170,9 @@ or `FlowVersion::find($request->version)` becomes a cross-tenant read.
 
 ### Other follow-ups
 
-- Six-figure audiences require a host `BatchTenantResolver`; the scalar `ownsSubject()` fallback remains
-  safe but can make one ownership lookup per subject.
+- Six-figure audiences require the concrete resolver bound as `TenantResolver::class` to implement
+  `BatchTenantResolver`; the scalar `ownsSubject()` fallback remains safe but can make one ownership
+  lookup per subject.
 - Nothing persists until every chunk of a node completes, so a crash mid-node loses the advancement
   record for subjects already processed — and there is no send-deduplication key.
 - The test suite is SQLite-only. Run it against your production database engine in CI; a Postgres

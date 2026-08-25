@@ -140,7 +140,7 @@ class AudienceMaterialiser
         }
 
         if (preg_match_all('/./us', $value) > 255) {
-            throw new InvalidArgumentException("{$kind} must be at most 255 Unicode characters.");
+            throw new InvalidArgumentException("{$kind} must be at most 255 Unicode code points.");
         }
     }
 }

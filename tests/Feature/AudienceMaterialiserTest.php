@@ -175,8 +175,8 @@ it('rejects identifiers that cannot be persisted losslessly before batch ownersh
     expect($resolver->calls)->toBe(0)
         ->and($this->run->subjects()->count())->toBe(0);
 })->with([
-    'overlong' => [str_repeat('x', 256), '255 Unicode characters'],
-    'overlong with line feed' => [str_repeat('x', 255)."\n", '255 Unicode characters'],
+    'overlong' => [str_repeat('x', 256), '255 Unicode code points'],
+    'overlong with line feed' => [str_repeat('x', 255)."\n", '255 Unicode code points'],
     'invalid utf-8' => ["\xB1\x31", 'valid UTF-8'],
     'nul byte' => ["valid\0id", 'NUL byte'],
 ]);

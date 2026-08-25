@@ -129,8 +129,10 @@ durable terminal state safely if publication is missed. A run exhausting the ste
 | `failed` | a node failed for this subject; `last_error` holds why |
 | `exited` | removed mid-journey, usually by cancellation. `exited_at` is set. |
 
-A finished run should have **no** `active` subjects. If you see one, something advanced incorrectly —
-that invariant is asserted in the test suite and is the clearest signal of a routing bug.
+A finished run should have **no** `active` subjects, except when `max_steps_per_run` exhausts and the
+interpreter completes normally with subjects still at an unprocessed node. Check `steps_taken` against the
+configured limit first; below that limit, an active subject on a completed run is the clearest signal of
+a routing bug.
 
 ## Observability
 
@@ -155,5 +157,5 @@ what it *decided*, not what a provider did with it.
 | Run creation rejects an audience | An unowned ID was omitted by `BatchTenantResolver::ownedSubjectIds()` or rejected by scalar `TenantResolver::ownsSubject()`; Nodeflow raises `CrossTenantSubjectException` and rolls back the run. A truly empty normalized input is a separate outcome. |
 | `SubjectResolver` throws about binding | You have not bound your own implementation |
 | A trigger's event fires and no run appears | Trigger registered somewhere that never executed; register in `boot()` |
-| Subject stuck `active` on a completed run | A routing bug; check `current_node_id` against the graph's edges |
+| Subjects remain `active` on a completed run | The `max_steps_per_run` guard can complete with unprocessed subjects; otherwise inspect `current_node_id` and graph routing for an inconsistency |
 | A wait fires immediately | A duration that parses to zero — now rejected at publish, but check older versions |

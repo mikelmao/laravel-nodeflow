@@ -56,7 +56,7 @@ Each `nodeflow_run_subjects` row is the current state of one unique `(run_id, su
 | --- | --- | --- |
 | `active` | `AudienceMaterialiser`. | Starts at the executable target of the trigger's `started` edge. It remains active while waiting at or moving between executable nodes; `current_node_id` names its current node. |
 | `completed` | `NodeRunner` when an output has no target, or when a processed subject returns no output/failure. | `current_node_id` is set to `null`. No completion timestamp is stored. |
-| `failed` | `NodeRunner` when a node returns a subject failure or throws during subject execution. | `current_node_id` is set to `null`; `last_error` stores the failure message. No failure timestamp is stored. |
+| `failed` | `NodeRunner` when a node returns a subject failure or throws during subject execution; `ProjectWorkflowFailure` for every still-active subject after a matching terminal durable failure. | `current_node_id` is set to `null`; `last_error` stores the subject failure or the bounded run-level durable error. No failure timestamp is stored. |
 | `exited` | `SubjectExiter`. | `current_node_id` is set to `null` and `exited_at` is set. |
 | `waiting` | No current package writer. | The string is schema-valid but has no package-defined subject-state behavior. Active subjects at a `core.wait` remain `active`; the overlay's `waiting` count is a label for active subjects at a node, not this status. |
 

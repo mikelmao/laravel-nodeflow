@@ -76,13 +76,20 @@ class OrganizationTenantResolver implements TenantResolver
 isn't one. It is called on every scoped query, so keep it cheap — cache it per request.
 
 Ownership is the **mandatory audience check**. It is enforced centrally while a run transaction
-materialises the audience in fixed-size batches. A host can implement `BatchTenantResolver::ownedSubjectIds()`
-for each batch; `ownsSubject()` remains the safe scalar fallback. Any rejection aborts and rolls back the
-whole run creation. This is the control that stops one customer's people receiving another customer's
-messages. Never implement either check as unconditional acceptance.
+materialises the audience in fixed-size batches. Make the concrete resolver implement
+`BatchTenantResolver` and bind that implementation under `TenantResolver::class` so
+`ownedSubjectIds()` validates each batch; do not add a separate `BatchTenantResolver`-only binding.
+`ownsSubject()` remains the safe scalar fallback. Any rejection raises `CrossTenantSubjectException`
+and rolls back the whole run creation; it does not return an empty audience. This is the control that
+stops one customer's people receiving another customer's messages. Never implement either check as
+unconditional acceptance.
 
-> **Performance note.** Bind `BatchTenantResolver` for six-figure audiences so ownership stays set-based.
-> The scalar `ownsSubject()` fallback remains correct but can make one lookup per distinct subject.
+> **Performance note.** For six-figure audiences, make the resolver bound as `TenantResolver::class`
+> implement `BatchTenantResolver` so ownership stays set-based. The scalar `ownsSubject()` fallback
+> remains correct but can make one lookup per distinct subject.
+
+Subject IDs are de-duplicated only within each materialization batch. A duplicate that arrives in a
+later batch is checked again; the database's unique key prevents a second audience row.
 
 ### Which kind of null you mean
 
