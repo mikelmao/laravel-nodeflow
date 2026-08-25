@@ -2,6 +2,7 @@
 
 use Illuminate\Foundation\Auth\User;
 use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Event;
 use Illuminate\Support\Facades\Gate;
 use Illuminate\Support\Facades\Route;
 use Nodeflow\Contracts\TenantResolver;
@@ -10,6 +11,8 @@ use Nodeflow\Models\Flow;
 use Nodeflow\Models\FlowVersion;
 use Nodeflow\Models\Run;
 use Nodeflow\Nodeflow;
+use Nodeflow\Workflows\FlowInterpreter;
+use Workflow\V2\Events\WorkflowFailed;
 
 beforeEach(function () {
     $this->tenant = 'org-1';
@@ -165,6 +168,33 @@ it('carries an overlay entry for every node in the pinned graph', function () {
     expect(array_keys($overlay['nodes']))->toBe(['trigger', 'pinned'])
         ->and($overlay['nodes']['pinned']['reached'])->toBeFalse()
         ->and($overlay['terminal'])->toBeFalse();
+});
+
+it('exposes a projected workflow failure only through the run-level error prop', function () {
+    allowRunViewing();
+
+    Event::dispatch(new WorkflowFailed(
+        instanceId: "nodeflow-run:{$this->run->id}",
+        runId: 'durable-run-4',
+        workflowType: 'class',
+        workflowClass: FlowInterpreter::class,
+        exceptionClass: RuntimeException::class,
+        message: 'Yaya remained unavailable',
+        committedAt: '2026-08-25T14:15:16+00:00',
+    ));
+
+    $response = runPage($this, $this->run->id)->assertOk();
+    $run = $response->json('props.run');
+    $overlay = $response->json('props.overlay');
+
+    expect($run['status'])->toBe('failed')
+        ->and($run['terminal'])->toBeTrue()
+        ->and($run['error'])->toBe(RuntimeException::class.': Yaya remained unavailable')
+        ->and(array_keys($overlay))->toBe(['status', 'terminal', 'nodes'])
+        ->and($overlay['status'])->toBe('failed')
+        ->and($overlay['terminal'])->toBeTrue()
+        ->and($overlay['nodes']['pinned']['failed'])->toBe(0)
+        ->and($overlay['nodes']['pinned']['error'])->toBeNull();
 });
 
 it('supplies discriminated executable and trigger definitions for the pinned graph', function () {
