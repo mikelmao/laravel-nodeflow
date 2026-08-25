@@ -38,8 +38,10 @@ Six tables are created, all prefixed `nodeflow_`: `flows`, `flow_versions`, `run
 ## Step 2 — Implement the two required contracts
 
 The package ships defaults for both, and **both defaults deliberately fail closed.** If you skip this
-step, audiences come back empty and subject resolution throws. That is intentional: a misconfigured
-install that silently sends nothing to nobody is far worse than one that fails loudly.
+step, subject resolution throws. A truly empty normalized audience remains empty, but a non-empty
+audience cannot be admitted: the default tenant resolver rejects it, `CreateRun` throws
+`CrossTenantSubjectException`, and the run transaction rolls back. That is intentional: a
+misconfigured install fails loudly instead of silently becoming a no-op.
 
 ### `TenantResolver`
 
@@ -86,7 +88,7 @@ unconditional acceptance.
 
 > **Performance note.** For six-figure audiences, make the resolver bound as `TenantResolver::class`
 > implement `BatchTenantResolver` so ownership stays set-based. The scalar `ownsSubject()` fallback
-> remains correct but can make one lookup per distinct subject.
+> remains correct but can make one lookup per supplied occurrence after within-batch de-duplication.
 
 Subject IDs are de-duplicated only within each materialization batch. A duplicate that arrives in a
 later batch is checked again; the database's unique key prevents a second audience row.

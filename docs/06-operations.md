@@ -126,7 +126,7 @@ durable terminal state safely if publication is missed. A run exhausting the ste
 |---|---|
 | `active` | in the journey, sitting at `current_node_id` |
 | `completed` | left the journey successfully (reached a node with no onward edge, or a terminal node) |
-| `failed` | a node failed for this subject; `last_error` holds why |
+| `failed` | a subject node returned or threw a per-subject failure, or `ProjectWorkflowFailure` projected a matching terminal durable failure for every still-active subject. `last_error` holds the subject failure or the bounded run-level durable error. |
 | `exited` | removed mid-journey, usually by cancellation. `exited_at` is set. |
 
 A finished run should have **no** `active` subjects, except when `max_steps_per_run` exhausts and the

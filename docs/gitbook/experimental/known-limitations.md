@@ -24,7 +24,7 @@ Nodeflow is experimental. Use these current boundaries to decide what must be ha
 
 ### Large audiences require a batch-capable host resolver
 
-**Impact:** Nodeflow materializes replayable trigger audiences in fixed-size batches, but a host that implements only scalar `TenantResolver::ownsSubject()` still incurs one ownership lookup per distinct subject. That can be impractical for a remote user system.
+**Impact:** Nodeflow materializes replayable trigger audiences in fixed-size batches, but a host that implements only scalar `TenantResolver::ownsSubject()` still incurs one ownership lookup per supplied occurrence after within-batch de-duplication. A duplicate in a later batch is checked again before database uniqueness prevents a second audience row. That can be impractical for a remote user system.
 
 **Mitigation:** Make the concrete resolver bound under `TenantResolver::class` implement `BatchTenantResolver` so one bounded `ownedSubjectIds()` call validates each batch, and measure representative audiences against your supported database. Do not weaken the ownership check. The opt-in package scale test is an SQLite streaming/batch proof; before rollout, run an equivalent 100,000-subject Portia host integration test against that host's configured PostgreSQL connection and expect no scalar ownership calls and batches no larger than 1,000. See [Required contracts](../integration/required-contracts.md).
 
