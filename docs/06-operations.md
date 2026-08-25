@@ -152,7 +152,7 @@ what it *decided*, not what a provider did with it.
 | Symptom | Likely cause |
 |---|---|
 | Runs created, nothing happens | No queue worker, or the queue driver is `sync` |
-| Audience is always empty | `TenantResolver::ownsSubject()` returning false — the shipped default does |
+| Run creation rejects an audience | An unowned ID was omitted by `BatchTenantResolver::ownedSubjectIds()` or rejected by scalar `TenantResolver::ownsSubject()`; Nodeflow raises `CrossTenantSubjectException` and rolls back the run. A truly empty normalized input is a separate outcome. |
 | `SubjectResolver` throws about binding | You have not bound your own implementation |
 | A trigger's event fires and no run appears | Trigger registered somewhere that never executed; register in `boot()` |
 | Subject stuck `active` on a completed run | A routing bug; check `current_node_id` against the graph's edges |
