@@ -279,12 +279,18 @@ who has no templates yet. A field with `optionsFrom()` set is advertised to the 
 
 ## Retries and idempotency
 
-Node bodies run as queued activities. **The retry policy is currently the engine's default of one
-attempt**, and `Node::$tries` is not yet wired. There is also no automatic
-`(run, node, subject, attempt)` deduplication key.
+Node bodies run as durable activities. Each publication validates and freezes the node's public
+`$tries`, `$backoff`, `$timeout`, and `$nonRetryableErrorTypes` values into that version's activity
+policy. The durable engine applies the frozen policy when it executes and, when eligible, retries the
+same logical node activity. Changing the node class later does not change an already-published version.
+
+An uncaught subject-node exception is isolated to that subject by `NodeRunner`; it does not retry the
+whole activity. An audience-node exception propagates and can retry the whole durable node activity.
+There is no automatic `(run, node, subject, attempt)` deduplication key.
 
 Practically: **make a sending node idempotent by its own construction** — key on something stable and
-check before you send. Do not assume the framework will stop a double-send.
+check before you send. The key must remain stable across activity attempts; do not include the attempt
+number or assume the framework will stop a double-send.
 
 ## A checklist before you ship a node
 

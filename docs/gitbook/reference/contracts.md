@@ -149,13 +149,13 @@ new TriggerOccurrence(
 TriggerMatch::make()->forTenant(
     string $tenantId,
     string $subjectType,
-    iterable $subjectIds,
+    iterable|Closure $subjectIds,
     array $triggerData = [],
     ?string $occurrenceId = null,
 );
 ```
 
-`forTenant()` is immutable: each call returns a new match. Reusing a tenant key replaces that tenant's previous value. `tenants()` returns `TriggerTenantMatch[]`. Tenant ID and subject type must be nonblank, every subject ID must be nonblank, and occurrence identity is null or nonblank.
+`forTenant()` is immutable: each call returns a new match. Reusing a tenant key replaces that tenant's previous value. `tenants()` returns `TriggerTenantMatch[]`. Tenant ID and subject type must be nonblank, every subject ID must be nonblank, and occurrence identity is null or nonblank. Directly supplied reusable iterables, including arrays and `IteratorAggregate` implementations, are accepted. A directly supplied `Iterator` or generator is rejected because it may be one-shot. For a large or lazy audience, pass a `Closure` that returns a fresh iterable on every invocation so activation fan-out and run admission can replay the subject stream.
 
 The `array $config` passed to `TriggerSource::resolve()` is the pinned activation descriptor metadata emitted by `TriggerNode::compile()`. It is not the raw request body or automatically the full graph-node config.
 
