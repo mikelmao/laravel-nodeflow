@@ -187,6 +187,33 @@ Or `$context->all('sent')` to send everyone down one output.
 batch fast path and keep the per-subject version as the readable reference. If a node implements both,
 `forAudience()` is what actually runs.
 
+### `HandlesUniformAudience` — bounded routing for one-output batches
+
+Opt into `HandlesUniformAudience` only when every successful chunk sends all and only its input IDs
+to one declared output. The runner can then validate and release each chunk instead of retaining every
+ID until the audience finishes:
+
+```php
+final class BroadcastNode extends Node implements HandlesUniformAudience
+{
+    public function audienceOutput(): string { return 'sent'; }
+
+    public function forAudience(AudienceContext $context): NodeResult
+    {
+        $this->transport->sendIdempotently($context->runId(), $context->nodeId(), $context->subjectIds());
+
+        return $context->all('sent');
+    }
+}
+```
+
+Ordinary `HandlesAudience` remains O(N) in runner aggregation because it must retain per-subject
+routing across chunks. A uniform node must return the exact current chunk on its one
+`audienceOutput()` or throw; failures, missing or extra IDs, duplicate IDs, and other output keys are
+contract violations. Cursor changes and the aggregate execution projection happen only after every
+chunk succeeds, but no transaction spans transport calls. External effects must therefore be
+replay-idempotent. This contract does not add an exactly-once activity receipt.
+
 ### What each context gives you
 
 | `SubjectContext` | `AudienceContext` |
