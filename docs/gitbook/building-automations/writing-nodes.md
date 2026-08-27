@@ -117,6 +117,26 @@ Implement `HandlesAudience` for native batch work. `forAudience(AudienceContext 
 
 If a node implements both interfaces, `NodeRunner` always prefers `HandlesAudience`: it calls `forAudience()` for every chunk and does not call `forSubject()`. The two paths therefore need identical routing and test-mode semantics before you expose both.
 
+### Stream a uniform audience
+
+Implement `HandlesUniformAudience` only when every successful chunk sends all and only its input IDs to one declared output. This lets the runner validate and release each bounded chunk instead of retaining every subject ID until the audience finishes.
+
+```php
+final class BroadcastNode extends Node implements HandlesUniformAudience
+{
+    public function audienceOutput(): string { return 'sent'; }
+
+    public function forAudience(AudienceContext $context): NodeResult
+    {
+        $this->transport->sendIdempotently($context->runId(), $context->nodeId(), $context->subjectIds());
+
+        return $context->all('sent');
+    }
+}
+```
+
+Ordinary `HandlesAudience` remains O(N) in runner aggregation because it must retain per-subject routing across chunks. A uniform node must return the exact current chunk on its one `audienceOutput()` or throw; failures, missing or extra IDs, duplicate IDs, and other output keys violate the contract. Cursor changes and the aggregate execution projection happen only after every chunk succeeds, but no transaction spans transport calls. External effects must therefore be replay-idempotent. This contract does not add an exactly-once activity receipt.
+
 ## Use the context surface
 
 The following are the public methods intended for node bodies. Both constructors are public for runtime wiring, but are runtime-owned construction APIs: host and node code must not instantiate either context.

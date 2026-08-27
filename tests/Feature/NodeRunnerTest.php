@@ -278,6 +278,57 @@ it('streams a uniform audience in bounded chunks and records one aggregate execu
         ->and(RunSubject::where('run_id', $this->run->id)->where('current_node_id', 'n2')->count())->toBe(5);
 });
 
+it('leaves every uniform audience cursor unchanged after a late failure and replays the whole audience', function () {
+    config()->set('nodeflow.limits.audience_chunk', 2);
+
+    foreach (['4', '5'] as $id) {
+        RunSubject::create(['run_id' => $this->run->id, 'subject_type' => 'user', 'subject_id' => $id, 'current_node_id' => 'n1', 'status' => 'active']);
+    }
+
+    $graph = Graph::fromArray([
+        'start' => 'n1',
+        'nodes' => [
+            ['id' => 'n1', 'type' => 'test.uniform-audience', 'config' => []],
+            ['id' => 'n2', 'type' => 'core.exit', 'config' => []],
+        ],
+        'edges' => [['from' => 'n1', 'output' => 'sent', 'to' => 'n2']],
+    ]);
+
+    $chunkHashes = [];
+    FakeUniformAudienceNode::$handler = function (AudienceContext $context, int $call) use (&$chunkHashes): NodeResult {
+        $chunkHashes[] = hash('sha256', json_encode($context->subjectIds(), JSON_THROW_ON_ERROR));
+
+        if ($call === 3) {
+            throw new RuntimeException('late uniform failure');
+        }
+
+        return $context->all('sent');
+    };
+
+    expect(fn () => app(NodeRunner::class)->run($this->run, $graph, 'n1'))
+        ->toThrow(RuntimeException::class, 'late uniform failure');
+
+    $expectedChunks = [['1', '2'], ['3', '4'], ['5']];
+    $expectedHashes = array_map(
+        fn (array $ids): string => hash('sha256', json_encode($ids, JSON_THROW_ON_ERROR)),
+        $expectedChunks,
+    );
+
+    expect(FakeUniformAudienceNode::$chunks)->toBe($expectedChunks)
+        ->and($chunkHashes)->toBe($expectedHashes)
+        ->and($this->run->nodeExecutions()->count())->toBe(0)
+        ->and(RunSubject::where('run_id', $this->run->id)->where('status', 'active')->where('current_node_id', 'n1')->count())->toBe(5);
+
+    FakeUniformAudienceNode::$handler = null;
+    FakeUniformAudienceNode::$chunks = [];
+
+    expect(app(NodeRunner::class)->run($this->run, $graph, 'n1'))->toBe(['n2'])
+        ->and(FakeUniformAudienceNode::$chunks)->toBe($expectedChunks)
+        ->and($this->run->nodeExecutions()->count())->toBe(1)
+        ->and($this->run->nodeExecutions()->first()->subject_count)->toBe(5)
+        ->and(RunSubject::where('run_id', $this->run->id)->where('status', 'active')->where('current_node_id', 'n2')->count())->toBe(5);
+});
+
 it('preserves two-argument NodeRunner construction for a uniform audience', function () {
     $runner = null;
     $constructionError = null;
@@ -328,6 +379,80 @@ it('rejects an invalid uniform audience output before invoking the node', functi
     expect($handlerCalled)->toBeFalse()
         ->and(FakeUniformAudienceNode::$chunks)->toBe([])
         ->and($this->run->nodeExecutions()->count())->toBe(0);
+});
+
+it('rejects an invalid uniform audience chunk result without mutating cursors or projections', function (Closure $result, string $category) {
+    FakeUniformAudienceNode::$handler = fn (AudienceContext $context): NodeResult => $result($context);
+
+    $graph = Graph::fromArray([
+        'start' => 'n1',
+        'nodes' => [
+            ['id' => 'n1', 'type' => 'test.uniform-audience', 'config' => []],
+            ['id' => 'n2', 'type' => 'core.exit', 'config' => []],
+        ],
+        'edges' => [['from' => 'n1', 'output' => 'sent', 'to' => 'n2']],
+    ]);
+
+    expect(fn () => app(NodeRunner::class)->run($this->run, $graph, 'n1'))
+        ->toThrow(RuntimeException::class, $category);
+
+    expect($this->run->nodeExecutions()->count())->toBe(0)
+        ->and(RunSubject::where('run_id', $this->run->id)->where('status', 'active')->where('current_node_id', 'n1')->count())->toBe(3);
+})->with([
+    'wrong output key' => [
+        fn (AudienceContext $context): NodeResult => NodeResult::partition(['wrong' => $context->subjectIds()]),
+        'unexpected_output_keys',
+    ],
+    'failure' => [
+        fn (AudienceContext $context): NodeResult => NodeResult::failed($context->subjectIds()[0], 'rejected'),
+        'failures',
+    ],
+    'duplicate ID' => [
+        fn (AudienceContext $context): NodeResult => NodeResult::partition([
+            'sent' => [...$context->subjectIds(), $context->subjectIds()[0]],
+        ]),
+        'duplicate_ids',
+    ],
+    'missing ID' => [
+        fn (AudienceContext $context): NodeResult => NodeResult::partition([
+            'sent' => array_slice($context->subjectIds(), 0, -1),
+        ]),
+        'missing_or_extra_ids',
+    ],
+    'extra ID' => [
+        fn (AudienceContext $context): NodeResult => NodeResult::partition([
+            'sent' => [...$context->subjectIds(), '99'],
+        ]),
+        'missing_or_extra_ids',
+    ],
+]);
+
+it('rejects mixed subject types before invoking the uniform audience for the affected chunk', function () {
+    config()->set('nodeflow.limits.audience_chunk', 2);
+
+    RunSubject::create([
+        'run_id' => $this->run->id,
+        'subject_type' => 'account',
+        'subject_id' => '4',
+        'current_node_id' => 'n1',
+        'status' => 'active',
+    ]);
+
+    $graph = Graph::fromArray([
+        'start' => 'n1',
+        'nodes' => [
+            ['id' => 'n1', 'type' => 'test.uniform-audience', 'config' => []],
+            ['id' => 'n2', 'type' => 'core.exit', 'config' => []],
+        ],
+        'edges' => [['from' => 'n1', 'output' => 'sent', 'to' => 'n2']],
+    ]);
+
+    expect(fn () => app(NodeRunner::class)->run($this->run, $graph, 'n1'))
+        ->toThrow(RuntimeException::class, 'mixed_subject_types');
+
+    expect(FakeUniformAudienceNode::$chunks)->toBe([['1', '2']])
+        ->and($this->run->nodeExecutions()->count())->toBe(0)
+        ->and(RunSubject::where('run_id', $this->run->id)->where('status', 'active')->where('current_node_id', 'n1')->count())->toBe(4);
 });
 
 it('completes a terminal uniform audience with null cursors', function () {
@@ -392,7 +517,7 @@ it('uses one bounded set update for a large uniform audience', function () {
         ->and($this->run->nodeExecutions()->first()->subject_count)->toBe(2001);
 });
 
-it('leaves rows inserted above a uniform audience high-water mark untouched', function () {
+it('keeps uniform audience cancellation pagination stable and excludes rows above the high-water mark', function () {
     config()->set('nodeflow.limits.audience_chunk', 2);
 
     foreach (['4', '5'] as $id) {
@@ -401,6 +526,10 @@ it('leaves rows inserted above a uniform audience high-water mark untouched', fu
 
     FakeUniformAudienceNode::$handler = function (AudienceContext $context, int $call): NodeResult {
         if ($call === 1) {
+            RunSubject::where('run_id', $this->run->id)
+                ->where('subject_id', '1')
+                ->update(['status' => 'exited', 'exited_at' => now()]);
+
             RunSubject::create([
                 'run_id' => $this->run->id,
                 'subject_type' => 'user',
@@ -424,12 +553,19 @@ it('leaves rows inserted above a uniform audience high-water mark untouched', fu
 
     app(NodeRunner::class)->run($this->run, $graph, 'n1');
 
+    $exited = RunSubject::where('run_id', $this->run->id)->where('subject_id', '1')->firstOrFail();
     $late = RunSubject::where('run_id', $this->run->id)->where('subject_id', '99')->firstOrFail();
+    $visited = collect(FakeUniformAudienceNode::$chunks)->flatten()->all();
 
     expect(FakeUniformAudienceNode::$chunks)->toBe([['1', '2'], ['3', '4'], ['5']])
+        ->and($visited)->toEqualCanonicalizing(['1', '2', '3', '4', '5'])
+        ->and(array_count_values($visited))->toBe(['1' => 1, '2' => 1, '3' => 1, '4' => 1, '5' => 1])
+        ->and($exited->status)->toBe('exited')
+        ->and($exited->current_node_id)->toBe('n1')
         ->and($late->status)->toBe('active')
         ->and($late->current_node_id)->toBe('n1')
-        ->and(RunSubject::where('run_id', $this->run->id)->where('current_node_id', 'n2')->count())->toBe(5);
+        ->and(RunSubject::where('run_id', $this->run->id)->where('status', 'active')->where('current_node_id', 'n2')->pluck('subject_id')->all())
+        ->toEqualCanonicalizing(['2', '3', '4', '5']);
 });
 
 it('returns no work when a uniform audience is cancelled after high-water capture', function () {
