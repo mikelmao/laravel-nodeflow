@@ -7,6 +7,7 @@ use Nodeflow\Contracts\TenantResolver;
 use Nodeflow\Execution\AudienceContext;
 use Nodeflow\Execution\NodeResult;
 use Nodeflow\Execution\NodeRunner;
+use Nodeflow\Execution\UniformAudienceResultValidator;
 use Nodeflow\Graph\Graph;
 use Nodeflow\Models\Flow;
 use Nodeflow\Models\FlowVersion;
@@ -18,6 +19,65 @@ use Tests\Support\FakeSendNode;
 use Tests\Support\FakeThrowingAudienceNode;
 use Tests\Support\FakeThrowingSubjectNode;
 use Tests\Support\FakeUniformAudienceNode;
+
+class UniformAudienceMemoryProbe extends UniformAudienceResultValidator
+{
+    public int $sampledChunks = 0;
+
+    public int $firstBytes = 0;
+
+    public int $lastBytes = 0;
+
+    public int $maxBytes = 0;
+
+    private int $validatedChunks = 0;
+
+    public function __construct(private readonly int $warmupChunks) {}
+
+    public function assertValid(
+        string $nodeType,
+        string $nodeId,
+        string $expectedOutput,
+        array $declaredOutputs,
+        array $expectedSubjectIds,
+        NodeResult $result,
+    ): void {
+        parent::assertValid($nodeType, $nodeId, $expectedOutput, $declaredOutputs, $expectedSubjectIds, $result);
+
+        $this->afterValidation($expectedSubjectIds);
+    }
+
+    protected function afterValidation(array $expectedSubjectIds): void
+    {
+        $this->validatedChunks++;
+
+        if ($this->validatedChunks <= $this->warmupChunks) {
+            return;
+        }
+
+        $bytes = memory_get_usage(false);
+        $this->sampledChunks++;
+
+        if ($this->sampledChunks === 1) {
+            $this->firstBytes = $bytes;
+        }
+
+        $this->lastBytes = $bytes;
+        $this->maxBytes = max($this->maxBytes, $bytes);
+    }
+}
+
+class RetainingUniformAudienceMemoryControl extends UniformAudienceMemoryProbe
+{
+    private array $retainedExpectedChunks = [];
+
+    protected function afterValidation(array $expectedSubjectIds): void
+    {
+        $this->retainedExpectedChunks[] = $expectedSubjectIds;
+
+        parent::afterValidation($expectedSubjectIds);
+    }
+}
 
 beforeEach(function () {
     app()->bind(TenantResolver::class, fn () => new class implements TenantResolver {
@@ -515,6 +575,93 @@ it('uses one bounded set update for a large uniform audience', function () {
         ->and($subjectUpdates[0]->sql)->not->toMatch('/["`]?subject_id["`]?\s+in\s*\(/i')
         ->and($subjectUpdates[0]->bindings)->toHaveCount(6)
         ->and($this->run->nodeExecutions()->first()->subject_count)->toBe(2001);
+});
+
+it('keeps uniform audience memory growth bounded relative to a retaining control', function () {
+    $chunkSize = 250;
+    $subjectCount = 30_000;
+    $warmupChunks = 10;
+    config()->set('nodeflow.limits.audience_chunk', $chunkSize);
+
+    RunSubject::where('run_id', $this->run->id)->delete();
+
+    $expectedHash = '';
+    foreach (array_chunk(range(1, $subjectCount), 500) as $batch) {
+        $rows = [];
+        foreach ($batch as $id) {
+            $subjectId = 'memory-subject-'.$id;
+            $expectedHash = hash('sha256', $expectedHash."\0".$subjectId);
+            $rows[] = [
+                'run_id' => $this->run->id,
+                'subject_type' => 'user',
+                'subject_id' => $subjectId,
+                'current_node_id' => 'n1',
+                'status' => 'active',
+            ];
+        }
+        RunSubject::insert($rows);
+    }
+
+    $graph = Graph::fromArray([
+        'start' => 'n1',
+        'nodes' => [
+            ['id' => 'n1', 'type' => 'test.uniform-audience', 'config' => []],
+            ['id' => 'n2', 'type' => 'core.exit', 'config' => []],
+        ],
+        'edges' => [['from' => 'n1', 'output' => 'sent', 'to' => 'n2']],
+    ]);
+
+    $resolver = new class implements SubjectResolver
+    {
+        public int $resolveCalls = 0;
+
+        public function resolve(string $subjectType, array $subjectIds): array
+        {
+            $this->resolveCalls++;
+
+            throw new RuntimeException('Uniform audience execution must not resolve subject models.');
+        }
+    };
+
+    FakeUniformAudienceNode::recordOnlyScalarMetrics();
+    $productionProbe = new UniformAudienceMemoryProbe($warmupChunks);
+    $productionRunner = new NodeRunner(Nodeflow::nodes(), $resolver, $productionProbe);
+    $productionRunner->run($this->run, $graph, 'n1');
+
+    $productionGrowth = $productionProbe->lastBytes - $productionProbe->firstBytes;
+    $productionPeakGrowth = $productionProbe->maxBytes - $productionProbe->firstBytes;
+    $expectedSamples = intdiv($subjectCount, $chunkSize) - $warmupChunks;
+
+    expect(FakeUniformAudienceNode::$callCount)->toBe(intdiv($subjectCount, $chunkSize))
+        ->and(FakeUniformAudienceNode::$totalSubjectCount)->toBe($subjectCount)
+        ->and(FakeUniformAudienceNode::$maxChunkSize)->toBe($chunkSize)
+        ->and(FakeUniformAudienceNode::$rollingHash)->toBe($expectedHash)
+        ->and(FakeUniformAudienceNode::$chunks)->toBe([])
+        ->and($productionProbe->sampledChunks)->toBe($expectedSamples)
+        ->and($resolver->resolveCalls)->toBe(0);
+
+    RunSubject::where('run_id', $this->run->id)
+        ->where('current_node_id', 'n2')
+        ->update(['current_node_id' => 'n1']);
+    $this->run->nodeExecutions()->delete();
+
+    FakeUniformAudienceNode::recordOnlyScalarMetrics();
+    $controlProbe = new RetainingUniformAudienceMemoryControl($warmupChunks);
+    $controlRunner = new NodeRunner(Nodeflow::nodes(), $resolver, $controlProbe);
+    $controlRunner->run($this->run, $graph, 'n1');
+
+    $controlGrowth = $controlProbe->lastBytes - $controlProbe->firstBytes;
+
+    expect(FakeUniformAudienceNode::$callCount)->toBe(intdiv($subjectCount, $chunkSize))
+        ->and(FakeUniformAudienceNode::$totalSubjectCount)->toBe($subjectCount)
+        ->and(FakeUniformAudienceNode::$maxChunkSize)->toBe($chunkSize)
+        ->and(FakeUniformAudienceNode::$rollingHash)->toBe($expectedHash)
+        ->and(FakeUniformAudienceNode::$chunks)->toBe([])
+        ->and($controlProbe->sampledChunks)->toBe($expectedSamples)
+        ->and($controlGrowth)->toBeGreaterThan(1_000_000)
+        ->and($productionGrowth)->toBeLessThan($controlGrowth * 0.10)
+        ->and($productionPeakGrowth)->toBeLessThan($controlGrowth * 0.10)
+        ->and($resolver->resolveCalls)->toBe(0);
 });
 
 it('keeps uniform audience cancellation pagination stable and excludes rows above the high-water mark', function () {
