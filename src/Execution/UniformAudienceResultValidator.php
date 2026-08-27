@@ -23,7 +23,8 @@ class UniformAudienceResultValidator
         }
 
         $outputs = $result->outputs();
-        if (array_keys($outputs) !== [$expectedOutput]) {
+        $outputKeys = array_map('strval', array_keys($outputs));
+        if ($outputKeys !== [$expectedOutput]) {
             $this->fail($nodeType, $nodeId, $expectedOutput, 'unexpected_output_keys');
         }
 

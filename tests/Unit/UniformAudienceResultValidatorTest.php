@@ -38,6 +38,19 @@ it('accepts the exact subject IDs under the uniform output in any order', functi
     expect(true)->toBeTrue();
 });
 
+it('accepts a digit-only uniform output name coerced to an integer array key', function () {
+    (new UniformAudienceResultValidator)->assertValid(
+        'test.uniform',
+        'message',
+        '42',
+        ['42'],
+        ['private-subject-9981', '2'],
+        NodeResult::partition(['42' => ['2', 'private-subject-9981']]),
+    );
+
+    expect(true)->toBeTrue();
+});
+
 it('rejects invalid uniform results without exposing private result content', function (
     string $expectedOutput,
     array $declaredOutputs,
