@@ -278,6 +278,58 @@ it('streams a uniform audience in bounded chunks and records one aggregate execu
         ->and(RunSubject::where('run_id', $this->run->id)->where('current_node_id', 'n2')->count())->toBe(5);
 });
 
+it('preserves two-argument NodeRunner construction for a uniform audience', function () {
+    $runner = null;
+    $constructionError = null;
+
+    try {
+        $runner = new NodeRunner(Nodeflow::nodes(), app(SubjectResolver::class));
+    } catch (ArgumentCountError $exception) {
+        $constructionError = $exception;
+    }
+
+    expect($constructionError)->toBeNull();
+
+    if (! $runner instanceof NodeRunner) {
+        return;
+    }
+
+    $graph = Graph::fromArray([
+        'start' => 'n1',
+        'nodes' => [
+            ['id' => 'n1', 'type' => 'test.uniform-audience', 'config' => []],
+            ['id' => 'n2', 'type' => 'core.exit', 'config' => []],
+        ],
+        'edges' => [['from' => 'n1', 'output' => 'sent', 'to' => 'n2']],
+    ]);
+
+    expect($runner->run($this->run, $graph, 'n1'))->toBe(['n2'])
+        ->and($this->run->nodeExecutions()->first()->subject_count)->toBe(3);
+});
+
+it('rejects an invalid uniform audience output before invoking the node', function () {
+    FakeUniformAudienceNode::$output = '   ';
+    $handlerCalled = false;
+    FakeUniformAudienceNode::$handler = function (AudienceContext $context) use (&$handlerCalled): NodeResult {
+        $handlerCalled = true;
+
+        return $context->all('sent');
+    };
+
+    $graph = Graph::fromArray([
+        'start' => 'n1',
+        'nodes' => [['id' => 'n1', 'type' => 'test.uniform-audience', 'config' => []]],
+        'edges' => [],
+    ]);
+
+    expect(fn () => app(NodeRunner::class)->run($this->run, $graph, 'n1'))
+        ->toThrow(RuntimeException::class, 'invalid_output');
+
+    expect($handlerCalled)->toBeFalse()
+        ->and(FakeUniformAudienceNode::$chunks)->toBe([])
+        ->and($this->run->nodeExecutions()->count())->toBe(0);
+});
+
 it('completes a terminal uniform audience with null cursors', function () {
     config()->set('nodeflow.limits.audience_chunk', 2);
 
@@ -378,4 +430,54 @@ it('leaves rows inserted above a uniform audience high-water mark untouched', fu
         ->and($late->status)->toBe('active')
         ->and($late->current_node_id)->toBe('n1')
         ->and(RunSubject::where('run_id', $this->run->id)->where('current_node_id', 'n2')->count())->toBe(5);
+});
+
+it('returns no work when a uniform audience is cancelled after high-water capture', function () {
+    config()->set('nodeflow.limits.audience_chunk', 2);
+
+    $graph = Graph::fromArray([
+        'start' => 'n1',
+        'nodes' => [
+            ['id' => 'n1', 'type' => 'test.uniform-audience', 'config' => []],
+            ['id' => 'n2', 'type' => 'core.exit', 'config' => []],
+        ],
+        'edges' => [['from' => 'n1', 'output' => 'sent', 'to' => 'n2']],
+    ]);
+
+    $armed = true;
+    $captureRunnerUpdates = false;
+    $runnerUpdates = [];
+    $run = $this->run;
+
+    DB::listen(function (QueryExecuted $query) use (&$armed, &$captureRunnerUpdates, &$runnerUpdates, $run): void {
+        $sql = strtolower($query->sql);
+
+        if ($armed && str_starts_with(ltrim($sql), 'select')
+            && str_contains($sql, 'max(')
+            && str_contains($sql, 'nodeflow_run_subjects')) {
+            $armed = false;
+            RunSubject::where('run_id', $run->id)
+                ->where('current_node_id', 'n1')
+                ->where('status', 'active')
+                ->update(['status' => 'exited', 'exited_at' => now()]);
+            $captureRunnerUpdates = true;
+
+            return;
+        }
+
+        if ($captureRunnerUpdates && str_starts_with(ltrim($sql), 'update')
+            && str_contains($sql, 'nodeflow_run_subjects')) {
+            $runnerUpdates[] = $query;
+        }
+    });
+
+    $next = app(NodeRunner::class)->run($this->run, $graph, 'n1');
+
+    expect($armed)->toBeFalse()
+        ->and(FakeUniformAudienceNode::$chunks)->toBe([])
+        ->and($next)->toBe([])
+        ->and($this->run->nodeExecutions()->count())->toBe(0)
+        ->and($runnerUpdates)->toBe([])
+        ->and(RunSubject::where('run_id', $this->run->id)->where('status', 'exited')->count())->toBe(3)
+        ->and(RunSubject::where('run_id', $this->run->id)->where('current_node_id', 'n1')->count())->toBe(3);
 });

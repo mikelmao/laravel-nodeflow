@@ -16,11 +16,15 @@ use Throwable;
 
 class NodeRunner
 {
+    private UniformAudienceResultValidator $uniformResults;
+
     public function __construct(
         private NodeRegistry $registry,
         private SubjectResolver $subjects,
-        private UniformAudienceResultValidator $uniformResults,
-    ) {}
+        ?UniformAudienceResultValidator $uniformResults = null,
+    ) {
+        $this->uniformResults = $uniformResults ?? new UniformAudienceResultValidator;
+    }
 
     /** @return string[] node ids that now hold subjects */
     public function run(Run $run, Graph $graph, string $nodeId): array
@@ -140,6 +144,7 @@ class NodeRunner
         $processedCount = 0;
         $output = $node->audienceOutput();
         $target = $graph->targetsFor($nodeId, $output)[0] ?? null;
+        $this->uniformResults->assertOutputValid($nodeType, $nodeId, $output, $declaredOutputs);
 
         $base = RunSubject::query()
             ->where('run_id', $run->id)
@@ -174,6 +179,10 @@ class NodeRunner
                 $this->uniformResults->assertValid($nodeType, $nodeId, $output, $declaredOutputs, $ids, $result);
                 $processedCount += count($ids);
             });
+
+        if ($processedCount === 0) {
+            return [];
+        }
 
         $durationMs = (int) ((microtime(true) - $startedAt) * 1000);
 

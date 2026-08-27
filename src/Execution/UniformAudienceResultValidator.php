@@ -14,9 +14,7 @@ class UniformAudienceResultValidator
         array $expectedSubjectIds,
         NodeResult $result,
     ): void {
-        if (trim($expectedOutput) === '' || ! in_array($expectedOutput, $declaredOutputs, true)) {
-            $this->fail($nodeType, $nodeId, $expectedOutput, 'invalid_output');
-        }
+        $this->assertOutputValid($nodeType, $nodeId, $expectedOutput, $declaredOutputs);
 
         if ($result->failures() !== []) {
             $this->fail($nodeType, $nodeId, $expectedOutput, 'failures');
@@ -39,6 +37,17 @@ class UniformAudienceResultValidator
 
         if ($actual !== $expected) {
             $this->fail($nodeType, $nodeId, $expectedOutput, 'missing_or_extra_ids');
+        }
+    }
+
+    public function assertOutputValid(
+        string $nodeType,
+        string $nodeId,
+        string $expectedOutput,
+        array $declaredOutputs,
+    ): void {
+        if (trim($expectedOutput) === '' || ! in_array($expectedOutput, $declaredOutputs, true)) {
+            $this->fail($nodeType, $nodeId, $expectedOutput, 'invalid_output');
         }
     }
 
