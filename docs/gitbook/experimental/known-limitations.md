@@ -22,11 +22,11 @@ Nodeflow is experimental. Use these current boundaries to decide what must be ha
 
 **Mitigation:** Make audience-node effects idempotent per subject and per chunk. Tune the configured chunk sizes only after measuring your own database and worker capacity. See [Durable execution](../operations/durable-execution.md).
 
-### Audience materialization checks every distinct subject
+### Large audiences require a batch-capable host resolver
 
-**Impact:** Starting a run calls `TenantResolver::ownsSubject()` once for each distinct, normalized subject ID before inserting the audience. Large audiences can therefore create many membership checks and remote database round trips.
+**Impact:** Nodeflow materializes replayable trigger audiences in fixed-size batches, but a host that implements only scalar `TenantResolver::ownsSubject()` still incurs one ownership lookup per supplied occurrence after within-batch de-duplication. A duplicate in a later batch is checked again before database uniqueness prevents a second audience row. That can be impractical for a remote user system.
 
-**Mitigation:** Keep membership checks cheap, and use operation-scoped batching, local preloading, or caching inside the resolver where that remains safe. Measure representative audiences against your supported database. Do not weaken the per-subject ownership check. See [Starting runs](../building-automations/starting-runs.md).
+**Mitigation:** Make the concrete resolver bound under `TenantResolver::class` implement `BatchTenantResolver` so one bounded `ownedSubjectIds()` call validates each batch, and measure representative audiences against your supported database. Do not weaken the ownership check. The opt-in package scale test is an SQLite streaming/batch proof; before rollout, run an equivalent 100,000-subject Portia host integration test against that host's configured PostgreSQL connection and expect no scalar ownership calls and batches no larger than 1,000. See [Required contracts](../integration/required-contracts.md).
 
 ### Child flows are keyless per chunk
 
@@ -62,17 +62,11 @@ Nodeflow is experimental. Use these current boundaries to decide what must be ha
 
 **Mitigation:** Treat published versions as append-only records in application code and protect them from direct update and delete paths. See [Flows and versions](../building-automations/flows-and-versions.md).
 
-### Publishing does not compare the draft revision
+### Failure projection has no atomic outbox
 
-**Impact:** Draft saving uses compare-and-swap, but publishing does not accept the revision. A save that arrives after the final draft save and before the publish can be cleared by that publish.
+**Impact:** Terminal durable `FlowInterpreter` failures are projected to `nodeflow_runs` by a retrying listener queued after commit. If broker publication itself fails after the durable transaction commits, the projection may be absent even though the durable execution failed.
 
-**Mitigation:** Serialize draft-save and publish requests per flow, or restrict each flow to one active editor/author. Restricting publishers alone is insufficient. See [Publishing flows](../building-automations/publishing-flows.md).
-
-### Durable-engine failures do not automatically reconcile Nodeflow run status
-
-**Impact:** A missing type or activity exception can fail the durable execution while the Nodeflow run remains `running`. The package has no automatic status reconciliation or packaged generic resume/recovery service.
-
-**Mitigation:** Monitor the durable engine and Nodeflow records together, enable node-type checks where appropriate, and define an application repair procedure before operating critical flows. See [Durable execution](../operations/durable-execution.md) and [Health checks](../operations/health-checks.md).
+**Mitigation:** Monitor durable failures and projection jobs together, operate queue recovery, and plan a reconciliation process that compares durable terminal state with Nodeflow runs. See [Durable execution](../operations/durable-execution.md) and [Health checks](../operations/health-checks.md).
 
 ### The run view is current evidence, not historical proof
 

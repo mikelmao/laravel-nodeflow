@@ -24,8 +24,10 @@ edge matching the output it returned.
 ## A run, step by step
 
 1. A trigger fires (or you call `StartRun`). One run is created per tenant, pinning `flow_version_id`.
-2. The audience is materialised into `run_subjects` — every subject checked against `ownsSubject()`
-   before a single row is written, all-or-nothing.
+2. The audience is materialised transactionally into `run_subjects`. Ownership is enforced centrally
+   in fixed-size batches when the concrete resolver implements `BatchTenantResolver` and is bound under
+   `TenantResolver::class`; `ownsSubject()` is the safe scalar fallback. Any rejection rolls back run
+   creation.
 3. The engine starts the interpreter with the run id. The graph is loaded through an activity, so its
    contents land in the workflow's replay history rather than being re-read.
 4. The cursor begins at the start node. For each node: if it is a wait, the workflow suspends; then
@@ -128,21 +130,25 @@ after the other rather than concurrently. Total elapsed time is the sum, not the
 warns at publish when it detects this shape. Concurrent branch waits need nested generators under the
 engine's `all()` and are deferred.
 
-### The interpreter has not run against a real engine
+### End-to-end queue-worker validation remains host-owned
 
-Every signature is verified against the installed engine source and the control flow is covered by
-tests, but nothing in this package's suite has executed the interpreter on a real queue worker with the
-real durable engine. Two API-shape corrections were already found this way during development. **Run
-the canonical journey on a real worker before trusting it in production.**
+The package suite exercises the durable task lifecycle, but it cannot prove a host's external queue
+worker, durable storage, cache, tenancy binding, or domain side effects work together. **Run the
+canonical journey through the configured external queue worker before trusting it in production.**
 
-### Runs do not reach a failure state
+### Terminal durable failures are projected
 
-`runs.status` is only ever written as `running` and then `completed`. An activity exception leaves a run
-`running` indefinitely, and a run that exhausts the step guard is recorded as `completed`. There is no
-`failed` and no recoverable `blocked` state yet, so a stuck run stays visible to the health check and
-unprunable. The run view's overlay polling treats "terminal" as `completed` alone for the same reason,
-so a dead run leaves a browser tab polling until it is closed — see
-[Editor client](08-editor-client.md#polling).
+The normal lifecycle is `pending` → `running` → `completed`. A matching terminal `FlowInterpreter`
+failure is projected by a queued, after-commit listener: it atomically sets the run to `failed`, stores a
+bounded run-level durable error and event time, and marks every still-active subject `failed` while
+clearing its cursor. This run-level error is distinct from the per-node business-failure records. The
+overlay treats `completed`, `failed`, and `cancelled` as terminal, so each stops polling.
+
+The projection job retries transient failures, but it is not an atomic outbox. If queue publication fails
+after the durable transaction commits, use queue operations and a safe reconciliation process to compare
+durable terminal state with Nodeflow runs. The step guard still ends normally and may record
+`completed` while subjects remain at an unprocessed node; no current package service writes `blocked`
+or run-level `cancelled`.
 
 ### A node that released nobody writes no execution row
 
@@ -164,7 +170,9 @@ or `FlowVersion::find($request->version)` becomes a cross-tenant read.
 
 ### Other follow-ups
 
-- `ownsSubject()` is called once per subject; a set-shaped contract is wanted before six-figure use.
+- Six-figure audiences require the concrete resolver bound as `TenantResolver::class` to implement
+  `BatchTenantResolver`; the scalar `ownsSubject()` fallback remains safe but can make one ownership
+  lookup per subject.
 - Nothing persists until every chunk of a node completes, so a crash mid-node loses the advancement
   record for subjects already processed — and there is no send-deduplication key.
 - The test suite is SQLite-only. Run it against your production database engine in CI; a Postgres

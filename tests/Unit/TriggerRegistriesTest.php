@@ -398,7 +398,7 @@ it('keeps trigger matches immutable and normalizes identifiers', function () {
         ->and($matched->tenants())->toHaveCount(1)
         ->and($matched->tenants()[0]->tenantId)->toBe('42')
         ->and($matched->tenants()[0]->subjectType)->toBe('7')
-        ->and($matched->tenants()[0]->subjectIds)->toBe(['1', '2']);
+        ->and(iterator_to_array($matched->tenants()[0]->subjectIds, false))->toBe(['1', '2']);
 });
 
 it('resolves occurrences through stable source configuration', function () {

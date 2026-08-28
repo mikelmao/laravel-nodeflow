@@ -524,12 +524,14 @@ it('shows the draft graph in preference to the published version', function () {
     allowEverything();
 
     $published = exitGraph();
-    app(\Nodeflow\Publishing\PublishFlow::class)->publish($this->flow, $published);
+    $publishedVersion = app(\Nodeflow\Publishing\PublishFlow::class)
+        ->publish($this->flow, $published)
+        ->version;
 
     // Leg two: a published version and no draft.
     editPage($this, $this->flow->id)
         ->assertOk()
-        ->assertJsonPath('props.graph', $published)
+        ->assertJsonPath('props.graph', $publishedVersion->graph)
         ->assertJsonPath('props.flow.version', 1);
 
     $draft = exitGraph();

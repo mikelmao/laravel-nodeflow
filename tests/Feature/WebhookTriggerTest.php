@@ -20,6 +20,7 @@ use Nodeflow\Triggers\TriggerMatch;
 use Nodeflow\Triggers\TriggerOccurrence;
 use Nodeflow\Triggers\Webhook\WebhookOccurrence;
 use Nodeflow\Triggers\Webhook\WebhookCredentials;
+use Nodeflow\Triggers\Webhook\WebhookSourceFailure;
 use Nodeflow\Triggers\Webhook\WebhookSourceRejected;
 use Nodeflow\Triggers\TriggerDriverRegistry;
 use Nodeflow\Triggers\TriggerSourceRegistry;
@@ -417,6 +418,211 @@ it('returns a retryable failure and recovers the same idempotent run after engin
         ->and($engine->calls)->toBe(2);
 });
 
+it('admits the first nonempty lazy webhook audience without replaying its factory', function () {
+    [$url, $secret] = publishedHttpContractWebhook();
+    $replays = 0;
+    HttpContractWebhookSource::$resolver = function () use (&$replays): TriggerMatch {
+        return TriggerMatch::make()->forTenant('org-1', 'user', function () use (&$replays): array {
+            $replays++;
+
+            return $replays === 1 ? [10, 20] : [];
+        });
+    };
+    $body = json_encode(['user_id' => '42'], JSON_THROW_ON_ERROR);
+    $timestamp = (string) now()->timestamp;
+
+    $this->call(
+        'POST',
+        $url,
+        server: signedWebhookHeaders($timestamp, $body, $secret, 'lazy-nonempty'),
+        content: $body,
+    )->assertAccepted();
+
+    expect($replays)->toBe(1)
+        ->and(Run::withoutTenancy()->sole()->subjects()->pluck('subject_id')->all())->toBe(['10', '20']);
+});
+
+it('does not consume a lazy webhook audience when an idempotent delivery already has a run', function () {
+    [$url, $secret] = publishedHttpContractWebhook();
+    $resolutions = 0;
+    $retryAudienceCalls = 0;
+    HttpContractWebhookSource::$resolver = function () use (&$resolutions, &$retryAudienceCalls): TriggerMatch {
+        $resolutions++;
+
+        if ($resolutions === 1) {
+            return TriggerMatch::make()->forTenant('org-1', 'user', ['42']);
+        }
+
+        return TriggerMatch::make()->forTenant('org-1', 'user', function () use (&$retryAudienceCalls): array {
+            $retryAudienceCalls++;
+
+            throw new RuntimeException('a redelivery audience must not be consumed');
+        });
+    };
+    $body = json_encode(['user_id' => '42'], JSON_THROW_ON_ERROR);
+    $timestamp = (string) now()->timestamp;
+    $headers = signedWebhookHeaders($timestamp, $body, $secret, 'lazy-idempotent-winner');
+
+    $first = $this->call('POST', $url, server: $headers, content: $body)->assertAccepted();
+    $retry = $this->call('POST', $url, server: $headers, content: $body)
+        ->assertAccepted()
+        ->assertJsonPath('duplicate', true)
+        ->assertJsonPath('run_id', $first->json('run_id'));
+
+    expect($retryAudienceCalls)->toBe(0)
+        ->and(Run::withoutTenancy()->count())->toBe(1)
+        ->and(Run::withoutTenancy()->sole()->subjects()->pluck('subject_id')->all())->toBe(['42']);
+});
+
+it('rejects an empty lazy webhook audience', function () {
+    [$url, $secret] = publishedHttpContractWebhook();
+    HttpContractWebhookSource::$resolver = fn (): TriggerMatch => TriggerMatch::make()
+        ->forTenant('org-1', 'user', fn (): array => []);
+    $body = json_encode(['user_id' => '42'], JSON_THROW_ON_ERROR);
+    $timestamp = (string) now()->timestamp;
+
+    $this->call(
+        'POST',
+        $url,
+        server: signedWebhookHeaders($timestamp, $body, $secret, 'lazy-empty'),
+        content: $body,
+    )->assertUnprocessable();
+
+    expect(Run::withoutTenancy()->count())->toBe(0);
+});
+
+it('sanitizes a lazy webhook audience failure before the first subject', function () {
+    [$url, $secret] = publishedHttpContractWebhook();
+    $reported = new class implements ExceptionHandler
+    {
+        public array $exceptions = [];
+
+        public function report(Throwable $e) { $this->exceptions[] = $e; }
+
+        public function shouldReport(Throwable $e) { return true; }
+
+        public function render($request, Throwable $e) { throw $e; }
+
+        public function renderForConsole($output, Throwable $e): void {}
+    };
+    app()->instance(ExceptionHandler::class, $reported);
+    HttpContractWebhookSource::$resolver = fn (): TriggerMatch => TriggerMatch::make()
+        ->forTenant('org-1', 'user', fn (): array => throw new RuntimeException('raw-body:secret-before-yield'));
+    $body = json_encode(['password' => 'secret-before-yield'], JSON_THROW_ON_ERROR);
+    $timestamp = (string) now()->timestamp;
+
+    $response = $this->call(
+        'POST',
+        $url,
+        server: signedWebhookHeaders($timestamp, $body, $secret, 'lazy-before-yield'),
+        content: $body,
+    )->assertStatus(503)->assertJsonPath('message', 'The webhook run could not be started.');
+
+    expect($response->getContent())->not->toContain('secret-before-yield', 'raw-body')
+        ->and($reported->exceptions)->toHaveCount(1)
+        ->and($reported->exceptions[0])->toBeInstanceOf(WebhookSourceFailure::class)
+        ->and($reported->exceptions[0]->getPrevious())->toBeNull()
+        ->and($reported->exceptions[0]->getMessage())->not->toContain('secret-before-yield', 'raw-body')
+        ->and(Run::withoutTenancy()->count())->toBe(0);
+});
+
+it('sanitizes a source-thrown cross-tenant exception before the first subject', function () {
+    [$url, $secret] = publishedHttpContractWebhook();
+    $reported = new class implements ExceptionHandler
+    {
+        public array $exceptions = [];
+
+        public function report(Throwable $e) { $this->exceptions[] = $e; }
+
+        public function shouldReport(Throwable $e) { return true; }
+
+        public function render($request, Throwable $e) { throw $e; }
+
+        public function renderForConsole($output, Throwable $e): void {}
+    };
+    app()->instance(ExceptionHandler::class, $reported);
+    HttpContractWebhookSource::$resolver = fn (TriggerOccurrence $occurrence): TriggerMatch => TriggerMatch::make()
+        ->forTenant('org-1', 'user', fn (): array => throw new \Nodeflow\Execution\CrossTenantSubjectException(
+            'org-1',
+            'user',
+            (string) $occurrence->payload->payload['user_id'],
+        ));
+    $body = json_encode(['user_id' => 'payload-derived-secret'], JSON_THROW_ON_ERROR);
+    $timestamp = (string) now()->timestamp;
+
+    $response = $this->call(
+        'POST',
+        $url,
+        server: signedWebhookHeaders($timestamp, $body, $secret, 'lazy-source-cross-tenant'),
+        content: $body,
+    )->assertStatus(503)->assertJsonPath('message', 'The webhook run could not be started.');
+
+    expect($response->getContent())->not->toContain('payload-derived-secret')
+        ->and($reported->exceptions)->toHaveCount(1)
+        ->and($reported->exceptions[0])->toBeInstanceOf(WebhookSourceFailure::class)
+        ->and($reported->exceptions[0]->getPrevious())->toBeNull()
+        ->and(get_object_vars($reported->exceptions[0]))->not->toHaveKey('subjectId')
+        ->and($reported->exceptions[0]->getMessage())->not->toContain('payload-derived-secret')
+        ->and(Run::withoutTenancy()->count())->toBe(0);
+});
+
+it('sanitizes a lazy webhook audience failure during run traversal', function () {
+    [$url, $secret] = publishedHttpContractWebhook();
+    $reported = new class implements ExceptionHandler
+    {
+        public array $exceptions = [];
+
+        public function report(Throwable $e) { $this->exceptions[] = $e; }
+
+        public function shouldReport(Throwable $e) { return true; }
+
+        public function render($request, Throwable $e) { throw $e; }
+
+        public function renderForConsole($output, Throwable $e): void {}
+    };
+    app()->instance(ExceptionHandler::class, $reported);
+    HttpContractWebhookSource::$resolver = fn (): TriggerMatch => TriggerMatch::make()
+        ->forTenant('org-1', 'user', function (): Generator {
+            yield '10';
+
+            throw new RuntimeException('raw-body:secret-after-yield');
+        });
+    $body = json_encode(['password' => 'secret-after-yield'], JSON_THROW_ON_ERROR);
+    $timestamp = (string) now()->timestamp;
+
+    $response = $this->call(
+        'POST',
+        $url,
+        server: signedWebhookHeaders($timestamp, $body, $secret, 'lazy-after-yield'),
+        content: $body,
+    )->assertStatus(503)->assertJsonPath('message', 'The webhook run could not be started.');
+
+    expect($response->getContent())->not->toContain('secret-after-yield', 'raw-body')
+        ->and($reported->exceptions)->toHaveCount(1)
+        ->and($reported->exceptions[0])->toBeInstanceOf(WebhookSourceFailure::class)
+        ->and($reported->exceptions[0]->getPrevious())->toBeNull()
+        ->and($reported->exceptions[0]->getMessage())->not->toContain('secret-after-yield', 'raw-body')
+        ->and(Run::withoutTenancy()->count())->toBe(0);
+});
+
+it('translates malformed lazy webhook audiences as source failures', function () {
+    [$url, $secret] = publishedHttpContractWebhook();
+    HttpContractWebhookSource::$resolver = fn (): TriggerMatch => TriggerMatch::make()
+        ->forTenant('org-1', 'user', fn (): array => ['  ']);
+    $body = json_encode(['user_id' => '42'], JSON_THROW_ON_ERROR);
+    $timestamp = (string) now()->timestamp;
+
+    $response = $this->call(
+        'POST',
+        $url,
+        server: signedWebhookHeaders($timestamp, $body, $secret, 'lazy-malformed'),
+        content: $body,
+    )->assertStatus(503);
+
+    expect($response->getContent())->not->toContain('blank subject ID')
+        ->and(Run::withoutTenancy()->count())->toBe(0);
+});
+
 it('keeps a start-failure response retryable when the host reporter also fails', function () {
     Queue::fake();
     app()->instance(ExceptionHandler::class, new class implements ExceptionHandler
@@ -455,6 +661,55 @@ it('keeps a start-failure response retryable when the host reporter also fails',
         server: signedWebhookHeaders($timestamp, $body, $secret, 'reporter-failure'),
         content: $body,
     )->assertStatus(503)->assertJsonPath('message', 'The webhook run could not be started.');
+});
+
+it('reports downstream workflow failures without source audience sanitization', function () {
+    $reported = new class implements ExceptionHandler
+    {
+        public array $exceptions = [];
+
+        public function report(Throwable $e) { $this->exceptions[] = $e; }
+
+        public function shouldReport(Throwable $e) { return true; }
+
+        public function render($request, Throwable $e) { throw $e; }
+
+        public function renderForConsole($output, Throwable $e): void {}
+    };
+    app()->instance(ExceptionHandler::class, $reported);
+    $failure = new RuntimeException('workflow infrastructure unavailable');
+    app()->instance(WorkflowEngine::class, new class($failure) implements WorkflowEngine
+    {
+        public function __construct(private RuntimeException $failure) {}
+
+        public function start(string $workflowClass, array $args, ?string $instanceId = null): string
+        {
+            throw $this->failure;
+        }
+
+        public function signal(string $workflowId, string $method, array $args = []): void {}
+
+        public function cancel(string $workflowId): void {}
+
+        public function isRunning(string $workflowId): bool { return false; }
+    });
+    app()->forgetInstance(\Nodeflow\Execution\CreateRun::class);
+    app()->forgetInstance(\Nodeflow\Triggers\TriggerRunStarter::class);
+    app()->forgetInstance(\Nodeflow\Triggers\Webhook\WebhookTriggerDriver::class);
+    [$url, $secret] = publishedHttpContractWebhook();
+    $body = json_encode(['user_id' => '42'], JSON_THROW_ON_ERROR);
+    $timestamp = (string) now()->timestamp;
+
+    $this->call(
+        'POST',
+        $url,
+        server: signedWebhookHeaders($timestamp, $body, $secret, 'workflow-infrastructure'),
+        content: $body,
+    )->assertStatus(503)->assertJsonPath('message', 'The webhook run could not be started.');
+
+    expect($reported->exceptions)->toHaveCount(2)
+        ->and($reported->exceptions[0])->toBe($failure)
+        ->and($reported->exceptions[1])->toBe($failure);
 });
 
 it('reports unexpected source failures as sanitized retryable infrastructure errors', function () {

@@ -106,7 +106,7 @@ export type CanvasEdge = { id:string; type?:'nodeflowEdge'; source:string; sourc
 export type NodeOverlay = { reached: boolean; byOutput: Record<string, number>; waiting: number; failed: number; error: string | null }
 
 // `terminal` is server-computed, so the client never hardcodes which run
-// statuses end a run. Today that is 'completed' alone (limitation C-1).
+// statuses end a run. The server recognizes completed, failed, and cancelled.
 export type OverlaySnapshot = { status: string; terminal: boolean; nodes: Record<string, NodeOverlay> }
 
 // Source: RunViewController::show(). `version` is the pinned version, which may

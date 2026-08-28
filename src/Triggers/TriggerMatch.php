@@ -2,6 +2,8 @@
 
 namespace Nodeflow\Triggers;
 
+use Closure;
+
 final readonly class TriggerMatch
 {
     /** @param  array<string, TriggerTenantMatch>  $matches */
@@ -15,7 +17,7 @@ final readonly class TriggerMatch
     public function forTenant(
         string $tenantId,
         string $subjectType,
-        iterable $subjectIds,
+        iterable|Closure $subjectIds,
         array $triggerData = [],
         ?string $occurrenceId = null,
     ): self {
@@ -24,10 +26,7 @@ final readonly class TriggerMatch
         $matches[$tenantId] = new TriggerTenantMatch(
             tenantId: $tenantId,
             subjectType: (string) $subjectType,
-            subjectIds: array_values(array_map(
-                static fn (mixed $subjectId): string => (string) $subjectId,
-                is_array($subjectIds) ? $subjectIds : iterator_to_array($subjectIds),
-            )),
+            subjectIds: $subjectIds,
             triggerData: $triggerData,
             occurrenceId: $occurrenceId,
         );

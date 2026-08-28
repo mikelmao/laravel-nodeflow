@@ -128,6 +128,33 @@ it('starts a custom-driver flow at the exact activation version without package 
         ->and($run->trigger_data)->toBe(['occurrence' => 'occ-9']);
 });
 
+it('replays one lazy source match for every matching activation', function () {
+    publishCustomTriggerFlow('org-1', 'First replayed audience');
+    publishCustomTriggerFlow('org-1', 'Second replayed audience');
+    $resolutions = 0;
+    $replays = 0;
+    $match = TriggerMatch::make()->forTenant('org-1', 'user', function () use (&$replays): array {
+        $replays++;
+
+        return [10, 20];
+    });
+    FakeTriggerSource::$resolver = function () use (&$resolutions, $match): TriggerMatch {
+        $resolutions++;
+
+        return $match;
+    };
+
+    $runs = app(TriggerOccurrenceDispatcher::class)->dispatch(new TriggerOccurrence(
+        'test.fake', 'test.orders', ['unused' => true],
+    ));
+
+    expect($runs)->toHaveCount(2)
+        ->and($resolutions)->toBe(2)
+        ->and($replays)->toBe(2)
+        ->and($runs[0]->subjects()->pluck('subject_id')->all())->toBe(['10', '20'])
+        ->and($runs[1]->subjects()->pluck('subject_id')->all())->toBe(['10', '20']);
+});
+
 it('isolates a candidate audience failure and continues multi-tenant fan-out', function () {
     publishCustomTriggerFlow('org-1', 'Broken audience');
     publishCustomTriggerFlow('org-2', 'Healthy audience');
@@ -280,9 +307,9 @@ it('isolates an invalid pinned snapshot before extension code and continues vali
     expect($runs)->toHaveCount(1)
         ->and($runs[0]->tenant_id)->toBe('org-2')
         ->and($resolutions)->toBe(1)
-        // The valid run is checked by both TriggerRunStarter and the shared
-        // audience materializer; the forged candidate contributes zero checks.
-        ->and($this->ownershipChecks)->toBe(2)
+        // The materializer exclusively checks the valid audience; the forged
+        // candidate contributes zero ownership checks.
+        ->and($this->ownershipChecks)->toBe(1)
         ->and($reported->reported)->toHaveCount(1)
         ->and($reported->reported[0]->getMessage())->toContain('pinned graph');
 });
@@ -540,7 +567,7 @@ it('isolates malformed extension matches before creating a run', function (Closu
 })->with([
     'blank tenant' => [fn () => TriggerMatch::make()->forTenant('  ', 'user', ['1']), 'tenant'],
     'blank subject type' => [fn () => TriggerMatch::make()->forTenant('org-1', ' ', ['1']), 'subject type'],
-    'blank subject id' => [fn () => TriggerMatch::make()->forTenant('org-1', 'user', ['1', '  ']), 'subject ID'],
+    'blank subject id' => [fn () => TriggerMatch::make()->forTenant('org-1', 'user', ['1', '  ']), 'blank subject ID'],
     'blank occurrence id' => [fn () => TriggerMatch::make()->forTenant('org-1', 'user', ['1'], [], ' '), 'occurrence ID'],
 ]);
 

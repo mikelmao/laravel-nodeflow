@@ -18,15 +18,8 @@ use Nodeflow\Models\Run;
  */
 class RunOverlay
 {
-    /**
-     * The only status the engine ever writes as an end state.
-     *
-     * `runs.status` has no durable failure value today (open issue C-1), so a
-     * run that dies leaves a client polling until the page closes. That is a
-     * known, accepted limitation rather than an oversight, and keeping the list
-     * here means the day a failure status exists, the client needs no change.
-     */
-    private const TERMINAL_STATUSES = ['completed'];
+    /** Terminal run states stop the overlay client from polling. */
+    private const TERMINAL_STATUSES = ['completed', 'failed', 'cancelled'];
 
     public function __construct(private GraphTypeCatalog $types) {}
 

@@ -8,10 +8,10 @@ contracts required by the next phase.
 
 ## Dependency order
 
-1. **First-class Nodeflow triggers**  
-   Execute `docs/superpowers/plans/2026-08-24-first-class-trigger-nodes.md`. This replaces the current
-   mutable flow-level trigger system and extracts `CreateRun`, `TriggerTenantMatch`, and the generic
-   occurrence dispatcher used by every later phase.
+1. **First-class Nodeflow triggers — complete**
+   Merged in Nodeflow commit `e99f8d7`. The merged boundary includes immutable activation
+   snapshots, pluggable drivers and sources, `TriggerRunStarter`, occurrence-scoped run idempotency,
+   deterministic durable workflow identities, and recoverable engine dispatch.
 
 2. **Nodeflow production readiness**  
    Execute `docs/superpowers/plans/2026-08-24-nodeflow-portia-readiness.md`. This adds replayable,
@@ -26,11 +26,15 @@ contracts required by the next phase.
    artifact, stream a frozen audience, and obtain stable per-subject command outcomes.
 
 4. **Rada-triggered initial warning**  
-   Write and execute one coordinated contract plan across `rada` and `portia-engine`. Rada emits a
-   signed, stable `rada.alert.triggered` event; Portia deduplicates it and dispatches the matching
-   Nodeflow activation; the first Yaya message capability runs in shadow mode before one test FSP is
-   cut over. The existing direct Rada-to-Yaya route remains the rollback path and is mutually
-   exclusive per FSP.
+   Write and execute one coordinated contract plan across `rada` and `portia-engine`. Rada emits one
+   signed, stable `rada.alert.triggered` event to a Portia ingress endpoint. Portia records it in an
+   idempotent inbox, snapshots the matching active Rada activations, persists one independently
+   retryable delivery per pinned activation, and queues those deliveries. Each worker invokes a
+   Portia-owned Rada trigger driver; the driver resolves the frozen Yaya audience through its source
+   and passes the single tenant match to Nodeflow's `TriggerRunStarter`. A duplicate job returns the
+   existing run for that activation and alert occurrence. The first Yaya message capability runs in
+   shadow mode before one test FSP is cut over. The existing direct Rada-to-Yaya route remains the
+   rollback path and is mutually exclusive per FSP.
 
 5. **Offer and acceptance loop**  
    Write and execute one coordinated plan across `portia-engine` and `yaya-engine`. It adds the
@@ -53,10 +57,25 @@ node needs a genuinely new Yaya-owned action, authoritative predicate, or artifa
 Inbox/outbox and durable activities standardize delivery and replay, but do not turn unknown domain
 semantics into data automatically.
 
+## Pre-run handoff versus workflow durability
+
+The Rada inbox and per-activation delivery rows cover only the boundary from receipt of an external
+alert until a Nodeflow run has been created or an explicit permanent non-match has been recorded.
+They contain no graph cursor, node state, wait timer, or Yaya command progress. Once
+`TriggerRunStarter` returns a run, Nodeflow exclusively owns workflow durability, retries, waits, and
+terminal state.
+
+Each delivery worker must mark its row complete only after `TriggerRunStarter` returns the newly
+created or idempotently recovered run. Transient audience, database, or engine-dispatch failures
+remain retryable. The critical Rada path must not use Nodeflow's flow-specific generic webhook or
+the built-in synchronous Laravel-event trigger driver: the webhook targets one already-selected
+activation, while the event driver deliberately isolates per-activation failures from the original
+event publisher and therefore cannot provide this handoff guarantee.
+
 ## Planning gates
 
-Do not write the detailed phase 3 plan until phases 1 and 2 establish the actual released Nodeflow
-API. Do not write the initial-warning plan until Portia and Yaya agree on versioned request, response,
-event, authentication, and idempotency fixtures. Do not write the offer-loop plan until the initial
-warning proves command replay and audience reconciliation in shadow and test-FSP environments.
-
+Phase 1 is satisfied by `e99f8d7`. Do not write the detailed phase 3 plan until phase 2 establishes
+the released replayable-audience, batch-tenancy, activity-policy, and failure-projection APIs. Do not
+write the initial-warning plan until Portia and Yaya agree on versioned request, response, event,
+authentication, and idempotency fixtures. Do not write the offer-loop plan until the initial warning
+proves command replay and audience reconciliation in shadow and test-FSP environments.

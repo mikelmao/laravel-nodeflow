@@ -38,8 +38,10 @@ Six tables are created, all prefixed `nodeflow_`: `flows`, `flow_versions`, `run
 ## Step 2 — Implement the two required contracts
 
 The package ships defaults for both, and **both defaults deliberately fail closed.** If you skip this
-step, audiences come back empty and subject resolution throws. That is intentional: a misconfigured
-install that silently sends nothing to nobody is far worse than one that fails loudly.
+step, subject resolution throws. A truly empty normalized audience remains empty, but a non-empty
+audience cannot be admitted: the default tenant resolver rejects it, `CreateRun` throws
+`CrossTenantSubjectException`, and the run transaction rolls back. That is intentional: a
+misconfigured install fails loudly instead of silently becoming a no-op.
 
 ### `TenantResolver`
 
@@ -75,14 +77,21 @@ class OrganizationTenantResolver implements TenantResolver
 `currentTenantId()` returns the ambient tenant, or `null` in a console or queue context where there
 isn't one. It is called on every scoped query, so keep it cheap — cache it per request.
 
-`ownsSubject()` is the **mandatory audience check**. It is called for every subject before a single
-audience row is written, and if it returns false the whole materialisation aborts with nothing
-written. This is the control that stops one customer's people receiving another customer's messages.
-Never implement it as `return true`.
+Ownership is the **mandatory audience check**. It is enforced centrally while a run transaction
+materialises the audience in fixed-size batches. Make the concrete resolver implement
+`BatchTenantResolver` and bind that implementation under `TenantResolver::class` so
+`ownedSubjectIds()` validates each batch; do not add a separate `BatchTenantResolver`-only binding.
+`ownsSubject()` remains the safe scalar fallback. Any rejection raises `CrossTenantSubjectException`
+and rolls back the whole run creation; it does not return an empty audience. This is the control that
+stops one customer's people receiving another customer's messages. Never implement either check as
+unconditional acceptance.
 
-> **Performance note.** `ownsSubject()` is currently called once per subject. At six-figure audiences
-> that is a lot of round trips. Implement it against an indexed column. A set-shaped variant of this
-> contract is a known follow-up.
+> **Performance note.** For six-figure audiences, make the resolver bound as `TenantResolver::class`
+> implement `BatchTenantResolver` so ownership stays set-based. The scalar `ownsSubject()` fallback
+> remains correct but can make one lookup per supplied occurrence after within-batch de-duplication.
+
+Subject IDs are de-duplicated only within each materialization batch. A duplicate that arrives in a
+later batch is checked again; the database's unique key prevents a second audience row.
 
 ### Which kind of null you mean
 

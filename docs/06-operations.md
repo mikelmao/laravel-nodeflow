@@ -75,10 +75,9 @@ Default window is `nodeflow.retention.runs_days` (90). Dry-run reports the same 
 delete, computed from the same query.
 
 **Only terminal runs are pruned** — `completed`, `failed`, `cancelled`. Specifically **not** `blocked`,
-because a blocked run is recoverable once a missing node type is re-registered, and pruning it would
-destroy state a fix could still resume. The consequence: a run stuck `blocked` forever is never pruned
-at any age. Clearing genuinely abandoned blocked runs is a deliberate operator decision, not something
-the command will do for you.
+which is application-reserved and has no current package writer. The consequence: a host-written blocked
+run is never pruned at any age. Clearing a genuinely abandoned blocked run is a deliberate operator
+decision, not something the command will do for you.
 
 A run's `run_subjects` and `node_executions` rows are deleted explicitly along with it, so this does not
 depend on database cascade behaviour.
@@ -110,11 +109,16 @@ Budget for it before you are at six figures per alert.
 | `completed` | terminal, prunable |
 | `failed` | terminal, prunable |
 | `cancelled` | terminal, prunable |
-| `blocked` | recoverable — a node type could not be resolved. Never pruned. |
+| `blocked` | application-reserved; no current package writer. Never pruned. |
 
-**Be aware:** only `running` and `completed` are actually written today. An activity exception leaves a
-run `running`, and a run exhausting the step guard is recorded `completed`. Do not build alerting that
-assumes `failed` appears — see [Execution model](05-execution-model.md#runs-do-not-reach-a-failure-state).
+**Be aware:** the interpreter writes `pending`, `running`, and `completed`; the queued,
+after-commit `ProjectWorkflowFailure` listener writes `failed` for matching terminal durable failures.
+It atomically fails still-active subjects and clears their cursors, while the run-level durable error is
+separate from node-failure counts. `completed`, `failed`, and `cancelled` are terminal for polling and
+pruning; no current package service writes run-level `cancelled` or `blocked`. The projection job retries,
+but queue publication after the durable commit is not an atomic outbox: monitor failed jobs and reconcile
+durable terminal state safely if publication is missed. A run exhausting the step guard still records
+`completed` — see [Execution model](05-execution-model.md#terminal-durable-failures-are-projected).
 
 ### `run_subjects.status`
 
@@ -122,11 +126,13 @@ assumes `failed` appears — see [Execution model](05-execution-model.md#runs-do
 |---|---|
 | `active` | in the journey, sitting at `current_node_id` |
 | `completed` | left the journey successfully (reached a node with no onward edge, or a terminal node) |
-| `failed` | a node failed for this subject; `last_error` holds why |
+| `failed` | a subject node returned or threw a per-subject failure, or `ProjectWorkflowFailure` projected a matching terminal durable failure for every still-active subject. `last_error` holds the subject failure or the bounded run-level durable error. |
 | `exited` | removed mid-journey, usually by cancellation. `exited_at` is set. |
 
-A finished run should have **no** `active` subjects. If you see one, something advanced incorrectly —
-that invariant is asserted in the test suite and is the clearest signal of a routing bug.
+A finished run should have **no** `active` subjects, except when `max_steps_per_run` exhausts and the
+interpreter completes normally with subjects still at an unprocessed node. Check `steps_taken` against the
+configured limit first; below that limit, an active subject on a completed run is the clearest signal of
+a routing bug.
 
 ## Observability
 
@@ -148,8 +154,8 @@ what it *decided*, not what a provider did with it.
 | Symptom | Likely cause |
 |---|---|
 | Runs created, nothing happens | No queue worker, or the queue driver is `sync` |
-| Audience is always empty | `TenantResolver::ownsSubject()` returning false — the shipped default does |
+| Run creation rejects an audience | An unowned ID was omitted by `BatchTenantResolver::ownedSubjectIds()` or rejected by scalar `TenantResolver::ownsSubject()`; Nodeflow raises `CrossTenantSubjectException` and rolls back the run. A truly empty normalized input is a separate outcome. |
 | `SubjectResolver` throws about binding | You have not bound your own implementation |
 | A trigger's event fires and no run appears | Trigger registered somewhere that never executed; register in `boot()` |
-| Subject stuck `active` on a completed run | A routing bug; check `current_node_id` against the graph's edges |
+| Subjects remain `active` on a completed run | The `max_steps_per_run` guard can complete with unprocessed subjects; otherwise inspect `current_node_id` and graph routing for an inconsistency |
 | A wait fires immediately | A duration that parses to zero — now rejected at publish, but check older versions |

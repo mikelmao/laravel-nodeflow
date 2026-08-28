@@ -56,18 +56,13 @@ class CreateRun
         $triggerData = $this->validatedTriggerData($options['trigger_data'] ?? null);
         $startedVia = $this->requiredOriginString($options, 'started_via');
         $triggerNodeId = $this->requiredOriginString($options, 'trigger_node_id');
-        $ids = array_values(array_map(
-            static fn (mixed $subjectId): string => (string) $subjectId,
-            is_array($subjectIds) ? $subjectIds : iterator_to_array($subjectIds),
-        ));
-
         try {
             $run = DB::transaction(function () use (
                 $version,
                 $options,
                 $key,
                 $subjectType,
-                $ids,
+                $subjectIds,
                 $entryNodeId,
                 $startedVia,
                 $triggerNodeId,
@@ -77,7 +72,7 @@ class CreateRun
                     'flow_version_id' => $version->id,
                     'tenant_id' => $version->tenant_id,
                     'correlation_id' => $options['correlation_id'] ?? null,
-                    'strategy' => $options['strategy'] ?? (count($ids) === 1 ? 'subject' : 'cohort'),
+                    'strategy' => $options['strategy'] ?? 'cohort',
                     'status' => 'pending',
                     'is_test' => (bool) ($options['is_test'] ?? false),
                     'idempotency_key' => $key,
@@ -89,7 +84,11 @@ class CreateRun
                     'trigger_data' => $triggerData,
                 ]));
 
-                $this->materialiser->materialise($run, $subjectType, $ids, $entryNodeId);
+                $inserted = $this->materialiser->materialise($run, $subjectType, $subjectIds, $entryNodeId);
+
+                if (! array_key_exists('strategy', $options)) {
+                    $run->update(['strategy' => $inserted === 1 ? 'subject' : 'cohort']);
+                }
 
                 return $run;
             });

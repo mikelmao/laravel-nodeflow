@@ -2,6 +2,7 @@
 
 namespace Nodeflow;
 
+use Illuminate\Support\Facades\Event;
 use Illuminate\Support\Facades\Gate;
 use Illuminate\Support\Facades\Log;
 use Illuminate\Support\ServiceProvider;
@@ -42,6 +43,7 @@ use Nodeflow\Triggers\TriggerNodeRegistry;
 use Nodeflow\Triggers\TriggerSourceRegistry;
 use Nodeflow\Triggers\Webhook\WebhookTriggerDriver;
 use Nodeflow\Triggers\Webhook\WebhookTriggerNode;
+use Nodeflow\Workflows\ProjectWorkflowFailure;
 
 class NodeflowServiceProvider extends ServiceProvider
 {
@@ -92,6 +94,8 @@ class NodeflowServiceProvider extends ServiceProvider
 
     public function boot(): void
     {
+        Event::listen(ProjectWorkflowFailure::eventClass(), ProjectWorkflowFailure::class);
+
         // Registered unconditionally: the run view and the editor both authorize
         // on every request, and a policy registered only in some contexts is a
         // policy that silently does not apply in the others.

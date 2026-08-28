@@ -3,6 +3,7 @@
 namespace Nodeflow\Workflows;
 
 use Nodeflow\Execution\InterpreterLoop;
+use Nodeflow\Execution\NodeActivityPolicy;
 use Nodeflow\Execution\Steps\RunNodeStep;
 use Nodeflow\Execution\Steps\WaitStep;
 use Nodeflow\Graph\Graph;
@@ -76,7 +77,16 @@ class FlowInterpreter extends Workflow
                 self::awaitWithTimeout($step->duration, 'audienceEmptied');
                 $send = null;
             } elseif ($step instanceof RunNodeStep) {
-                $send = self::activity(RunNodeActivity::class, $runId, $step->nodeId);
+                $definition = $graph->node($step->nodeId);
+                $runtime = is_array($definition['runtime'] ?? null) ? $definition['runtime'] : [];
+                $policy = NodeActivityPolicy::fromPublishedSnapshot($runtime['activity'] ?? null);
+
+                $send = self::activity(
+                    RunNodeActivity::class,
+                    $policy->activityOptions(),
+                    $runId,
+                    $step->nodeId,
+                );
             }
 
             $loop->send($send);

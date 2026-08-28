@@ -77,7 +77,7 @@ app(\Nodeflow\Schema\SubjectAttributeRegistry::class)->register(
 );
 ```
 
-The resolver receives the resolved subject value and returns any value. A missing subject can reach a subject node as `null`, so either make the closure accept `mixed` and return `null`, or ensure the surrounding execution only supplies the expected subject model. Do not use an attribute resolver to make a database authorization decision: audience ownership is enforced before a run begins by `TenantResolver::ownsSubject()`.
+The resolver receives the resolved subject value and returns any value. A missing subject can reach a subject node as `null`, so either make the closure accept `mixed` and return `null`, or ensure the surrounding execution only supplies the expected subject model. Do not use an attribute resolver to make a database authorization decision: transactional audience materialization centrally enforces ownership through optional `BatchTenantResolver::ownedSubjectIds()` for each bounded batch, or the safe scalar `TenantResolver::ownsSubject()` fallback.
 
 `ConditionNode` does not catch resolver exceptions. `NodeRunner` catches `Throwable` for a subject node, records `ClassName: message` in that subject's `last_error`, and includes up to five distinct failure messages in the node-execution error. The authorized run UI exposes these values. Never throw an exception containing secrets, personal data, credentials, or upstream response bodies. Handle and report detailed failures inside the resolver, then return a safe value or throw a sanitized domain exception.
 

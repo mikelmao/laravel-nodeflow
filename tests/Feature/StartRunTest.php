@@ -417,9 +417,11 @@ it('registers only one deferred start for an idempotent retry inside an ambient 
 it('marks a per-user run as the subject strategy automatically', function () {
     $cohort = app(StartRun::class)->forFlow($this->flow->fresh(), 'user', ['1', '2']);
     $single = app(StartRun::class)->forFlow($this->flow->fresh(), 'user', ['3']);
+    $deduplicated = app(StartRun::class)->forFlow($this->flow->fresh(), 'user', ['4', '4']);
 
     expect($cohort->strategy)->toBe('cohort')
-        ->and($single->strategy)->toBe('subject');
+        ->and($single->strategy)->toBe('subject')
+        ->and($deduplicated->strategy)->toBe('subject');
 });
 
 it('refuses to start when a subject fails the tenant check and creates no run subjects', function () {
