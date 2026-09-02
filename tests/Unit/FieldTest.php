@@ -77,3 +77,39 @@ it('validates dotted field keys as literal flat config keys', function () {
         ->and(Validator::make(['template' => ['variant' => 'welcome']], $rules)->passes())->toBeFalse()
         ->and(Validator::make([], $rules)->errors()->keys())->toBe(['template.variant']);
 });
+
+it('describes a singular fact predicate and validates its authored shape', function () {
+    $field = Field::factPredicate('predicate', 'runtime_condition')->required();
+    $wire = $field->toWireArray();
+    $valid = [
+        'provider' => 'crm',
+        'key' => 'profile.segment',
+        'version' => 1,
+        'operator' => 'equals',
+        'value' => 'agriculture',
+    ];
+
+    expect($wire['type'])->toBe('fact_predicate')
+        ->and($wire['fact_capability'])->toBe('runtime_condition')
+        ->and($wire['max_items'])->toBe(1)
+        ->and(Validator::make(['predicate' => $valid], $field->rules())->passes())->toBeTrue()
+        ->and(Validator::make(['predicate' => [...$valid, 'type' => 'text']], $field->rules())->passes())->toBeFalse();
+});
+
+it('describes a bounded fact predicate list and validates every item', function () {
+    $field = Field::factPredicates('filters', 'audience_filter', 2)->required();
+    $valid = [
+        'provider' => 'crm',
+        'key' => 'profile.segment',
+        'version' => 1,
+        'operator' => 'in',
+        'value' => ['agriculture'],
+    ];
+
+    expect($field->toWireArray()['type'])->toBe('fact_predicates')
+        ->and($field->toWireArray()['fact_capability'])->toBe('audience_filter')
+        ->and($field->toWireArray()['max_items'])->toBe(2)
+        ->and(Validator::make(['filters' => [$valid, [...$valid, 'key' => 'profile.score']]], $field->rules())->passes())->toBeTrue()
+        ->and(Validator::make(['filters' => [$valid, $valid, $valid]], $field->rules())->passes())->toBeFalse()
+        ->and(Validator::make(['filters' => [['provider' => 'crm']]], $field->rules())->passes())->toBeFalse();
+});
