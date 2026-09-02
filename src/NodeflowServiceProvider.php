@@ -22,6 +22,7 @@ use Nodeflow\Contracts\TenantResolver;
 use Nodeflow\Engine\DurableWorkflowEngine;
 use Nodeflow\Engine\WorkflowEngine;
 use Nodeflow\Facts\FactProviderRegistry;
+use Nodeflow\Facts\Publishing\CompileFacts;
 use Nodeflow\Graph\GraphTypeCatalog;
 use Nodeflow\Models\Flow;
 use Nodeflow\Models\Run;
@@ -32,6 +33,7 @@ use Nodeflow\Nodes\Core\WaitNode;
 use Nodeflow\Nodes\NodeRegistry;
 use Nodeflow\Policies\FlowPolicy;
 use Nodeflow\Policies\RunPolicy;
+use Nodeflow\Publishing\GraphCompilerRegistry;
 use Nodeflow\Schema\SubjectAttributeRegistry;
 use Nodeflow\Tenancy\NoTenancyResolver;
 use Nodeflow\Tenancy\TenancyDecisionResolver;
@@ -56,6 +58,7 @@ class NodeflowServiceProvider extends ServiceProvider
 
         $this->app->singleton(GraphTypeCatalog::class);
         $this->app->singleton(FactProviderRegistry::class);
+        $this->app->singleton(GraphCompilerRegistry::class);
         $this->app->singleton(NodeRegistry::class);
         $this->app->singleton(SubjectAttributeRegistry::class);
         $this->app->singleton(TriggerDriverRegistry::class);
@@ -96,6 +99,10 @@ class NodeflowServiceProvider extends ServiceProvider
 
     public function boot(): void
     {
+        $this->app->make(GraphCompilerRegistry::class)->register(
+            $this->app->make(CompileFacts::class),
+        );
+
         Event::listen(ProjectWorkflowFailure::eventClass(), ProjectWorkflowFailure::class);
 
         // Registered unconditionally: the run view and the editor both authorize
