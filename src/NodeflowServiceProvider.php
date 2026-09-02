@@ -67,6 +67,13 @@ class NodeflowServiceProvider extends ServiceProvider
         $this->app->singleton(TriggerSourceRegistry::class);
         $this->app->singleton(TenancyDecisionResolver::class);
 
+        // Package-owned compilers are part of the registry's baseline. Register
+        // them during the provider registration phase so replaying boot hooks
+        // cannot add them twice, while duplicate host compiler keys still fail.
+        $this->app->make(GraphCompilerRegistry::class)->register(
+            $this->app->make(CompileFacts::class),
+        );
+
         // Drivers must exist before a host provider registers its allowlisted
         // sources. Register the built-in graph types in the same phase so host
         // extensions see the complete package catalog without replacing it.
@@ -100,10 +107,6 @@ class NodeflowServiceProvider extends ServiceProvider
 
     public function boot(): void
     {
-        $this->app->make(GraphCompilerRegistry::class)->register(
-            $this->app->make(CompileFacts::class),
-        );
-
         Event::listen(ProjectWorkflowFailure::eventClass(), ProjectWorkflowFailure::class);
 
         // Registered unconditionally: the run view and the editor both authorize
