@@ -7,6 +7,8 @@ use Nodeflow\Support\StableKey;
 
 final readonly class FactCatalogue
 {
+    public const int EDITOR_CONTRACT_VERSION = 1;
+
     /** @var list<FactDefinition> */
     public array $facts;
 
@@ -59,5 +61,14 @@ final readonly class FactCatalogue
             'facts' => array_map(static fn (FactDefinition $fact): array => $fact->toArray(), $this->facts),
         ];
     }
-}
 
+    /** @return array{contract_version: int, revision: string, facts: list<array<string, mixed>>} */
+    public function toEditorArray(): array
+    {
+        return [
+            'contract_version' => self::EDITOR_CONTRACT_VERSION,
+            'revision' => $this->revision,
+            'facts' => array_map(static fn (FactDefinition $fact): array => $fact->toArray(), $this->facts),
+        ];
+    }
+}

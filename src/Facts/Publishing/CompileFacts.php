@@ -2,10 +2,12 @@
 
 namespace Nodeflow\Facts\Publishing;
 
+use InvalidArgumentException;
 use Nodeflow\Facts\CompiledFactPredicate;
 use Nodeflow\Facts\FactCatalogue;
 use Nodeflow\Facts\FactCatalogueContext;
 use Nodeflow\Facts\FactPredicate;
+use Nodeflow\Facts\FactPredicateEvaluator;
 use Nodeflow\Facts\FactProviderRegistry;
 use Nodeflow\Graph\GraphTypeCatalog;
 use Nodeflow\Nodes\NodeRegistry;
@@ -16,7 +18,6 @@ use Nodeflow\Schema\Field;
 use Nodeflow\Triggers\TriggerNodeRegistry;
 use Nodeflow\Triggers\TriggerSourceCompatibility;
 use Nodeflow\Triggers\TriggerSourceRegistry;
-use Throwable;
 
 final class CompileFacts implements GraphCompiler
 {
@@ -75,12 +76,17 @@ final class CompileFacts implements GraphCompiler
                         }
                         $seen[$identity] = true;
                         $definition = $catalogue->definition($predicate->key, $predicate->version);
-                        $compiled[] = CompiledFactPredicate::compile(
+                        $compiledPredicate = CompiledFactPredicate::compile(
                             $predicate,
                             $definition,
                             $field->factCapability(),
                             $catalogue->revision,
-                        )->toArray();
+                        );
+                        if (($node['type'] ?? null) === 'core.fact_condition'
+                            && ! FactPredicateEvaluator::supports($compiledPredicate->operator)) {
+                            throw new InvalidArgumentException;
+                        }
+                        $compiled[] = $compiledPredicate->toArray();
                     }
 
                     usort($compiled, static fn (array $left, array $right): int =>
@@ -92,7 +98,7 @@ final class CompileFacts implements GraphCompiler
                     $graph['nodes'][$index]['config'][$field->key] = $field->isFactPredicateList()
                         ? $compiled
                         : ($compiled[0] ?? throw new \InvalidArgumentException);
-                } catch (Throwable) {
+                } catch (InvalidArgumentException) {
                     $this->invalid((string) ($node['id'] ?? ''), $field->key);
                 }
             }
@@ -151,4 +157,3 @@ final class CompileFacts implements GraphCompiler
         );
     }
 }
-

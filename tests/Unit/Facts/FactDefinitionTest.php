@@ -18,7 +18,7 @@ it('serialises a versioned fact definition deterministically', function () {
             'audience_filter' => ['in'],
         ],
         options: [
-            new FactOption('retail', 'Retail'),
+            new FactOption('retail', 'Retail', false),
             new FactOption('agriculture', 'Agriculture'),
         ],
         missingBehavior: MissingFactBehavior::RouteNo,
@@ -35,8 +35,8 @@ it('serialises a versioned fact definition deterministically', function () {
             'runtime_condition' => ['equals', 'not_equals'],
         ],
         'options' => [
-            ['value' => 'agriculture', 'label' => 'Agriculture'],
-            ['value' => 'retail', 'label' => 'Retail'],
+            ['value' => 'agriculture', 'label' => 'Agriculture', 'active' => true],
+            ['value' => 'retail', 'label' => 'Retail', 'active' => false],
         ],
         'missing_behavior' => 'route_no',
     ]);
@@ -91,4 +91,18 @@ it('indexes catalogue definitions by exact key and version', function () {
     expect($catalogue->definition('profile.segment', 1))->toBe($v1)
         ->and($catalogue->definition('profile.segment', 2))->toBe($v2)
         ->and($catalogue->toArray()['facts'][0]['version'])->toBe(1);
+});
+
+it('serialises the exact versioned contract consumed by the reusable editor', function () {
+    $definition = new FactDefinition(
+        'profile.segment', 1, 'Segment', FactValueType::Text,
+        ['runtime_condition'], ['runtime_condition' => ['equals']],
+    );
+    $catalogue = new FactCatalogue('crm', 'revision-42', [$definition]);
+
+    expect($catalogue->toEditorArray())->toBe([
+        'contract_version' => 1,
+        'revision' => 'revision-42',
+        'facts' => [$definition->toArray()],
+    ]);
 });

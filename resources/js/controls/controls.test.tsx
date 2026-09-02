@@ -53,8 +53,8 @@ describe('control selection', () => {
     // Counterfactual: key defaultControls on anything but the wire `type` string
     // and every field falls through to Unregistered. Leave the shared defaults
     // mutable and one editor can corrupt every later editor in the same process.
-    it('has a built-in for each of the six field types and no more', () => {
-        expect(Object.keys(defaultControls).sort()).toEqual(['boolean', 'duration', 'multiselect', 'number', 'select', 'text'])
+    it('has a built-in for each package field type and no more', () => {
+        expect(Object.keys(defaultControls).sort()).toEqual(['boolean', 'duration', 'fact_predicate', 'fact_predicates', 'multiselect', 'number', 'select', 'text'])
         expect(Object.isFrozen(defaultControls)).toBe(true)
     })
 

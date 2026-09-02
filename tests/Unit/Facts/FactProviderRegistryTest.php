@@ -7,6 +7,7 @@ use Nodeflow\Facts\FactProvider;
 use Nodeflow\Facts\FactProviderRegistry;
 use Nodeflow\Facts\FactResolution;
 use Nodeflow\Facts\FactResolutionContext;
+use Nodeflow\Nodeflow;
 
 function factsTestProvider(string $key): FactProvider
 {
@@ -67,3 +68,11 @@ it('represents present and missing provider values without ambiguity', function 
     ]);
 });
 
+it('exposes provider registration through the package facade', function () {
+    $provider = factsTestProvider('catalogue');
+
+    Nodeflow::registerFactProviders([$provider]);
+
+    expect(Nodeflow::facts())->toBe(app(FactProviderRegistry::class))
+        ->and(Nodeflow::facts()->get('catalogue'))->toBe($provider);
+});

@@ -68,6 +68,7 @@ Generate the corresponding starting points with `nodeflow:make-trigger`, `nodefl
 
 - [Quick start](docs/gitbook/getting-started/quick-start.md)
 - [Writing triggers](docs/gitbook/building-automations/writing-triggers.md)
+- [Provider-backed facts](docs/gitbook/building-automations/provider-backed-facts.md)
 - [Starting runs](docs/gitbook/building-automations/starting-runs.md)
 - [Route reference](docs/gitbook/reference/routes.md)
 - [Database schema](docs/gitbook/reference/database-schema.md)

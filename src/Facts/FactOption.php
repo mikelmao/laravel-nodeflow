@@ -9,6 +9,7 @@ final readonly class FactOption
     public function __construct(
         public bool|int|float|string $value,
         public string $label,
+        public bool $active = true,
     ) {
         if (is_float($value) && ! is_finite($value)) {
             throw new InvalidArgumentException('A fact option number must be finite.');
@@ -19,10 +20,9 @@ final readonly class FactOption
         }
     }
 
-    /** @return array{value: bool|int|float|string, label: string} */
+    /** @return array{value: bool|int|float|string, label: string, active: bool} */
     public function toArray(): array
     {
-        return ['value' => $this->value, 'label' => $this->label];
+        return ['value' => $this->value, 'label' => $this->label, 'active' => $this->active];
     }
 }
-

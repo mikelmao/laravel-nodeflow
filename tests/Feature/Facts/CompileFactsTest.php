@@ -40,17 +40,23 @@ class FactCompilationTestNode extends Node implements HandlesAudience
 final class FactCompilationTestProvider implements FactProvider
 {
     public int $catalogueCalls = 0;
+    public ?Throwable $catalogueFailure = null;
+    /** @var list<string> */
+    public array $runtimeOperators = ['equals', 'in'];
 
     public function key(): string { return 'crm'; }
 
     public function catalogue(FactCatalogueContext $context): FactCatalogue
     {
         $this->catalogueCalls++;
+        if ($this->catalogueFailure !== null) {
+            throw $this->catalogueFailure;
+        }
 
         return new FactCatalogue('crm', 'revision-42', [
             new FactDefinition(
                 'profile.segment', 1, 'Segment', FactValueType::Text,
-                ['runtime_condition'], ['runtime_condition' => ['equals', 'in']],
+                ['runtime_condition'], ['runtime_condition' => $this->runtimeOperators],
             ),
         ]);
     }
@@ -118,12 +124,36 @@ it('returns a field-scoped publication error for unavailable facts', function ()
         ->and($this->flow->fresh()->current_version_id)->toBeNull();
 });
 
-function factCompilationGraph(array $predicate): array
+it('does not disguise provider outages as an invalid user selection', function () {
+    $this->provider->catalogueFailure = new RuntimeException('Provider unavailable.');
+
+    expect(fn () => app(PublishFlow::class)->publish($this->flow, factCompilationGraph([
+        'provider' => 'crm',
+        'key' => 'profile.segment',
+        'version' => 1,
+        'operator' => 'equals',
+        'value' => 'agriculture',
+    ])))->toThrow(RuntimeException::class, 'Provider unavailable.');
+});
+
+it('rejects provider operators that the built-in condition cannot execute', function () {
+    $this->provider->runtimeOperators = ['starts_with'];
+
+    expect(fn () => app(PublishFlow::class)->publish($this->flow, factCompilationGraph([
+        'provider' => 'crm',
+        'key' => 'profile.segment',
+        'version' => 1,
+        'operator' => 'starts_with',
+        'value' => 'agriculture',
+    ], 'core.fact_condition')))->toThrow(GraphInvalidException::class, 'selected fact is unavailable or invalid');
+});
+
+function factCompilationGraph(array $predicate, string $nodeType = 'test.fact-compilation'): array
 {
     return triggeredGraph([
         'start' => 'condition',
         'nodes' => [
-            ['id' => 'condition', 'type' => 'test.fact-compilation', 'config' => ['predicate' => $predicate]],
+            ['id' => 'condition', 'type' => $nodeType, 'config' => ['predicate' => $predicate]],
             ['id' => 'exit-yes', 'type' => 'core.exit', 'config' => []],
             ['id' => 'exit-no', 'type' => 'core.exit', 'config' => []],
         ],
@@ -133,4 +163,3 @@ function factCompilationGraph(array $predicate): array
         ],
     ]);
 }
-

@@ -6,6 +6,11 @@ use Nodeflow\Facts\Exceptions\FactContractException;
 
 final class FactPredicateEvaluator
 {
+    public static function supports(string $operator): bool
+    {
+        return in_array($operator, ['equals', 'not_equals', 'in', 'greater_than', 'less_than'], true);
+    }
+
     public function matches(bool|int|float|string $actual, CompiledFactPredicate $predicate): bool
     {
         if (! $predicate->type->accepts($actual)) {
@@ -31,4 +36,3 @@ final class FactPredicateEvaluator
         return (float) $value;
     }
 }
-

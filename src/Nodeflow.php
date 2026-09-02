@@ -2,6 +2,8 @@
 
 namespace Nodeflow;
 
+use Nodeflow\Facts\FactProvider;
+use Nodeflow\Facts\FactProviderRegistry;
 use Nodeflow\Nodes\NodeRegistry;
 use Nodeflow\Triggers\TriggerDriverRegistry;
 use Nodeflow\Triggers\TriggerNodeRegistry;
@@ -17,6 +19,17 @@ class Nodeflow
     public static function register(array $nodeClasses): void
     {
         static::nodes()->register(...$nodeClasses);
+    }
+
+    public static function facts(): FactProviderRegistry
+    {
+        return app(FactProviderRegistry::class);
+    }
+
+    /** @param list<FactProvider> $providers */
+    public static function registerFactProviders(array $providers): void
+    {
+        static::facts()->register(...$providers);
     }
 
     public static function triggerNodes(): TriggerNodeRegistry
