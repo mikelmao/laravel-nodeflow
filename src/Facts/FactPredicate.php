@@ -15,7 +15,7 @@ final readonly class FactPredicate
         public mixed $value,
     ) {
         StableKey::assert($provider, 'fact provider key', 64);
-        StableKey::assert($key, 'fact key', 191);
+        StableKey::assert($key, 'fact key', 255);
         StableKey::assert($operator, 'fact operator', 64);
         if ($version < 1) {
             throw new InvalidArgumentException('A fact version must be positive.');
@@ -51,4 +51,3 @@ final readonly class FactPredicate
         ];
     }
 }
-

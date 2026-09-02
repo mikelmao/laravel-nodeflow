@@ -31,14 +31,14 @@ final readonly class FactDefinition
         array $options = [],
         public MissingFactBehavior $missingBehavior = MissingFactBehavior::RouteNo,
     ) {
-        StableKey::assert($key, 'fact key', 191);
+        StableKey::assert($key, 'fact key', 255);
 
         if ($version < 1) {
             throw new InvalidArgumentException('A fact version must be positive.');
         }
 
-        if ($label === '' || trim($label) !== $label || mb_strlen($label) > 191 || ! mb_check_encoding($label, 'UTF-8')) {
-            throw new InvalidArgumentException('A fact label must be a non-empty UTF-8 string of at most 191 characters.');
+        if ($label === '' || trim($label) !== $label || mb_strlen($label) > 255 || ! mb_check_encoding($label, 'UTF-8')) {
+            throw new InvalidArgumentException('A fact label must be a non-empty UTF-8 string of at most 255 characters.');
         }
 
         if ($capabilities === [] || ! array_is_list($capabilities)) {
@@ -129,4 +129,3 @@ final readonly class FactDefinition
         return get_debug_type($value).':'.json_encode($value, JSON_THROW_ON_ERROR | JSON_UNESCAPED_UNICODE);
     }
 }
-

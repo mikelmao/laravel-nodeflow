@@ -63,9 +63,9 @@ export function parseFactCatalogue(value: unknown, provider: string, contractVer
             'key', 'version', 'label', 'type', 'capabilities', 'operators', 'options', 'missing_behavior',
         ])) invalid()
         const item = candidate as Record<string, unknown>
-        if (typeof item.key !== 'string' || !stableKey.test(item.key) || item.key.length > 191) invalid()
+        if (typeof item.key !== 'string' || !stableKey.test(item.key) || item.key.length > 255) invalid()
         if (!Number.isInteger(item.version) || (item.version as number) < 1) invalid()
-        if (typeof item.label !== 'string' || item.label.trim() !== item.label || item.label.length === 0 || item.label.length > 191) invalid()
+        if (typeof item.label !== 'string' || item.label.trim() !== item.label || item.label.length === 0 || item.label.length > 255) invalid()
         if (item.type !== 'boolean' && item.type !== 'number' && item.type !== 'text') invalid()
         const type = item.type as FactValueType
         const capabilityCandidates = item.capabilities
@@ -92,7 +92,7 @@ export function parseFactCatalogue(value: unknown, provider: string, contractVer
             if (!isRecord(candidateOption) || !exactKeys(candidateOption, ['value', 'label', 'active'])) invalid()
             const option = candidateOption as Record<string, unknown>
             if (!scalar(option.value) || !matchesType(option.value, type)) invalid()
-            if (typeof option.label !== 'string' || option.label.trim() !== option.label || option.label.length === 0 || option.label.length > 191) invalid()
+            if (typeof option.label !== 'string' || option.label.trim() !== option.label || option.label.length === 0 || option.label.length > 255) invalid()
             if (typeof option.active !== 'boolean') invalid()
             const identity = `${typeof option.value}:${JSON.stringify(option.value)}`
             if (optionValues.has(identity)) invalid()

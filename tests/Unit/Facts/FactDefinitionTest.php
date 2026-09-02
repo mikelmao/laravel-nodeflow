@@ -77,6 +77,23 @@ it('rejects option values that do not match the fact type', function () {
     ))->toThrow(InvalidArgumentException::class);
 });
 
+it('uses the shared 255-character metadata boundary', function () {
+    $key = 'a'.str_repeat('b', 254);
+    $label = str_repeat('L', 255);
+
+    expect(new FactDefinition(
+        $key, 1, $label, FactValueType::Text,
+        ['runtime_condition'], ['runtime_condition' => ['equals']],
+        [new FactOption('value', $label)],
+    ))->key->toBe($key)
+        ->and(fn () => new FactDefinition(
+            $key.'c', 1, 'Label', FactValueType::Text,
+            ['runtime_condition'], ['runtime_condition' => ['equals']],
+        ))->toThrow(InvalidArgumentException::class)
+        ->and(fn () => new FactOption('value', $label.'L'))
+        ->toThrow(InvalidArgumentException::class);
+});
+
 it('indexes catalogue definitions by exact key and version', function () {
     $v1 = new FactDefinition(
         'profile.segment', 1, 'Segment', FactValueType::Text,

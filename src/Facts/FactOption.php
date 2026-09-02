@@ -15,8 +15,8 @@ final readonly class FactOption
             throw new InvalidArgumentException('A fact option number must be finite.');
         }
 
-        if ($label === '' || trim($label) !== $label || mb_strlen($label) > 191 || ! mb_check_encoding($label, 'UTF-8')) {
-            throw new InvalidArgumentException('A fact option label must be a non-empty UTF-8 string of at most 191 characters.');
+        if ($label === '' || trim($label) !== $label || mb_strlen($label) > 255 || ! mb_check_encoding($label, 'UTF-8')) {
+            throw new InvalidArgumentException('A fact option label must be a non-empty UTF-8 string of at most 255 characters.');
         }
     }
 

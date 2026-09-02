@@ -19,7 +19,7 @@ final readonly class CompiledFactPredicate
         public string $catalogueRevision,
     ) {
         StableKey::assert($provider, 'fact provider key', 64);
-        StableKey::assert($key, 'fact key', 191);
+        StableKey::assert($key, 'fact key', 255);
         StableKey::assert($operator, 'fact operator', 64);
         if ($version < 1 || $catalogueRevision === '' || strlen($catalogueRevision) > 191 || preg_match('//u', $catalogueRevision) !== 1) {
             throw new InvalidArgumentException('A compiled fact predicate has invalid pinned metadata.');
