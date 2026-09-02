@@ -1,4 +1,4 @@
-import { render, screen, waitFor } from '@testing-library/react'
+import { act, render, screen, waitFor } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { useContext } from 'react'
 import { afterEach, describe, expect, it, vi } from 'vitest'
@@ -22,7 +22,10 @@ function Probe() {
     </div>
 }
 
-afterEach(() => vi.unstubAllGlobals())
+afterEach(() => {
+    vi.useRealTimers()
+    vi.unstubAllGlobals()
+})
 
 describe('FactCataloguesProvider', () => {
     it('loads multiple configured providers and qualifies their definitions', async () => {
@@ -59,5 +62,42 @@ describe('FactCataloguesProvider', () => {
         await userEvent.click(screen.getByRole('button', { name: 'Retry' }))
         await waitFor(() => expect(screen.getByText('alpha')).toBeInTheDocument())
         expect(fetch).toHaveBeenCalledTimes(2)
+    })
+
+    it('fails a stalled catalogue request after a bounded deadline', async () => {
+        vi.useFakeTimers()
+        const signals: AbortSignal[] = []
+        vi.stubGlobal('fetch', vi.fn((_url: string, init: RequestInit) => {
+            const signal = init.signal as AbortSignal
+            signals.push(signal)
+            return new Promise((_resolve, reject) => signal.addEventListener('abort', () => reject(new DOMException('Aborted', 'AbortError'))))
+        }))
+
+        render(<FactCataloguesProvider config={{ providers: [{ key: 'alpha', url: '/facts/alpha' }] }}>
+            <Probe />
+        </FactCataloguesProvider>)
+
+        await act(async () => vi.advanceTimersByTimeAsync(10_000))
+
+        expect(screen.getByText('Could not load fact values.')).toBeInTheDocument()
+        expect(signals).toHaveLength(1)
+        expect(signals[0]?.aborted).toBe(true)
+    })
+
+    it('cancels sibling catalogue requests when one provider fails', async () => {
+        let hangingSignal: AbortSignal | undefined
+        vi.stubGlobal('fetch', vi.fn((url: string, init: RequestInit) => {
+            if (url.includes('failed')) return Promise.resolve({ ok: false, status: 503, json: async () => ({}) })
+            hangingSignal = init.signal as AbortSignal
+            return new Promise((_resolve, reject) => hangingSignal?.addEventListener('abort', () => reject(new DOMException('Aborted', 'AbortError'))))
+        }))
+
+        render(<FactCataloguesProvider config={{ providers: [
+            { key: 'failed', url: '/facts/failed' },
+            { key: 'hanging', url: '/facts/hanging' },
+        ] }}><Probe /></FactCataloguesProvider>)
+
+        expect(await screen.findByText('Could not load fact values.')).toBeInTheDocument()
+        expect(hangingSignal?.aborted).toBe(true)
     })
 })

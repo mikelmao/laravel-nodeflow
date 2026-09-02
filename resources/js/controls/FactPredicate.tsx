@@ -107,7 +107,15 @@ function FactPredicateFields({ facts, capability, predicate, onChange, disabled 
             {fact.options.length === 0 && fact.type !== 'boolean' && predicate.operator !== 'in' && <input
                 id={`${id}-value`} className={inputClass} disabled={disabled} type={fact.type === 'number' ? 'number' : 'text'}
                 value={Array.isArray(predicate.value) ? '' : String(predicate.value)}
-                onChange={(event) => onChange({ ...predicate, value: fact.type === 'number' ? event.target.valueAsNumber : event.target.value })}
+                onChange={(event) => {
+                    if (fact.type !== 'number') {
+                        onChange({ ...predicate, value: event.target.value })
+                        return
+                    }
+                    if (Number.isFinite(event.target.valueAsNumber)) {
+                        onChange({ ...predicate, value: event.target.valueAsNumber })
+                    }
+                }}
             />}
         </>}
     </div>

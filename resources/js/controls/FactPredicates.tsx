@@ -4,6 +4,9 @@ import { projectFactPredicate, type FactPredicate } from '../facts/types'
 import { FactPredicateFields, newFactPredicate } from './FactPredicate'
 import type { FieldControlProps } from './types'
 
+const factIdentity = ({ provider, key, version }: { provider: string; key: string; version: number }): string =>
+    `${provider}:${key}@${version}`
+
 export function FactPredicatesControl({ field, value, onChange, errors }: FieldControlProps) {
     const state = useContext(FactCataloguesContext)
     const capability = field.fact_capability ?? 'audience_filter'
@@ -13,6 +16,8 @@ export function FactPredicatesControl({ field, value, onChange, errors }: FieldC
         const predicate = projectFactPredicate(candidate)
         return predicate === null ? [] : [predicate]
     }) : []
+    const selectedIdentities = new Set(predicates.map(factIdentity))
+    const unselectedFacts = facts.filter((fact) => !selectedIdentities.has(factIdentity(fact)))
     const disabled = state.loading || state.error !== null
     const update = (next: FactPredicate[]) => onChange(next)
 
@@ -24,15 +29,17 @@ export function FactPredicatesControl({ field, value, onChange, errors }: FieldC
         </div>}
         {predicates.map((predicate, index) => <div key={`${predicate.provider}:${predicate.key}:${predicate.version}:${index}`} className="space-y-1">
             <FactPredicateFields
-                facts={facts} capability={capability} predicate={predicate} disabled={disabled}
+                facts={facts.filter((fact) => predicates.every((other, otherIndex) =>
+                    otherIndex === index || factIdentity(other) !== factIdentity(fact)))}
+                capability={capability} predicate={predicate} disabled={disabled}
                 onChange={(next) => { if (next !== null) update(predicates.map((current, candidate) => candidate === index ? next : current)) }}
             />
             <button type="button" className="text-xs text-destructive" disabled={disabled} onClick={() => update(predicates.filter((_, candidate) => candidate !== index))}>Remove filter</button>
         </div>)}
         <button
             type="button" className="rounded border border-input bg-background px-2 py-1 text-xs"
-            disabled={disabled || predicates.length >= maximum || facts.length === 0}
-            onClick={() => { if (facts[0] !== undefined) update([...predicates, newFactPredicate(facts[0], capability)]) }}
+            disabled={disabled || predicates.length >= maximum || unselectedFacts.length === 0}
+            onClick={() => { if (unselectedFacts[0] !== undefined) update([...predicates, newFactPredicate(unselectedFacts[0], capability)]) }}
         >Add filter</button>
         {field.help && <p className="text-[11px] text-muted-foreground">{field.help}</p>}
         {errors.length > 0 && <ul role="alert" className="text-[11px] text-destructive">{errors.map((error) => <li key={error}>{error}</li>)}</ul>}

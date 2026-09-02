@@ -80,9 +80,9 @@ it('bulk resolves each engine chunk and routes every subject exactly once', func
     app(NodeRunner::class)->run($run, $graph, 'condition');
 
     expect($this->provider->batches)->toBe([['1', '2'], ['3', '4'], ['5']])
-        ->and(RunSubject::where('run_id', $run->id)->where('current_node_id', 'yes')->pluck('subject_id')->all())
+        ->and(RunSubject::where('run_id', $run->id)->where('current_node_id', 'yes')->orderBy('id')->pluck('subject_id')->all())
         ->toBe(['1', '3', '5'])
-        ->and(RunSubject::where('run_id', $run->id)->where('current_node_id', 'no')->pluck('subject_id')->all())
+        ->and(RunSubject::where('run_id', $run->id)->where('current_node_id', 'no')->orderBy('id')->pluck('subject_id')->all())
         ->toBe(['2', '4']);
 });
 
@@ -92,7 +92,7 @@ it('routes missing values according to the pinned behavior', function () {
 
     app(NodeRunner::class)->run($run, $graph, 'condition');
 
-    expect(RunSubject::where('run_id', $run->id)->where('current_node_id', 'yes')->pluck('subject_id')->all())
+    expect(RunSubject::where('run_id', $run->id)->where('current_node_id', 'yes')->orderBy('id')->pluck('subject_id')->all())
         ->toBe(['1', '2']);
 });
 

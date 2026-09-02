@@ -22,6 +22,7 @@ const emptyState: FactCataloguesState = {
 }
 
 export const FactCataloguesContext = createContext<FactCataloguesState>(emptyState)
+const factCatalogueTimeoutMs = 10_000
 
 export function FactCataloguesProvider({ config, children }: { config?: FactsConfig; children: ReactNode }) {
     const [catalogues, setCatalogues] = useState<FactCatalogue[]>([])
@@ -41,6 +42,8 @@ export function FactCataloguesProvider({ config, children }: { config?: FactsCon
         }
 
         const abort = new AbortController()
+        let active = true
+        const timeout = globalThis.setTimeout(() => abort.abort(), factCatalogueTimeoutMs)
         setLoading(true)
         setError(null)
 
@@ -53,17 +56,23 @@ export function FactCataloguesProvider({ config, children }: { config?: FactsCon
             if (!response.ok) throw new Error(`HTTP ${response.status}`)
             return parseFactCatalogue(await response.json(), provider.key, provider.contractVersion ?? 1)
         })).then((next) => {
-            if (!abort.signal.aborted) setCatalogues(next.sort((left, right) => left.provider.localeCompare(right.provider)))
+            if (active) setCatalogues(next.sort((left, right) => left.provider.localeCompare(right.provider)))
         }).catch(() => {
-            if (!abort.signal.aborted) {
+            if (active) {
+                abort.abort()
                 setCatalogues([])
                 setError('Could not load fact values.')
             }
         }).finally(() => {
-            if (!abort.signal.aborted) setLoading(false)
+            globalThis.clearTimeout(timeout)
+            if (active) setLoading(false)
         })
 
-        return () => abort.abort()
+        return () => {
+            active = false
+            globalThis.clearTimeout(timeout)
+            abort.abort()
+        }
     }, [attempt, requestKey])
 
     const state = useMemo<FactCataloguesState>(

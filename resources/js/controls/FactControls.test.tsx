@@ -1,4 +1,4 @@
-import { render, screen } from '@testing-library/react'
+import { render, screen, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { useState } from 'react'
 import { describe, expect, it, vi } from 'vitest'
@@ -24,6 +24,16 @@ const catalogue: FactCataloguesState = {
                 { value: 'agriculture', label: 'Agriculture', active: true },
                 { value: 'legacy', label: 'Legacy', active: false },
             ],
+            missing_behavior: 'missing',
+        }, {
+            provider: 'crm',
+            key: 'profile.score',
+            version: 1,
+            label: 'Customer score',
+            type: 'number',
+            capabilities: ['audience_filter', 'runtime_condition'],
+            operators: { audience_filter: ['equals'], runtime_condition: ['equals'] },
+            options: [],
             missing_behavior: 'missing',
         }],
     }],
@@ -87,5 +97,39 @@ describe('fact controls', () => {
         </FactCataloguesContext.Provider>)
 
         expect(screen.getByRole('option', { name: 'Unavailable value' })).toBeInTheDocument()
+    })
+
+    it('does not emit a non-finite predicate when a number input is cleared', async () => {
+        const changed = vi.fn()
+        render(<FactCataloguesContext.Provider value={catalogue}>
+            <FactPredicateControl
+                field={factField('fact_predicate', 'runtime_condition', 1)}
+                value={{ provider: 'crm', key: 'profile.score', version: 1, operator: 'equals', value: 12 }}
+                onChange={changed} errors={[]} options={{}} optionsLoading={false}
+            />
+        </FactCataloguesContext.Provider>)
+
+        await userEvent.clear(screen.getByLabelText('Value'))
+
+        expect(changed).not.toHaveBeenCalled()
+    })
+
+    it('does not allow two filter rows to select the same fact identity', () => {
+        render(<FactCataloguesContext.Provider value={catalogue}>
+            <FactPredicatesControl
+                field={factField('fact_predicates', 'audience_filter', 10)}
+                value={[
+                    { provider: 'crm', key: 'profile.segment', version: 1, operator: 'in', value: [] },
+                    { provider: 'crm', key: 'profile.score', version: 1, operator: 'equals', value: 0 },
+                ]}
+                onChange={vi.fn()} errors={[]} options={{}} optionsLoading={false}
+            />
+        </FactCataloguesContext.Provider>)
+
+        const selectors = screen.getAllByLabelText('Fact value')
+        expect(selectors).toHaveLength(2)
+        expect(within(selectors[0]!).queryByRole('option', { name: 'Customer score' })).not.toBeInTheDocument()
+        expect(within(selectors[1]!).queryByRole('option', { name: 'Customer segment' })).not.toBeInTheDocument()
+        expect(screen.getByRole('button', { name: 'Add filter' })).toBeDisabled()
     })
 })
