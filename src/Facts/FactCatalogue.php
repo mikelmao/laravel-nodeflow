@@ -25,8 +25,8 @@ final readonly class FactCatalogue
         if ($revision === '' || strlen($revision) > 191 || preg_match('//u', $revision) !== 1) {
             throw new InvalidArgumentException('A fact catalogue revision must be a non-empty UTF-8 string of at most 191 characters.');
         }
-        if (! array_is_list($facts)) {
-            throw new InvalidArgumentException('A fact catalogue must contain a list of definitions.');
+        if (! array_is_list($facts) || count($facts) > 100) {
+            throw new InvalidArgumentException('A fact catalogue must contain a list of at most 100 definitions.');
         }
 
         $byIdentity = [];

@@ -63,6 +63,8 @@ Nodeflow::registerFactProviders([app(CustomerFacts::class)]);
 
 Provider and fact keys are durable identifiers. Increment a fact's `version` when its meaning or value type changes. Change the catalogue `revision` whenever its definitions or options change. Do not reuse an old key and version with new semantics.
 
+The standard editor contract bounds each catalogue to 100 definitions, each definition to 20 capabilities, each capability to 20 operators, and each definition to 5,000 options. Use a free-form typed fact or a narrower upstream search mechanism when the possible values exceed that option limit.
+
 `resolve()` must return exactly one `FactResolution` for every requested subject ID, with no duplicates or extra IDs. Nodeflow fails closed if that contract is broken. The engine calls the provider once per audience execution chunk; the default maximum is controlled by `nodeflow.limits.audience_chunk`. Providers should perform one bounded bulk query or request for the supplied IDs instead of making one request per subject.
 
 ## Expose the editor catalogue
@@ -110,7 +112,7 @@ Field::factPredicates('audience_filters', 'audience_filter', maximum: 10);
 
 At publication Nodeflow validates the current catalogue, canonicalises values, and pins the provider, key, version, value type, missing-value behavior, and catalogue revision into the immutable graph. Providers are not contacted again merely to reinterpret that published configuration.
 
-`core.fact_condition` resolves the pinned predicate for the active audience and routes each subject to `yes` or `no`. Its portable runtime operators are `equals`, `not_equals`, `in`, `greater_than`, and `less_than`; publication rejects any other operator for this built-in node. Other fact-aware components may define their own capability and operator vocabulary.
+`core.fact_condition` resolves the pinned predicate for the active audience and routes each subject to `yes` or `no`. Its portable runtime operators are `equals`, `not_equals`, `in`, `greater_than`, and `less_than`; the ordered comparisons are valid only for numeric facts. Publication rejects unsupported or type-incompatible operators for this built-in node. Other fact-aware components may define their own capability and operator vocabulary.
 
 ## Missing values and failures
 

@@ -22,7 +22,10 @@ use Nodeflow\Schema\NodeDefinition;
 
 class FactCompilationTestNode extends Node implements HandlesAudience
 {
-    public static function type(): string { return 'test.fact-compilation'; }
+    public static function type(): string
+    {
+        return 'test.fact-compilation';
+    }
 
     public function definition(): NodeDefinition
     {
@@ -37,14 +40,41 @@ class FactCompilationTestNode extends Node implements HandlesAudience
     }
 }
 
+class OptionalFactCompilationTestNode extends Node implements HandlesAudience
+{
+    public static function type(): string
+    {
+        return 'test.optional-fact-compilation';
+    }
+
+    public function definition(): NodeDefinition
+    {
+        return NodeDefinition::make('Optional fact compiler')
+            ->outputs(['yes', 'no'])
+            ->fields([Field::factPredicate('predicate', 'runtime_condition')]);
+    }
+
+    public function forAudience(AudienceContext $context): NodeResult
+    {
+        return $context->all('yes');
+    }
+}
+
 final class FactCompilationTestProvider implements FactProvider
 {
     public int $catalogueCalls = 0;
+
     public ?Throwable $catalogueFailure = null;
+
+    public FactValueType $runtimeType = FactValueType::Text;
+
     /** @var list<string> */
     public array $runtimeOperators = ['equals', 'in'];
 
-    public function key(): string { return 'crm'; }
+    public function key(): string
+    {
+        return 'crm';
+    }
 
     public function catalogue(FactCatalogueContext $context): FactCatalogue
     {
@@ -55,7 +85,7 @@ final class FactCompilationTestProvider implements FactProvider
 
         return new FactCatalogue('crm', 'revision-42', [
             new FactDefinition(
-                'profile.segment', 1, 'Segment', FactValueType::Text,
+                'profile.segment', 1, 'Segment', $this->runtimeType,
                 ['runtime_condition'], ['runtime_condition' => $this->runtimeOperators],
             ),
         ]);
@@ -68,11 +98,19 @@ final class FactCompilationTestProvider implements FactProvider
 }
 
 beforeEach(function () {
-    app()->bind(TenantResolver::class, fn () => new class implements TenantResolver {
-        public function currentTenantId(): ?string { return 'org-1'; }
-        public function ownsSubject(string $tenantId, string $subjectType, string $subjectId): bool { return true; }
+    app()->bind(TenantResolver::class, fn () => new class implements TenantResolver
+    {
+        public function currentTenantId(): ?string
+        {
+            return 'org-1';
+        }
+
+        public function ownsSubject(string $tenantId, string $subjectType, string $subjectId): bool
+        {
+            return true;
+        }
     });
-    Nodeflow::register([FactCompilationTestNode::class]);
+    Nodeflow::register([FactCompilationTestNode::class, OptionalFactCompilationTestNode::class]);
     $this->provider = new FactCompilationTestProvider;
     app(FactProviderRegistry::class)->register($this->provider);
     $this->flow = Flow::create(['name' => 'Fact flow', 'status' => 'draft']);
@@ -136,6 +174,28 @@ it('does not disguise provider outages as an invalid user selection', function (
     ])))->toThrow(RuntimeException::class, 'Provider unavailable.');
 });
 
+it('leaves an empty optional fact predicate uncompiled', function () {
+    $graph = factCompilationGraph([
+        'provider' => 'crm',
+        'key' => 'profile.segment',
+        'version' => 1,
+        'operator' => 'equals',
+        'value' => 'unused',
+    ], OptionalFactCompilationTestNode::type());
+    foreach ($graph['nodes'] as &$node) {
+        if (($node['id'] ?? null) === 'condition') {
+            $node['config']['predicate'] = null;
+        }
+    }
+    unset($node);
+
+    $version = app(PublishFlow::class)->publish($this->flow, $graph)->version;
+    $condition = collect($version->graph['nodes'])->firstWhere('id', 'condition');
+
+    expect($condition['config']['predicate'])->toBeNull()
+        ->and($this->provider->catalogueCalls)->toBe(0);
+});
+
 it('rejects provider operators that the built-in condition cannot execute', function () {
     $this->provider->runtimeOperators = ['starts_with'];
 
@@ -144,6 +204,18 @@ it('rejects provider operators that the built-in condition cannot execute', func
         'key' => 'profile.segment',
         'version' => 1,
         'operator' => 'starts_with',
+        'value' => 'agriculture',
+    ], 'core.fact_condition')))->toThrow(GraphInvalidException::class, 'selected fact is unavailable or invalid');
+});
+
+it('rejects numeric operators on non-numeric built-in conditions', function () {
+    $this->provider->runtimeOperators = ['greater_than'];
+
+    expect(fn () => app(PublishFlow::class)->publish($this->flow, factCompilationGraph([
+        'provider' => 'crm',
+        'key' => 'profile.segment',
+        'version' => 1,
+        'operator' => 'greater_than',
         'value' => 'agriculture',
     ], 'core.fact_condition')))->toThrow(GraphInvalidException::class, 'selected fact is unavailable or invalid');
 });

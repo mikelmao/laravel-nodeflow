@@ -17,9 +17,9 @@ final readonly class FactDefinition
     public array $options;
 
     /**
-     * @param list<string> $capabilities
-     * @param array<string, list<string>> $operators
-     * @param list<FactOption> $options
+     * @param  list<string>  $capabilities
+     * @param  array<string, list<string>>  $operators
+     * @param  list<FactOption>  $options
      */
     public function __construct(
         public string $key,
@@ -41,8 +41,8 @@ final readonly class FactDefinition
             throw new InvalidArgumentException('A fact label must be a non-empty UTF-8 string of at most 255 characters.');
         }
 
-        if ($capabilities === [] || ! array_is_list($capabilities)) {
-            throw new InvalidArgumentException('Fact capabilities must be a non-empty list.');
+        if ($capabilities === [] || ! array_is_list($capabilities) || count($capabilities) > 20) {
+            throw new InvalidArgumentException('Fact capabilities must be a non-empty list of at most 20 items.');
         }
 
         foreach ($capabilities as $capability) {
@@ -61,8 +61,8 @@ final readonly class FactDefinition
 
         foreach ($capabilities as $capability) {
             $supported = $operators[$capability] ?? null;
-            if (! is_array($supported) || ! array_is_list($supported) || $supported === []) {
-                throw new InvalidArgumentException("Fact operators for [{$capability}] must be a non-empty list.");
+            if (! is_array($supported) || ! array_is_list($supported) || $supported === [] || count($supported) > 20) {
+                throw new InvalidArgumentException("Fact operators for [{$capability}] must be a non-empty list of at most 20 items.");
             }
 
             foreach ($supported as $operator) {
@@ -78,8 +78,8 @@ final readonly class FactDefinition
         }
         ksort($operators, SORT_STRING);
 
-        if (! array_is_list($options)) {
-            throw new InvalidArgumentException('Fact options must be a list.');
+        if (! array_is_list($options) || count($options) > 5_000) {
+            throw new InvalidArgumentException('Fact options must be a list of at most 5000 items.');
         }
 
         $seen = [];

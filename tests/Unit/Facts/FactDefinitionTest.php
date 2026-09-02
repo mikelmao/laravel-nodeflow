@@ -123,3 +123,36 @@ it('serialises the exact versioned contract consumed by the reusable editor', fu
         'facts' => [$definition->toArray()],
     ]);
 });
+
+it('enforces the reusable editor collection bounds', function () {
+    $capabilities = array_map(static fn (int $index): string => 'capability_'.$index, range(1, 21));
+    $capabilityOperators = array_fill_keys($capabilities, ['equals']);
+    $operators = array_map(static fn (int $index): string => 'operator_'.$index, range(1, 21));
+    $options = array_map(static fn (int $index): FactOption => new FactOption($index, 'Option '.$index), range(1, 5_001));
+    $definition = new FactDefinition(
+        'profile.segment', 1, 'Segment', FactValueType::Text,
+        ['runtime_condition'], ['runtime_condition' => ['equals']],
+    );
+
+    expect(fn () => new FactDefinition(
+        'profile.segment', 1, 'Segment', FactValueType::Text,
+        $capabilities, $capabilityOperators,
+    ))->toThrow(InvalidArgumentException::class, 'at most 20')
+        ->and(fn () => new FactDefinition(
+            'profile.segment', 1, 'Segment', FactValueType::Text,
+            ['runtime_condition'], ['runtime_condition' => $operators],
+        ))->toThrow(InvalidArgumentException::class, 'at most 20')
+        ->and(fn () => new FactDefinition(
+            'profile.score', 1, 'Score', FactValueType::Number,
+            ['runtime_condition'], ['runtime_condition' => ['equals']], $options,
+        ))->toThrow(InvalidArgumentException::class, 'at most 5000')
+        ->and(fn () => new FactCatalogue(
+            'crm', 'revision', array_map(
+                static fn (int $version): FactDefinition => new FactDefinition(
+                    'profile.segment', $version, 'Segment', FactValueType::Text,
+                    ['runtime_condition'], ['runtime_condition' => ['equals']],
+                ),
+                range(1, 101),
+            ),
+        ))->toThrow(InvalidArgumentException::class, 'at most 100');
+});

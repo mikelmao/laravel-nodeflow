@@ -57,22 +57,25 @@ final class CompileFacts implements GraphCompiler
 
                 try {
                     $value = $node['config'][$field->key];
+                    if ($value === null) {
+                        continue;
+                    }
                     $predicates = $field->isFactPredicateList() ? $value : [$value];
                     if (! is_array($predicates) || ! array_is_list($predicates)) {
-                        throw new \InvalidArgumentException;
+                        throw new InvalidArgumentException;
                     }
 
                     $compiled = [];
                     $seen = [];
                     foreach ($predicates as $authored) {
                         if (! is_array($authored)) {
-                            throw new \InvalidArgumentException;
+                            throw new InvalidArgumentException;
                         }
                         $predicate = FactPredicate::fromArray($authored);
                         $catalogue = $catalogues[$predicate->provider] ??= $this->catalogue($context, $predicate->provider);
                         $identity = $predicate->provider.':'.$predicate->key.'@'.$predicate->version;
                         if (isset($seen[$identity])) {
-                            throw new \InvalidArgumentException;
+                            throw new InvalidArgumentException;
                         }
                         $seen[$identity] = true;
                         $definition = $catalogue->definition($predicate->key, $predicate->version);
@@ -83,21 +86,20 @@ final class CompileFacts implements GraphCompiler
                             $catalogue->revision,
                         );
                         if (($node['type'] ?? null) === 'core.fact_condition'
-                            && ! FactPredicateEvaluator::supports($compiledPredicate->operator)) {
+                            && ! FactPredicateEvaluator::supports($compiledPredicate->type, $compiledPredicate->operator)) {
                             throw new InvalidArgumentException;
                         }
                         $compiled[] = $compiledPredicate->toArray();
                     }
 
-                    usort($compiled, static fn (array $left, array $right): int =>
-                        strcmp($left['provider'], $right['provider'])
+                    usort($compiled, static fn (array $left, array $right): int => strcmp($left['provider'], $right['provider'])
                         ?: strcmp($left['key'], $right['key'])
                         ?: $left['version'] <=> $right['version']
                     );
 
                     $graph['nodes'][$index]['config'][$field->key] = $field->isFactPredicateList()
                         ? $compiled
-                        : ($compiled[0] ?? throw new \InvalidArgumentException);
+                        : ($compiled[0] ?? throw new InvalidArgumentException);
                 } catch (InvalidArgumentException) {
                     $this->invalid((string) ($node['id'] ?? ''), $field->key);
                 }
@@ -141,7 +143,7 @@ final class CompileFacts implements GraphCompiler
     {
         $catalogue = $this->providers->get($providerKey)->catalogue(new FactCatalogueContext($context->flow));
         if ($catalogue->provider !== $providerKey) {
-            throw new \InvalidArgumentException('The provider returned a catalogue for another provider.');
+            throw new InvalidArgumentException('The provider returned a catalogue for another provider.');
         }
 
         return $catalogue;
