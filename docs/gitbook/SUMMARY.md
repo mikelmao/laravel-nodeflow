@@ -25,6 +25,7 @@
 * [Node fields](building-automations/node-fields.md)
 * [Writing triggers](building-automations/writing-triggers.md)
 * [Subject attributes](building-automations/subject-attributes.md)
+* [Provider-backed facts](building-automations/provider-backed-facts.md)
 * [Starting runs](building-automations/starting-runs.md)
 * [Publishing flows](building-automations/publishing-flows.md)
 

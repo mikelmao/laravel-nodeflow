@@ -21,16 +21,20 @@ use Nodeflow\Contracts\SubjectResolver;
 use Nodeflow\Contracts\TenantResolver;
 use Nodeflow\Engine\DurableWorkflowEngine;
 use Nodeflow\Engine\WorkflowEngine;
+use Nodeflow\Facts\FactProviderRegistry;
+use Nodeflow\Facts\Publishing\CompileFacts;
 use Nodeflow\Graph\GraphTypeCatalog;
 use Nodeflow\Models\Flow;
 use Nodeflow\Models\Run;
 use Nodeflow\Nodes\Core\ConditionNode;
 use Nodeflow\Nodes\Core\ExitNode;
+use Nodeflow\Nodes\Core\FactConditionNode;
 use Nodeflow\Nodes\Core\StartFlowNode;
 use Nodeflow\Nodes\Core\WaitNode;
 use Nodeflow\Nodes\NodeRegistry;
 use Nodeflow\Policies\FlowPolicy;
 use Nodeflow\Policies\RunPolicy;
+use Nodeflow\Publishing\GraphCompilerRegistry;
 use Nodeflow\Schema\SubjectAttributeRegistry;
 use Nodeflow\Tenancy\NoTenancyResolver;
 use Nodeflow\Tenancy\TenancyDecisionResolver;
@@ -54,12 +58,21 @@ class NodeflowServiceProvider extends ServiceProvider
         $this->mergeConfigFrom(__DIR__.'/../config/nodeflow.php', 'nodeflow');
 
         $this->app->singleton(GraphTypeCatalog::class);
+        $this->app->singleton(FactProviderRegistry::class);
+        $this->app->singleton(GraphCompilerRegistry::class);
         $this->app->singleton(NodeRegistry::class);
         $this->app->singleton(SubjectAttributeRegistry::class);
         $this->app->singleton(TriggerDriverRegistry::class);
         $this->app->singleton(TriggerNodeRegistry::class);
         $this->app->singleton(TriggerSourceRegistry::class);
         $this->app->singleton(TenancyDecisionResolver::class);
+
+        // Package-owned compilers are part of the registry's baseline. Register
+        // them during the provider registration phase so replaying boot hooks
+        // cannot add them twice, while duplicate host compiler keys still fail.
+        $this->app->make(GraphCompilerRegistry::class)->register(
+            $this->app->make(CompileFacts::class),
+        );
 
         // Drivers must exist before a host provider registers its allowlisted
         // sources. Register the built-in graph types in the same phase so host
@@ -136,6 +149,7 @@ class NodeflowServiceProvider extends ServiceProvider
 
         Nodeflow::register([
             ExitNode::class,
+            FactConditionNode::class,
             WaitNode::class,
             ConditionNode::class,
             StartFlowNode::class,

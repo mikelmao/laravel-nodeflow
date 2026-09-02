@@ -1,5 +1,7 @@
 import { BooleanControl } from './Boolean'
 import { Duration } from './Duration'
+import { FactPredicateControl } from './FactPredicate'
+import { FactPredicatesControl } from './FactPredicates'
 import { Multiselect } from './Multiselect'
 import { NumberControl } from './Number'
 import { Select } from './Select'
@@ -22,6 +24,8 @@ export const defaultControls: ControlMap = Object.freeze({
     select: Select,
     multiselect: Multiselect,
     duration: Duration,
+    fact_predicate: FactPredicateControl,
+    fact_predicates: FactPredicatesControl,
 })
 
 /** Host overrides last, so a host may replace a built-in as well as add a type. */

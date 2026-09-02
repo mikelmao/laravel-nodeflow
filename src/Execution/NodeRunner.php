@@ -2,22 +2,29 @@
 
 namespace Nodeflow\Execution;
 
+use Illuminate\Support\Facades\DB;
 use Nodeflow\Contracts\SubjectResolver;
 use Nodeflow\Graph\Graph;
 use Nodeflow\Models\Run;
 use Nodeflow\Models\RunSubject;
 use Nodeflow\Nodes\HandlesAudience;
 use Nodeflow\Nodes\HandlesSubject;
+use Nodeflow\Nodes\HandlesUniformAudience;
 use Nodeflow\Nodes\NodeRegistry;
 use RuntimeException;
 use Throwable;
 
 class NodeRunner
 {
+    private UniformAudienceResultValidator $uniformResults;
+
     public function __construct(
         private NodeRegistry $registry,
         private SubjectResolver $subjects,
-    ) {}
+        ?UniformAudienceResultValidator $uniformResults = null,
+    ) {
+        $this->uniformResults = $uniformResults ?? new UniformAudienceResultValidator;
+    }
 
     /** @return string[] node ids that now hold subjects */
     public function run(Run $run, Graph $graph, string $nodeId): array
@@ -31,6 +38,19 @@ class NodeRunner
         $node = $this->registry->resolve($definition['type']);
         $config = $definition['config'] ?? [];
         $startedAt = microtime(true);
+
+        if ($node instanceof HandlesUniformAudience) {
+            return $this->runUniformAudience(
+                $run,
+                $graph,
+                $nodeId,
+                $definition['type'],
+                $config,
+                $node,
+                $node->definition()->outputNames(),
+                $startedAt,
+            );
+        }
 
         // Folded incrementally per chunk rather than accumulated as one NodeResult per
         // subject: at cohort scale (~100k subjects) holding every subject's individual
@@ -108,6 +128,84 @@ class NodeRunner
         });
 
         return $this->advance($run, $graph, $nodeId, $merged, $subjectType, array_map('strval', array_keys($seen)), (int) ((microtime(true) - $startedAt) * 1000));
+    }
+
+    private function runUniformAudience(
+        Run $run,
+        Graph $graph,
+        string $nodeId,
+        string $nodeType,
+        array $config,
+        HandlesUniformAudience $node,
+        array $declaredOutputs,
+        float $startedAt,
+    ): array {
+        $subjectType = null;
+        $processedCount = 0;
+        $output = $node->audienceOutput();
+        $target = $graph->targetsFor($nodeId, $output)[0] ?? null;
+        $this->uniformResults->assertOutputValid($nodeType, $nodeId, $output, $declaredOutputs);
+
+        $base = RunSubject::query()
+            ->where('run_id', $run->id)
+            ->where('current_node_id', $nodeId)
+            ->where('status', 'active');
+        $highWatermark = (clone $base)->max('id');
+
+        if ($highWatermark === null) {
+            return [];
+        }
+
+        $base->where('id', '<=', $highWatermark)
+            ->chunkById((int) config('nodeflow.limits.audience_chunk', 5000), function ($rows) use (
+                &$subjectType,
+                &$processedCount,
+                $node,
+                $nodeType,
+                $nodeId,
+                $run,
+                $config,
+                $output,
+                $declaredOutputs,
+            ): void {
+                $types = $rows->pluck('subject_type')->map('strval')->unique()->values()->all();
+                if (count($types) !== 1 || ($subjectType !== null && $subjectType !== $types[0])) {
+                    throw new RuntimeException("Uniform audience node [{$nodeType}] at [{$nodeId}] violated [mixed_subject_types].");
+                }
+
+                $subjectType ??= $types[0];
+                $ids = $rows->pluck('subject_id')->map('strval')->all();
+                $result = $node->forAudience(new AudienceContext($run, $nodeId, $config, $subjectType, $ids));
+                $this->uniformResults->assertValid($nodeType, $nodeId, $output, $declaredOutputs, $ids, $result);
+                $processedCount += count($ids);
+            });
+
+        if ($processedCount === 0) {
+            return [];
+        }
+
+        $durationMs = (int) ((microtime(true) - $startedAt) * 1000);
+
+        DB::transaction(function () use ($run, $nodeId, $output, $processedCount, $durationMs, $subjectType, $highWatermark, $target): void {
+            $run->nodeExecutions()->create([
+                'node_id' => $nodeId,
+                'output' => $output,
+                'subject_count' => $processedCount,
+                'duration_ms' => $durationMs,
+            ]);
+
+            RunSubject::query()
+                ->where('run_id', $run->id)
+                ->where('subject_type', $subjectType)
+                ->where('current_node_id', $nodeId)
+                ->where('status', 'active')
+                ->where('id', '<=', $highWatermark)
+                ->update($target === null
+                    ? ['status' => 'completed', 'current_node_id' => null]
+                    : ['current_node_id' => $target]);
+        });
+
+        return $target === null ? [] : [$target];
     }
 
     /**

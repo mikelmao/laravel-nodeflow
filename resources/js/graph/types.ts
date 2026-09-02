@@ -3,7 +3,7 @@
  * field types remain arbitrary strings so an unmatched editor control can fail
  * explicitly rather than silently rendering the wrong input.
  */
-export type FieldPayload = { key: string; type: string; label: string; help: string | null; default: unknown; required: boolean; options: Record<string,string>; dynamic_options: boolean }
+export type FieldPayload = { key: string; type: string; label: string; help: string | null; default: unknown; required: boolean; options: Record<string,string>; dynamic_options: boolean; fact_capability?: string; max_items?: number }
 
 // Empty PHP configuration can arrive as []; editors normalize it before use.
 export type GraphConfig = Record<string, unknown> | unknown[]

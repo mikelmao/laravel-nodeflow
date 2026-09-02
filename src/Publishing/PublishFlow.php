@@ -16,6 +16,7 @@ class PublishFlow
 {
     public function __construct(
         private GraphValidator $validator,
+        private GraphCompilerRegistry $compilers,
         private CompileNodeActivityPolicies $compilePolicies,
         private CompileTriggerActivation $compileActivation,
         private WebhookCredentials $webhookCredentials,
@@ -37,7 +38,11 @@ class PublishFlow
             throw new GraphInvalidException($result->errors(), $result->nodeErrors());
         }
 
-        $compiledGraphArray = $this->compilePolicies->compile($graph);
+        $compiledGraphArray = $this->compilers->compile(
+            new GraphCompilerContext($flow, $expectedDraftRevision, $definitions),
+            $graph,
+        );
+        $compiledGraphArray = $this->compilePolicies->compile($compiledGraphArray);
         $compiledGraph = Graph::fromArray($compiledGraphArray);
 
         try {

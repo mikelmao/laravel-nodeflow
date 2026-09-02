@@ -4,6 +4,8 @@ namespace Nodeflow\Schema;
 
 use Illuminate\Support\Str;
 use Nodeflow\Schema\Rules\ValidDuration;
+use Nodeflow\Schema\Rules\ValidFactPredicate;
+use Nodeflow\Schema\Rules\ValidFactPredicates;
 use Nodeflow\Support\StableKey;
 
 class Field
@@ -23,6 +25,10 @@ class Field
     private ?string $customType = null;
 
     private string $customBaseRule = 'string';
+
+    private ?string $factCapability = null;
+
+    private ?int $factMaximum = null;
 
     private function __construct(
         public readonly string $key,
@@ -60,6 +66,28 @@ class Field
     public static function duration(string $key): self
     {
         return new self($key, FieldType::Duration);
+    }
+
+    public static function factPredicate(string $key, string $capability): self
+    {
+        $field = self::custom($key, 'fact_predicate', 'array');
+        $field->factCapability = StableKey::assert($capability, 'fact capability', 64);
+        $field->factMaximum = 1;
+
+        return $field;
+    }
+
+    public static function factPredicates(string $key, string $capability, int $maximum = 10): self
+    {
+        if ($maximum < 1 || $maximum > 100) {
+            throw new \InvalidArgumentException('A fact predicate field maximum must be between 1 and 100.');
+        }
+
+        $field = self::custom($key, 'fact_predicates', 'array');
+        $field->factCapability = StableKey::assert($capability, 'fact capability', 64);
+        $field->factMaximum = $maximum;
+
+        return $field;
     }
 
     /**
@@ -135,9 +163,24 @@ class Field
         return $this->optionsSource;
     }
 
+    public function factCapability(): ?string
+    {
+        return $this->factCapability;
+    }
+
+    public function factMaximum(): ?int
+    {
+        return $this->factMaximum;
+    }
+
+    public function isFactPredicateList(): bool
+    {
+        return $this->customType === 'fact_predicates';
+    }
+
     public function toArray(): array
     {
-        return [
+        $field = [
             'key' => $this->key,
             'type' => $this->customType ?? $this->type->value,
             'label' => $this->label ?? Str::ucfirst(str_replace('_', ' ', Str::snake($this->key))),
@@ -147,6 +190,13 @@ class Field
             'options' => $this->options,
             'dynamic_options' => $this->optionsSource !== null,
         ];
+
+        if ($this->factCapability !== null) {
+            $field['fact_capability'] = $this->factCapability;
+            $field['max_items'] = $this->factMaximum;
+        }
+
+        return $field;
     }
 
     /**
@@ -191,6 +241,12 @@ class Field
         // unvalidated duration field is a zero-second wait waiting to happen.
         if ($this->type === FieldType::Duration) {
             $rules[] = new ValidDuration;
+        }
+
+        if ($this->customType === 'fact_predicate') {
+            $rules[] = new ValidFactPredicate;
+        } elseif ($this->customType === 'fact_predicates') {
+            $rules[] = new ValidFactPredicates($this->factMaximum ?? 10);
         }
 
         // Config is deliberately a flat map. Laravel treats dots in rule keys as

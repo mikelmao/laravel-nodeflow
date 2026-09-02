@@ -3,6 +3,7 @@ import { Canvas } from '../canvas/Canvas'
 import type { NodeRendererMap } from '../canvas/context'
 import type { ControlMap } from '../controls/types'
 import { FieldOptionsContext } from '../controls/useFieldOptions'
+import { FactCataloguesProvider, type FactsConfig } from '../facts/FactCataloguesContext'
 import type {
     EditorUrls,
     FlowSummary,
@@ -71,6 +72,7 @@ export type FlowEditorProps = {
     className?: string
     mode?: EditorMode
     toolbarSlots?: ToolbarSlots
+    facts?: FactsConfig
 }
 
 function sessionKey({ flow, urls }: FlowEditorProps): string {
@@ -94,7 +96,7 @@ function interactiveTarget(target: EventTarget | null): boolean {
     return target.closest('button, a, input, textarea, select, [contenteditable]:not([contenteditable="false"]), [role="button"], [tabindex]:not([tabindex="-1"])') !== null
 }
 
-function FlowEditorSession({ mode = 'workspace', toolbarSlots, className, ...options }: FlowEditorProps) {
+function FlowEditorSession({ mode = 'workspace', toolbarSlots, className, facts, ...options }: FlowEditorProps) {
     const controller = useEditorController(options)
     const librarySearchRef = useRef<HTMLInputElement>(null)
     const shortcutToken = useRef(Symbol('nodeflow-shortcuts'))
@@ -186,7 +188,7 @@ function FlowEditorSession({ mode = 'workspace', toolbarSlots, className, ...opt
         ? <FlowOverview {...controller.flowOverviewProps} />
         : <NodeInspector {...controller.nodeInspectorProps} />
 
-    return <FieldOptionsContext.Provider value={controller.optionsSource}>
+    return <FactCataloguesProvider config={facts}><FieldOptionsContext.Provider value={controller.optionsSource}>
         <div ref={rootRef} tabIndex={-1} className="contents" onPointerDownCapture={claimShortcuts} onClickCapture={claimShortcuts} onFocusCapture={claimShortcuts}>
             <p className="sr-only">Start: {controller.document.startId || 'none'}</p>
             <EditorShell
@@ -203,5 +205,5 @@ function FlowEditorSession({ mode = 'workspace', toolbarSlots, className, ...opt
             onInspectorOpenChange={controller.actions.setInspectorOpen}
             />
         </div>
-    </FieldOptionsContext.Provider>
+    </FieldOptionsContext.Provider></FactCataloguesProvider>
 }

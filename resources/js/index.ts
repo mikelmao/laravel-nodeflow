@@ -11,6 +11,12 @@ export type {
 export { controlFor, defaultControls, mergeControls, Unregistered } from './controls'
 export type { ControlMap, FieldControl, FieldControlProps } from './controls/types'
 export { FieldOptionsContext } from './controls/useFieldOptions'
+export { FactCataloguesContext, FactCataloguesProvider } from './facts/FactCataloguesContext'
+export type { FactCataloguesState, FactProviderEndpoint, FactsConfig } from './facts/FactCataloguesContext'
+export { parseFactCatalogue, projectFactPredicate } from './facts/types'
+export type { FactCatalogue, FactDefinition, FactOption, FactPredicate, FactScalar, FactValueType } from './facts/types'
+export { FactPredicateControl } from './controls/FactPredicate'
+export { FactPredicatesControl } from './controls/FactPredicates'
 
 export { FlowEditor } from './editor/FlowEditor'
 export type { EditorMode, FlowEditorProps, ToolbarSlots } from './editor/FlowEditor'

@@ -13,3 +13,8 @@ it('registers the node packaging commands', function () {
         'nodeflow:make-trigger-driver',
     ]);
 });
+
+it('shares one fact provider registry across the application', function () {
+    expect(app(\Nodeflow\Facts\FactProviderRegistry::class))
+        ->toBe(app(\Nodeflow\Facts\FactProviderRegistry::class));
+});
