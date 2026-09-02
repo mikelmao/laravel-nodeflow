@@ -3,6 +3,7 @@
 namespace Nodeflow\Facts;
 
 use InvalidArgumentException;
+use Nodeflow\Support\StableKey;
 use Normalizer;
 
 final readonly class CompiledFactPredicate
@@ -16,7 +17,61 @@ final readonly class CompiledFactPredicate
         public mixed $value,
         public MissingFactBehavior $missingBehavior,
         public string $catalogueRevision,
-    ) {}
+    ) {
+        StableKey::assert($provider, 'fact provider key', 64);
+        StableKey::assert($key, 'fact key', 191);
+        StableKey::assert($operator, 'fact operator', 64);
+        if ($version < 1 || $catalogueRevision === '' || strlen($catalogueRevision) > 191 || preg_match('//u', $catalogueRevision) !== 1) {
+            throw new InvalidArgumentException('A compiled fact predicate has invalid pinned metadata.');
+        }
+
+        if ($operator === 'in') {
+            if (! is_array($value) || ! array_is_list($value) || $value === []) {
+                throw new InvalidArgumentException('A compiled in predicate must contain a non-empty list.');
+            }
+            foreach ($value as $item) {
+                if (! $type->accepts($item)) {
+                    throw new InvalidArgumentException('A compiled fact predicate value does not match its type.');
+                }
+            }
+        } elseif (! $type->accepts($value)) {
+            throw new InvalidArgumentException('A compiled fact predicate value does not match its type.');
+        }
+    }
+
+    public static function fromArray(array $value): self
+    {
+        $keys = array_keys($value);
+        sort($keys, SORT_STRING);
+        $expected = ['catalogue_revision', 'key', 'missing_behavior', 'operator', 'provider', 'type', 'value', 'version'];
+        if ($keys !== $expected
+            || ! is_string($value['provider'] ?? null)
+            || ! is_string($value['key'] ?? null)
+            || ! is_int($value['version'] ?? null)
+            || ! is_string($value['type'] ?? null)
+            || ! is_string($value['operator'] ?? null)
+            || ! is_string($value['missing_behavior'] ?? null)
+            || ! is_string($value['catalogue_revision'] ?? null)) {
+            throw new InvalidArgumentException('A compiled fact predicate must contain exactly the pinned predicate fields.');
+        }
+
+        $type = FactValueType::tryFrom($value['type']);
+        $missing = MissingFactBehavior::tryFrom($value['missing_behavior']);
+        if ($type === null || $missing === null) {
+            throw new InvalidArgumentException('A compiled fact predicate contains unsupported pinned metadata.');
+        }
+
+        return new self(
+            $value['provider'],
+            $value['key'],
+            $value['version'],
+            $type,
+            $value['operator'],
+            $value['value'],
+            $missing,
+            $value['catalogue_revision'],
+        );
+    }
 
     public static function compile(
         FactPredicate $predicate,
@@ -109,4 +164,3 @@ final readonly class CompiledFactPredicate
         return $normalised;
     }
 }
-

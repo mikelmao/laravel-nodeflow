@@ -28,6 +28,7 @@ use Nodeflow\Models\Flow;
 use Nodeflow\Models\Run;
 use Nodeflow\Nodes\Core\ConditionNode;
 use Nodeflow\Nodes\Core\ExitNode;
+use Nodeflow\Nodes\Core\FactConditionNode;
 use Nodeflow\Nodes\Core\StartFlowNode;
 use Nodeflow\Nodes\Core\WaitNode;
 use Nodeflow\Nodes\NodeRegistry;
@@ -145,6 +146,7 @@ class NodeflowServiceProvider extends ServiceProvider
 
         Nodeflow::register([
             ExitNode::class,
+            FactConditionNode::class,
             WaitNode::class,
             ConditionNode::class,
             StartFlowNode::class,

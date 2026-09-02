@@ -88,3 +88,23 @@ it('rejects predicate values that do not match the fact type', function () {
         'revision-42',
     ))->toThrow(InvalidArgumentException::class);
 });
+
+it('parses only the exact compiled predicate shape', function () {
+    $compiled = CompiledFactPredicate::fromArray([
+        'provider' => 'crm',
+        'key' => 'profile.score',
+        'version' => 1,
+        'type' => 'number',
+        'operator' => 'greater_than',
+        'value' => 10,
+        'missing_behavior' => 'route_no',
+        'catalogue_revision' => 'revision-42',
+    ]);
+
+    expect($compiled->type)->toBe(FactValueType::Number)
+        ->and($compiled->catalogueRevision)->toBe('revision-42')
+        ->and(fn () => CompiledFactPredicate::fromArray([
+            ...$compiled->toArray(),
+            'capability' => 'runtime_condition',
+        ]))->toThrow(InvalidArgumentException::class, 'exactly');
+});
