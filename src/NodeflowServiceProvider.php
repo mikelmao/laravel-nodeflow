@@ -21,6 +21,7 @@ use Nodeflow\Contracts\SubjectResolver;
 use Nodeflow\Contracts\TenantResolver;
 use Nodeflow\Engine\DurableWorkflowEngine;
 use Nodeflow\Engine\WorkflowEngine;
+use Nodeflow\Facts\FactProviderRegistry;
 use Nodeflow\Graph\GraphTypeCatalog;
 use Nodeflow\Models\Flow;
 use Nodeflow\Models\Run;
@@ -54,6 +55,7 @@ class NodeflowServiceProvider extends ServiceProvider
         $this->mergeConfigFrom(__DIR__.'/../config/nodeflow.php', 'nodeflow');
 
         $this->app->singleton(GraphTypeCatalog::class);
+        $this->app->singleton(FactProviderRegistry::class);
         $this->app->singleton(NodeRegistry::class);
         $this->app->singleton(SubjectAttributeRegistry::class);
         $this->app->singleton(TriggerDriverRegistry::class);
