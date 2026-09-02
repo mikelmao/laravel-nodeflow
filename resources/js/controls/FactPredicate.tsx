@@ -141,4 +141,3 @@ export function FactPredicateControl({ field, value, onChange, errors }: FieldCo
 }
 
 export { FactPredicateFields }
-

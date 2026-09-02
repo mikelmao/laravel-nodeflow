@@ -8,4 +8,3 @@ enum MissingFactBehavior: string
     case RouteYes = 'route_yes';
     case Fail = 'fail';
 }
-

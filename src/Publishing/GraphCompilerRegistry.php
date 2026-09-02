@@ -45,4 +45,3 @@ final class GraphCompilerRegistry
         return $this->compilers;
     }
 }
-

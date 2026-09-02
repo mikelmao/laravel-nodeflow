@@ -37,4 +37,3 @@ final class FactProviderRegistry
         return $this->providers;
     }
 }
-

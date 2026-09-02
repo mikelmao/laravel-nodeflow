@@ -39,4 +39,3 @@ describe('parseFactCatalogue', () => {
         }, 'crm', 1)).toThrow(/catalogue/i)
     })
 })
-

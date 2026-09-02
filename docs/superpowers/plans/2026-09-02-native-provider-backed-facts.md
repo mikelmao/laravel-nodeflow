@@ -148,4 +148,3 @@
 4. Run PHP formatting, the complete Pest suite, JavaScript tests, and TypeScript checks.
 5. Review `git diff --check`, public API exports, and backward compatibility of existing condition nodes.
 6. Commit: `docs: explain provider-backed facts`
-

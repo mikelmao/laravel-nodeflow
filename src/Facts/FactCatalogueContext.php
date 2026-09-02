@@ -8,4 +8,3 @@ final readonly class FactCatalogueContext
 {
     public function __construct(public Flow $flow) {}
 }
-

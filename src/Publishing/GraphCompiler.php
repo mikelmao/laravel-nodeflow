@@ -13,4 +13,3 @@ interface GraphCompiler
      */
     public function compile(GraphCompilerContext $context, array $graph): array;
 }
-

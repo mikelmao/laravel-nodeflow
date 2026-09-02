@@ -13,4 +13,3 @@ final readonly class GraphCompilerContext
         public TriggerDefinitionContext $triggerDefinitions,
     ) {}
 }
-

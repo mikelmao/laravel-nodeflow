@@ -33,4 +33,3 @@ final readonly class ValidFactPredicates implements ValidationRule
         }
     }
 }
-

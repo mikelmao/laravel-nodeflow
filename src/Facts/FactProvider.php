@@ -20,4 +20,3 @@ interface FactProvider
         array $subjectIds,
     ): iterable;
 }
-

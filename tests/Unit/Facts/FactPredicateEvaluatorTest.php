@@ -25,4 +25,3 @@ it('evaluates typed fact operators without coercion', function (string $operator
     'less number' => ['less_than', 10, 9, true],
     'boolean is strict' => ['equals', true, false, false],
 ]);
-

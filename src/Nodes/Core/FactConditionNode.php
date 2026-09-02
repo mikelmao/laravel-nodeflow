@@ -110,4 +110,3 @@ final class FactConditionNode extends Node implements HandlesAudience
         return 'subject:'.$subjectId;
     }
 }
-

@@ -38,4 +38,3 @@ export function FactPredicatesControl({ field, value, onChange, errors }: FieldC
         {errors.length > 0 && <ul role="alert" className="text-[11px] text-destructive">{errors.map((error) => <li key={error}>{error}</li>)}</ul>}
     </fieldset>
 }
-

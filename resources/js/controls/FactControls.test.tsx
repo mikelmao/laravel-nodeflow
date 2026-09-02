@@ -89,4 +89,3 @@ describe('fact controls', () => {
         expect(screen.getByRole('option', { name: 'Unavailable value' })).toBeInTheDocument()
     })
 })
-

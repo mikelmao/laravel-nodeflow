@@ -73,4 +73,3 @@ export function FactCataloguesProvider({ config, children }: { config?: FactsCon
 
     return <FactCataloguesContext.Provider value={state}>{children}</FactCataloguesContext.Provider>
 }
-
