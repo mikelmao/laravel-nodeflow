@@ -78,8 +78,8 @@ class NodeRunner
         // chunkById, not orderBy('id')->chunk(): chunk() paginates with
         // offset(($page - 1) * $count) over the live, filtered (status = 'active')
         // query. If a node body removes a row from that filtered set mid-loop —
-        // e.g. SubjectExiter::exit(), the documented cancellation mechanism (spec
-        // §7.3) — every later page's offset is computed against a set that has
+        // e.g. SubjectExiter::exit(), the documented cancellation mechanism —
+        // every later page's offset is computed against a set that has
         // already shrunk, silently skipping whichever subjects shifted into the
         // gap. chunkById paginates on "id > last seen id" instead of an offset,
         // so a departure cannot shift the window: a skipped subject stays active
@@ -281,7 +281,7 @@ class NodeRunner
      * Without this sweep those subjects keep status='active' and
      * current_node_id=<finished node> forever, which breaks two documented
      * behaviours: SubjectExiter never observes activeSubjectCount() === 0, so no
-     * later cohort wait wakes early on audience-empty (D10 / spec 7.3), and
+     * later cohort wait wakes early on audience-empty, and
      * CompleteRunActivity marks the run completed while subjects read as active.
      *
      * Scoped deliberately narrowly: only ids the chunk loop actually iterated,

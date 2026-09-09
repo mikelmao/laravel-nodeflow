@@ -5,7 +5,7 @@ namespace Nodeflow\Console;
 /**
  * Finds every place in a set of host roots that names a given node class, so
  * `nodeflow:extract-node` can refuse a move instead of leaving the host
- * fatal (E34, as amended by E45 and E46).
+ * fatal (safety invariant, as amended by span-aware reference handling and scan-root coverage).
  *
  * WHY THIS GATE EXISTS. `NodeRegistry::register()` autoloads a node class
  * through `is_a()`. Once a class moves into a package, any reference to its
@@ -13,12 +13,12 @@ namespace Nodeflow\Console;
  * on every request. This scanner is what makes extraction refuse rather than
  * ship that fatal.
  *
- * BYTE RANGES, NOT FILES (E45). Every NodeReference carries a byte span, not
+ * BYTE RANGES, NOT FILES. Every NodeReference carries a byte span, not
  * merely a file, because exemption must be checked per span, never per file
  * — see NodeReference's own docblock for the counterfactual that falsified
  * the file-level design.
  *
- * DETECTION IS UNIVERSAL, NOT PER-CONSTRUCT (round-2 review, Critical 2).
+ * DETECTION IS UNIVERSAL, NOT PER-CONSTRUCT.
  * The first cut of this class detected exactly four syntactic shapes —
  * `<name>::class`, `extends <name>`, a `use` import, a string literal — and
  * missed every other way a class name can appear as a bare identifier:
@@ -80,7 +80,7 @@ namespace Nodeflow\Console;
  * usages reports THREE references, not two — "the import, the $nodes entry,
  * and the legacy register() entry: three distinct spans in ONE file."
  * Collapsing the plain import into its later usage would silently drop a
- * span E45 exists to keep separate. An import's FQCN is looked up through
+ * span. The span-aware reference handling exists to keep separate. An import's FQCN is looked up through
  * `PhpNameResolver::imports()` (built once per file, by the same code every
  * OTHER lookup in this codebase trusts) rather than re-derived here — this
  * class only walks the `use` statement's own tokens far enough to find each
@@ -110,7 +110,7 @@ namespace Nodeflow\Console;
  *      not the token's entire content.
  *
  * KNOWN LIMITS, stated rather than silently missed:
- *   - E46: a class name built or stored dynamically — string concatenation,
+ *   - scan-root coverage: a class name built or stored dynamically — string concatenation,
  *     a database column, a config value read at runtime — is out of reach
  *     of a token-based scan.
  *   - Only `.php`, `.blade.php` (itself ending `.php`), `.phtml`, and `.inc`
@@ -170,10 +170,10 @@ final class NodeReferenceScanner
      *  recursing into, but ONLY when they sit directly inside one of
      *  $absoluteRoots itself — never at any deeper nesting, and never
      *  affecting a DIFFERENT root that happens to share a name. Added for
-     *  ExtractNodeCommand's shared scan-root method (G5 and M6a both call
+     *  ExtractNodeCommand's shared scan-root method (reference scan and post-move rescan both call
      *  it): `storage/framework/` and `bootstrap/cache/` hold COMPILED
      *  artifacts, not source a developer wrote, and admitting `storage/`
-     *  or `bootstrap/` as real scan roots at all (E46 — `bootstrap/app.php`
+     *  or `bootstrap/` as real scan roots at all (scan-root coverage — `bootstrap/app.php`
      *  is Laravel 11's own provider registration site) must not mean a
      *  stale compiled Blade view or cached config file can abort a
      *  legitimate move. Excluding the whole `storage/`/`bootstrap/`
@@ -215,25 +215,24 @@ final class NodeReferenceScanner
     /**
      * Every `*.php` (which already covers `*.blade.php`), `*.phtml`, and
      * `*.inc` file under $directory, found by a recursive directory walk
-     * that FOLLOWS a symlinked directory rather than skipping it (round 4
-     * ruling — see below for why), with $visitedRealPaths tracking every
+     * that FOLLOWS a symlinked directory rather than skipping it (see below
+     * for why), with $visitedRealPaths tracking every
      * directory's canonical (`realpath()`) form across the WHOLE `scan()`
      * call. A recursion-stack revisit is refused as a cycle; a directory
      * already completed through an overlapping root is simply not rescanned.
      *
-     * WHY FOLLOW A SYMLINK NESTED INSIDE A SCAN ROOT AT ALL (round 4
-     * ruling, replacing round-1's `HostPath::contains()` filter). A
+     * WHY FOLLOW A SYMLINK NESTED INSIDE A SCAN ROOT AT ALL. A
      * top-level scan root that IS ITSELF an escaping symlink is refused
      * upstream, before it ever reaches this class — ExtractNodeCommand's
      * own `hostPsr4Directories()` and `sharedScanRoots()` already filter
-     * that out (E51, Important N2). What this method now handles is
+     * that out. What this method now handles is
      * DIFFERENT and sharper: a symlink NESTED inside an otherwise
      * legitimate root — `app/Linked` symlinked to a directory outside the
      * host, itself declaring `App\Linked\Consumer` and referencing the
      * node under extraction. PSR-4 (`App\` → `app/`) makes that class
      * genuinely autoloadable by the host at runtime, but the OLD
      * `HostPath::contains()` filter made it invisible to this scanner —
-     * meaning invisible to both G5 and M6a — so extraction would delete
+     * meaning invisible to both reference scan and post-move rescan — so extraction would delete
      * the original and leave the host loading a class that no longer
      * exists, the exact failure this whole command exists to prevent. A
      * blanket refusal of any scan root containing an escaping symlink was
@@ -241,7 +240,7 @@ final class NodeReferenceScanner
      * exactly where this is real, and refusing there would block the
      * users who most need this command. Scanning the target instead finds
      * the reference and refuses for the right reason, naming the file —
-     * the SAME trade this class already makes everywhere else (E46: erring
+     * the SAME trade this class already makes everywhere else (scan-root coverage: erring
      * toward finding too much is always the safe direction; the unsafe one
      * is silently finding too little).
      *
@@ -562,7 +561,7 @@ final class NodeReferenceScanner
             }
 
             if ($token['id'] === T_IMPLEMENTS) {
-                // Not its own kind (round-2 ruling): an implemented
+                // Not its own kind: an implemented
                 // interface is caught by the universal rule below and
                 // labelled the generic `reference` kind, same as `new` or a
                 // static call.
@@ -719,7 +718,7 @@ final class NodeReferenceScanner
                 $j++;
             }
 
-            // round-2 review, Critical 1: `??` yields its right-hand side
+            // Regression: `??` yields its right-hand side
             // when the LEFT is null — and a `{` token's own `id` IS null, so
             // `($meaningful[$j]['id'] ?? false) === null` can never be true.
             // That earlier form made this method always return `[]`, which
@@ -897,9 +896,8 @@ final class NodeReferenceScanner
      * HTML mixed into a `.php` file outside `<?php ?>` tags) or a
      * `T_ENCAPSED_AND_WHITESPACE` token — a heredoc/nowdoc body, but also
      * the literal segments BETWEEN interpolated `$variables` in a
-     * double-quoted string or a backtick shell-exec string (round-3
-     * review, Critical 2, plus a round-4 correction to this docblock: an
-     * earlier version of it described only the heredoc/nowdoc case).
+     * double-quoted string or a backtick shell-exec string. Regression
+     * coverage includes both that case and heredoc/nowdoc content.
      *
      * WHY A DIFFERENT MATCHING RULE THAN scanStringLiterals(). A quoted
      * literal's VALUE is compared for exact equality, because the token
@@ -925,8 +923,7 @@ final class NodeReferenceScanner
      *
      * BOTH token kinds are also searched for the ESCAPED form of $target
      * (every `\` doubled to `\\`) as a second needle. `T_INLINE_HTML` is
-     * NOT plain, unescaped output text the way raw HTML is — round-3's
-     * docblock claimed otherwise, which was wrong: `{{ … }}` and a
+     * NOT plain, unescaped output text the way raw HTML is: `{{ … }}` and a
      * `@php(...)`/`@php … @endphp` body ARE PHP, so a string literal
      * written inside either one (`@php $n = app('App\\Nodeflow\\Nodes\\
      * SendMessage'); @endphp`) carries ordinary PHP string escaping —
@@ -936,7 +933,7 @@ final class NodeReferenceScanner
      * `foldEscapedBackslash()`'s own reasoning) is what lets the recorded
      * byte range stay a plain, un-mapped slice of the RAW source text.
      *
-     * STATED LIMIT, alongside E46: a Blade reference written as a bare
+     * STATED LIMIT, alongside scan-root coverage: a Blade reference written as a bare
      * SHORT NAME (`{{ SendMessage::class }}`) is out of reach. Blade has no
      * import mechanism this scanner could resolve a short name against —
      * unlike PHP, there is no `use` statement anywhere in a `.blade.php`
@@ -1076,7 +1073,7 @@ final class NodeReferenceScanner
      * class name's own namespace separator takes — untouched.
      *
      * Fixes a real bug, not merely a mutation-testing gap: `stripcslashes()`
-     * (this method's first-round implementation) strips the backslash from
+     * (an earlier implementation) strips the backslash from
      * ANY unrecognised escape sequence, not only recognised ones —
      * `stripcslashes('App\Nodeflow\Nodes\SendMessage')` returns
      * `'AppNodeflowNodesSendMessage'`, deleting every namespace separator.

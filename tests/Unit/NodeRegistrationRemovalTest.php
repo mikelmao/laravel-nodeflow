@@ -64,7 +64,7 @@ it('removes a fully-qualified entry and leaves the file parseable', function () 
 });
 
 it('removes a bare short-name entry behind an import', function () {
-    // G-10's form, and the demo's own shape after its migration to $nodes. This
+    // registration-form case's form, and the demo's own shape after its migration to $nodes. This
     // is the path the real-host run exercises.
     $path = providerForRemoval(
         '        SendMessage::class,',
@@ -77,7 +77,7 @@ it('removes a bare short-name entry behind an import', function () {
 });
 
 it('removes an ALIASED entry rather than reporting it absent', function () {
-    // The first design draft's lexical three-form table missed this entirely:
+    // A lexical three-form table misses this entirely:
     // a live registration read NotPresent, extraction proceeded, and the host
     // was left fatal. Counterfactual: match on the target's short name as a
     // string and this fails, because the file never contains "SendMessage::class".
@@ -174,7 +174,7 @@ it('removes the last entry when it carries no trailing comma', function () {
 });
 
 it('leaves no orphan blank line where a middle entry used to be', function () {
-    // M5: entryDeletionRange()'s "own line" deletion must consume the entry's
+    // host deregistration: entryDeletionRange()'s "own line" deletion must consume the entry's
     // OWN trailing newline (the `+ 1` on rawEnd), not stop one byte short —
     // otherwise the entry's text is gone but an empty line survives where it
     // used to be. That defect makes the file no less valid PHP and leaves no
@@ -208,7 +208,7 @@ it('removes an entry carrying a trailing same-line comment', function () {
 });
 
 it('refuses as EntryAmbiguous when the target shares a line with a sibling', function () {
-    // E39: deleting from inside a shared line means preserving that line's other
+    // shared-line registration outcome: deleting from inside a shared line means preserving that line's other
     // content byte-exactly, which is where this codebase's substring bug would
     // live for the ninth time. Refusing loudly beats character surgery.
     $path = providerForRemoval('        SendMessage::class, TagUser::class,',
@@ -304,7 +304,7 @@ it('refuses to guess when the anchor is absent from an existing file', function 
 });
 
 it('removes the target when the caller passes it with a leading backslash', function () {
-    // M7: removeFrom()'s $nodeClass argument is ltrim'd of a leading `\`
+    // original deletion: removeFrom()'s $nodeClass argument is ltrim'd of a leading `\`
     // before comparison, matching PhpNameResolver::resolve()'s own contract
     // (no leading backslash in its return value) and register()'s existing
     // convention of accepting either spelling. Counterfactual: drop that
@@ -402,7 +402,7 @@ it('clears the body of a single-line array where the entry is not on its own lin
 });
 
 it('removes an entry with legal whitespace around the :: operator', function () {
-    // Review Critical, row 2. `SendMessage :: class` and `SendMessage::class`
+    // Regression. `SendMessage :: class` and `SendMessage::class`
     // are the SAME token sequence with T_WHITESPACE tokens interposed — PHP
     // does not care, and neither should this. Counterfactual: match by
     // trimmed string equality against a fixed "Name::class" literal instead
@@ -424,7 +424,7 @@ it('removes an entry with legal whitespace around the :: operator', function () 
 });
 
 it('removes an entry with a newline between the name and ::class', function () {
-    // Review Critical, row 3. Same reasoning as the spaced-colon test above,
+    // Regression. Same reasoning as the spaced-colon test above,
     // with the whitespace token being a newline rather than a space.
     $path = providerForRemoval(
         "        SendMessage\n        ::class,",
@@ -441,7 +441,7 @@ it('removes an entry with a newline between the name and ::class', function () {
 });
 
 it('refuses rather than reporting NotPresent when a live registration is written as a class-string literal', function () {
-    // Review Critical, row 1, and the asymmetry note: a class-string literal
+    // Regression, and the asymmetry note: a class-string literal
     // `'App\…\SendMessage'` IS a real, live registration — a caller seeing
     // NotPresent here would conclude it is safe to delete the SendMessage
     // class file, and it is not. This writer's chosen resolution is to
@@ -464,7 +464,7 @@ it('refuses rather than reporting NotPresent when a live registration is written
 });
 
 it('refuses rather than reporting NotPresent when a live registration is aliased through a class constant', function () {
-    // Review Critical, row 4. `self::SMS` is a live registration whenever
+    // Regression. `self::SMS` is a live registration whenever
     // `const SMS = SendMessage::class;` exists — this writer cannot see
     // through a class-constant fetch (that requires evaluating the
     // constant's own initialiser, not just resolving a written name), so it
@@ -507,7 +507,7 @@ it('refuses rather than reporting NotPresent when a live registration is aliased
 });
 
 it('refuses rather than reporting NotPresent when the array contains a spread element', function () {
-    // Review Critical, row 5. `...$more` cannot resolve to anything at all
+    // Regression. `...$more` cannot resolve to anything at all
     // without evaluating a runtime variable — refusing is the only honest
     // answer. Counterfactual: a classifier that only checks "does the element
     // end in a `class` keyword" without also requiring a `::` immediately
@@ -527,7 +527,7 @@ it('refuses rather than reporting NotPresent when the array contains a spread el
 });
 
 it('produces valid PHP when removing the first entry of a comma-first list', function () {
-    // CRITICAL (round 3). Comma-first style puts the delimiter BEFORE the
+    // Regression. Comma-first style puts the delimiter BEFORE the
     // next entry rather than after this one, so this entry's own physical
     // line carries NEITHER a leading nor a trailing comma. Deleting only
     // this line — the pre-fix behaviour — would strand the following
@@ -618,7 +618,7 @@ it('produces valid PHP when removing an entry separated by a comma stranded on i
 });
 
 it('refuses rather than reporting NotPresent for a dynamic class reference', function () {
-    // Important #1. `$this->sms::class` is a live, dynamic class-constant
+    // Regression. `$this->sms::class` is a live, dynamic class-constant
     // fetch this writer cannot resolve without evaluating a property at
     // runtime — refusing is the only honest answer, mirroring the
     // self::SMS class-constant case. Counterfactual: classifyElement()'s
@@ -641,7 +641,7 @@ it('refuses rather than reporting NotPresent for a dynamic class reference', fun
 });
 
 it('refuses rather than reporting NotPresent for a bare ::class with no name at all', function () {
-    // Important #2. `::class` with nothing before the `::` is not a real
+    // Regression. `::class` with nothing before the `::` is not a real
     // class reference — refusing is correct. This is also the fixture that
     // makes classifyElement()'s `$count < 3` guard load-bearing: it is the
     // ONLY thing that keeps `$nameIndexes` (computed as `array_slice($significant,
@@ -715,7 +715,7 @@ it('does not strip the new last entry\'s own trailing comma when removing the en
 });
 
 it('lints with PHP_BINARY rather than whatever "php" resolves to on PATH', function () {
-    // Important #1 (round 4). compiles() must invoke PHP_BINARY, not a
+    // Regression. compiles() must invoke PHP_BINARY, not a
     // bare `php` — PATH is not guaranteed to resolve to the interpreter
     // currently running this process (a php8.3-only image, or an older
     // `php` shadowing it earlier on PATH), and linting a CORRECT removal
@@ -753,7 +753,7 @@ it('lints with PHP_BINARY rather than whatever "php" resolves to on PATH', funct
 });
 
 it('removes a middle element whose delimiting comma is stranded alone on its own line', function () {
-    // Important #2 (round 4). ownLineMatch()'s 'neither' branch, reached
+    // Regression. ownLineMatch()'s 'neither' branch, reached
     // for a NON-FIRST element, was only ever exercised (in the existing
     // suite) by removing element 0 — which the removed-prefix fix-up
     // rescues independently, masking a mutation that collapses 'neither'

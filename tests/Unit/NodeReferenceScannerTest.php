@@ -36,7 +36,7 @@ function target(): string
 }
 
 it('accepts a target FQCN argument written with a leading backslash', function () {
-    // round-3 review, IMPORTANT: `ltrim($fqcn, '\\')` on scan()'s OWN
+    // Regression: `ltrim($fqcn, '\\')` on scan()'s OWN
     // target argument, not the string-literal comparison value tested
     // elsewhere. A caller writing `scan('\App\Nodeflow\Nodes\SendMessage',
     // ...)` -- a common way to spell a class name, e.g. copied straight
@@ -88,12 +88,12 @@ it('finds a fully-qualified reference', function () {
 });
 
 it('finds a bare short name behind an import', function () {
-    // BRIEF CONTRADICTION, resolved in favour of the mandatory Step 4
-    // counterfactual (see the E45 test below): that test's provider fixture
+    // Contract clarification
+    // counterfactual (see the span-aware reference handling test below): that test's provider fixture
     // has a PLAIN, unaliased `use App\Nodeflow\Nodes\SendMessage;` import
     // AND expects it to count as its own reference (its comment says so
     // explicitly: "the import, the $nodes entry, and the legacy register()
-    // entry: three distinct spans"). The brief's own table states "1
+    // entry: three distinct spans"). The contract states "1
     // reference" for this row's identical shape (plain import + matching
     // usage), which cannot both be true under one consistent rule. Kept
     // consistent with the mandatory, literally-executed Step 4 snippet:
@@ -439,7 +439,7 @@ it('records a byte range that isolates the reference', function () {
 });
 
 it('records a byte range that isolates a bounded-substring match, not the whole token', function () {
-    // round-4 review, G2. E45's ENTIRE mechanism -- exemption per SPAN, not
+    // Regression: the exemption-per-span mechanism, rather than exemption per file,
     // per file -- depends on the byte range actually isolating the
     // matched text. Both `$token['start'] + $pos` -> `$token['start']` and
     // `$token['start'] + $after` -> `$token['end']` survive the full suite
@@ -518,7 +518,7 @@ it('ignores a use function import even when its path matches the target', functi
     // scanner must skip the whole statement, not treat its path as a class
     // import.
     //
-    // Round-2 mutation sweep found this row alone does NOT discriminate the
+    // Regression testing found this row alone does NOT discriminate the
     // T_FUNCTION/T_CONST skip once matching moved to a PhpNameResolver::
     // imports() lookup (see parseUseStatement()'s docblock): with the skip
     // REMOVED, this fixture still resolves to 0 references, because
@@ -603,7 +603,7 @@ it('does not let a same-named use function statement borrow a real class imports
 });
 
 it('refuses a file declaring two namespaces', function () {
-    // Task 3's stated limit: PhpNameResolver reads only the first namespace
+    // the earlier implementation's stated limit: PhpNameResolver reads only the first namespace
     // block and merges imports() into one flat map across blocks, which is
     // wrong for a file with more than one. Refusing here, rather than
     // resolving against the wrong block's imports, is what keeps that
@@ -630,15 +630,15 @@ it('refuses a file declaring two namespaces', function () {
     }
 });
 
-it('DOES scan through a symlink nested inside a scan root, finding a reference in its target (review round 4, item B)', function () {
+it('DOES scan through a symlink nested inside a scan root, finding a reference in its target', function () {
     // Reversed from an earlier design: this test used to assert the
     // OPPOSITE (skipping such a symlink entirely), on the theory that a
-    // symlink escaping the root should never be trusted. The review round
+    // symlink escaping the root should never be trusted. The regression
     // 4 found the real failure that design caused: `app/Linked` symlinked
     // to a directory outside the host, declaring
     // `App\Linked\Consumer` and referencing the node under extraction, is
     // genuinely autoloadable by the host (PSR-4: `App\` -> `app/`), but
-    // was invisible to both G5 and M6a under the old filter -- extraction
+    // was invisible to both reference scan and post-move rescan under the old filter -- extraction
     // would delete the original and leave the host loading a class that
     // no longer exists. A TOP-LEVEL scan root that is itself an escaping
     // symlink is still refused before it ever reaches this class
@@ -799,7 +799,7 @@ it('refuses a nested symlink to the filesystem root before traversing it', funct
     }
 });
 
-it('accepts a single FILE as a scan root, not only a directory (review round 4, item A)', function () {
+it('accepts a single FILE as a scan root, not only a directory', function () {
     // A loose *.php file at the host root (e.g. rector.php) has no
     // containing directory this class was ever told to walk -- accepting
     // a file root directly is what lets ExtractNodeCommand's own
@@ -829,8 +829,8 @@ it('ignores a FILE root whose extension is not one of the scannable ones', funct
 });
 
 it('reports a legacy register() call in the provider as a reference the provider rewrite does not cover', function () {
-    // E45. The first design draft exempted whole FILES the command rewrites. The
-    // provider IS such a file (M5 edits $nodes and the import), so this reference
+    // A file-level exemption is unsafe. The command rewrites only part of the
+    // provider ($nodes and the import), so this reference
     // was exempted rather than refused — the exact case the scan existed to catch,
     // and it leaves the host fatal at boot.
     //
@@ -871,12 +871,12 @@ it('reports a legacy register() call in the provider as a reference the provider
     expect(array_unique(array_map(fn ($r) => $r->file, $found)))->toHaveCount(1);
 });
 
-// --- Round-3 review fix: Critical 1, a closure capture list clobbering a
+// --- Regression: a closure capture list clobbering a
 // real import (shared root cause with PhpNameResolverTest.php). ---
 
 it('does not let a closure capture list swallow a real import and the reference after it', function () {
-    // round-3 review, Critical 1. Two lint-clean, idiomatic routes/web.php
-    // shapes, both given by the reviewer verbatim. Before the fix,
+    // Two lint-clean, idiomatic routes/web.php
+    // shapes, both kept as exact regression fixtures. Before the fix,
     // parseUseStatement() read the closure's captured variable ($router,
     // $prefix) as if it were importing an alias, and because that read
     // shares the SAME lookup map as the real `use
@@ -910,11 +910,10 @@ it('does not let a closure capture list swallow a real import and the reference 
         ->toEqualCanonicalizing(['import', 'reference', 'import', 'class_constant']);
 });
 
-// --- Round-2 review fixes below: Critical 1 (braced-namespace brace-kind
-// bug), Critical 2 (universal detection), and the four surviving mutants. ---
+// --- Regression coverage for braced namespaces and universal detection. ---
 
 it('pops the brace-kind stack when a function body closes, so a later top-level use is still an import', function () {
-    // round-3 review, IMPORTANT: `array_pop($braceKinds)` on `}`. Without
+    // Regression: `array_pop($braceKinds)` on `}`. Without
     // it, an empty function body's `{` pushes 'other' and it is NEVER
     // popped, so braceKinds stays ['other'] for the REST of the file --
     // and a top-level `use` declared AFTER that function is wrongly read
@@ -949,13 +948,13 @@ it('pops the brace-kind stack when a function body closes, so a later top-level 
 });
 
 it('finds a use import inside a braced namespace, not just a bracket-free one', function () {
-    // round-2 review, Critical 1. namespaceBraceIndexes() used
+    // Regression: namespaceBraceIndexes() used
     // `($meaningful[$j]['id'] ?? false) === null`, and `??` only yields its
     // right-hand side when the LEFT is null -- which a `{` token's `id`
     // always is, so the condition could never be true. That made the
     // helper always return [], which made every namespace brace classify
     // as 'other', which made scanImports() (as it was then) discard every
-    // `use` inside a braced namespace. Verified against the reviewer's own
+    // `use` inside a braced namespace. Verified against the recorded
     // example.
     $root = hostWith([
         'app/Braced.php' => <<<'PHP'
@@ -981,7 +980,7 @@ it('finds a use import inside a braced namespace, not just a bracket-free one', 
 });
 
 it('catches new and a static call in the same file that only ::class and the import were caught before', function () {
-    // round-2 review, Critical 2 -- "the case that matters". The first cut
+    // Regression: the first cut
     // of this scanner detected exactly four syntactic shapes and missed
     // every other bare use of a class name. A host whose provider carries
     // the import, the $nodes entry, AND a legacy `new SendMessage();
@@ -1115,7 +1114,7 @@ it('finds a bare name behind a parameter type and a return type', function () {
 });
 
 it('finds a bare name behind implements, labelled the generic kind, not extends', function () {
-    // round-2 ruling: implements is subsumed by the universal rule, not
+    // Current behavior: implements is subsumed by the universal rule, not
     // given its own kind.
     $root = hostWith([
         'app/Foo.php' => <<<'PHP'
@@ -1231,7 +1230,7 @@ it('resets the extends/implements clause even when extends names nothing at all'
 });
 
 it('does not classify a static method call as class_constant', function () {
-    // The IMPORTANT mutation the round-2 review named directly: removing
+    // The IMPORTANT mutation the regression named directly: removing
     // the `$class['id'] !== T_CLASS` guard was previously untested because
     // nothing exercised `Name::method()` at all. Under universal detection
     // this is no longer merely "untested" -- a removed guard would
@@ -1260,7 +1259,7 @@ it('does not classify a static method call as class_constant', function () {
 });
 
 it('does not classify an instanceof check followed by an unrelated class declaration as class_constant', function () {
-    // round-3 review, IMPORTANT: the T_DOUBLE_COLON half of classify()'s
+    // Regression: the T_DOUBLE_COLON half of classify()'s
     // guard, discriminated from the T_CLASS half above. `$y instanceof
     // SendMessage;` is immediately followed by `class D {}` -- with only
     // the T_CLASS half checked (ignoring what the token right after the
@@ -1296,7 +1295,7 @@ it('finds a target that is not first in a comma-separated extends list', functio
     // `break` mutation because nothing put the target second in the list.
     // Detection is universal now (this is no longer a special-cased walk
     // that could "break" early at all), but the row is re-derived and kept
-    // as its own persisted proof per the reviewer's instruction.
+    // as its own persisted proof as a durable regression.
     $root = hostWith([
         'app/Foo.php' => <<<'PHP'
         <?php
@@ -1424,7 +1423,7 @@ it('finds a double-quoted string literal written with escaped backslashes', func
 
 it('finds a double-quoted string literal written with plain, unescaped backslashes', function () {
     // A REAL bug, not merely a mutation-testing gap, found while
-    // investigating why the round-2 mutation sweep's heredoc-decoding
+    // investigating why the regression suite's heredoc-decoding
     // mutant went uncaught. unquote()'s double-quoted branch used
     // stripcslashes(), which strips the backslash from ANY unrecognised
     // escape, not only recognised ones:
@@ -1509,7 +1508,7 @@ it('scans .phtml and .inc files, not just .php', function () {
 });
 
 it('does not scan a file whose extension is outside php, blade.php, phtml, and inc', function () {
-    // E46-adjacent stated limit: a reference spelled out only inside a
+    // scan-root coverage-adjacent stated limit: a reference spelled out only inside a
     // file with some other extension is out of reach, by design, not by
     // oversight.
     $root = hostWith([
@@ -1522,7 +1521,7 @@ it('does not scan a file whose extension is outside php, blade.php, phtml, and i
 });
 
 
-// --- Round-3 review fix: Critical 2, Blade support via bounded substring
+// --- Regression: Blade support via bounded substring
 // matching, which also resolves the heredoc/nowdoc Important raised
 // separately (an exact-body-equality rule missed the FQCN appearing inside
 // a LARGER heredoc body). ---
@@ -1544,7 +1543,7 @@ it('records the correct line for a Blade match that is not on the tokens own fir
 });
 
 it('finds an FQCN inside Blade double-curly output, with no <?php tag at all', function () {
-    // round-3 review, Critical 2. A pure Blade template has no `<?php`
+    // A pure Blade template has no `<?php`
     // tag, so PHP's own tokeniser reads the WHOLE file as one
     // T_INLINE_HTML token -- verified directly against token_get_all()
     // before writing this test.
@@ -1579,7 +1578,7 @@ it('finds an FQCN inside an @php ... @endphp Blade block', function () {
 });
 
 it('finds an escaped-backslash FQCN spelling inside a Blade @php block', function () {
-    // round-4 review, G1. T_INLINE_HTML IS PHP inside {{ ... }} and
+    // Regression: T_INLINE_HTML is PHP inside {{ ... }} and
     // @php(...)/@php...@endphp -- it carries ordinary PHP string escaping,
     // so a class name passed through app('App\\Nodeflow\\Nodes\\
     // SendMessage') (a real, idiomatic way to resolve a class by name)
@@ -1649,7 +1648,7 @@ it('does not match an unrelated FQCN sharing the target short name in Blade', fu
 it('ignores a Blade reference written as a bare short name, a stated limit', function () {
     // Blade has no `use`/import mechanism this scanner could resolve a
     // short name against -- documented in the class docblock alongside
-    // E46's dynamic-and-database-stored-names limit, not silently missed.
+    // the documented dynamic-and-database-stored-names limit, not silently missed.
     $root = hostWith([
         'resources/view.blade.php' => "<div>{{ SendMessage::class }}</div>\n",
     ]);
@@ -1660,7 +1659,7 @@ it('ignores a Blade reference written as a bare short name, a stated limit', fun
 });
 
 it('finds the FQCN as a substring inside a larger heredoc body, not only when the body equals it exactly', function () {
-    // The Important the reviewer raised separately, resolved by the SAME
+    // This separate edge case, resolved by the SAME
     // substring rule as Blade: `<<<PHP\nuse App\…\SendMessage;\nPHP`
     // returned 0 under the old exact-body-equality rule.
     $root = hostWith([
@@ -1679,7 +1678,7 @@ it('finds the FQCN as a substring inside a larger heredoc body, not only when th
     expect($found[0]->kind)->toBe('string_literal');
 });
 
-// --- $excludedTopLevelNames (review round 3, mutation survivor 1) ---------
+// --- $excludedTopLevelNames regression ---------
 
 it('excludes a directory NAME only when it sits directly inside the scanned root, not at any deeper nesting', function () {
     // The central claim of the $excludedTopLevelNames parameter: deleting

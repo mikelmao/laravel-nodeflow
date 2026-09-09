@@ -183,7 +183,7 @@ class NodeRegistrationWriter
                 return new NodeRegistrationPlan(NodeRegistrationOutcome::AnchorAmbiguous);
             }
 
-            // E50: scoped to the anchor's own array span, not the whole file — a
+            // scoped registration: scoped to the anchor's own array span, not the whole file — a
             // mention anywhere else (a docblock example, a string literal in an
             // unrelated method) must not read as already registered.
             if ($this->isAlreadyPresent($updated, $anchor, $presenceNeedle)) {
@@ -211,7 +211,7 @@ class NodeRegistrationWriter
             );
         }
 
-        // E11: a position that passed every check above can still sit inside a
+        // post-write verification: a position that passed every check above can still sit inside a
         // comment — a `$nodes` home whose declaration line is itself commented
         // out ("// protected array $nodes = [") still matches ANCHOR once, raw,
         // and the insertion looks clean right up until the result is read back.
@@ -289,7 +289,7 @@ class NodeRegistrationWriter
 
     /**
      * Removes every entry inside $anchor's array whose written name RESOLVES to
-     * $nodeClass (E38, E39, E50).
+     * $nodeClass (registration-removal outcome, shared-line registration outcome, scoped registration).
      *
      * Matching is identity, not spelling: `<name>::class` is only a candidate,
      * and is only removed once PhpNameResolver::resolve() says its FQCN, under
@@ -442,7 +442,7 @@ class NodeRegistrationWriter
             $updated = substr_replace($updated, '', $deletion['start'], $deletion['end'] - $deletion['start']);
         }
 
-        // Re-verify rather than trust the write (E11's rule, applied to a
+        // Re-verify rather than trust the write (post-write verification, applied to a
         // deletion): the result must still COMPILE — not merely parse; see
         // compiles()'s docblock for why token_get_all(TOKEN_PARSE) is not
         // enough here even though it remains enough for appendTo() — the
@@ -489,13 +489,13 @@ class NodeRegistrationWriter
      * The exact byte span of every element inside $anchor's array that
      * RESOLVES to $nodeClass, provided every element in that array is a
      * plain `<name>::class` this writer actually understands — read-only,
-     * for a caller (ExtractNodeCommand's G5) that needs to know exactly
+     * for a caller (ExtractNodeCommand's reference scan) that needs to know exactly
      * what a LATER removeFrom() call would touch, without touching
      * anything itself.
      *
      * WHY THIS EXISTS, rather than a caller computing the array's own
      * bracket range and treating everything inside it as exempt. A too-wide
-     * exemption is the same defect class E45 already named once (a
+     * exemption is the same defect class span-aware reference handling already named once (a
      * FILE-level exemption hiding a real reference) wearing a different
      * costume: `protected array $nodes = [ ...config('x', [Foo::class =>
      * 'alias']) ]` is a real reference to Foo sitting inside this array,
@@ -934,7 +934,7 @@ class NodeRegistrationWriter
 
     /**
      * Whether $presenceNeedle already appears inside $anchor's own array span
-     * (E50) — never the whole file, so a mention anywhere else (a docblock
+     * — never the whole file, so a mention anywhere else (a docblock
      * example, a string literal in an unrelated method) cannot read as already
      * registered.
      *

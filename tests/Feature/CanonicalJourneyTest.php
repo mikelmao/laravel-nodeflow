@@ -25,7 +25,7 @@ use Tests\Support\JourneySendNode;
  * node per RunNodeStep, send back the node ids that now hold subjects) minus
  * the durable engine and the queue.
  *
- * Every per-node review passed while three Critical defects lived in the seam
+ * Unit coverage passed while three defects lived in the integration seam
  * between these classes, because no test ever crossed it.
  */
 beforeEach(function () {
@@ -157,7 +157,7 @@ it('drives the canonical journey end to end and leaves no subject active', funct
     // exit_this_flow) used to leave its subjects status='active' with
     // current_node_id still pointing at the finished node. That silently breaks
     // two documented behaviours: SubjectExiter can never see activeSubjectCount()
-    // reach 0, so no later cohort wait ever wakes early (D10 / spec 7.3), and
+    // reach 0, so no later cohort wait ever wakes early, and
     // CompleteRunActivity marks the run 'completed' while subjects sit 'active',
     // so the run view lies. If this assertion ever fails, the reconciliation
     // sweep in NodeRunner::advance() has regressed.

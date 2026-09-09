@@ -10,8 +10,8 @@ use Nodeflow\Models\Run;
  * The run view's aggregate, in two grouped queries.
  *
  * Both reads go through the Run's own relations, never through RunSubject or
- * NodeExecution directly. Those two tables carry no tenant_id by design (spec
- * E1) precisely because they are only reachable through a Run, which is scoped
+ * NodeExecution directly. Those two tables carry no tenant_id because they are
+ * reachable only through a scoped Run
  * — so relation-only access is not a style preference here, it is the whole
  * isolation mechanism. tests/Unit/ArchitectureTest.php enforces it, and this
  * class deliberately imports neither model so it needs no allowlist entry.
@@ -39,7 +39,7 @@ class RunOverlay
             $waiting = $activeAt[$id] ?? 0;
 
             $nodes[$id] = [
-                // E13. Row existence OR a subject sitting here — never a count
+                // overlay semantics. Row existence OR a subject sitting here — never a count
                 // of subjects released. A node with one row summing to zero and
                 // nobody waiting is `true`; a node with no row and nobody
                 // waiting is `false`. `array_sum($byOutput) > 0` collapses

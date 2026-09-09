@@ -598,7 +598,7 @@ function handWrittenProvider(): string
 }
 
 it('reports a provider without the anchors as writable', function () {
-    // Counterfactual: keep Task 4's `exists() ? AlreadyPresent : Writable` and
+    // Counterfactual: keep the prior provider-check implementation's `exists() ? AlreadyPresent : Writable` and
     // this fails — the host who followed the docs is told everything is fine
     // while make-node still cannot register into their file.
     file_put_contents($this->path, handWrittenProvider());
@@ -703,7 +703,7 @@ it('refuses a differently formatted trigger home instead of creating a duplicate
 });
 
 /**
- * C4. All three registration homes exist, but every boot() call is commented
+ * regression case. All three registration homes exist, but every boot() call is commented
  * out — the exact host where nothing registers and the palette is empty.
  */
 function providerWithCommentedOutBootCalls(): string
@@ -753,7 +753,7 @@ it('reports a provider with every boot() call commented out as writable, not alr
     // Counterfactual: match the boot() needles against raw text and this fails
     // — the commented-out calls are found "raw" and check() reports
     // AlreadyPresent, which is `install` exit 0 on a host where nothing
-    // registers and the palette is empty (E22).
+    // registers and the palette is empty.
     file_put_contents($this->path, providerWithCommentedOutBootCalls());
 
     expect($this->step->check())->toBe(InstallOutcome::Writable);

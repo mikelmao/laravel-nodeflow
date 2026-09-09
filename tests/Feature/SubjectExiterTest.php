@@ -65,7 +65,7 @@ it('records the exit but sends no signal for a run that has already finished', f
 });
 
 it('can still reach audience-empty after a node released part of the cohort', function () {
-    // The D10 / spec 7.3 consequence of Fix 2, asserted directly. Subject '1' is
+    // The audience-empty cancellation consequence, asserted directly. Subject '1' is
     // handed to a sub-flow by a node returning NodeResult::empty(); '2' stays in
     // this flow and later exits. Before the reconciliation sweep, '1' kept
     // status='active' forever, activeSubjectCount() could never reach 0, and

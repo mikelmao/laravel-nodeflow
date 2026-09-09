@@ -2,7 +2,7 @@
 
 use Nodeflow\Console\Extract\ComposerRunner;
 
-/** Test-only entry point that deliberately bypasses G3 to challenge M9 with a drifting type. */
+/** Test-only entry point that deliberately bypasses type consistency validation to challenge fresh-host verification with a drifting type. */
 final class TypeDriftBypassExtractCommand extends \Nodeflow\Console\ExtractNodeCommand
 {
     protected $signature = 'nodeflow:test-type-drift-bypass';
@@ -360,7 +360,7 @@ function verificationWriteLaravelHostFixture(string $suffix): string
     return $root;
 }
 
-/** Writes the smallest host tree that passes G1-G8 and reaches the move transaction. */
+/** Writes the smallest host tree that passes class eligibility validation-Composer readiness validation and reaches the move transaction. */
 function verificationWriteExtractionFixture(string $suffix, string $shortClass, string $type): array
 {
     $root = verificationFixtureRoot($suffix);
@@ -437,56 +437,56 @@ afterEach(function () {
     verificationDeleteTree(verificationFixtureRoot('double cleanup unusable regeneration'));
     verificationDeleteTree(verificationFixtureRoot('cleanup residue plus undo failure'));
     verificationDeleteTree(verificationFixtureRoot('stable scaffold extraction'));
-    verificationDeleteTree(verificationFixtureRoot('M8 failure'));
-    verificationDeleteTree(verificationFixtureRoot('M8 custom vendor-dir failure'));
-    verificationDeleteTree(verificationFixtureRoot('M8 symlinked vendor-dir failure'));
-    verificationDeleteTree(verificationFixtureRoot('M8 escaping vendor-dir'));
+    verificationDeleteTree(verificationFixtureRoot('dependency installation failure'));
+    verificationDeleteTree(verificationFixtureRoot('dependency installation custom vendor-dir failure'));
+    verificationDeleteTree(verificationFixtureRoot('dependency installation symlinked vendor-dir failure'));
+    verificationDeleteTree(verificationFixtureRoot('dependency installation escaping vendor-dir'));
     verificationDeleteTree(verificationFixtureRoot('external configured vendor'));
-    verificationDeleteTree(verificationFixtureRoot('M8 custom bin-dir failure'));
-    verificationDeleteTree(verificationFixtureRoot('M8 escaping bin-dir'));
+    verificationDeleteTree(verificationFixtureRoot('dependency installation custom bin-dir failure'));
+    verificationDeleteTree(verificationFixtureRoot('dependency installation escaping bin-dir'));
     verificationDeleteTree(verificationFixtureRoot('external configured bin'));
-    verificationDeleteTree(verificationFixtureRoot('M8 Windows drive vendor-dir'));
-    verificationDeleteTree(verificationFixtureRoot('M8 Windows drive-relative vendor-dir'));
-    verificationDeleteTree(verificationFixtureRoot('M8 Windows UNC bin-dir'));
-    verificationDeleteTree(verificationFixtureRoot('M8 symlinked lock failure'));
-    verificationDeleteTree(verificationFixtureRoot('M8 dangling in-host lock failure'));
-    verificationDeleteTree(verificationFixtureRoot('M8 lock state changed'));
-    verificationDeleteTree(verificationFixtureRoot('M8 escaping lock'));
-    verificationDeleteTree(verificationFixtureRoot('M8 dangling multi-hop lock'));
-    verificationDeleteTree(verificationFixtureRoot('M8 cyclic lock'));
-    verificationDeleteTree(verificationFixtureRoot('M8 Windows drive lock target'));
-    verificationDeleteTree(verificationFixtureRoot('M8 Windows drive-relative lock target'));
-    verificationDeleteTree(verificationFixtureRoot('M8 Windows UNC lock target'));
+    verificationDeleteTree(verificationFixtureRoot('dependency installation Windows drive vendor-dir'));
+    verificationDeleteTree(verificationFixtureRoot('dependency installation Windows drive-relative vendor-dir'));
+    verificationDeleteTree(verificationFixtureRoot('dependency installation Windows UNC bin-dir'));
+    verificationDeleteTree(verificationFixtureRoot('dependency installation symlinked lock failure'));
+    verificationDeleteTree(verificationFixtureRoot('dependency installation dangling in-host lock failure'));
+    verificationDeleteTree(verificationFixtureRoot('dependency installation lock state changed'));
+    verificationDeleteTree(verificationFixtureRoot('dependency installation escaping lock'));
+    verificationDeleteTree(verificationFixtureRoot('dependency installation dangling multi-hop lock'));
+    verificationDeleteTree(verificationFixtureRoot('dependency installation cyclic lock'));
+    verificationDeleteTree(verificationFixtureRoot('dependency installation Windows drive lock target'));
+    verificationDeleteTree(verificationFixtureRoot('dependency installation Windows drive-relative lock target'));
+    verificationDeleteTree(verificationFixtureRoot('dependency installation Windows UNC lock target'));
     verificationDeleteTree(verificationFixtureRoot('external composer lock'));
     verificationDeleteTree(verificationFixtureRoot('external dangling composer lock'));
-    verificationDeleteTree(verificationFixtureRoot('M8 generated symlink failure'));
-    verificationDeleteTree(verificationFixtureRoot('M8 escaping autoload symlink'));
-    verificationDeleteTree(verificationFixtureRoot('M8 escaping composer subtree'));
+    verificationDeleteTree(verificationFixtureRoot('dependency installation generated symlink failure'));
+    verificationDeleteTree(verificationFixtureRoot('dependency installation escaping autoload symlink'));
+    verificationDeleteTree(verificationFixtureRoot('dependency installation escaping composer subtree'));
     verificationDeleteTree(verificationFixtureRoot('external generated composer state'));
-    verificationDeleteTree(verificationFixtureRoot('M9 external packages cache'));
-    verificationDeleteTree(verificationFixtureRoot('M9 external services cache'));
-    verificationDeleteTree(verificationFixtureRoot('M9 Windows packages cache'));
-    verificationDeleteTree(verificationFixtureRoot('M9 Windows drive-relative packages cache'));
-    verificationDeleteTree(verificationFixtureRoot('M9 UNC services cache'));
+    verificationDeleteTree(verificationFixtureRoot('fresh-host verification external packages cache'));
+    verificationDeleteTree(verificationFixtureRoot('fresh-host verification external services cache'));
+    verificationDeleteTree(verificationFixtureRoot('fresh-host verification Windows packages cache'));
+    verificationDeleteTree(verificationFixtureRoot('fresh-host verification Windows drive-relative packages cache'));
+    verificationDeleteTree(verificationFixtureRoot('fresh-host verification UNC services cache'));
     verificationDeleteTree(verificationFixtureRoot('external Laravel cache'));
-    verificationDeleteTree(verificationFixtureRoot('M9 custom cache rollback'));
-    verificationDeleteTree(verificationFixtureRoot('M9 symlinked custom cache rollback'));
-    verificationDeleteTree(verificationFixtureRoot('M6 escaping composer json'));
-    verificationDeleteTree(verificationFixtureRoot('M5 escaping host provider'));
+    verificationDeleteTree(verificationFixtureRoot('fresh-host verification custom cache rollback'));
+    verificationDeleteTree(verificationFixtureRoot('fresh-host verification symlinked custom cache rollback'));
+    verificationDeleteTree(verificationFixtureRoot('Composer rewrite escaping composer json'));
+    verificationDeleteTree(verificationFixtureRoot('host deregistration escaping host provider'));
     verificationDeleteTree(verificationFixtureRoot('external mutable host file'));
-    verificationDeleteTree(verificationFixtureRoot('M8 matching package failure'));
-    verificationDeleteTree(verificationFixtureRoot('M8 forced package failure'));
+    verificationDeleteTree(verificationFixtureRoot('dependency installation matching package failure'));
+    verificationDeleteTree(verificationFixtureRoot('dependency installation forced package failure'));
     verificationDeleteTree(verificationFixtureRoot('restore regeneration failure'));
-    verificationDeleteTree(verificationFixtureRoot('M9 undiscovered'));
-    verificationDeleteTree(verificationFixtureRoot('M9 real undiscovered'));
-    verificationDeleteTree(verificationFixtureRoot('M9 mismatch'));
-    verificationDeleteTree(verificationFixtureRoot('M9 type drift'));
+    verificationDeleteTree(verificationFixtureRoot('fresh-host verification undiscovered'));
+    verificationDeleteTree(verificationFixtureRoot('fresh-host verification real undiscovered'));
+    verificationDeleteTree(verificationFixtureRoot('fresh-host verification mismatch'));
+    verificationDeleteTree(verificationFixtureRoot('fresh-host verification type drift'));
     verificationDeleteTree(verificationFixtureRoot('stale resident class'));
     verificationDeleteTree(verificationFixtureRoot('stale package manifest direct'));
     verificationDeleteTree(verificationFixtureRoot('stale package manifest extraction'));
-    @unlink(verificationFixtureRoot('M8 restore ran'));
-    @unlink(verificationFixtureRoot('M9 restore ran'));
-    @unlink(verificationFixtureRoot('M9 mismatch restore ran'));
+    @unlink(verificationFixtureRoot('dependency installation restore ran'));
+    @unlink(verificationFixtureRoot('fresh-host verification restore ran'));
+    @unlink(verificationFixtureRoot('fresh-host verification mismatch restore ran'));
     @unlink(verificationFixtureRoot('restore cleanup-only regeneration ran'));
     putenv('COMPOSER_VENDOR_DIR');
     putenv('COMPOSER_BIN_DIR');
@@ -496,7 +496,7 @@ afterEach(function () {
     \Illuminate\Support\Env::getRepository()->clear('APP_SERVICES_CACHE');
 });
 
-it('uses a real full Composer install without scripts when no lock existed (E48)', function () {
+it('uses a real full Composer install without scripts when no lock existed', function () {
     $root = verificationWriteComposerFixture('no lock; $PATH-safe');
 
     $dump = verificationRun(['composer', 'dump-autoload', '--no-scripts'], $root);
@@ -513,7 +513,7 @@ it('uses a real full Composer install without scripts when no lock existed (E48)
     expect($root.'/post-autoload-dump-ran')->not->toBeFile();
 });
 
-it('uses a real scoped Composer update without scripts when a lock existed (E48)', function () {
+it('uses a real scoped Composer update without scripts when a lock existed', function () {
     $root = verificationWriteComposerFixture('existing lock; scoped update');
     $composerPath = $root.'/composer.json';
     $composer = json_decode(file_get_contents($composerPath), true);
@@ -539,7 +539,7 @@ it('uses a real scoped Composer update without scripts when a lock existed (E48)
     expect($root.'/post-autoload-dump-ran')->not->toBeFile();
 });
 
-it('does not let an inherited Composer vendor override redirect M8 outside the host', function () {
+it('does not let an inherited Composer vendor override redirect dependency installation outside the host', function () {
     $root = verificationWriteComposerFixture('composer env isolation');
     $externalVendor = verificationFixtureRoot('external composer vendor');
     verificationDeleteTree($externalVendor);
@@ -583,7 +583,7 @@ it('does not let an inherited Composer bin override redirect dependency proxies 
     expect($externalBin)->not->toBeDirectory();
 });
 
-it('does not let inherited Composer home configuration redirect M8 outside the host', function () {
+it('does not let inherited Composer home configuration redirect dependency installation outside the host', function () {
     $root = verificationWriteComposerFixture('composer home isolation');
     $composerHome = verificationFixtureRoot('ambient composer home');
     $externalVendor = verificationFixtureRoot('external composer home vendor');
@@ -609,7 +609,7 @@ it('does not let inherited Composer home configuration redirect M8 outside the h
     expect(glob(sys_get_temp_dir().'/nodeflow-composer-home-*') ?: [])->toBe($temporaryHomesBefore);
 });
 
-it('does not let an inherited Composer file override redirect M8 away from the host', function () {
+it('does not let an inherited Composer file override redirect dependency installation away from the host', function () {
     $root = verificationWriteComposerFixture('composer file env isolation');
     $externalRoot = verificationFixtureRoot('external composer project');
     verificationDeleteTree($externalRoot);
@@ -687,7 +687,7 @@ it('regenerates a restored lockless autoloader without creating a lock or runnin
     expect(verificationTreeHash($root))->toBe($before);
 });
 
-it('boots a real Laravel host in a fresh process and returns the class package discovery registered (E49)', function () {
+it('boots a real Laravel host in a fresh process and returns the class package discovery registered', function () {
     $root = verificationWriteLaravelHostFixture('fresh host; discovery');
 
     $resolved = (new ComposerRunner())->bootAndResolve($root, 'probe.discovered');
@@ -696,7 +696,7 @@ it('boots a real Laravel host in a fresh process and returns the class package d
     expect($root.'/bootstrap/cache/packages.php')->toBeFile();
 });
 
-it('boots M9 with the exact in-host Laravel cache paths frozen by G8', function () {
+it('boots fresh-host verification with the exact in-host Laravel cache paths frozen by Composer readiness validation', function () {
     $root = verificationWriteLaravelHostFixture('fresh host; frozen custom caches');
     $customDirectory = $root.'/storage/framework/frozen-cache';
     mkdir($customDirectory, 0777, true);
@@ -815,7 +815,7 @@ it('proves a stale Laravel package manifest blocks discovery until it is invalid
     expect($root.'/post-autoload-dump-ran')->not->toBeFile();
 });
 
-it('keeps a successful extraction only after M8 installs and M9 resolves the exact moved class', function () {
+it('keeps a successful extraction only after dependency installation succeeds and fresh-host verification resolves the exact moved class', function () {
     [$root, $class] = verificationWriteExtractionFixture(
         'injected success',
         'InstalledNode',
@@ -1319,9 +1319,9 @@ it('installs the actual versionless scaffold on a default-stability host through
     expect(glob(sys_get_temp_dir().'/nodeflow-extract-snapshot-*') ?: [])->toBe($snapshotsBefore);
 });
 
-it('restores all Composer state and regenerates the restored autoloader when M8 fails', function () {
+it('restores all Composer state and regenerates the restored autoloader when dependency installation fails', function () {
     [$root, $class] = verificationWriteExtractionFixture(
-        'M8 failure',
+        'dependency installation failure',
         'InstallFailureNode',
         'verification.install-failure',
     );
@@ -1336,7 +1336,7 @@ it('restores all Composer state and regenerates the restored autoloader when M8 
     chmod($nodePath, 0755);
 
     $before = verificationTreeHash($root);
-    $restoreMarker = verificationFixtureRoot('M8 restore ran');
+    $restoreMarker = verificationFixtureRoot('dependency installation restore ran');
 
     $this->app->setBasePath($root);
     $this->app->instance(ComposerRunner::class, new class($restoreMarker) extends ComposerRunner
@@ -1378,7 +1378,7 @@ it('restores all Composer state and regenerates the restored autoloader when M8 
 
         public function bootAndResolve(string $hostPath, string $type): ?string
         {
-            throw new RuntimeException('M9 must not run after M8 fails.');
+            throw new RuntimeException('fresh-host verification must not run after dependency installation fails.');
         }
     });
 
@@ -1403,9 +1403,9 @@ it('restores all Composer state and regenerates the restored autoloader when M8 
     expect(glob(sys_get_temp_dir().'/nodeflow-extract-snapshot-*') ?: [])->toBe($snapshotsBefore);
 });
 
-it('restores Composer state from the host configured vendor directory when M8 fails', function () {
+it('restores Composer state from the host configured vendor directory when dependency installation fails', function () {
     [$root, $class] = verificationWriteExtractionFixture(
-        'M8 custom vendor-dir failure',
+        'dependency installation custom vendor-dir failure',
         'CustomVendorFailureNode',
         'verification.custom-vendor-failure',
     );
@@ -1455,9 +1455,9 @@ it('restores Composer state from the host configured vendor directory when M8 fa
     expect($vendorPath.'/acme')->not->toBeDirectory();
 });
 
-it('restores the in-host target of a symlinked Composer vendor directory when M8 fails', function () {
+it('restores the in-host target of a symlinked Composer vendor directory when dependency installation fails', function () {
     [$root, $class] = verificationWriteExtractionFixture(
-        'M8 symlinked vendor-dir failure',
+        'dependency installation symlinked vendor-dir failure',
         'SymlinkedVendorFailureNode',
         'verification.symlinked-vendor-failure',
     );
@@ -1503,9 +1503,9 @@ it('restores the in-host target of a symlinked Composer vendor directory when M8
     expect($realVendor.'/acme')->not->toBeDirectory();
 });
 
-it('refuses a Composer vendor directory outside the host before M8 can run', function () {
+it('refuses a Composer vendor directory outside the host before dependency installation can run', function () {
     [$root, $class] = verificationWriteExtractionFixture(
-        'M8 escaping vendor-dir',
+        'dependency installation escaping vendor-dir',
         'EscapingVendorNode',
         'verification.escaping-vendor',
     );
@@ -1515,7 +1515,7 @@ it('refuses a Composer vendor directory outside the host before M8 can run', fun
     $composer['config'] = ['vendor-dir' => $externalVendor];
     file_put_contents($composerPath, json_encode($composer, JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES));
     mkdir($root.'/stubs/package', 0777, true);
-    file_put_contents($root.'/stubs/package/provider.stub', '<?php this M1 stub does not parse');
+    file_put_contents($root.'/stubs/package/provider.stub', '<?php this package scaffolding stub does not parse');
     $before = verificationTreeHash($root);
 
     $this->app->setBasePath($root);
@@ -1539,9 +1539,9 @@ it('refuses a Composer vendor directory outside the host before M8 can run', fun
     expect($root.'/packages/acme/widgets')->not->toBeDirectory();
 });
 
-it('restores Composer binaries from an in-host custom bin directory after M8 and regeneration fail', function () {
+it('restores Composer binaries from an in-host custom bin directory after dependency installation and regeneration fail', function () {
     [$root, $class] = verificationWriteExtractionFixture(
-        'M8 custom bin-dir failure',
+        'dependency installation custom bin-dir failure',
         'CustomBinFailureNode',
         'verification.custom-bin-failure',
     );
@@ -1586,9 +1586,9 @@ it('restores Composer binaries from an in-host custom bin directory after M8 and
     expect($root.'/tools/bin/new-regeneration-tool')->not->toBeFile();
 });
 
-it('refuses a Composer bin directory outside the host during G8 before any package writes', function () {
+it('refuses a Composer bin directory outside the host during Composer readiness validation before any package writes', function () {
     [$root, $class] = verificationWriteExtractionFixture(
-        'M8 escaping bin-dir',
+        'dependency installation escaping bin-dir',
         'EscapingBinNode',
         'verification.escaping-bin',
     );
@@ -1598,7 +1598,7 @@ it('refuses a Composer bin directory outside the host during G8 before any packa
     $composer['config'] = ['bin-dir' => $externalBin];
     file_put_contents($composerPath, json_encode($composer, JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES));
     mkdir($root.'/stubs/package', 0777, true);
-    file_put_contents($root.'/stubs/package/provider.stub', '<?php this M1 stub does not parse');
+    file_put_contents($root.'/stubs/package/provider.stub', '<?php this package scaffolding stub does not parse');
     $before = verificationTreeHash($root);
 
     $this->app->setBasePath($root);
@@ -1622,11 +1622,11 @@ it('refuses a Composer bin directory outside the host during G8 before any packa
     expect($root.'/packages/acme/widgets')->not->toBeDirectory();
 });
 
-it('refuses Windows drive and UNC Composer paths during G8 on every operating system', function () {
+it('refuses Windows drive and UNC Composer paths during Composer readiness validation on every operating system', function () {
     $cases = [
-        ['M8 Windows drive vendor-dir', 'WindowsDrivePathNode', 'vendor-dir', 'C:\\outside\\vendor'],
-        ['M8 Windows drive-relative vendor-dir', 'WindowsDriveRelativePathNode', 'vendor-dir', 'C:relative\\vendor'],
-        ['M8 Windows UNC bin-dir', 'WindowsUncPathNode', 'bin-dir', '\\\\server\\share\\bin'],
+        ['dependency installation Windows drive vendor-dir', 'WindowsDrivePathNode', 'vendor-dir', 'C:\\outside\\vendor'],
+        ['dependency installation Windows drive-relative vendor-dir', 'WindowsDriveRelativePathNode', 'vendor-dir', 'C:relative\\vendor'],
+        ['dependency installation Windows UNC bin-dir', 'WindowsUncPathNode', 'bin-dir', '\\\\server\\share\\bin'],
     ];
 
     foreach ($cases as [$suffix, $shortClass, $key, $configuredPath]) {
@@ -1640,7 +1640,7 @@ it('refuses Windows drive and UNC Composer paths during G8 on every operating sy
         $composer['config'] = [$key => $configuredPath];
         file_put_contents($composerPath, json_encode($composer, JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES));
         mkdir($root.'/stubs/package', 0777, true);
-        file_put_contents($root.'/stubs/package/provider.stub', '<?php this M1 stub does not parse');
+        file_put_contents($root.'/stubs/package/provider.stub', '<?php this package scaffolding stub does not parse');
         $before = verificationTreeHash($root);
         $this->app->setBasePath($root);
 
@@ -1658,9 +1658,9 @@ it('refuses Windows drive and UNC Composer paths during G8 on every operating sy
     }
 });
 
-it('restores an in-host composer lock symlink and its target after M8 and regeneration fail', function () {
+it('restores an in-host composer lock symlink and its target after dependency installation and regeneration fail', function () {
     [$root, $class] = verificationWriteExtractionFixture(
-        'M8 symlinked lock failure',
+        'dependency installation symlinked lock failure',
         'SymlinkedLockFailureNode',
         'verification.symlinked-lock-failure',
     );
@@ -1700,7 +1700,7 @@ it('restores an in-host composer lock symlink and its target after M8 and regene
 
 it('removes a final file Composer creates through a dangling in-host multi-hop lock chain', function () {
     [$root, $class] = verificationWriteExtractionFixture(
-        'M8 dangling in-host lock failure',
+        'dependency installation dangling in-host lock failure',
         'DanglingInHostLockFailureNode',
         'verification.dangling-in-host-lock-failure',
     );
@@ -1740,12 +1740,12 @@ it('removes a final file Composer creates through a dangling in-host multi-hop l
         ->and($root.'/storage/new-composer.lock')->not->toBeFile();
 });
 
-it('refuses M8 when composer lock presence changed after the state G8 recorded', function () {
-    $root = verificationFixtureRoot('M8 lock state changed');
+it('refuses dependency installation when composer lock presence changed after the state Composer readiness validation recorded', function () {
+    $root = verificationFixtureRoot('dependency installation lock state changed');
     verificationDeleteTree($root);
     mkdir($root, 0777, true);
     file_put_contents($root.'/composer.json', json_encode(['name' => 'probe/host']));
-    file_put_contents($root.'/composer.lock', 'appeared after G8');
+    file_put_contents($root.'/composer.lock', 'appeared after Composer readiness validation');
     $runner = new class extends ComposerRunner
     {
         public function install(string $hostPath, string $packageName): bool
@@ -1774,15 +1774,15 @@ it('refuses M8 when composer lock presence changed after the state G8 recorded',
     }
 
     expect($failure)->toBeInstanceOf(RuntimeException::class)
-        ->and($failure?->getMessage())->toContain('composer.lock presence changed after G8')
+        ->and($failure?->getMessage())->toContain('composer.lock presence changed after Composer readiness validation')
         ->and($attempted)->toBeFalse()
         ->and($root.'/m8-install-was-reached')->not->toBeFile()
-        ->and(file_get_contents($root.'/composer.lock'))->toBe('appeared after G8');
+        ->and(file_get_contents($root.'/composer.lock'))->toBe('appeared after Composer readiness validation');
 });
 
-it('refuses an escaping composer lock symlink during G8 before any package writes', function () {
+it('refuses an escaping composer lock symlink during Composer readiness validation before any package writes', function () {
     [$root, $class] = verificationWriteExtractionFixture(
-        'M8 escaping lock',
+        'dependency installation escaping lock',
         'EscapingLockNode',
         'verification.escaping-lock',
     );
@@ -1792,7 +1792,7 @@ it('refuses an escaping composer lock symlink during G8 before any package write
     file_put_contents($external.'/composer.lock', 'external lock bytes');
     symlink($external.'/composer.lock', $root.'/composer.lock');
     mkdir($root.'/stubs/package', 0777, true);
-    file_put_contents($root.'/stubs/package/provider.stub', '<?php this M1 stub does not parse');
+    file_put_contents($root.'/stubs/package/provider.stub', '<?php this package scaffolding stub does not parse');
     $before = verificationTreeHash($root);
     $externalBefore = verificationTreeHash($external);
 
@@ -1810,27 +1810,27 @@ it('refuses an escaping composer lock symlink during G8 before any package write
     expect($root.'/packages/acme/widgets')->not->toBeDirectory();
 });
 
-it('refuses dangling multi-hop cyclic and portable-absolute lock symlinks during G8', function () {
+it('refuses dangling multi-hop cyclic and portable-absolute lock symlinks during Composer readiness validation', function () {
     $external = verificationFixtureRoot('external dangling composer lock');
     verificationDeleteTree($external);
     mkdir($external, 0777, true);
 
     $cases = [
-        ['M8 dangling multi-hop lock', 'DanglingMultiHopLockNode', static function (string $root) use ($external): void {
+        ['dependency installation dangling multi-hop lock', 'DanglingMultiHopLockNode', static function (string $root) use ($external): void {
             symlink($external.'/missing.lock', $root.'/hop-two');
             symlink('hop-two', $root.'/composer.lock');
         }],
-        ['M8 cyclic lock', 'CyclicLockNode', static function (string $root): void {
+        ['dependency installation cyclic lock', 'CyclicLockNode', static function (string $root): void {
             symlink('hop-two', $root.'/composer.lock');
             symlink('composer.lock', $root.'/hop-two');
         }],
-        ['M8 Windows drive lock target', 'WindowsDriveLockTargetNode', static function (string $root): void {
+        ['dependency installation Windows drive lock target', 'WindowsDriveLockTargetNode', static function (string $root): void {
             symlink('C:\\outside\\composer.lock', $root.'/composer.lock');
         }],
-        ['M8 Windows drive-relative lock target', 'WindowsDriveRelativeLockTargetNode', static function (string $root): void {
+        ['dependency installation Windows drive-relative lock target', 'WindowsDriveRelativeLockTargetNode', static function (string $root): void {
             symlink('C:relative\\composer.lock', $root.'/composer.lock');
         }],
-        ['M8 Windows UNC lock target', 'WindowsUncLockTargetNode', static function (string $root): void {
+        ['dependency installation Windows UNC lock target', 'WindowsUncLockTargetNode', static function (string $root): void {
             symlink('\\\\server\\share\\composer.lock', $root.'/composer.lock');
         }],
     ];
@@ -1843,7 +1843,7 @@ it('refuses dangling multi-hop cyclic and portable-absolute lock symlinks during
         );
         $makeLinks($root);
         mkdir($root.'/stubs/package', 0777, true);
-        file_put_contents($root.'/stubs/package/provider.stub', '<?php this M1 stub does not parse');
+        file_put_contents($root.'/stubs/package/provider.stub', '<?php this package scaffolding stub does not parse');
         $before = verificationTreeHash($root);
         $externalBefore = verificationTreeHash($external);
         $this->app->setBasePath($root);
@@ -1863,9 +1863,9 @@ it('refuses dangling multi-hop cyclic and portable-absolute lock symlinks during
     }
 });
 
-it('restores in-host targets of generated Composer state symlinks after M8 and regeneration fail', function () {
+it('restores in-host targets of generated Composer state symlinks after dependency installation and regeneration fail', function () {
     [$root, $class] = verificationWriteExtractionFixture(
-        'M8 generated symlink failure',
+        'dependency installation generated symlink failure',
         'GeneratedSymlinkFailureNode',
         'verification.generated-symlink-failure',
     );
@@ -1909,10 +1909,10 @@ it('restores in-host targets of generated Composer state symlinks after M8 and r
         ->and(file_get_contents($root.'/storage/composer-state/installed.json'))->toBe('original installed target');
 });
 
-it('refuses escaping generated Composer state symlinks during G8 before M1', function () {
+it('refuses escaping generated Composer state symlinks during Composer readiness validation before package scaffolding', function () {
     $cases = [
-        ['M8 escaping autoload symlink', 'EscapingAutoloadSymlinkNode', 'autoload'],
-        ['M8 escaping composer subtree', 'EscapingComposerSubtreeNode', 'composer'],
+        ['dependency installation escaping autoload symlink', 'EscapingAutoloadSymlinkNode', 'autoload'],
+        ['dependency installation escaping composer subtree', 'EscapingComposerSubtreeNode', 'composer'],
     ];
 
     foreach ($cases as [$suffix, $shortClass, $kind]) {
@@ -1936,7 +1936,7 @@ it('refuses escaping generated Composer state symlinks during G8 before M1', fun
         }
 
         mkdir($root.'/stubs/package', 0777, true);
-        file_put_contents($root.'/stubs/package/provider.stub', '<?php this M1 stub does not parse');
+        file_put_contents($root.'/stubs/package/provider.stub', '<?php this package scaffolding stub does not parse');
         $before = verificationTreeHash($root);
         $externalBefore = verificationTreeHash($external);
         $this->app->setBasePath($root);
@@ -1955,10 +1955,10 @@ it('refuses escaping generated Composer state symlinks during G8 before M1', fun
     }
 });
 
-it('refuses effective Laravel cache paths outside the host during G8 before M1', function () {
+it('refuses effective Laravel cache paths outside the host during Composer readiness validation before package scaffolding', function () {
     $cases = [
-        ['M9 external packages cache', 'ExternalPackagesCacheNode', 'APP_PACKAGES_CACHE', 'packages'],
-        ['M9 external services cache', 'ExternalServicesCacheNode', 'APP_SERVICES_CACHE', 'services'],
+        ['fresh-host verification external packages cache', 'ExternalPackagesCacheNode', 'APP_PACKAGES_CACHE', 'packages'],
+        ['fresh-host verification external services cache', 'ExternalServicesCacheNode', 'APP_SERVICES_CACHE', 'services'],
     ];
 
     foreach ($cases as [$suffix, $shortClass, $environmentKey, $label]) {
@@ -1973,7 +1973,7 @@ it('refuses effective Laravel cache paths outside the host during G8 before M1',
         $externalPath = $external.'/'.$label.'.php';
         file_put_contents($externalPath, 'external cache bytes');
         mkdir($root.'/stubs/package', 0777, true);
-        file_put_contents($root.'/stubs/package/provider.stub', '<?php this M1 stub does not parse');
+        file_put_contents($root.'/stubs/package/provider.stub', '<?php this package scaffolding stub does not parse');
         $before = verificationTreeHash($root);
         $externalBefore = verificationTreeHash($external);
         \Illuminate\Support\Env::getRepository()->set($environmentKey, $externalPath);
@@ -1997,11 +1997,11 @@ it('refuses effective Laravel cache paths outside the host during G8 before M1',
     }
 });
 
-it('refuses Windows drive and UNC Laravel cache overrides during G8 on every operating system', function () {
+it('refuses Windows drive and UNC Laravel cache overrides during Composer readiness validation on every operating system', function () {
     $cases = [
-        ['M9 Windows packages cache', 'WindowsPackagesCacheNode', 'APP_PACKAGES_CACHE', 'packages', 'C:\\outside\\packages.php'],
-        ['M9 Windows drive-relative packages cache', 'WindowsDriveRelativePackagesCacheNode', 'APP_PACKAGES_CACHE', 'packages', 'C:relative\\packages.php'],
-        ['M9 UNC services cache', 'UncServicesCacheNode', 'APP_SERVICES_CACHE', 'services', '\\\\server\\share\\services.php'],
+        ['fresh-host verification Windows packages cache', 'WindowsPackagesCacheNode', 'APP_PACKAGES_CACHE', 'packages', 'C:\\outside\\packages.php'],
+        ['fresh-host verification Windows drive-relative packages cache', 'WindowsDriveRelativePackagesCacheNode', 'APP_PACKAGES_CACHE', 'packages', 'C:relative\\packages.php'],
+        ['fresh-host verification UNC services cache', 'UncServicesCacheNode', 'APP_SERVICES_CACHE', 'services', '\\\\server\\share\\services.php'],
     ];
 
     foreach ($cases as [$suffix, $shortClass, $environmentKey, $label, $configuredPath]) {
@@ -2011,7 +2011,7 @@ it('refuses Windows drive and UNC Laravel cache overrides during G8 on every ope
             'verification.'.strtolower($shortClass),
         );
         mkdir($root.'/stubs/package', 0777, true);
-        file_put_contents($root.'/stubs/package/provider.stub', '<?php this M1 stub does not parse');
+        file_put_contents($root.'/stubs/package/provider.stub', '<?php this package scaffolding stub does not parse');
         $before = verificationTreeHash($root);
         \Illuminate\Support\Env::getRepository()->set($environmentKey, $configuredPath);
         $this->app->setBasePath($root);
@@ -2034,9 +2034,9 @@ it('refuses Windows drive and UNC Laravel cache overrides during G8 on every ope
     }
 });
 
-it('restores effective in-host custom Laravel caches changed by a failed M9 boot', function () {
+it('restores effective in-host custom Laravel caches changed by a failed fresh-host verification boot', function () {
     [$root, $class] = verificationWriteExtractionFixture(
-        'M9 custom cache rollback',
+        'fresh-host verification custom cache rollback',
         'CustomCacheRollbackNode',
         'verification.custom-cache-rollback',
     );
@@ -2096,7 +2096,7 @@ it('restores effective in-host custom Laravel caches changed by a failed M9 boot
 
 it('restores lexical links and distinct in-host targets for effective Laravel caches', function () {
     [$root, $class] = verificationWriteExtractionFixture(
-        'M9 symlinked custom cache rollback',
+        'fresh-host verification symlinked custom cache rollback',
         'SymlinkedCustomCacheNode',
         'verification.symlinked-custom-cache',
     );
@@ -2156,10 +2156,10 @@ it('restores lexical links and distinct in-host targets for effective Laravel ca
         ->and(file_get_contents($servicesTarget))->toBe('original linked services cache');
 });
 
-it('refuses mutable host files whose symlink targets escape before M1', function () {
+it('refuses mutable host files whose symlink targets escape before package scaffolding', function () {
     $cases = [
-        ['M5 escaping host provider', 'EscapingHostProviderNode', 'provider'],
-        ['M6 escaping composer json', 'EscapingComposerJsonNode', 'composer'],
+        ['host deregistration escaping host provider', 'EscapingHostProviderNode', 'provider'],
+        ['Composer rewrite escaping composer json', 'EscapingComposerJsonNode', 'composer'],
     ];
 
     foreach ($cases as [$suffix, $shortClass, $kind]) {
@@ -2195,7 +2195,7 @@ it('refuses mutable host files whose symlink targets escape before M1', function
         }
 
         mkdir($root.'/stubs/package', 0777, true);
-        file_put_contents($root.'/stubs/package/provider.stub', '<?php this M1 stub does not parse');
+        file_put_contents($root.'/stubs/package/provider.stub', '<?php this package scaffolding stub does not parse');
         $before = verificationTreeHash($root);
         $externalBefore = verificationTreeHash($external);
         $this->app->setBasePath($root);
@@ -2214,9 +2214,9 @@ it('refuses mutable host files whose symlink targets escape before M1', function
     }
 });
 
-it('preserves an E43 matching pre-existing package exactly when M8 fails', function () {
+it('preserves a target-state-rule matching pre-existing package exactly when dependency installation fails', function () {
     [$root, $class] = verificationWriteExtractionFixture(
-        'M8 matching package failure',
+        'dependency installation matching package failure',
         'MatchingPackageFailureNode',
         'verification.matching-package-failure',
     );
@@ -2258,9 +2258,9 @@ it('preserves an E43 matching pre-existing package exactly when M8 fails', funct
     expect($root.'/vendor')->not->toBeDirectory();
 });
 
-it('restores an E43 force-overwritten foreign package exactly when M8 fails', function () {
+it('restores a target-state-rule force-overwritten foreign package exactly when dependency installation fails', function () {
     [$root, $class] = verificationWriteExtractionFixture(
-        'M8 forced package failure',
+        'dependency installation forced package failure',
         'ForcedPackageFailureNode',
         'verification.forced-package-failure',
     );
@@ -2350,7 +2350,7 @@ it('reports a degraded restore when Composer cannot regenerate the restored auto
 
 it('aborts and restores when a fresh host boot does not discover the package provider', function () {
     [$root, $class] = verificationWriteExtractionFixture(
-        'M9 undiscovered',
+        'fresh-host verification undiscovered',
         'UndiscoveredNode',
         'verification.undiscovered',
     );
@@ -2359,7 +2359,7 @@ it('aborts and restores when a fresh host boot does not discover the package pro
     file_put_contents($root.'/bootstrap/cache/services.php', 'original services manifest');
 
     $before = verificationTreeHash($root);
-    $restoreMarker = verificationFixtureRoot('M9 restore ran');
+    $restoreMarker = verificationFixtureRoot('fresh-host verification restore ran');
 
     $this->app->setBasePath($root);
     $this->app->instance(ComposerRunner::class, new class($restoreMarker) extends ComposerRunner
@@ -2410,7 +2410,7 @@ it('aborts and restores when a fresh host boot does not discover the package pro
 });
 
 it('uses a real Composer install and fresh Laravel boot to abort and restore when the scaffold omits provider discovery', function () {
-    $root = verificationWriteLaravelHostFixture('M9 real undiscovered');
+    $root = verificationWriteLaravelHostFixture('fresh-host verification real undiscovered');
     $composerPath = $root.'/composer.json';
     $composer = json_decode(file_get_contents($composerPath), true);
     $composer['autoload'] = ['psr-4' => ['App\\' => 'app/']];
@@ -2451,8 +2451,8 @@ it('uses a real Composer install and fresh Laravel boot to abort and restore whe
 
     // A host-owned scaffold override is a real package shape whose provider
     // exists but is intentionally absent from extra.laravel.providers. This
-    // is distinct from G6's read-only dont-discover refusal: it reaches M8,
-    // installs through real Composer, then lets M9's fresh boot prove that
+    // is distinct from package configuration validation's read-only dont-discover refusal: it reaches dependency installation,
+    // installs through real Composer, then lets fresh-host verification's fresh boot prove that
     // discovery did not register the node.
     mkdir($root.'/stubs/package', 0777, true);
     file_put_contents($root.'/stubs/package/composer.json.stub', <<<'JSON'
@@ -2503,12 +2503,12 @@ it('uses a real Composer install and fresh Laravel boot to abort and restore whe
 
 it('aborts and restores when the fresh registry maps the type to a different class', function () {
     [$root, $class] = verificationWriteExtractionFixture(
-        'M9 mismatch',
+        'fresh-host verification mismatch',
         'MismatchNode',
         'verification.mismatch',
     );
     $before = verificationTreeHash($root);
-    $restoreMarker = verificationFixtureRoot('M9 mismatch restore ran');
+    $restoreMarker = verificationFixtureRoot('fresh-host verification mismatch restore ran');
 
     $this->app->setBasePath($root);
     $this->app->instance(ComposerRunner::class, new class($restoreMarker) extends ComposerRunner
@@ -2544,8 +2544,8 @@ it('aborts and restores when the fresh registry maps the type to a different cla
     expect(verificationTreeHash($root))->toBe($before);
 });
 
-it('aborts and restores when a G3-bypassed static class type drifts after the move', function () {
-    $root = verificationWriteLaravelHostFixture('M9 type drift');
+it('aborts and restores when a type consistency validation-bypassed static class type drifts after the move', function () {
+    $root = verificationWriteLaravelHostFixture('fresh-host verification type drift');
     $composerPath = $root.'/composer.json';
     $composer = json_decode(file_get_contents($composerPath), true);
     $composer['autoload'] = ['psr-4' => ['App\\' => 'app/']];
@@ -2591,7 +2591,7 @@ it('aborts and restores when a G3-bypassed static class type drifts after the mo
     expect($oldClass::type())->toBe($oldClass);
     $before = verificationTreeHash($root);
 
-    // This test deliberately invokes performMoves() without handle()/G8,
+    // This test deliberately invokes performMoves() without handle()/Composer readiness validation,
     // so point the already-booted Application at the fixture explicitly;
     // ordinary command execution already has this host Application.
     $this->app->setBasePath($root);
@@ -2701,7 +2701,7 @@ it('proves an old resident class passes in process while the fresh host subproce
     expect($root.'/post-autoload-dump-ran')->not->toBeFile();
 });
 
-it('freezes and invalidates effective custom cache paths so a real M8 and M9 extraction succeeds', function () {
+it('freezes and invalidates effective custom cache paths so a real dependency installation and fresh-host verification extraction succeeds', function () {
     $root = verificationWriteLaravelHostFixture('stale package manifest extraction');
     $composerPath = $root.'/composer.json';
     $composer = json_decode(file_get_contents($composerPath), true);

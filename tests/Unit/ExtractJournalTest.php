@@ -513,7 +513,7 @@ it('undoes entries in REVERSE of recording order', function () {
     // A create of a DIRECTORY recorded first, then a create of a FILE
     // inside it recorded second -- reverse order matters whenever a later
     // entry's own undo depends on an earlier one's target still existing
-    // (ExtractJournal's own docblock: M4 registers into a provider M1 only
+    // (ExtractJournal's own docblock: package registration registers into a provider package scaffolding only
     // just created). Modelled here with a directory and a file inside it
     // that must be removed file-first, directory-second: deleting the
     // directory RECURSIVELY handles that regardless of order in THIS
@@ -538,10 +538,8 @@ it('undoes entries in REVERSE of recording order', function () {
     expect($created)->not->toBeDirectory();
 });
 
-it('continues undoing every OTHER entry even when one fails to restore, then raises the failure (Important 5, review round)', function () {
-    // Mutating restore() to `break` after the first failed undo survives
-    // the whole suite -- this is the persisted regression test the review
-    // asked for. Entry A is recorded FIRST, so restore()'s own reverse
+it('continues undoing every OTHER entry even when one fails to restore, then raises the failure (regression)', function () {
+    // Entry A is recorded FIRST, so restore()'s own reverse
     // order undoes it LAST; entry B is recorded SECOND, so it is undone
     // FIRST, and B's own undo is made to fail (its file is chmod'd
     // read-only, so putBack()'s in-place overwrite cannot land). A

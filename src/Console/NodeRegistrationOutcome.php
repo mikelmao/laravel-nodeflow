@@ -17,7 +17,7 @@ enum NodeRegistrationOutcome
 
     /**
      * The anchor was present and unique, and a write was attempted, but the
-     * re-read (E11) found the result either failed to parse or did not carry
+     * re-read found the result either failed to parse or did not carry
      * the entry outside a comment — an anchor that looked valid but sat inside
      * a `//` or `/* *\/` comment line, most commonly. The original bytes are
      * restored before this is returned, so the file is untouched either way.

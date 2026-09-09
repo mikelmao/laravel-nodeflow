@@ -94,7 +94,7 @@ final class TailwindSourceStep implements InstallStep
             0,
         ));
 
-        // E11: re-read and prove it. Same tolerant-but-strict comparison as
+        // post-write verification: re-read and prove it. Same tolerant-but-strict comparison as
         // check(), not the PACKAGE_SOURCE tail alone — see hasSourceLine().
         return $this->hasSourceLine(SourceText::withoutCssComments($this->files->get($entry)), $entry)
             ? InstallOutcome::Wired
@@ -229,8 +229,8 @@ final class TailwindSourceStep implements InstallStep
      * would have that inner "project" segment stripped too, undercounting the
      * depth and pointing the emitted @source at the wrong directory. The
      * tsconfig step hit the same class of bug from ltrim() first; see its
-     * fix-round history. This class and TsconfigPathsStep now share one
-     * implementation of that arithmetic in HostPath (G-6).
+     * validation history. This class and TsconfigPathsStep now share one
+     * implementation of that arithmetic in HostPath.
      */
     private function relativePath(string $entry): string
     {

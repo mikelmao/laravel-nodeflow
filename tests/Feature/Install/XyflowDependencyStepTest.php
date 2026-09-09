@@ -50,7 +50,7 @@ it('cannot wire a missing manifest', function () {
 });
 
 it('cannot wire a manifest whose dependencies key is not an object, instead of crashing', function () {
-    // Fix round 1, finding 2: a malformed-but-valid manifest like
+    // Regression: a malformed-but-valid manifest like
     // {"dependencies": "oops"} used to make array_merge() throw a TypeError,
     // because "oops" is a string, not an array. A step contracted to return an
     // InstallOutcome must not crash the install command over an input this

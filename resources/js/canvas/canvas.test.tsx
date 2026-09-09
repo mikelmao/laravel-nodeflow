@@ -295,7 +295,7 @@ describe('NodeCard', () => {
         expect(screen.queryByText('inherited error')).toBeNull()
     })
 
-    // E16: the run view's counts reach the shared card as data. Counterfactual:
+    // run-overlay contract: the run view's counts reach the shared card as data. Counterfactual:
     // render badges from a run-specific context inside NodeCard and the editor
     // imports run vocabulary it has no use for.
     it('renders decoration badges and dims a node when told to', () => {

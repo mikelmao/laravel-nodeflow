@@ -38,10 +38,10 @@ it('confines durable workflow imports to src/Engine and src/Workflows except the
 });
 
 it('keeps RunSubject and NodeExecution out of everything but the execution internals', function () {
-    // Spec E1: these two carry no tenant_id — they are the six-figure tables and
+    // Tenant isolation: these two carry no tenant_id — they are the six-figure tables and
     // are only reachable through a Run, which is scoped. So the isolation is
-    // structural, and this is the thing that keeps it structural once Plan 3
-    // adds controllers. The allowlist is the set of places that legitimately
+    // structural, and this keeps it structural when controllers are added. The
+    // allowlist is the set of places that legitimately
     // query them today: the interpreter internals and the prune command, which
     // is explicitly a cross-tenant system operation.
     //
@@ -62,7 +62,7 @@ it('keeps RunSubject and NodeExecution out of everything but the execution inter
         [
             '/src/Execution/',
             '/src/Console/PruneCommand.php',
-            // E18's bright-line rule matches a table name anywhere in code, and
+            // The raw table access restriction matches a table name anywhere in code, and
             // these two files legitimately declare `protected $table` for the
             // very models the rule protects. Allowlisting the files is not a
             // hole: a scope method added to either still has to be *called*

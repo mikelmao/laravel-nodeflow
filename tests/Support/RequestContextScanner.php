@@ -9,7 +9,7 @@ use RecursiveIteratorIterator;
  * Finds queries against models that carry no tenant_id of their own.
  *
  * RunSubject and NodeExecution are the high-volume tables, so they were
- * deliberately given no tenant column (spec E1): they are only ever reachable
+ * deliberately given no tenant column: they are only ever reachable
  * through a Run, which is tenant-scoped. That makes their isolation structural
  * rather than enforced by a scope — query them directly from a request-context
  * class and there is nothing between the caller and every tenant's rows.
@@ -102,7 +102,7 @@ class RequestContextScanner
                 // tables, in any form. That single rule covers what a list of
                 // builder methods cannot — `table('t as a')`, `->join('t', …)`,
                 // `->from('t')`, a subquery closure, and raw SQL naming the
-                // table inside a string. See open issue G-1 and spec E18.
+                // table inside a string. The scanner must understand this scope.
                 $pattern = '/\b'.$model.'::(?!class\b)|'.preg_quote($table, '/').'/i';
 
                 if (preg_match($pattern, $code) === 1) {

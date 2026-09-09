@@ -7,7 +7,7 @@ namespace Nodeflow\Console;
  * name-resolution rule.
  *
  * WHY THIS EXISTS, given ProviderRegistrationStep deliberately declined to parse
- * use statements. The stakes inverted (E35). There, a false positive was harmless
+ * use statements. The stakes inverted. There, a false positive was harmless
  * and the shape unseen. Here a false NEGATIVE leaves the host fatal after a move —
  * NodeRegistry::register() autoloads through is_a(), so a stale FQCN throws in the
  * host's provider boot() on every request — and a false POSITIVE refuses
@@ -19,12 +19,12 @@ namespace Nodeflow\Console;
  *   Alias\D\E       -> the import's target for Alias, then \D\E
  *   A\B\C           -> <current namespace>\A\B\C, when A is not imported
  *
- * That last line is the one the first draft of this plan's design got wrong, and
+ * An earlier implementation got that last line wrong, and
  * it is why removeFrom() must resolve rather than string-match. Verified:
  * inside `namespace App\Providers;`, `App\Nodeflow\Nodes\SendMessage::class`
  * evaluates to `App\Providers\App\Nodeflow\Nodes\SendMessage`.
  *
- * Stated limit (Step 5 probe 4): a file with more than one `namespace` block is
+ * Stated limit: a file with more than one `namespace` block is
  * not supported — this reads only the first and does not attempt to scope
  * imports or resolution per-block. NodeReferenceScanner must refuse such a file
  * outright rather than rely on this resolver to handle it correctly.

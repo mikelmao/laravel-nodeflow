@@ -65,7 +65,7 @@ it('emits a package whose composer.json is valid JSON with the expected name and
     expect($decoded['name'])->toBe('acme/widgets');
     expect($decoded['extra']['laravel']['providers'])->toBe(['Acme\\Widgets\\WidgetsServiceProvider']);
 
-    // Structural, not substring (global constraint): the PSR-4 key itself,
+    // Structural, not substring (global validation): the PSR-4 key itself,
     // not merely that the text "Acme\Widgets" appears somewhere in the file.
     expect($decoded['autoload']['psr-4'])->toBe(['Acme\\Widgets\\' => 'src/']);
     expect($decoded['autoload-dev']['psr-4'])->toBe(['Tests\\' => 'tests/']);
@@ -181,7 +181,7 @@ it('emits a README with every placeholder substituted and no claim that make-nod
     expect($readme)->toContain('acme/widgets');
     expect($readme)->toContain('Acme\\Widgets\\WidgetsServiceProvider');
 
-    // Requirement 5: an earlier design draft claimed make-node could run
+    // Regression: an earlier implementation assumed make-node could run
     // inside a scaffolded package; that is false, and the README must not
     // repeat the claim.
     expect($readme)->not->toContain('You can run');
@@ -240,7 +240,8 @@ it('refuses a provider short class name that would otherwise escape the package 
 });
 
 it('throws when a rendered stub does not parse, and leaves nothing behind', function () {
-    // E52, F-2: this guard needs a persisted test, not merely a proved claim.
+    // Exercise the parse guard with a malformed rendered provider and verify
+    // that its temporary package directory is removed.
     mkdir($this->basePath.'/stubs/package', 0777, true);
     file_put_contents($this->basePath.'/stubs/package/provider.stub', <<<'PHP'
     <?php

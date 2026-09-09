@@ -89,7 +89,7 @@ it('refuses an invalid Composer name, naming the pattern', function () {
 });
 
 it('refuses a Composer-valid name that is not a valid PHP namespace, and writes nothing', function () {
-    // E52: 123vendor/456pkg satisfies Composer's own pattern but StudlyCase of
+    // package and namespace validation: 123vendor/456pkg satisfies Composer's own pattern but StudlyCase of
     // either segment still starts with a digit, which is not a legal PHP
     // identifier. Composer's pattern alone would let this through to render
     // `namespace 123Vendor\456Pkg;` — a parse error.
@@ -247,7 +247,7 @@ it('refuses a --path that escapes the host through a symlink, and writes nothing
 });
 
 it('refuses --path=. rather than overwriting the host application itself, even with --force', function () {
-    // The most serious finding on this task: targetIsAvailable()'s
+    // Regression: targetIsAvailable()'s
     // inference — "this directory's composer.json names this package,
     // therefore this directory IS that package" — is false for the project
     // root. Reproduced exactly as found: a host composer.json that happens
@@ -346,7 +346,7 @@ it('refuses when the default-derived namespace is not a valid PHP identifier, na
     // Validating the FULL provider class (not just the base namespace)
     // matters here: without --namespace, the provider's short class is
     // Str::studly($package).'ServiceProvider', and its validity is what
-    // this guard actually exists to check. See the report's mutation-testing
+    // this guard actually exists to check. Regression
     // section for why an explicit --namespace no longer creates daylight
     // between "validate the full provider class" and "validate the base
     // namespace alone" — the short class is now always derived from one of
@@ -527,7 +527,7 @@ it('prints no host wiring reminder under --js when the host is already wired', f
 });
 
 it('refuses at exit code 1, not 0', function () {
-    // The F-3 / handle(): int contract. Counterfactual: return false from
+    // The state reset / handle(): int contract. Counterfactual: return false from
     // handle() for a refusal, and Laravel's (int) cast on that turns it into
     // exit code 0 — indistinguishable from success to any script or CI job
     // that only checks $?.
@@ -537,7 +537,7 @@ it('refuses at exit code 1, not 0', function () {
 });
 
 it('resolves a fresh target for a second, different call rather than reusing the first', function () {
-    // F-3. Symfony resolves one command object per name and keeps it for the
+    // state reset. Symfony resolves one command object per name and keeps it for the
     // process's lifetime, so this second artisan() call reuses the exact
     // same MakeNodePackageCommand instance — and target() is a cache-or-
     // compute getter (`$this->target ??= $this->resolveTarget()`), so
@@ -557,7 +557,7 @@ it('resolves a fresh target for a second, different call rather than reusing the
 });
 
 it('does not let a failed first call leave a stale target for a later successful one', function () {
-    // F-3's other half: a first, failed resolution never assigns $this->target
+    // state reset's other half: a first, failed resolution never assigns $this->target
     // (resolveTarget() throws before target()'s ??= can run), so this is
     // "reset never fires against something that would have blocked anyway" —
     // recorded as its own test because the earlier version of this suite

@@ -71,7 +71,7 @@ function runPage($test, int $runId)
 }
 
 it('denies the run view when the host has defined no gates', function () {
-    // Plan 2's default-deny floor, over the run routes. Counterfactual: skip
+    // The default-deny floor, exercised over the run routes. Counterfactual: skip
     // authorize() in the controller and this returns 200.
     $this->actingAs($this->user)->get("/nodeflow/runs/{$this->run->id}")->assertForbidden();
 });
@@ -102,7 +102,7 @@ it('four-oh-fours another tenants run rather than forbidding it', function () {
 });
 
 /**
- * Trap 2 of the spec's three, half one.
+ * One half of the run-view ownership regression.
  *
  * Only meaningful because the draft genuinely differs from the run's version:
  * a same-graph fixture passes while the bug is present. Counterfactual: render
@@ -133,7 +133,7 @@ it('renders the pinned version and not the flows draft', function () {
  *
  * Counterfactual: read `$run->flowVersion->flow->currentVersion->graph`, or
  * `$flow->currentVersion->graph`, and a run still mid-wait on version 1 is
- * painted onto version 2's graph. D8's immutability exists exactly so this
+ * painted onto version 2's graph. regression case's immutability exists exactly so this
  * cannot happen, and nothing else in the suite would catch it.
  */
 it('renders the runs own version and not the flows newest published version', function () {
@@ -179,7 +179,7 @@ it('exposes a projected workflow failure only through the run-level error prop',
         workflowType: 'class',
         workflowClass: FlowInterpreter::class,
         exceptionClass: RuntimeException::class,
-        message: 'Yaya remained unavailable',
+        message: 'Message provider remained unavailable',
         committedAt: '2026-08-25T14:15:16+00:00',
     ));
 
@@ -189,7 +189,7 @@ it('exposes a projected workflow failure only through the run-level error prop',
 
     expect($run['status'])->toBe('failed')
         ->and($run['terminal'])->toBeTrue()
-        ->and($run['error'])->toBe(RuntimeException::class.': Yaya remained unavailable')
+        ->and($run['error'])->toBe(RuntimeException::class.': Message provider remained unavailable')
         ->and(array_keys($overlay))->toBe(['status', 'terminal', 'nodes'])
         ->and($overlay['status'])->toBe('failed')
         ->and($overlay['terminal'])->toBeTrue()
@@ -249,7 +249,7 @@ it('exposes safe origin fields without leaking execution-only trigger data', fun
 });
 
 it('serves urls whose node sentinel survives route generation', function () {
-    // E4: the client substitutes into these, so both the sentinel and the
+    // host integration contract: the client substitutes into these, so both the sentinel and the
     // host's chosen prefix must arrive intact. Counterfactual: build the URL by
     // string concatenation in the client and a host prefix breaks every run
     // view in the field with no test failing here.
