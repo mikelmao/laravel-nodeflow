@@ -18,7 +18,7 @@ use RuntimeException;
  * absolute path, the host's own `atram/laravel-nodeflow` constraint, and
  * whether the target directory may be written into.
  *
- * TWO INDEPENDENT VALIDATION LAYERS (E52), and this is the point of the
+ * TWO INDEPENDENT VALIDATION LAYERS, and this is the point of the
  * command. Composer's own name pattern is not a PHP identifier check:
  * `123vendor/456pkg` is a Composer name Composer itself accepts, and no
  * segment of it is a legal PHP namespace segment. Passing only the first
@@ -42,16 +42,16 @@ class MakeNodePackageCommand extends Command
     protected $description = 'Scaffold a new Composer package that ships Nodeflow nodes.';
 
     /**
-     * Composer's own package name pattern. Public: ExtractNodeCommand's G6
+     * Composer's own package name pattern. Public: ExtractNodeCommand's package configuration validation
      * reuses this exact pattern to validate --package rather than inventing
      * a second one — a divergent copy is exactly how an uppercase-tolerant
      * validator would let a name past this check while still failing a
-     * later, case-sensitive comparison against composer.json (E49's own
+     * later, case-sensitive comparison against composer.json (discovery configuration's
      * dont-discover check, for one).
      */
     public const COMPOSER_NAME_PATTERN = '/^[a-z0-9]([_.-]?[a-z0-9]+)*\/[a-z0-9](([_.]|-{1,2})?[a-z0-9]+)*$/';
 
-    /** A single PHP identifier segment (E52). */
+    /** A single PHP identifier segment. */
     private const NAMESPACE_SEGMENT_PATTERN = '/^[A-Za-z_\x80-\xff][A-Za-z0-9_\x80-\xff]*$/';
 
     /**
@@ -63,7 +63,7 @@ class MakeNodePackageCommand extends Command
      * for the process's lifetime, so a second Artisan::call() of this exact
      * command — from a host script, or a test file that calls artisan()
      * twice — reuses this exact instance and this exact property. Reset at
-     * the top of every handle() (F-3): without it, a second run for a
+     * the top of every handle(): without it, a second run for a
      * DIFFERENT package name would silently re-scaffold the FIRST run's
      * target instead of validating and scaffolding its own — the same shape
      * of bug that shipped twice against nodeType(), just with a package
@@ -208,7 +208,7 @@ class MakeNodePackageCommand extends Command
 
         // Whitespace-trimmed only — NOT slash-trimmed. HostPath::resolveWithin()
         // deliberately refuses a leading '/' as not being "a relative path
-        // inside the project" (E51's own rule); stripping that leading slash
+        // inside the project"; stripping that leading slash
         // here, the way the namespace's stray backslashes are stripped below,
         // would silently reinterpret an absolute-looking --path as relative
         // instead of letting resolveWithin() refuse it the way it is designed
@@ -217,7 +217,7 @@ class MakeNodePackageCommand extends Command
         $relativePath = $pathOption !== '' ? $pathOption : "packages/{$vendor}/{$package}";
 
         // HostPath::resolveWithin() throws InvalidArgumentException on a '..'
-        // segment or a symlink escape (E51) — allowed to propagate as-is,
+        // segment or a symlink escape — allowed to propagate as-is,
         // since it already carries the right exception type and a message
         // naming the problem.
         $host = HostPath::root($this->laravel->basePath());
@@ -266,7 +266,7 @@ class MakeNodePackageCommand extends Command
 
         if ($constraint === null) {
             throw new InvalidArgumentException(
-                'The host composer.json does not require atram/laravel-nodeflow (E33). Run '.
+                'The host composer.json does not require atram/laravel-nodeflow. Run '.
                 '`composer require atram/laravel-nodeflow` first, so the scaffolded package can '.
                 'mirror the same constraint the host itself resolved to.'
             );
@@ -274,8 +274,8 @@ class MakeNodePackageCommand extends Command
 
         if (! $this->targetIsAvailable($absolutePath, $name)) {
             throw new InvalidArgumentException(
-                "[{$relativePath}] already exists and its composer.json does not name [{$name}] ".
-                '(E43). Pass --force to overwrite it anyway.'
+                "[{$relativePath}] already exists and its composer.json does not name [{$name}]. ".
+                'Pass --force to overwrite it anyway.'
             );
         }
 
@@ -297,7 +297,7 @@ class MakeNodePackageCommand extends Command
             if (preg_match(self::NAMESPACE_SEGMENT_PATTERN, $segment) !== 1) {
                 throw new InvalidArgumentException(
                     "[{$segment}] is not a valid PHP identifier, so [{$fqcn}] is not a namespace ".
-                    'PHP can parse (E52). Every segment must match the pattern '.
+                    'PHP can parse. Every segment must match the pattern '.
                     self::NAMESPACE_SEGMENT_PATTERN.' — a Composer name may contain characters '.
                     '(a leading digit, a literal dot) that Composer accepts and PHP cannot. Pass '.
                     '--namespace to supply one explicitly.'
@@ -307,7 +307,7 @@ class MakeNodePackageCommand extends Command
     }
 
     /**
-     * The host's own `atram/laravel-nodeflow` require constraint (E33), or
+     * The host's own `atram/laravel-nodeflow` require constraint, or
      * null when there is nothing to mirror: no composer.json, an
      * unparseable one, or one whose `require` does not list the package.
      */
@@ -333,7 +333,7 @@ class MakeNodePackageCommand extends Command
     /**
      * Whether $absolutePath is free to scaffold into: nothing is there yet,
      * --force was passed, or it already holds a composer.json naming this
-     * exact package (E43) — the case that makes a second, idempotent run of
+     * exact package — the case that makes a second, idempotent run of
      * this same command succeed rather than being refused as "foreign".
      */
     private function targetIsAvailable(string $absolutePath, string $composerName): bool
@@ -358,7 +358,7 @@ class MakeNodePackageCommand extends Command
     }
 
     /**
-     * Prints, but never writes (E32, E20), the same host Vite alias and
+     * Prints, but never writes (frontend scaffolding option, verify-only configuration), the same host Vite alias and
      * tsconfig `paths` snippets InstallCommand would print for an unwired
      * host — reused rather than re-derived, since a JS-enabled package's own
      * resources/js/index.ts (see index.ts.stub) imports from `@nodeflow/editor`

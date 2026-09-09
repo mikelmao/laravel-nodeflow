@@ -83,7 +83,7 @@ it('walks the whole population through its cursor without repeating or skipping 
  * return the identical sequence a cursor does, so that test would pass
  * unchanged even if `atNode()` paginated by offset. It proves the walk
  * terminates and covers the set; it says nothing about offset vs. cursor,
- * which is the entire reason E15 chose a cursor.
+ * which is the entire reason cursor design chose a cursor.
  *
  * This test makes the population move mid-walk. Subject '1' — already
  * returned on page 1 — leaves the node the same way every terminal
@@ -171,7 +171,7 @@ it('four-oh-fours a node id that is not in the pinned graph', function () {
 });
 
 /**
- * Open issue G-3, as a test.
+ * The tenant-ownership invariant, as a test.
  *
  * 'other' is a perfectly real node id — in a different run's graph. The graph
  * check this test defends is what turns "unknown to any graph" into 404 for
@@ -181,7 +181,7 @@ it('four-oh-fours a node id that is not in the pinned graph', function () {
  * through the route-bound $run, so 'other' simply matches nothing in this
  * run's rows. That is still the wrong answer: an operator reading an empty
  * list cannot tell "this node doesn't exist" from "nobody is here right now",
- * and accepting a raw key as equivalent to authorization is exactly what G-3
+ * and accepting a raw key as equivalent to authorization is exactly what type consistency validation
  * warns about. Counterfactual: validate {node} against any graph, or not at
  * all, and this returns 200 with an empty list instead of 404.
  */

@@ -9,9 +9,8 @@ use Nodeflow\Schema\Rules\ValidDuration;
  * It reads DURATION_UNITS out of the .tsx rather than restating it, because a
  * restated list is a second source of truth: renaming a unit in the control
  * would leave a hand-copied PHP array agreeing with itself while every host's
- * publish rejected the value. This is the same failure mode as open issue F-2,
- * where renaming ->help( in one stub left 203 tests green and the stub fatal in
- * every host.
+ * publish rejected the value. The same source-of-truth drift can leave tests
+ * green while a renamed stub method fails in every host.
  */
 function durationUnitsFromControl(): array
 {

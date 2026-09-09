@@ -7,7 +7,7 @@ use Nodeflow\Console\NodeTypeLiteral;
 use RecursiveDirectoryIterator;
 use RecursiveIteratorIterator;
 
-/** Keeps pre-M8 extraction tests focused on their own move/gate behavior. */
+/** Keeps pre-dependency installation extraction tests focused on their own move/gate behavior. */
 final class PassingComposerRunner extends ComposerRunner
 {
     public function install(string $hostPath, string $packageName): bool

@@ -98,7 +98,7 @@ function writeRegisteredNode(string $root, string $class, string $type, string $
 }
 
 it('generates a subject node at the conventional path', function () {
-    $this->artisan('nodeflow:make-node', ['name' => 'SendSms', '--type' => 'yaya.send_sms'])
+    $this->artisan('nodeflow:make-node', ['name' => 'SendSms', '--type' => 'notifications.send_sms'])
         ->assertExitCode(0);
 
     $path = $this->root.'/app/Nodeflow/Nodes/SendSms.php';
@@ -110,7 +110,7 @@ it('generates a subject node at the conventional path', function () {
     expect($contents)
         ->toContain('namespace App\Nodeflow\Nodes;')
         ->toContain('class SendSms extends Node implements HandlesSubject')
-        ->toContain("return 'yaya.send_sms';")
+        ->toContain("return 'notifications.send_sms';")
         ->toContain('public function forSubject(SubjectContext $context): NodeResult');
 });
 
@@ -127,7 +127,7 @@ it('produces a subject class the registry accepts and the runtime can execute', 
     // so this is what stands in for running it.
     $this->artisan('nodeflow:make-node', [
         'name' => 'SendSms',
-        '--type' => 'yaya.send_sms',
+        '--type' => 'notifications.send_sms',
         '--outputs' => 'sent, failed',
     ])->assertExitCode(0);
 
@@ -135,9 +135,9 @@ it('produces a subject class the registry accepts and the runtime can execute', 
 
     app(NodeRegistry::class)->register('App\Nodeflow\Nodes\SendSms');
 
-    expect(app(NodeRegistry::class)->has('yaya.send_sms'))->toBeTrue();
+    expect(app(NodeRegistry::class)->has('notifications.send_sms'))->toBeTrue();
 
-    $node = app(NodeRegistry::class)->resolve('yaya.send_sms');
+    $node = app(NodeRegistry::class)->resolve('notifications.send_sms');
 
     expect($node)->toBeInstanceOf(HandlesSubject::class);
 
@@ -166,7 +166,7 @@ it('produces an audience class the registry accepts and the runtime can execute'
     // fatals with "class already declared".
     $this->artisan('nodeflow:make-node', [
         'name' => 'SendBlast',
-        '--type' => 'yaya.send_blast',
+        '--type' => 'notifications.send_blast',
         '--cardinality' => 'audience',
         '--outputs' => 'sent, failed',
     ])->assertExitCode(0);
@@ -175,7 +175,7 @@ it('produces an audience class the registry accepts and the runtime can execute'
 
     app(NodeRegistry::class)->register('App\Nodeflow\Nodes\SendBlast');
 
-    $node = app(NodeRegistry::class)->resolve('yaya.send_blast');
+    $node = app(NodeRegistry::class)->resolve('notifications.send_blast');
 
     expect($node)->toBeInstanceOf(HandlesAudience::class);
     expect($node->definition()->outputNames())->toBe(['sent', 'failed']);
@@ -189,7 +189,7 @@ it('produces an audience class the registry accepts and the runtime can execute'
 });
 
 it('produces a both-cardinality class the registry accepts and both paths execute', function () {
-    // F-2. Nothing but `php -l` watched node.both.stub, and `php -l` resolves no
+    // Exercise the generated class at runtime. Nothing but `php -l` watched node.both.stub, and `php -l` resolves no
     // symbols: renaming ->help( to ->helpText( in that file alone left every test
     // green while the stub fataled in every host that generated from it.
     //
@@ -198,7 +198,7 @@ it('produces a both-cardinality class the registry accepts and both paths execut
     // generated classes that share an FQCN fatals with "class already declared".
     $this->artisan('nodeflow:make-node', [
         'name' => 'SendDigest',
-        '--type' => 'yaya.send_digest',
+        '--type' => 'notifications.send_digest',
         '--cardinality' => 'both',
         '--outputs' => 'sent, failed',
     ])->assertExitCode(0);
@@ -207,7 +207,7 @@ it('produces a both-cardinality class the registry accepts and both paths execut
 
     app(NodeRegistry::class)->register('App\Nodeflow\Nodes\SendDigest');
 
-    $node = app(NodeRegistry::class)->resolve('yaya.send_digest');
+    $node = app(NodeRegistry::class)->resolve('notifications.send_digest');
 
     expect($node)->toBeInstanceOf(HandlesSubject::class)
         ->toBeInstanceOf(HandlesAudience::class);
@@ -241,7 +241,7 @@ it('generates an audience node that does not also declare forSubject', function 
     // the forSubject assertion, because the subject stub would be rendered.
     $this->artisan('nodeflow:make-node', [
         'name' => 'SendBatch',
-        '--type' => 'yaya.send_batch',
+        '--type' => 'notifications.send_batch',
         '--cardinality' => 'audience',
     ])->assertExitCode(0);
 
@@ -256,7 +256,7 @@ it('generates an audience node that does not also declare forSubject', function 
 it('generates a both-cardinality node declaring two interfaces and two methods', function () {
     $this->artisan('nodeflow:make-node', [
         'name' => 'SendEither',
-        '--type' => 'yaya.send_either',
+        '--type' => 'notifications.send_either',
         '--cardinality' => 'both',
     ])->assertExitCode(0);
 
@@ -273,7 +273,7 @@ it('refuses an unknown cardinality without writing a file', function () {
     // would resolve a nonexistent stub path and throw instead of exiting 1.
     $this->artisan('nodeflow:make-node', [
         'name' => 'Broken',
-        '--type' => 'yaya.broken',
+        '--type' => 'notifications.broken',
         '--cardinality' => 'sideways',
     ])->assertExitCode(1);
 
@@ -286,7 +286,7 @@ it('renders the declared outputs and group into the definition', function () {
     // pass while --outputs was being ignored entirely.
     $this->artisan('nodeflow:make-node', [
         'name' => 'SendSms',
-        '--type' => 'yaya.send_sms',
+        '--type' => 'notifications.send_sms',
         '--outputs' => 'sent, failed',
         '--group' => 'Messaging',
     ])->assertExitCode(0);
@@ -308,7 +308,7 @@ it('refuses an output name that would not render as PHP', function () {
     // malformed *type* would also exit 1 and this input has a valid type.
     $this->artisan('nodeflow:make-node', [
         'name' => 'SendSms',
-        '--type' => 'yaya.send_sms',
+        '--type' => 'notifications.send_sms',
         '--outputs' => "sent, it's failed",
         '--test' => true,
     ])
@@ -326,7 +326,7 @@ it('refuses a duplicated output list', function () {
     // author cannot tell apart.
     $this->artisan('nodeflow:make-node', [
         'name' => 'SendSms',
-        '--type' => 'yaya.send_sms',
+        '--type' => 'notifications.send_sms',
         '--outputs' => 'sent, sent',
     ])
         ->expectsOutputToContain('Duplicate output name [sent]')
@@ -342,7 +342,7 @@ it('renders a group containing a quote as valid PHP', function () {
     // label, so the assertion is that it renders correctly, not that it is rejected.
     $this->artisan('nodeflow:make-node', [
         'name' => 'SendSms',
-        '--type' => 'yaya.send_sms',
+        '--type' => 'notifications.send_sms',
         '--group' => "O'Brien",
     ])->assertExitCode(0);
 
@@ -391,7 +391,7 @@ it('refuses a type already registered by another node', function () {
 it('refuses a malformed type', function () {
     $this->artisan('nodeflow:make-node', [
         'name' => 'Shouty',
-        '--type' => 'Yaya Send Message',
+        '--type' => 'Notifications Send Message',
     ])->assertExitCode(1);
 
     expect($this->root.'/app/Nodeflow/Nodes/Shouty.php')->not->toBeFile();
@@ -426,18 +426,18 @@ it('lets --force overwrite a node that already owns its registered type', functi
     // Asserting on the absence of the collision message and on the rewritten body,
     // not on the exit code alone: a command that refused for some other reason, or
     // one that exited 0 having written nothing, would both pass a code-only check.
-    writeRegisteredNode($this->root, 'SendForce', 'yaya.send_force', 'hand-written marker');
+    writeRegisteredNode($this->root, 'SendForce', 'notifications.send_force', 'hand-written marker');
 
     $this->artisan('nodeflow:make-node', [
         'name' => 'SendForce',
-        '--type' => 'yaya.send_force',
+        '--type' => 'notifications.send_force',
         '--force' => true,
     ])
         ->doesntExpectOutputToContain('is already registered by')
         ->assertExitCode(0);
 
     expect(file_get_contents($this->root.'/app/Nodeflow/Nodes/SendForce.php'))
-        ->toContain("return 'yaya.send_force';")
+        ->toContain("return 'notifications.send_force';")
         ->toContain('TODO: describe this node')
         ->not->toContain('hand-written marker');
 });
@@ -448,9 +448,9 @@ it('refuses a registered node without --force as an existing file, not a type co
     // after which this fails because the author is told to "choose another type" —
     // the one action the node contract forbids for a node with published graph
     // versions resolving through that string.
-    writeRegisteredNode($this->root, 'SendGuard', 'yaya.send_guard', 'hand-written marker');
+    writeRegisteredNode($this->root, 'SendGuard', 'notifications.send_guard', 'hand-written marker');
 
-    $this->artisan('nodeflow:make-node', ['name' => 'SendGuard', '--type' => 'yaya.send_guard'])
+    $this->artisan('nodeflow:make-node', ['name' => 'SendGuard', '--type' => 'notifications.send_guard'])
         ->expectsOutputToContain('Node already exists.')
         ->doesntExpectOutputToContain('Choose another type.')
         ->assertExitCode(1);
@@ -493,7 +493,7 @@ it('registers the generated node in the host provider when it can', function () 
     }
     PHP);
 
-    $this->artisan('nodeflow:make-node', ['name' => 'SendSms', '--type' => 'yaya.send_sms'])
+    $this->artisan('nodeflow:make-node', ['name' => 'SendSms', '--type' => 'notifications.send_sms'])
         ->assertExitCode(0);
 
     expect(file_get_contents($this->root.'/app/Providers/NodeflowServiceProvider.php'))
@@ -501,8 +501,8 @@ it('registers the generated node in the host provider when it can', function () 
 });
 
 it('prints the registration snippet when there is no provider to edit', function () {
-    // nodeflow:install lands in Plan 5, so through Plans 1-4 this is the normal
-    // path, not the edge case. The counterfactual: exit non-zero or say nothing
+    // A missing provider is a normal recoverable host state, not an edge case.
+    // The counterfactual: exit non-zero or say nothing
     // when the provider is absent, and the author is left with an unregistered
     // node that never appears in the palette.
     //
@@ -510,7 +510,7 @@ it('prints the registration snippet when there is no provider to edit', function
     // registerNode()'s match arms print the same snippet and differ only in the
     // sentence above it, so swapping two of those strings would pass a
     // snippet-only assertion in all three.
-    $this->artisan('nodeflow:make-node', ['name' => 'SendSms', '--type' => 'yaya.send_sms'])
+    $this->artisan('nodeflow:make-node', ['name' => 'SendSms', '--type' => 'notifications.send_sms'])
         ->expectsOutputToContain('No app/Providers/NodeflowServiceProvider.php found.')
         ->expectsOutputToContain('Nodeflow::register([')
         ->expectsOutputToContain('\App\Nodeflow\Nodes\SendSms::class')
@@ -540,7 +540,7 @@ it('says the anchor is missing when the provider has no nodes array', function (
 
     $before = file_get_contents($this->root.'/app/Providers/NodeflowServiceProvider.php');
 
-    $this->artisan('nodeflow:make-node', ['name' => 'SendSms', '--type' => 'yaya.send_sms'])
+    $this->artisan('nodeflow:make-node', ['name' => 'SendSms', '--type' => 'notifications.send_sms'])
         ->expectsOutputToContain('has no `protected array $nodes = [` line')
         ->expectsOutputToContain('Nodeflow::register([')
         ->assertExitCode(0);
@@ -572,7 +572,7 @@ it('says the anchor is ambiguous when the provider has two nodes arrays', functi
 
     $before = file_get_contents($this->root.'/app/Providers/NodeflowServiceProvider.php');
 
-    $this->artisan('nodeflow:make-node', ['name' => 'SendSms', '--type' => 'yaya.send_sms'])
+    $this->artisan('nodeflow:make-node', ['name' => 'SendSms', '--type' => 'notifications.send_sms'])
         ->expectsOutputToContain('has more than one `protected array $nodes = [` line')
         ->expectsOutputToContain('Nodeflow::register([')
         ->assertExitCode(0);
@@ -581,7 +581,7 @@ it('says the anchor is ambiguous when the provider has two nodes arrays', functi
 });
 
 it('generates no test unless asked', function () {
-    $this->artisan('nodeflow:make-node', ['name' => 'SendSms', '--type' => 'yaya.send_sms'])
+    $this->artisan('nodeflow:make-node', ['name' => 'SendSms', '--type' => 'notifications.send_sms'])
         ->assertExitCode(0);
 
     expect($this->root.'/tests/Feature/Nodeflow/SendSmsTest.php')->not->toBeFile();
@@ -594,7 +594,7 @@ it('generates a test whose expectations match the node it generated', function (
     // between the two stubs is detectable at all.
     $this->artisan('nodeflow:make-node', [
         'name' => 'SendSms',
-        '--type' => 'yaya.send_sms',
+        '--type' => 'notifications.send_sms',
         '--outputs' => 'sent, failed',
         '--test' => true,
     ])->assertExitCode(0);
@@ -604,7 +604,7 @@ it('generates a test whose expectations match the node it generated', function (
 
     expect($test)
         ->toContain('use App\Nodeflow\Nodes\SendSms;')
-        ->toContain("expect(SendSms::type())->toBe('yaya.send_sms');")
+        ->toContain("expect(SendSms::type())->toBe('notifications.send_sms');")
         ->toContain("->toBe(['sent', 'failed'])")
         ->toContain('HandlesSubject::class');
 
@@ -616,7 +616,7 @@ it('generates a test whose expectations match the node it generated', function (
 it('asserts the audience interface for an audience node', function () {
     $this->artisan('nodeflow:make-node', [
         'name' => 'SendBatch',
-        '--type' => 'yaya.send_batch',
+        '--type' => 'notifications.send_batch',
         '--cardinality' => 'audience',
         '--test' => true,
     ])->assertExitCode(0);
@@ -636,7 +636,7 @@ it('generates syntactically valid PHP for every cardinality', function (string $
 
     $this->artisan('nodeflow:make-node', [
         'name' => $class,
-        '--type' => 'yaya.send_'.$cardinality,
+        '--type' => 'notifications.send_'.$cardinality,
         '--cardinality' => $cardinality,
         '--outputs' => 'sent, failed',
         '--test' => true,
@@ -660,8 +660,8 @@ it('generates syntactically valid PHP for every cardinality', function (string $
 })->with(['subject', 'audience', 'both']);
 
 it('does not clobber a hand-edited test file on regeneration without --force', function () {
-    // Finding: writeTest() skips an existing test file unless --force, warning as
-    // it does so — but nothing in the suite exercised that branch. It matters more
+    // writeTest() skips an existing test file unless --force, warning as
+    // it does so. This matters more
     // than a typical uncovered branch because the stub it renders ends with
     // `// TODO: add a test per output`, i.e. it explicitly tells the author to
     // hand-edit this file. A silent overwrite destroys real work, not boilerplate.
@@ -676,10 +676,10 @@ it('does not clobber a hand-edited test file on regeneration without --force', f
     // so a test built that way could not have detected the regression it exists
     // to catch. Deleting the class file — standing in for an author who moved or
     // rewrote it while keeping their edited test — is what lets this test reach
-    // the code the finding is actually about.
+    // the code path that protects the edited file.
     $this->artisan('nodeflow:make-node', [
         'name' => 'SendSms',
-        '--type' => 'yaya.send_sms',
+        '--type' => 'notifications.send_sms',
         '--test' => true,
     ])->assertExitCode(0);
 
@@ -691,7 +691,7 @@ it('does not clobber a hand-edited test file on regeneration without --force', f
 
     $this->artisan('nodeflow:make-node', [
         'name' => 'SendSms',
-        '--type' => 'yaya.send_sms',
+        '--type' => 'notifications.send_sms',
         '--test' => true,
     ])
         ->expectsOutputToContain('Test already exists at')
@@ -704,12 +704,12 @@ it('does not clobber a hand-edited test file on regeneration without --force', f
 });
 
 it('renders a group containing a placeholder literally instead of re-substituting it', function () {
-    // F-1. The counterfactual: restore str_replace() in buildClass() and this
+    // structural replacement. The counterfactual: restore str_replace() in buildClass() and this
     // fails, because the sequential substitution turns --group='{{ outputs }}'
     // into ->group(''default'') — a parse error the command reports as success.
     $this->artisan('nodeflow:make-node', [
         'name' => 'SendPlaceholder',
-        '--type' => 'yaya.send_placeholder',
+        '--type' => 'notifications.send_placeholder',
         '--group' => '{{ outputs }}',
     ])->assertExitCode(0);
 
@@ -735,17 +735,17 @@ it('validates each invocation independently, even when the command instance is r
     // permanent, not cosmetic.
     $this->artisan('nodeflow:make-node', [
         'name' => 'FirstLeakProbeNode',
-        '--type' => 'yaya.first_leak_probe',
+        '--type' => 'notifications.first_leak_probe',
     ])->assertExitCode(0);
 
     $this->artisan('nodeflow:make-node', [
         'name' => 'SecondLeakProbeNode',
-        '--type' => 'yaya.second_leak_probe',
+        '--type' => 'notifications.second_leak_probe',
     ])->assertExitCode(0);
 
     $secondFile = file_get_contents($this->root.'/app/Nodeflow/Nodes/SecondLeakProbeNode.php');
 
     expect($secondFile)
-        ->toContain("return 'yaya.second_leak_probe';")
-        ->not->toContain("return 'yaya.first_leak_probe';");
+        ->toContain("return 'notifications.second_leak_probe';")
+        ->not->toContain("return 'notifications.first_leak_probe';");
 });

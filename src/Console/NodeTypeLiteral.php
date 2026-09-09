@@ -3,7 +3,7 @@
 namespace Nodeflow\Console;
 
 /**
- * Proves that a node's type() returns a fixed string, or refuses (E36, E10).
+ * Proves that a node's type() returns a fixed string, or refuses it.
  *
  * WHY THIS IS A WHITELIST. type() is the identifier immutable published graph
  * versions and live mid-wait runs resolve through forever. A blacklist of known
@@ -22,7 +22,7 @@ namespace Nodeflow\Console;
  * empirical gate passes while the type is still derived from the class name and
  * the author's next rename orphans every published version.
  *
- * WHY EVERYTHING IS SCOPED TO ONE CLASS'S OWN BODY. E36 requires the constant
+ * WHY EVERYTHING IS SCOPED TO ONE CLASS'S OWN BODY. literal type requirement requires the constant
  * to be found "in the same class body" — a flat, whole-file token scan cannot
  * enforce that. A sibling class declaring a constant of the same name, or a
  * nested anonymous class declaring its own type(), must not be visible to this
@@ -94,7 +94,7 @@ final class NodeTypeLiteral
     /**
      * Comment- and whitespace-free tokens, each normalised to [id, text].
      *
-     * Comments are dropped because E36 matches on the stripped stream: a probe
+     * Comments are dropped because literal type requirement matches on the stripped stream: a probe
      * confirmed that a body opening with a `//` line emits T_COMMENT, so an
      * exact raw-sequence match would refuse every node whose author explained
      * their type. Whitespace is dropped so the shape match is about syntax

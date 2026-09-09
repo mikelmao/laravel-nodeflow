@@ -148,7 +148,7 @@ class GraphValidator
                 // Fan-out to parallel branches is deferred, not merely unimplemented:
                 // nodeflow_run_subjects carries unique(run_id, subject_type,
                 // subject_id) and a single current_node_id, so one subject cannot
-                // occupy two nodes. See spec section 7.
+                // occupy two nodes. Duplicate identifiers are ambiguous.
                 $errors[] = "Node [{$edge['from']}] output [{$edge['output']}] has more than one outgoing edge. ".
                     'An output may lead to exactly one node. Use a Condition node to send each subject '.
                     'down one of several branches; sending the same subject down two branches at once is '.

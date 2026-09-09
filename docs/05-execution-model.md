@@ -159,14 +159,14 @@ row at all. The run view's overlay derives "reached" from row existence (or an a
 sitting on the node), so once every subject has moved past `core.exit` it shows as never reached, even
 though the run genuinely executed it. The per-output counts elsewhere on the graph are unaffected; only
 that one node's dimming misleads. Closing this means writing a row on the durable execution path, which
-the run view deliberately does not touch — see open issue C-1's neighbour in
-`docs/superpowers/open-issues.md`.
+the run view deliberately does not touch.
 
 ### Three models carry no tenant scope
 
 `FlowVersion`, `RunSubject` and `NodeExecution` have no global tenant scope — they are reached through
-their parents today. **Add the scope, or an explicit ownership join, before exposing any HTTP route**,
-or `FlowVersion::find($request->version)` becomes a cross-tenant read.
+their parents. Package routes preserve that ownership chain. Host integrations must do the same: do
+not expose a direct `FlowVersion::find($request->version)` lookup without an explicit tenant-owned
+parent join.
 
 ### Other follow-ups
 

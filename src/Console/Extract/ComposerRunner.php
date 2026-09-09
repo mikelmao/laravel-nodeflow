@@ -11,7 +11,7 @@ class ComposerRunner
     private array $frozenCachePaths = [];
 
     /**
-     * Freezes the read-only G8 observation for M9. The child receives these
+     * Freezes the read-only Composer readiness validation observation for fresh-host verification. The child receives these
      * exact paths as environment values, so a changed ambient shell or .env
      * cannot redirect its discovery caches after the journal boundary was
      * accepted.
@@ -33,7 +33,7 @@ class ComposerRunner
         return $this->run($command, $hostPath)['exit'] === 0;
     }
 
-    /** Regenerates only the already-restored installed state; this is never M8's installation step. */
+    /** Regenerates only the already-restored installed state; this is never dependency installation. */
     public function regenerateAutoload(string $hostPath): bool
     {
         return $this->run([
@@ -182,7 +182,7 @@ class ComposerRunner
 
             // Composer loads global config.json from COMPOSER_HOME. Point it
             // at a private empty directory for every invocation so ambient
-            // vendor-dir/plugin/repository settings cannot redirect M8 beyond
+            // vendor-dir/plugin/repository settings cannot redirect dependency installation beyond
             // the host paths the command journaled. Cache writes are scoped
             // there too and deleted deterministically with the home.
             $environment['COMPOSER_HOME'] = $composerHome;

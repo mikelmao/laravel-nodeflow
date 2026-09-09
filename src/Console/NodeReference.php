@@ -6,7 +6,7 @@ namespace Nodeflow\Console;
  * One place in a host file that names a node class, found by
  * NodeReferenceScanner.
  *
- * WHY A BYTE RANGE, NOT JUST A FILE (E45). The first design draft exempted
+ * WHY A BYTE RANGE, NOT JUST A FILE. A file-level exemption would exempt
  * whole FILES the extraction command rewrites. The host provider IS such a
  * file — the rewrite only touches the `$nodes` entry and the `use` import —
  * so a legacy `Nodeflow::register([SendMessage::class])` call living in that
@@ -16,7 +16,7 @@ namespace Nodeflow\Console;
  * rewrote) while still refusing on every other span in the same file.
  *
  * `kind` is one of `class_constant`, `string_literal`, `import`, `extends`,
- * `reference`. Detection is universal (round-2 review, Critical 2): ANY
+ * `reference`. Detection is universal: ANY
  * name-run that resolves to the target is a reference, whatever syntax
  * surrounds it, so `kind` is classification metadata on top of that one
  * rule, not the mechanism that decides whether something is a reference at

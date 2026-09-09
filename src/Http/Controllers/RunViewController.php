@@ -21,15 +21,15 @@ use Nodeflow\Triggers\TriggerNodeRegistry;
  * The graph comes from the run's own pinned flow_version and from nowhere else.
  * Not draft_graph, which the editor correctly prefers and which a run never
  * executed; and not flow->currentVersion, which may have moved on while this
- * run sits mid-wait on the version it started under. D8 froze that version so
+ * run sits mid-wait on the version it started under. regression case froze that version so
  * this view could be honest about what actually ran, and painting live counts
- * onto a graph the run never executed is the exact misreading spec E7 exists to
+ * onto a graph the run never executed is the exact misreading this boundary exists to
  * prevent.
  *
  * Nothing here queries RunSubject or NodeExecution; RunOverlay reaches both
  * through the already-scoped Run's relations. And nothing reads a foreign key
  * from the request: {run} binds through the scoped model, and {node} is a graph
- * key validated against that graph, never a record id (open issue G-3).
+ * key validated against that graph, never a record id.
  */
 class RunViewController extends Controller
 {
@@ -73,7 +73,7 @@ class RunViewController extends Controller
                 // that runs in a console context with no ambient tenant, where
                 // the scope would throw. A request has a resolved tenant, so
                 // the scope resolves — but this is not a second authorization
-                // check: G-3's invariant (flow_version_id points inside its
+                // check: type consistency validation's invariant (flow_version_id points inside its
                 // own tenant) is what makes this row belong to $run's tenant
                 // in the first place, and nothing here re-verifies it. If that
                 // invariant were ever violated, the scope would simply find no

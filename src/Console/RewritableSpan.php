@@ -9,11 +9,11 @@ namespace Nodeflow\Console;
  * (the `$nodes` entry, or the `use` import).
  *
  * WHY THIS EXISTS AS ITS OWN CLASS, given it carries no behaviour beyond its
- * own construction — the same reason `NodeReference` does. G5 subtracts
+ * own construction — the same reason `NodeReference` does. reference scan subtracts
  * exactly the set `rewritableSpans()` returns from what
  * `NodeReferenceScanner::scan()` finds; a `NodeReference` describes something
  * FOUND, a `RewritableSpan` describes something that will be TRANSFORMED,
- * and conflating the two types would blur a distinction G5's own docblock
+ * and conflating the two types would blur a distinction reference scan's docblock
  * depends on: a survivor is a `NodeReference` not covered by any
  * `RewritableSpan`.
  */
@@ -28,7 +28,7 @@ final readonly class RewritableSpan
     /**
      * The entire byte range of $file. Used for the node's own file and its
      * test file: moving either rewrites the file's namespace, which moves
-     * EVERY declaration in it (E47's own reasoning, from the other
+     * EVERY declaration in it (single-symbol requirement's reasoning, from the other
      * direction) — so exempting anything less than the whole file would
      * itself be wrong, not merely incomplete.
      */

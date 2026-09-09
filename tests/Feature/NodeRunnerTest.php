@@ -282,7 +282,7 @@ it('completes the subjects of a start_flow node that exits this flow', function 
 });
 
 it('does not strand a subject when the node exits another subject mid-chunk (chunkById, not offset chunk)', function () {
-    // Reproduces the reviewer's probe: 6 subjects, subject_chunk = 2, node body
+    // Reproduces the chunk-skew regression: 6 subjects, subject_chunk = 2, node body
     // exits subject '1' mid-loop. Under offset-based chunk() over a query
     // filtered on status='active', subject 1's departure shifts every later
     // page's offset window and subject '3' is skipped entirely — never passed

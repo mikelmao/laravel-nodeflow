@@ -5,7 +5,7 @@ namespace Nodeflow\Schema;
 /**
  * Supplies a field's options at edit time, scoped to the current tenant.
  *
- * A select whose choices are host data — this FSP's message templates, this
+ * A select whose choices are host data — this tenant's message templates, this
  * organisation's towns — cannot have them baked into the node definition, because
  * the definition is one class shared by every tenant. So the field names a class
  * and the package asks it, inside the request, with the tenancy resolver already

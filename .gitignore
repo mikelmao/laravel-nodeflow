@@ -2,11 +2,4 @@ vendor/
 node_modules/
 .DS_Store
 
-# Agent scratch. .claude/worktrees/ holds linked worktrees created inside the
-# repo; .superpowers/ holds subagent-driven-development ledgers, task briefs and
-# review packages. Both are working state, never history. Only the worktrees
-# subdirectory is ignored, so a project-level .claude/settings.json or a shared
-# agent definition can still be committed.
-.claude/worktrees/
 .worktrees/
-.superpowers/

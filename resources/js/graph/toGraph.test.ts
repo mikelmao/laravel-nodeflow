@@ -83,7 +83,7 @@ describe('toGraph', () => {
     expect(emitted).not.toBe(canvas.nodes[0]!.data.config)
   })
 
-  // The round-trip case §9 asks for, with positions present on every node so
+  // The round-trip regression case, with positions present on every node so
   // the assertion is identity rather than "close enough".
   // Counterfactual: drop `position` from the emitted node, or drop `config`, or
   // emit `start` from anywhere but the argument, and this fails.
@@ -108,7 +108,7 @@ describe('toGraph', () => {
     expect(toGraph(canvas, 'n1', defs).graph.nodes?.[0]?.position).toEqual({ x: 40.4, y: 80.6 })
   })
 
-  // THE PROTOTYPE'S BUG, pinned. `~/Sites/test-workflow`'s editor.tsx did
+  // AN EARLY HOST PROTOTYPE'S BUG, pinned. Its editor did
   // `output: e.sourceHandle ?? 'default'`, so a dropped handle published an
   // edge naming an output app.send never declared, and the server rejected it
   // with a message about an output the author never chose.

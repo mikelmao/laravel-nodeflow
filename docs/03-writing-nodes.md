@@ -7,7 +7,7 @@ here feels awkward, it is a bug worth reporting.
 
 ```bash
 php artisan nodeflow:make-node SendSms \
-    --type=yaya.send_sms \
+    --type=notifications.send_sms \
     --cardinality=subject \
     --outputs='sent, failed' \
     --group=Messaging \
@@ -28,11 +28,10 @@ node; if you find yourself creating a directory, something has gone wrong.
 
 Registration is explicit, never automatic discovery. The command looks for
 `app/Providers/NodeflowServiceProvider.php` containing the line `protected array $nodes = [`
-**exactly once**, and appends the new class there when it finds it. There is no `nodeflow:install`
-command yet to have created that provider for you, so on a fresh install — or whenever the anchor is
-missing or appears more than once — the command instead prints a `Nodeflow::register([...])` snippet
-for you to paste in, and says which of those reasons applied. Today, hitting the snippet is the normal
-case, not the exception.
+**exactly once**, and appends the new class there when it finds it. The `nodeflow:install` command
+creates that provider during normal package setup. If the provider or anchor is missing, or if the
+anchor appears more than once, the generator prints a `Nodeflow::register([...])` snippet for you to
+paste in and explains why it could not edit the provider safely.
 
 It refuses, rather than generating something broken, when the type doesn't match the expected
 lowercase-letters/digits/dots/underscores format, uses the reserved `core.` prefix, or collides with a

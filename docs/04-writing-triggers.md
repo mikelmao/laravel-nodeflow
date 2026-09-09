@@ -9,7 +9,7 @@ authoring surface.
 ```bash
 php artisan nodeflow:make-trigger FloodAlertFires \
     --event='App\Events\FloodAlertDispatched' \
-    --type=rada.flood_alert
+    --type=weather.flood_alert
 ```
 
 That writes `app/Nodeflow/Triggers/FloodAlertFires.php` with the four required

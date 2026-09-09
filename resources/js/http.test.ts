@@ -105,8 +105,8 @@ describe('optionsUrl', () => {
     it('substitutes both sentinels, url-encoded', () => {
         const template = 'https://app.test/admin/flows/12/nodes/__NODEFLOW_TYPE__/fields/__NODEFLOW_FIELD__/options'
 
-        expect(optionsUrl(template, 'yaya.send/message', 'template')).toBe(
-            'https://app.test/admin/flows/12/nodes/yaya.send%2Fmessage/fields/template/options',
+        expect(optionsUrl(template, 'notifications.send/message', 'template')).toBe(
+            'https://app.test/admin/flows/12/nodes/notifications.send%2Fmessage/fields/template/options',
         )
     })
 

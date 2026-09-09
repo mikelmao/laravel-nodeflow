@@ -94,7 +94,7 @@ class Field
      * A field type the package does not know about.
      *
      * FieldType is an enum, so a host cannot add a case to it — but the field-type
-     * to control mapping is deliberately extensible (spec E5), and a host with a
+     * to control mapping is deliberately extensible, and a host with a
      * town picker needs a type string to key it on. The base rule travels with it
      * because publish-time validation must still work for a type the package has
      * never heard of; without it a numeric custom field would accept anything.
@@ -154,7 +154,7 @@ class Field
      * The declared option source, for server-side resolution only.
      *
      * Deliberately not in toArray(): the browser learns that a field is dynamic,
-     * never which class backs it (spec E6). The options endpoint reads this from
+     * never which class backs it. The options endpoint reads this from
      * the node's own definition, so a client-supplied class name is never part of
      * the lookup.
      */

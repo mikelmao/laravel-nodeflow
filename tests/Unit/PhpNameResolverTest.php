@@ -9,8 +9,7 @@ it('resolves a leading-backslash name to itself', function () {
 });
 
 it('resolves a name with no leading backslash RELATIVE to the current namespace', function () {
-    // THE finding that falsified the first draft's entry-form table, and it is
-    // PHP's actual rule. Verified by probe:
+    // PHP resolves this form relative to the current namespace. Verified by probe:
     //   inside namespace App\Providers, App\Nodeflow\Nodes\SendMessage::class
     //   === 'App\Providers\App\Nodeflow\Nodes\SendMessage'
     // Counterfactual: return the written name unchanged and this fails — which
@@ -29,8 +28,8 @@ it('resolves a bare short name through a plain import', function () {
 });
 
 it('resolves an aliased import', function () {
-    // The live-registration form the first draft's three-form table missed
-    // entirely, so it read NotPresent and let extraction proceed to a fatal host.
+    // This live-registration form must resolve through the alias; treating it as
+    // absent would let extraction proceed to a fatal host.
     $source = "<?php\nnamespace App\\Providers;\nuse App\\Nodeflow\\Nodes\\SendMessage as Sender;\n";
 
     expect(PhpNameResolver::forSource($source)->resolve('Sender'))
@@ -77,7 +76,7 @@ it('ignores a use statement inside a closure', function () {
 });
 
 it('does not let a later closure capture list overwrite a real import sharing its short name', function () {
-    // round-2/round-3 review, Critical 1. The 'other'-brace guard cannot see
+    // Regression. The 'other'-brace guard cannot see
     // a capture list, because a closure's `use` PRECEDES its own `{` --
     // at the point readImports() sees this `use`, it may not be inside any
     // brace at all (it can be inside a function call's parens instead, the
@@ -107,10 +106,10 @@ it('ignores a trait use inside a class body', function () {
     expect(PhpNameResolver::forSource($source)->imports())->toBe([]);
 });
 
-// --- Step 5 adversarial probes, persisted per F-2 ---
+// --- Adversarial namespace forms ---
 
 it('resolves a group import containing a single member', function () {
-    // Probe 1: a group of one must still go through the group-parsing path.
+    // A group of one must still go through the group-parsing path.
     $source = "<?php\nnamespace App\\Providers;\nuse App\\Nodeflow\\Nodes\\{SendMessage};\n";
 
     expect(PhpNameResolver::forSource($source)->resolve('SendMessage'))
@@ -118,7 +117,7 @@ it('resolves a group import containing a single member', function () {
 });
 
 it('resolves a leading-backslash import to the same target as one without', function () {
-    // Probe 2: `use \App\Nodeflow\Nodes\SendMessage;` — the leading backslash in
+    // `use \App\Nodeflow\Nodes\SendMessage;` — the leading backslash in
     // the import itself must not become part of the recorded FQCN.
     $source = "<?php\nnamespace App\\Providers;\nuse \\App\\Nodeflow\\Nodes\\SendMessage;\n";
 
@@ -127,7 +126,7 @@ it('resolves a leading-backslash import to the same target as one without', func
 });
 
 it('lets the later of two case-differing aliases win, because alias lookup is case-insensitive', function () {
-    // Probe 3: `Sender` and `sender` collide under the lowercased alias table.
+    // `Sender` and `sender` collide under the lowercased alias table.
     // This is NOT a real PHP semantic being documented: `php -l` fatals on this
     // exact file ("Cannot use X as sender because the name is already in use"),
     // whether the two aliases target the same class or different ones — PHP
@@ -149,7 +148,7 @@ it('lets the later of two case-differing aliases win, because alias lookup is ca
 });
 
 it('reads only the first namespace of a file with two namespace blocks, a stated limit', function () {
-    // Probe 4: multi-namespace files are a stated limit, not a bug to fix here.
+    // Multi-namespace files are a stated limit.
     // NodeReferenceScanner must refuse such a file outright rather than rely on
     // this resolver to handle it — this test pins the actual (first-namespace)
     // behaviour so a future change to that limit is visible.
@@ -158,10 +157,10 @@ it('reads only the first namespace of a file with two namespace blocks, a stated
     expect(PhpNameResolver::forSource($source)->namespaceName())->toBe('A');
 });
 
-// --- Round-2 review findings ---
+// --- Namespace-resolution edge cases ---
 
 it('resolves an import declared inside a braced namespace block', function () {
-    // Critical review finding: `namespace App\Providers { ... }` is valid PHP
+    // `namespace App\Providers { ... }` is valid PHP
     // (confirmed by php -l and by real execution: inside it,
     // App\Nodeflow\Nodes\SendMessage::class stays App\Nodeflow\Nodes\SendMessage
     // when the class is imported). A bare brace-depth counter treated this
@@ -205,7 +204,7 @@ it('resolves both members of a group import when the aliased member comes first'
 });
 
 it('pops the innermost brace first when a braced namespace nests a class that nests a trait use', function () {
-    // Re-review finding M11: the brace-kind stack must behave as a STACK
+    // Regression: the brace-kind stack must behave as a STACK
     // (pop the innermost/most-recently-opened brace), not a queue. Nothing
     // else in this suite has two simultaneously-open braces of DIFFERENT
     // kinds, so array_pop($braceKinds) (LIFO, correct) and array_shift

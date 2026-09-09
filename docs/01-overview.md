@@ -82,5 +82,5 @@ There is deliberately **no split/parallel-branch node**. See
 
 If you are wiring this into an application, read [Integration](02-integration.md) next. If you want to
 understand the runtime before you commit, read [Execution model](05-execution-model.md). If you learn
-best from a complete example, jump to the [worked example](07-worked-example-rada-yaya.md) and refer
+best from a complete example, jump to the [worked example](07-worked-example.md) and refer
 back.

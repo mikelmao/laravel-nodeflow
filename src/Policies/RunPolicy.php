@@ -14,7 +14,7 @@ class RunPolicy extends DelegatesToGate
 
     /**
      * Same rationale as FlowPolicy::view(): mapped to the listing gate
-     * rather than a fifth gate the spec doesn't name.
+     * rather than a fifth gate the public API does not define.
      */
     public function view(?Authenticatable $user, Run $run): bool
     {

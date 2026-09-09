@@ -49,7 +49,7 @@ it('reads unscoped under auto when the package fallback resolver is in play', fu
 
 it('throws under auto when the host bound its own resolver and it returned null', function () {
     // The multi-tenant host on a queue job. Under the old 'disabled' default this
-    // silently returned every tenant's rows — the hole E2a closes.
+    // silently returned every tenant's rows — the isolation hole this test closes.
     // Counterfactual: treat any resolver as "no tenancy" and this returns 2.
     seedFlowFor('org-1');
     bindNullResolver();

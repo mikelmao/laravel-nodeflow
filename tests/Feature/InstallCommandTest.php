@@ -148,7 +148,7 @@ it('exits zero under --check on a fully wired host', function () {
 });
 
 it('does not publish migrations by default', function () {
-    // E19. Counterfactual: publish by default and every fresh install lays down a
+    // migration ownership. Counterfactual: publish by default and every fresh install lays down a
     // copy that shadows the package's own file for every migrate run, forever.
     writeClientWiring($this->root);
 
@@ -181,7 +181,7 @@ it('reports undefined gates without failing on them', function () {
     // A report, never an outcome. Counterfactual: fold the gate report into the
     // exit code and this fails — an undefined gate is the correct state
     // immediately after install, so the first run would always be red and every
-    // host would learn to ignore the exit code that Task 11's whole point is.
+    // host would learn to ignore the exit code that the integration contract's whole point is.
     writeClientWiring($this->root);
 
     $this->artisan('nodeflow:install')

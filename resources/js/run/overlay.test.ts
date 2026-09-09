@@ -93,7 +93,7 @@ describe('decorationsFor', () => {
     })
 
     /**
-     * Deliberate override of spec §4.2, which labels this badge "failed": a
+     * Deliberate badge-label choice: a
      * node that declares an output literally named "failed" (the demo's
      * `demo.send` does) would otherwise render two badges both reading
      * "failed" for two different meanings — one output-count, one

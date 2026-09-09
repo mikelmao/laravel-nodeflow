@@ -22,7 +22,7 @@ it('admits a lazy audience in fixed ownership batches', function () {
 
     $run = app(CreateRun::class)->forVersion(
         $version,
-        'yaya-user',
+        'external-user',
         ReplayableSubjectIds::from(function () use ($total, $probe): iterable {
             for ($id = 1; $id <= $total; $id++) {
                 $probe->recordYield();
