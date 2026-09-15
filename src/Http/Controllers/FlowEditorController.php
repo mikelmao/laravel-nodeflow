@@ -30,9 +30,9 @@ use Nodeflow\Triggers\Webhook\WebhookTriggerDriver;
  * never its meaning, because a graph mid-edit is allowed to be broken and refusing
  * to store it would make autosave useless — see graphRules() for exactly where
  * that line falls. Publish returns per-node errors so the canvas can render each
- * beside its node. And nothing reads a foreign key out of the request: open issue
- * G-3 records that Flow::currentVersion() is deliberately unscoped, which is safe
- * only while current_version_id stays inside the tenant — so it is set from a
+ * beside its node. And nothing reads a foreign key out of the request:
+ * Flow::currentVersion() is deliberately unscoped, which is safe only while
+ * current_version_id stays inside the tenant — so it is set from a
  * version this code just created, never from input.
  *
  * The draft concurrency token is draft_revision, an integer counter, not a

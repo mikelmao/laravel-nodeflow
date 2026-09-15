@@ -25,7 +25,7 @@ use Workflow\V2\WorkflowStub;
  * and `self::awaitWithTimeout(...)` suspend that fiber directly and return
  * the resolved value to the caller — there is no `yield` in v2 workflow
  * bodies (unlike the v1 `Workflow\Workflow` API this class's predecessor
- * brief was written against).
+ * legacy behavior depended on).
  *
  * The unified wait: every `core.wait` node compiles to
  * `awaitWithTimeout($duration, 'audienceEmptied')`, racing the node's own
@@ -40,8 +40,8 @@ use Workflow\V2\WorkflowStub;
  * cursor sequentially, so two branches that both contain waits elapse in
  * sequence rather than concurrently — their durations sum instead of
  * overlapping. GraphValidator already warns about this at publish time.
- * Making branch waits run concurrently needs nested generators under the
- * engine's `all()`/`parallel()` and is deliberately deferred to a later plan.
+ * Making branch waits run concurrently would require nested generators under
+ * the engine's `all()`/`parallel()` and is not currently supported.
  */
 #[Signal('audienceEmptied')]
 class FlowInterpreter extends Workflow

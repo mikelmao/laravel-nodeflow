@@ -42,7 +42,7 @@ Route::get(
 )->name('nodeflow.trigger-source-fields.options');
 
 /*
- * The run view (spec §6, plan 4). Read-only: there is no write path here at all.
+ * The run view is read-only: there is no write path here at all.
  *
  * {run} binds through the tenant-scoped Run, so a cross-tenant id is a 404
  * before any controller code runs — same reasoning as {flow} above. {node} is a

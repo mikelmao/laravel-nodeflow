@@ -13,7 +13,7 @@ class FlowPolicy extends DelegatesToGate
     }
 
     /**
-     * Viewing one flow maps to the same gate as listing them. The spec names
+     * Viewing one flow maps to the same gate as listing them. The public API defines
      * four gates, and a fifth invented here would be a gate no host knows to
      * define — which, under default deny, reads as the package being broken.
      */

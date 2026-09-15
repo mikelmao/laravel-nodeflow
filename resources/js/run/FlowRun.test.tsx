@@ -202,7 +202,7 @@ describe('FlowRun', () => {
 
     it('says this run has no record here rather than asserting the node was never reached', async () => {
         // The mirror image of the previous test, and the one the original
-        // brief itself got wrong: asserting a never-reached node was "never
+        // counterfactual exposed: asserting a never-reached node was "never
         // reached by this run" is false in the most common case there is —
         // core.exit returns NodeResult::empty(), so it writes no
         // node_executions row, and once its subjects have moved on this
@@ -258,7 +258,7 @@ describe('FlowRun', () => {
         // check inside load()'s .then) and this fails, because the stale
         // 'sent' reply below then overwrites 'segment's rows once it
         // resolves. This is the third response-outliving-its-context guard
-        // in this plan (after useOverlayPolling.ts's two), proved the same
+        // after useOverlayPolling.ts's two related cases, proved the same
         // way: hold a request open, switch context out from under it, and
         // show the late reply lose.
         let resolveSent: (value: Response) => void = () => {}

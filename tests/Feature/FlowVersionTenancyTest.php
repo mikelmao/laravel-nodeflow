@@ -78,7 +78,7 @@ function seedVersionWithLiveRun(string $tenantId, string $type): FlowVersion
 
 it('hides another tenants flow versions', function () {
     // Counterfactual: remove BelongsToTenant from FlowVersion and this returns 2.
-    // This is the read the handoff named: FlowVersion::find($request->version)
+    // A direct FlowVersion::find($request->version)
     // becomes a cross-tenant read the moment a route exists.
     seedVersionWithLiveRun('org-1', 'core.exit');
     seedVersionWithLiveRun('org-2', 'core.exit');
@@ -108,7 +108,7 @@ it('stamps a version with its flows tenant, not the ambient one', function () {
 });
 
 it('checks node types across every tenant, not just the ambient one', function () {
-    // The regression this task exists to prevent. check-node-types is a deploy
+    // The regression this test exists to prevent. check-node-types is a deploy
     // gate: it must see every tenant's live versions. Counterfactual: drop
     // withoutTenancy() from CheckNodeTypesResolver and this finds 1, not 2 —
     // or throws, in resolver mode with no ambient tenant.

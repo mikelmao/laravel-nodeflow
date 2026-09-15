@@ -96,7 +96,7 @@ it('treats a commented-out source line as absent', function () {
 });
 
 /**
- * C3. check() and its E11 re-verify used to compare only the tail
+ * regression case. check() and its post-write verification used to compare only the tail
  * ('vendor/atram/laravel-nodeflow/resources/js'), never the '../' prefix that
  * decides whether Tailwind actually resolves the path. All three hosts below
  * currently read AlreadyPresent while Tailwind matches nothing.
@@ -159,7 +159,7 @@ it('accepts the correct computed line outright', function () {
 });
 
 /**
- * I3 (this fix). C3's exact-string comparison closed the false ACCEPT on a
+ * regression case (this fix). regression case's exact-string comparison closed the false ACCEPT on a
  * wrong '../' prefix, but it also opened a false REJECT: it demanded the
  * single-quoted, no-trailing-slash spelling apply() itself writes, and
  * rejected anything lexically different even when Tailwind treats it

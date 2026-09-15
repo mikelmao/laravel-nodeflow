@@ -33,7 +33,7 @@ it('defaults a custom field to a string rule', function () {
 });
 
 it('tells the editor a field is dynamic without naming the class behind it', function () {
-    // Spec E6: the browser needs to know THAT a field is dynamic, never what PHP
+    // Dynamic-field boundary: the browser needs to know THAT a field is dynamic, never what PHP
     // class backs it. Leaking the name buys nothing and invites an endpoint that
     // accepts it. Counterfactual: keep emitting options_source and the class name
     // is in every palette payload.

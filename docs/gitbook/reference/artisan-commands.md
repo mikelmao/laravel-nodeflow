@@ -27,7 +27,7 @@ Do not treat a normal successful install as a replacement for the `--check` veri
 
 ```text
 nodeflow:make-node {name}
-    {--type= : The stable type identifier, e.g. yaya.send_message}
+    {--type= : The stable type identifier, e.g. notifications.send_message}
     {--cardinality=subject : subject, audience, or both}
     {--outputs=default : Comma-separated output names}
     {--group=General : Palette group shown in the editor}

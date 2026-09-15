@@ -95,7 +95,7 @@ function workflowFailureFor(Run $run, ?string $instanceId = null, ?string $workf
         workflowType: 'class',
         workflowClass: $workflowClass ?? FlowInterpreter::class,
         exceptionClass: RuntimeException::class,
-        message: $message ?? 'Yaya remained unavailable',
+        message: $message ?? 'Message provider remained unavailable',
         committedAt: $committedAt ?? '2026-08-25T14:15:16+00:00',
     );
 }
@@ -172,7 +172,7 @@ it('projects a duplicate durable failure while the start handle has not yet been
 
     expect($failed->status)->toBe('failed')
         ->and($firstEndedAt)->toBe('2026-08-25T14:15:16+00:00')
-        ->and($firstError)->toBe(RuntimeException::class.': Yaya remained unavailable');
+        ->and($firstError)->toBe(RuntimeException::class.': Message provider remained unavailable');
 
     expect(Run::withoutTenancy()->findOrFail($run->id)->ended_at?->toIso8601String())->toBe($firstEndedAt)
         ->and(Run::withoutTenancy()->findOrFail($run->id)->error)->toBe($firstError);

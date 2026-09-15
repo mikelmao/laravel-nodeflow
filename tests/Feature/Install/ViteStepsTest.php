@@ -137,7 +137,7 @@ it('accepts the Vite-selected CommonJS config candidates', function (string $fil
 ]);
 
 it('rejects a commented-out alias', function () {
-    // The test that distinguishes E22 from naive text matching. Counterfactual:
+    // The test that distinguishes comment stripping from naive text matching. Counterfactual:
     // drop SourceText::withoutJsComments() from the step and this fails, because
     // the raw text contains the alias — so a host who commented it out while
     // debugging is told they are wired.
@@ -148,7 +148,7 @@ it('rejects a commented-out alias', function () {
 });
 
 it('rejects an alias pointing at a sibling packages/ directory without the vendor/ prefix', function () {
-    // The E41 discriminator: PACKAGE_SOURCE used to be the short
+    // The package-source discriminator: PACKAGE_SOURCE used to be the short
     // 'atram/laravel-nodeflow/resources/js' tail, which is also a substring of
     // this path. A host who aliased the package's un-vendored source tree
     // (e.g. a workspace symlink under packages/, not vendor/) read as
@@ -428,7 +428,7 @@ it('rejects a commented-out dedupe', function () {
 });
 
 it('rejects a dedupe list missing one of the three packages', function () {
-    // G-4 is specifically all three. Counterfactual: check only that `dedupe`
+    // This contract requires all three. Counterfactual: check only that `dedupe`
     // appears and this fails — a list with react alone still mounts two copies of
     // @xyflow/react, which is an invalid hook call that looks like a React bug.
     ($this->write)(str_replace(
@@ -461,9 +461,9 @@ it('cannot wire when there is no vite config at all', function () {
 });
 
 it('never writes to the vite config', function () {
-    // These two steps verify only (E20). Counterfactual: give either an apply()
+    // These two steps verify only. Counterfactual: give either an apply()
     // that edits the file and this fails — and a regex insertion into an
-    // arbitrary vite.config.ts is exactly the edit E11 forbids, because a
+    // arbitrary vite.config.ts is exactly the edit post-write verification forbids, because a
     // passing re-read would not prove it landed in the exported config.
     ($this->write)(wiredViteConfig());
 

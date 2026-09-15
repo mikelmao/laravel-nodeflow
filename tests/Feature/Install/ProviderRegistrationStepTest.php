@@ -84,7 +84,7 @@ it('cannot wire a bootstrap file with two return arrays', function () {
 });
 
 it('refuses apply() directly on a missing bootstrap file and creates nothing', function () {
-    // Previously deferred (task 6's minor): no test called apply() DIRECTLY on
+    // Regression: no test called apply() DIRECTLY on
     // this fixture, so a divergence between this step's own check() and the
     // writer's internal guard would go uncaught. This closes it.
     unlink($this->path);
@@ -106,7 +106,7 @@ it('refuses apply() directly on a bootstrap file with two return arrays and writ
 });
 
 /**
- * C1. The real installed host lists the provider via an import and the SHORT
+ * regression case. The real installed host lists the provider via an import and the SHORT
  * class name, not the fully-qualified string this step's needle used to be.
  */
 it('recognises the real host\'s import-and-short-name form and writes nothing', function () {
@@ -161,7 +161,7 @@ it('does not mistake a different provider merely ending in the same suffix for t
 });
 
 /**
- * C4. Verification is comment-stripped for the two steps reading PHP, same as
+ * regression case. Verification is comment-stripped for the two steps reading PHP, same as
  * the three reading JS/TS/CSS — a debugged-out entry must not read as wired.
  */
 it('treats a line-commented-out entry as absent', function () {

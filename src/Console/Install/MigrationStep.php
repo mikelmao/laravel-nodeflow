@@ -7,7 +7,7 @@ use Illuminate\Filesystem\Filesystem;
 /**
  * Audits any published copy of the package's migrations. Publishes only on request.
  *
- * WHY THIS IS AN AUDIT AND NOT A PUBLISH (E19). Laravel's
+ * WHY THIS IS AN AUDIT AND NOT A PUBLISH. Laravel's
  * BaseCommand::getMigrationPaths() returns array_merge(registered paths, [the
  * host's database/migrations]) — the host's path last — and
  * Migrator::getMigrationFiles() reduces that list with keyBy(migration name),
@@ -17,8 +17,7 @@ use Illuminate\Filesystem\Filesystem;
  * host's, and no test on either side can see it: the package's assertions run
  * against the package's file, the host's tests against the host's.
  *
- * That happened once already, between Plan 4 and the demo application. This step
- * exists so the next one is a non-zero exit instead of a silent divergence.
+ * This step turns that otherwise silent divergence into a non-zero exit.
  */
 final class MigrationStep implements InstallStep
 {
@@ -51,7 +50,7 @@ final class MigrationStep implements InstallStep
             return InstallOutcome::Writable;
         }
 
-        // No published copy and no --publish-migrations is the state E19 wants a
+        // No published copy and no --publish-migrations is the state migration ownership wants a
         // host to be in, so it must read as fine rather than as work outstanding.
         return InstallOutcome::AlreadyPresent;
     }
@@ -79,7 +78,7 @@ final class MigrationStep implements InstallStep
             return null;
         }
 
-        // Spec §3.2.1 and §10 both require the drift report to name both paths:
+        // The drift report must name both paths:
         // the host's published copy and the package's own source, side by side,
         // so a reader can diff them without hunting for either one. realpath()
         // collapses the `__DIR__.'/../../../...'` glob prefix into a canonical

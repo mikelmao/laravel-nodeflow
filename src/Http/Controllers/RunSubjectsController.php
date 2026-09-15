@@ -18,7 +18,7 @@ use Symfony\Component\HttpKernel\Exception\NotFoundHttpException;
  * query. That is not input hygiene for its own sake: a node id that is real in
  * a *different* run's graph must not resolve here, because being entitled to
  * this run says nothing about another one. Accepting a raw key as equivalent to
- * authorization is exactly what open issue G-3 warns about, and the 404 for
+ * authorization would bypass tenant ownership, and the 404 for
  * that case is asserted rather than assumed.
  *
  * This controller never names RunSubject; the reader shapes the rows.

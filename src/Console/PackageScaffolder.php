@@ -7,13 +7,13 @@ use Illuminate\Filesystem\Filesystem;
 /**
  * Emits an ordinary Composer package that ships Nodeflow nodes.
  *
- * Deliberately no manifest (E9): compatibility comes from `require`, provider
+ * Deliberately no manifest: compatibility comes from `require`, provider
  * loading comes from `extra.laravel.providers`, and a node's identity comes
  * from its own `type()` plus explicit registration — the same three things
  * that make a hand-written package work, because that is all this emits.
  *
  * Every file is rendered and parse-checked, then every existing-target output
- * path is containment-checked, BEFORE anything is written (E51/E52). A parse
+ * path is containment-checked, BEFORE anything is written (path containment/package and namespace validation). A parse
  * or path refusal therefore cannot leave a partially refreshed package.
  */
 final class PackageScaffolder
@@ -99,7 +99,7 @@ final class PackageScaffolder
         foreach ($files as $relative => $contents) {
             $path = $paths[$relative];
 
-            // E43's matching-package state is a merge, not a reinitialise:
+            // target-state handling's matching-package state is a merge, not a reinitialise:
             // a later extraction must not erase earlier $nodes entries (or
             // any other package-owned customisation) before adding its own.
             if ($matchingPackage && $this->files->exists($path)
@@ -199,7 +199,7 @@ final class PackageScaffolder
     private function renderComposerJson(PackageTarget $target, string $namespace): string
     {
         // Every value below goes through json_encode() rather than manual
-        // quoting or escaping (F-1): the PSR-4 key needs a literal trailing
+        // quoting or escaping: the PSR-4 key needs a literal trailing
         // namespace separator, which JSON must render as a doubled
         // backslash, and json_encode() gets that right for any namespace or
         // constraint text without this class having to reason about it.

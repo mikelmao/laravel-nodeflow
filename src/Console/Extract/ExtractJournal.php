@@ -5,7 +5,7 @@ namespace Nodeflow\Console\Extract;
 use Illuminate\Filesystem\Filesystem;
 
 /**
- * Records every mutation `ExtractNodeCommand`'s moves (M1-M9, plus M6a's own
+ * Records every mutation `ExtractNodeCommand`'s moves (full mutation sequence, plus post-move rescan's own
  * abort path) make to the host tree, in the order they happen, so a failure
  * anywhere in that sequence can undo everything rather than leave the host
  * half-moved. This is the ONLY thing standing between a bad extraction and a
@@ -30,8 +30,8 @@ use Illuminate\Filesystem\Filesystem;
  *     tree with the exact state captured before the external process ran.
  *
  * WHY REPLAY IN REVERSE (restore()'s own rule, and the one most worth
- * getting wrong). The moves are not independent: M4 registers a class into a
- * provider M1 only just created; M6 edits a composer.json that already
+ * getting wrong). The moves are not independent: package registration registers a class into a
+ * provider package scaffolding only just created; Composer rewrite edits a composer.json that already
  * existed before any move ran. Undoing them in the SAME order they
  * happened — oldest first — would try to, say, restore a file's original
  * bytes after an EARLIER (in undo order) step had already deleted the

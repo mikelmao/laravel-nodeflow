@@ -14,8 +14,8 @@ use Nodeflow\Console\SourceText;
  * dedupe cannot drift. The comment-stripping call in configSource() is shared
  * for the same reason.
  *
- * Both concrete steps are verify-only (E20): editing an arbitrary vite.config.ts
- * needs a TypeScript AST, which PHP does not have, and E11 permits only an edit
+ * Both concrete steps are verify-only: editing an arbitrary vite.config.ts
+ * needs a TypeScript AST, which PHP does not have, and post-write verification permits only an edit
  * whose success can be re-verified. apply() is therefore shared too — check()
  * never returns Writable, so apply() is unreachable and simply mirrors check().
  */

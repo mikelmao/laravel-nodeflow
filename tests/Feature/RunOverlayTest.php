@@ -122,7 +122,7 @@ it('preserves real execution output when a legacy run names an executable start 
 });
 
 /**
- * E13's second half. Counterfactual: derive `reached` from execution rows only,
+ * overlay semantics's second half. Counterfactual: derive `reached` from execution rows only,
  * and the node holding the entire audience mid-wait renders dimmed with no
  * badge — the single most important state this whole view exists to display.
  */
@@ -198,7 +198,7 @@ it('marks completed, failed, and cancelled runs terminal', function () {
 });
 
 it('aggregates with exactly two queries regardless of how many nodes the graph has', function () {
-    // The D4/D11 payoff. Counterfactual: loop the graph's nodes issuing a count
+    // The bounded-query payoff. Counterfactual: loop the graph's nodes issuing a count
     // per node and this is 4 queries here and 400 on a real graph.
     $this->run->fresh();
     $queries = [];
@@ -241,7 +241,7 @@ it('four-oh-fours another tenants overlay rather than forbidding it', function (
 });
 
 /**
- * Spec §7's numeric-id/output case. Every other fixture in this file uses
+ * Numeric identifiers and node output share this numeric-id/output case. Every other fixture in this file uses
  * non-numeric node ids ('sent', 'segment', ...) and casts the decoded JSON
  * back to an array before comparing, so deleting either `(object)` cast in
  * RunOverlay::snapshot() (lines 56 and 68) leaves every other assertion here

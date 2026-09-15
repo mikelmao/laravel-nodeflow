@@ -38,7 +38,7 @@ it('proves a double-quoted literal with no interpolation', function () {
 });
 
 it('proves a literal past a leading comment in the body', function () {
-    // E36 requires matching on the COMMENT-STRIPPED token stream. Counterfactual:
+    // literal type requirement requires matching on the COMMENT-STRIPPED token stream. Counterfactual:
     // match the raw token sequence and this fails, refusing every node whose
     // author explained their type — a probe confirmed the body emits T_COMMENT.
     $result = NodeTypeLiteral::resolve(
@@ -73,7 +73,7 @@ it('proves a same-class constant reached through static::', function () {
 it('refuses a concatenation even of two literals', function () {
     // Two T_CONSTANT_ENCAPSED_STRING tokens, not one. Accepting concatenation
     // opens the door to 'x' . static::class, which is the exact orphaning shape
-    // E10 exists to refuse.
+    // literal type constraint exists to refuse.
     $result = NodeTypeLiteral::resolve(nodeSource("        return 'demo' . '.send';"), 'SendMessage');
 
     expect($result->ok())->toBeFalse();
@@ -100,7 +100,7 @@ it('refuses a heredoc', function () {
 
 it('refuses a type derived from the class name', function () {
     // The shape the whole guard exists for. Measured: this returns the SAME
-    // string before and after a namespace move, so the empirical check at M9
+    // string before and after a namespace move, so the empirical check at fresh-host verification
     // cannot see it.
     $result = NodeTypeLiteral::resolve(
         nodeSource('        return strtolower(class_basename(static::class));'),
@@ -149,7 +149,7 @@ it('refuses a constant inherited from a parent rather than declared here', funct
 });
 
 it('resolves a same-class constant even when a sibling class declares one of the same name', function () {
-    // Critical 1's reproduction: sameClassConstant() must not scan the whole
+    // Regression: sameClassConstant() must not scan the whole
     // file's flat token stream. Other's TYPE must not leak into SendMessage's
     // own, provably-correct literal — and Other is declared FIRST in the file,
     // so an unscoped scan would find it before ever reaching SendMessage's own.
@@ -181,11 +181,11 @@ it('resolves a same-class constant even when a sibling class declares one of the
 });
 
 it('refuses a class constant whose initialiser concatenates a literal with static::class', function () {
-    // Critical 2: the exact shape E10 refuses on the return path — 'x' .
+    // Regression: the exact shape literal type constraint refuses on the return path — 'x' .
     // static::class — must also be refused when it appears as a class
     // constant's initialiser, since self::TYPE / static::TYPE hands that same
     // value to type(). Checking only the token immediately after '=' (as the
-    // brief's original code did) would accept this by mistake.
+    // an unscoped scan would) would accept this by mistake.
     $result = NodeTypeLiteral::resolve(
         nodeSource('        return self::TYPE;', "    public const TYPE = 'demo.' . static::class;\n"),
         'SendMessage',
@@ -196,7 +196,7 @@ it('refuses a class constant whose initialiser concatenates a literal with stati
 });
 
 it('refuses when the only type() of that name belongs to a nested anonymous class', function () {
-    // Important 3: an anonymous class nested inside one of SendMessage's own
+    // Regression: an anonymous class nested inside one of SendMessage's own
     // methods can declare its own type(). A flat scan for the first function
     // named "type" anywhere in the file would find THIS one and treat its body
     // as SendMessage's own — a false accept, since SendMessage itself declares
@@ -229,7 +229,7 @@ it('refuses when the only type() of that name belongs to a nested anonymous clas
 });
 
 it('proves the real class type() even when a bodiless interface signature precedes it', function () {
-    // Important 3: a flat, unscoped scan for the first function named "type"
+    // Regression: a flat, unscoped scan for the first function named "type"
     // would stop at the interface's bodiless signature (a ';' before any '{')
     // and wrongly refuse the whole file. Scoping to SendMessage's own class
     // body means the interface's tokens are never even in scope, and the
@@ -260,7 +260,7 @@ it('proves the real class type() even when a bodiless interface signature preced
 });
 
 it('refuses a same-class constant lookup that only matches inside a nested anonymous class', function () {
-    // Re-review finding 4: mutation-testing the shipped code by deleting
+    // Regression: mutation-testing the shipped code by deleting
     // "&& $depth === 0" from sameClassConstant()'s T_CONST match left all 17
     // tests passing. Without that check, sameClassConstant() reaches into a
     // nested anonymous class's own constant and reports a value the moved

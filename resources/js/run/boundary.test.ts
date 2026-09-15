@@ -3,7 +3,7 @@ import { join } from 'node:path'
 import { describe, expect, it } from 'vitest'
 
 /**
- * Spec E7's structural guarantee, enforced rather than documented.
+ * The structural guarantee, enforced rather than documented.
  *
  * A run executed a frozen graph; the editor renders a draft that may have
  * diverged. One component for both invites painting a run's counts onto nodes

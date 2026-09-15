@@ -230,7 +230,7 @@ export default function Page(props: FlowEditorProps) {
     return (
         <FlowEditor
             {...props}
-            nodeRenderers={{ 'yaya.send_message': MyCard }}
+            nodeRenderers={{ 'notifications.send_message': MyCard }}
         />
     )
 }
@@ -368,8 +368,8 @@ that node. The drill-down panel's never-reached wording ("no subject has ever
 been here") is not true in that state either; there is nothing in either the
 overlay or the drill-down that can tell the two states apart, because neither
 is backed by a durable record of the visit. See
-[Execution model](05-execution-model.md#known-limitations) for why, and open
-issue C-1 for the related caveat on when polling stops.
+[Execution model](05-execution-model.md#known-limitations) for the related
+polling limitation.
 
 ### The subject drill-down
 
@@ -453,9 +453,7 @@ a host assembling its own run UI instead of using `FlowRun` directly:
 `FlowRunSession` calls `normalizeOverlay(overlay)` inside a `useMemo` with no error
 boundary anywhere in the package, so a payload that fails validation (not an
 object, `terminal` not a boolean, `nodes` not an object) throws synchronously out
-of render. A spec-driven expectation exists that this would surface as a named
-client error a host could catch and render around (see spec §6); the shipped
-behavior is a plain, uncaught `Error`. A host that wants to survive a malformed
+of render as a plain, uncaught `Error`. A host that wants to survive a malformed
 overlay needs its own error boundary around `FlowRun`.
 
 ### What's still manual
@@ -463,5 +461,5 @@ overlay needs its own error boundary around `FlowRun`.
 The five host-wiring requirements above are unchanged by any of this —
 `FlowRun` shares the same Vite alias, tsconfig path, Tailwind `@source`,
 `@xyflow/react` dependency and `dedupe` setting as `FlowEditor`, and adds no
-sixth. The `nodeflow:install` command that verifies all five is still Plan 5
-work.
+sixth. Run `php artisan nodeflow:install --check` to verify all five without
+changing host files.

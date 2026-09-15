@@ -44,7 +44,7 @@ abstract class TestCase extends Orchestra
             'prefix' => '',
         ]);
 
-        // Task 5 is the first suite to send a request through the 'web'
+        // This is the first suite to send a request through the 'web'
         // middleware group (EditorRoutesTest, via actingAs()+get/put/postJson).
         // That group's EncryptCookies middleware resolves the encrypter
         // regardless of whether any cookie actually needs it, so every test in

@@ -295,7 +295,7 @@ function allowEverything(): void
 }
 
 it('denies editing when the host has defined no gates', function () {
-    // Plan 2's floor, reached over HTTP for the first time. Counterfactual: skip
+    // The default-deny floor, reached over HTTP. Counterfactual: skip
     // authorize() in the controller and this returns 200.
     $this->actingAs($this->user)
         ->get("/nodeflow/flows/{$this->flow->id}/edit")
@@ -638,7 +638,7 @@ it('returns 409 and the newer draft when the token is stale', function () {
 });
 
 it('accepts a draft that could never publish', function () {
-    // E3 again, over HTTP: the endpoint must not validate.
+    // safety invariant again, over HTTP: the endpoint must not validate.
     allowEverything();
 
     $this->actingAs($this->user)
@@ -806,7 +806,7 @@ it('returns the current draft revision alongside the published version', functio
 });
 
 it('returns per-node errors when publish is rejected', function () {
-    // The payoff of Task 3, over HTTP. Counterfactual: return only the flat
+    // The per-node error contract, exercised over HTTP. Counterfactual: return only the flat
     // strings and the editor has to parse prose to find the node.
     allowEverything();
 
@@ -921,7 +921,7 @@ it('denies publishing to someone who may edit but not publish', function () {
 });
 
 it('ignores a version id smuggled into the publish payload', function () {
-    // Open issue G-3: the unscoped Flow::currentVersion() relation is safe only
+    // Tenant-ownership invariant: the unscoped Flow::currentVersion() relation is safe only
     // while current_version_id stays inside the tenant. Counterfactual: pass the
     // request through to update() and a caller repoints the flow at another
     // tenant's version.
@@ -940,7 +940,7 @@ it('ignores a version id smuggled into the publish payload', function () {
 
 it('hands the client the urls for its own endpoints', function () {
     // The client cannot build these itself: Nodeflow::routes() is called inside
-    // the host's own group, so prefix and middleware are the host's choice (E4).
+    // the host's own group, so prefix and middleware are the host's choice (host integration contract).
     // Counterfactual: drop the `urls` prop and every assertion here fails; the
     // throwaway prototype hardcoded '/nodeflow/flows/{id}/publish' instead, which
     // is exactly what this prop exists to prevent.

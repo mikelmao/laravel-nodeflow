@@ -5,9 +5,9 @@ namespace Nodeflow\Console;
 /**
  * What NodeRegistrationWriter::removeFrom() did.
  *
- * Deliberately NOT extra cases on NodeRegistrationOutcome (E38). `Appended` is
+ * Deliberately NOT extra cases on NodeRegistrationOutcome (registration-removal outcome). `Appended` is
  * meaningless for a removal and `Removed` for an append, and growing that enum
- * would force every match() Plans 1 and 5 shipped to gain arms it can never hit
+ * would force every existing match() caller to gain arms it can never hit
  * or throw UnhandledMatchError.
  */
 enum NodeRemovalOutcome
@@ -35,7 +35,7 @@ enum NodeRemovalOutcome
     case AnchorMissing;
     case AnchorAmbiguous;
 
-    /** The entry shares its line with a sibling entry (E39). File untouched. */
+    /** The entry shares its line with a sibling entry (shared-line registration outcome). File untouched. */
     case EntryAmbiguous;
 
     /**

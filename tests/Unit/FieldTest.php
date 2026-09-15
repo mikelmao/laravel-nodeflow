@@ -45,7 +45,7 @@ it('produces validation rules', function () {
 });
 
 it('records a dynamic options source instead of inline options', function () {
-    $field = Field::select('template')->optionsFrom('App\\Nodeflow\\YayaTemplates');
+    $field = Field::select('template')->optionsFrom('App\\Nodeflow\\MessageTemplates');
 
     expect($field->toArray()['options'])->toBe([])
         ->and($field->toArray()['dynamic_options'])->toBeTrue()

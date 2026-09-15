@@ -11,11 +11,11 @@ use Nodeflow\Nodes\Node;
 use Nodeflow\Schema\NodeDefinition;
 
 /**
- * Reproduces the reviewer's probe for the NodeRunner chunk-skew bug: a node
+ * Reproduces the chunk-skew regression for the NodeRunner chunk-skew bug: a node
  * whose body reacts to one subject (e.g. a conversion) by calling
  * SubjectExiter::exit() on it, mid-loop — mutating the very
  * `status = 'active'` set NodeRunner is chunking over. SubjectExiter::exit()
- * is the documented cancellation mechanism (spec §7.3, "a plain DB write"),
+ * is the documented cancellation mechanism (a plain database write),
  * so this is not a contrived edge case: any node that cancels the rest of a
  * cohort in reaction to one subject's outcome does exactly this.
  *

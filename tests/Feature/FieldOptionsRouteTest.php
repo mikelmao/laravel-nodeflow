@@ -219,7 +219,7 @@ it('rejects incompatible unknown and colliding trigger source option identities'
 ]);
 
 it('ignores a class name smuggled in the query string', function () {
-    // THE test for this task. Counterfactual: read the class from the request and
+    // Counterfactual: read the class from the request and
     // this endpoint instantiates arbitrary application classes.
     $this->actingAs($this->user)
         ->getJson(

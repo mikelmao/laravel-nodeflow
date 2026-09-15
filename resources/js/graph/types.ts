@@ -102,7 +102,7 @@ export type CanvasEdge = { id:string; type?:'nodeflowEdge'; source:string; sourc
 
 // Source: Nodeflow\Runs\RunOverlay::snapshot(). One entry per node in the run's
 // pinned graph. `reached` is row existence or a subject sitting here, never a
-// count of subjects released — see the package spec's E13.
+// count of subjects released.
 export type NodeOverlay = { reached: boolean; byOutput: Record<string, number>; waiting: number; failed: number; error: string | null }
 
 // `terminal` is server-computed, so the client never hardcodes which run

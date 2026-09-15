@@ -7,7 +7,7 @@ import type { FieldPayload } from '../graph/types'
  *
  * Option fetching is the package's job, in useFieldOptions, keyed by (node type,
  * field key). A custom control receives resolved options as data and never
- * learns the URL, so E6's invariant - the options endpoint never accepts a class
+ * learns the URL, so safety invariant's invariant - the options endpoint never accepts a class
  * name from the client - cannot be broken by a host's control.
  *
  * `errors` carries anything that should render beside this field, which includes

@@ -69,7 +69,7 @@ export async function send(
  * Substitute server-authored URL sentinels, url-encoding each value.
  *
  * A missing sentinel throws by name rather than returning the template: the
- * server owns these URLs (E4), so an absent placeholder means its contract
+ * server owns these URLs (host integration contract), so an absent placeholder means its contract
  * changed, and silently sending the unsubstituted template turns that into a
  * mysterious 404 far from the cause.
  */

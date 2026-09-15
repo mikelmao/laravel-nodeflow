@@ -5,7 +5,7 @@
 // per-file, so installing @types/node would make `process`, `Buffer`,
 // `__dirname` and the rest ambient across every file under resources/js —
 // including editor and canvas code a host's Vite compiles for the browser
-// (package.json's decision D2), where none of those exist at runtime. A
+// (package.json's development-only toolchain), where none of those exist at runtime. A
 // client component reading `process.env` is a real bug that @types/node
 // would let typecheck silently. This shim's narrowness — exactly the two
 // functions boundary.test.ts's directory scan calls, and nothing else Node

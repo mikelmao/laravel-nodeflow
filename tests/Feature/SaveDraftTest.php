@@ -39,7 +39,7 @@ it('saves a first draft when nothing has been saved yet', function () {
 });
 
 it('accepts a graph that could never publish', function () {
-    // E3: a draft is not a version. Mid-edit it is allowed to be broken, which is
+    // safety invariant: a draft is not a version. Mid-edit it is allowed to be broken, which is
     // the whole reason it is not stored as one.
     // Counterfactual: validate in save() and this throws.
     $broken = ['start' => 'nope', 'nodes' => [], 'edges' => []];

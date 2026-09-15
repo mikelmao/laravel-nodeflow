@@ -19,10 +19,10 @@ export type OverlayPolling = { snapshot: OverlaySnapshot; error: string | null }
  *
  * Interval polling rather than broadcasting, because the package does not own
  * queue or messaging infrastructure and requiring Echo would dictate a
- * websocket stack to the host (spec E8). A plain JSON endpoint over the
+ * websocket stack to the host. A plain JSON endpoint over the
  * package's own send() rather than an Inertia partial reload, because nothing
- * under resources/js imports Inertia and E4's whole point is that components
- * consume server-authored URLs without knowing the page framework (E14).
+ * under resources/js imports Inertia and host integration contract's whole point is that components
+ * consume server-authored URLs without knowing the page framework (framework-neutral URL design).
  */
 export function useOverlayPolling(
     url: string,

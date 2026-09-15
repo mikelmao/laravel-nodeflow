@@ -8,7 +8,7 @@ use Nodeflow\Nodes\NodeRegistry;
  * assertion that matters is really two: the exit code, AND that the host
  * tree is byte-identical before and after. A test that only checked the
  * exit code would miss a gate that "refuses" after already having written
- * something, which is exactly the bug class E45's own history warns about.
+ * something, which is exactly the bug class the span-aware reference handling warns about.
  */
 beforeEach(function () {
     $this->app->instance(
@@ -30,10 +30,10 @@ beforeEach(function () {
 
     // 'autoload' => ['psr-4' => ['App\\' => 'app/']] matches every real
     // Laravel host's own composer.json (Laravel's own skeleton ships exactly
-    // this entry) -- and, since Important A, G2 now REQUIRES the node's own
+    // this entry) -- and source-location validation requires the node's own
     // file to sit under a directory the host's composer.json maps this way,
     // so every fixture in this file needs it present to reach any gate past
-    // G2 at all.
+    // source-location validation at all.
     file_put_contents($this->root.'/composer.json', json_encode([
         'require' => ['atram/laravel-nodeflow' => '^2.0'],
         'autoload' => ['psr-4' => ['App\\' => 'app/']],
@@ -176,14 +176,14 @@ function writeAppNode(string $root, string $shortClass, string $type): string
     return 'App\Nodeflow\Nodes\\'.$shortClass;
 }
 
-// --- Happy path: every gate passes, so Task 9's moves actually run --------
+// --- Happy path: every gate passes and the mutation phase runs --------
 
-// Task 8's own build stopped here with a "gates passed, nothing moved yet"
+// An earlier read-only implementation stopped here with a "gates passed, nothing moved yet"
 // notice and asserted the host tree stayed byte-identical -- the correct
 // assertion for a command that was, at the time, read-only by construction.
-// Task 9 replaces that notice with the real moves (see
-// tests/Feature/ExtractNodeMovesTest.php for full coverage of M1-M7 and
-// M6a), so a host tree that changes -- the package now exists, the original
+// The mutation phase replaces that notice with the real moves (see
+// tests/Feature/ExtractNodeMovesTest.php for full coverage of package scaffolding through original deletion and
+// post-move rescan), so a host tree that changes -- the package now exists, the original
 // is gone -- is the CORRECT outcome here, not a regression.
 it('passes all eight gates and performs the extraction', function () {
     $class = writeAppNode($this->root, 'HappyPathNode', 'happy.path');
@@ -204,7 +204,7 @@ it('extracts successfully when the host has no composer.lock', function () {
         ->assertExitCode(0);
 });
 
-it('refuses at exit code 1, not 0 (F-3 / handle(): int contract)', function () {
+it('refuses at exit code 1, not 0 (state reset / handle(): int contract)', function () {
     // Counterfactual: return false from handle() for a refusal, and Laravel's
     // (int) cast on that turns it into exit code 0 -- indistinguishable from
     // success to any script or CI job that only checks $?.
@@ -216,9 +216,9 @@ it('refuses at exit code 1, not 0 (F-3 / handle(): int contract)', function () {
     expect($exitCode)->toBe(1);
 });
 
-// --- G1: class_exists, is_a(Node), cardinality ------------------------------
+// --- class eligibility validation: class_exists, is_a(Node), cardinality ------------------------------
 
-it('refuses a class that does not exist, reusing NodeRegistry::register()\'s own message (G1)', function () {
+it('refuses a class that does not exist, reusing NodeRegistry::register()\'s own message', function () {
     $before = hostTreeHash($this->root);
 
     $this->artisan('nodeflow:extract-node', [
@@ -231,7 +231,7 @@ it('refuses a class that does not exist, reusing NodeRegistry::register()\'s own
     expect(hostTreeHash($this->root))->toBe($before);
 });
 
-it('refuses a class that does not extend Node, reusing NodeRegistry::register()\'s own message (G1)', function () {
+it('refuses a class that does not extend Node, reusing NodeRegistry::register()\'s own message', function () {
     $path = $this->root.'/app/NotANode.php';
     file_put_contents($path, <<<'PHP'
     <?php
@@ -253,7 +253,7 @@ it('refuses a class that does not extend Node, reusing NodeRegistry::register()\
     expect(hostTreeHash($this->root))->toBe($before);
 });
 
-it('refuses a Node with neither cardinality interface, reusing NodeRegistry::register()\'s own message (G1)', function () {
+it('refuses a Node with neither cardinality interface, reusing NodeRegistry::register()\'s own message', function () {
     $directory = $this->root.'/app/Nodeflow/Nodes';
     mkdir($directory, 0777, true);
     $path = $directory.'/NoCardinalityNode.php';
@@ -293,9 +293,9 @@ it('refuses a Node with neither cardinality interface, reusing NodeRegistry::reg
     expect(hostTreeHash($this->root))->toBe($before);
 });
 
-// --- G2: file location (E51) and single top-level symbol (E47) -------------
+// --- source-location validation: file location and single top-level symbol -------------
 
-it('refuses a node whose file lives under vendor/, outside the host application (G2, adversarial probe 1)', function () {
+it('refuses a node whose file lives under vendor/, outside the host application', function () {
     $directory = $this->root.'/vendor/some-vendor/some-pkg/src';
     mkdir($directory, 0777, true);
     $path = $directory.'/VendorNode.php';
@@ -343,10 +343,10 @@ it('refuses a node whose file lives under vendor/, outside the host application 
     expect(hostTreeHash($this->root))->toBe($before);
 });
 
-it('does not refuse a node living outside app/ but still inside a PSR-4 root the host itself maps, e.g. src/ (Important 5, refined by Important A)', function () {
-    // G2's rule is "under a directory the host's OWN composer.json maps via
+it('does not refuse a node living outside app/ but still inside a PSR-4 root the host itself maps, e.g. src/', function () {
+    // source-location validation's rule is "under a directory the host's OWN composer.json maps via
     // autoload/autoload-dev PSR-4, and not under vendor/ at any depth" --
-    // NOT "inside app/ specifically", and (since Important A) NOT merely
+    // NOT "inside app/ specifically", and not merely
     // "anywhere under the host root" either: reading the host's own PSR-4
     // map is what lets a host mapping its root namespace to src/ (a
     // legitimate, if less common, choice) still work, while a directory the
@@ -401,17 +401,17 @@ it('does not refuse a node living outside app/ but still inside a PSR-4 root the
     ])->assertExitCode(0);
 });
 
-// --- Important A: G2 must not admit ground G5 cannot scan ------------------
+// --- source-location validation must not admit content the reference scan cannot cover -------------------------------
 
-it('refuses a node inside ANOTHER local path-repository package, not mapped by the HOST\'s own composer.json (Important A, case a)', function () {
+it('refuses a node inside ANOTHER local path-repository package not mapped by the HOST\'s own composer.json', function () {
     // packages/acme/other/src/... is a DIFFERENT Composer package's own
     // source, mapped by THAT package's own composer.json, never the host's.
-    // Before Important A (G2 widened to "host root minus a top-level
-    // vendor/"), this exited 0: the file sits inside the host root and not
+    // A simple "host root minus a top-level vendor/" rule would let this exit
+    // 0: the file sits inside the host root and not
     // under vendor/, so it passed, even though moving it would rewrite a
     // namespace that other package's own src/Consumer.php still references
-    // -- a reference G5 never scans, because packages/acme/other/src/ was
-    // never one of G5's roots either.
+    // -- a reference the scanner never sees, because packages/acme/other/src/ was
+    // never one of reference scan's roots either.
     mkdir($this->root.'/packages/acme/other/src/Nodes', 0777, true);
     $path = $this->root.'/packages/acme/other/src/Nodes/OtherPackageNode.php';
 
@@ -446,7 +446,7 @@ it('refuses a node inside ANOTHER local path-repository package, not mapped by t
     PHP);
     require $path;
 
-    // The live reference G5 would never have reached, even before this fix
+    // The live reference scanner would never have reached, even before this fix
     // -- included so the fixture demonstrates the actual consequence, not
     // merely a contrived path.
     file_put_contents($this->root.'/packages/acme/other/src/Consumer.php', <<<'PHP'
@@ -477,7 +477,7 @@ it('refuses a node inside ANOTHER local path-repository package, not mapped by t
     expect(hostTreeHash($this->root))->toBe($before);
 });
 
-it('refuses a node inside a NESTED vendor/ directory belonging to a different local package (Important A, case b)', function () {
+it('refuses a node inside a NESTED vendor/ directory belonging to a different local package', function () {
     // packages/foo/vendor/bar/pkg/src/... -- a vendor/ segment two levels
     // deep, precisely what the any-depth exclusion exists to stop. A host
     // mapping a broad root like "packages/" would otherwise treat this as
@@ -529,7 +529,7 @@ it('refuses a node inside a NESTED vendor/ directory belonging to a different lo
     expect(hostTreeHash($this->root))->toBe($before);
 });
 
-it('refuses a node inside storage/framework/cache/, unmapped by any PSR-4 entry (Important A, case c)', function () {
+it('refuses a node inside storage/framework/cache/ when no PSR-4 entry maps it', function () {
     mkdir($this->root.'/storage/framework/cache', 0777, true);
     $path = $this->root.'/storage/framework/cache/CacheNode.php';
 
@@ -576,7 +576,7 @@ it('refuses a node inside storage/framework/cache/, unmapped by any PSR-4 entry 
     expect(hostTreeHash($this->root))->toBe($before);
 });
 
-it('refuses a node already inside the extraction\'s own TARGET package, unmapped by the host (Important A, case d)', function () {
+it('refuses a node already inside the extraction\'s own TARGET package when the host does not map it', function () {
     // packages/acme/widgets/src/... is exactly where THIS extraction's own
     // --package=acme/widgets would land -- a node already sitting there is
     // not the host's own source either, and the host's composer.json never
@@ -627,8 +627,8 @@ it('refuses a node already inside the extraction\'s own TARGET package, unmapped
     expect(hostTreeHash($this->root))->toBe($before);
 });
 
-it('unions the host\'s own PSR-4 roots into G5\'s scan, agreeing with G2 by construction (Important A)', function () {
-    // G2 requires the node's own file to sit under a host PSR-4 root; G5's
+it('unions the host\'s own PSR-4 roots into reference scan\'s scan, agreeing with source-location validation by construction', function () {
+    // source-location validation requires the node's own file to sit under a host PSR-4 root; reference scan's
     // scan roots gain that SAME set via the SAME hostPsr4Directories() call
     // -- proven here by mapping App\ to src/ (NOT one of the seven NAMED
     // scan directories) and putting a live reference to the target only
@@ -703,13 +703,13 @@ it('unions the host\'s own PSR-4 roots into G5\'s scan, agreeing with G2 by cons
     expect(hostTreeHash($this->root))->toBe($before);
 });
 
-// --- Important N2: a PSR-4 value must not map the whole root or escape it ---
+// --- Root-containment regression: a PSR-4 value must not map the whole root or escape it ---
 
-it('refuses a node under storage/, even when composer.json maps a PSR-4 prefix to "./" (Important N2)', function () {
+it('refuses a node under storage/, even when composer.json maps a PSR-4 prefix to "./"', function () {
     // "./" normalises to zero path segments -- the same as "." or "/" --
     // and MUST NOT be accepted as a mapped root, or it maps the ENTIRE
-    // host, reopening Important A's case (c): storage/framework/cache/
-    // would then be "contained" in that root and pass G2. Counterfactual:
+    // host, making storage/framework/cache/ appear "contained" in that root
+    // and pass source-location validation. Counterfactual:
     // restore the old trim($directory, '/') derivation (no segment check)
     // and this test fails at exit 0.
     file_put_contents($this->root.'/composer.json', json_encode([
@@ -853,15 +853,15 @@ it('refuses the same node when the PSR-4 value is the bare slash rather than dot
     ])->assertFailed();
 });
 
-it('does not let a "../" PSR-4 value make G5 scan outside the host root (Important N2)', function () {
+it('does not let a "../" PSR-4 value make reference scan outside the host root', function () {
     // A dedicated, isolated sandbox (not sys_get_temp_dir() itself, which
     // is a busy, shared directory unrelated files could live under) so
     // this test is deterministic: the ONLY thing directly inside the
     // sandbox, besides the host itself, is one planted file this test
     // controls. composer.json declares a SECOND (legitimate) PSR-4 entry
-    // ("App\" => "app/") so G2 still passes for the node itself -- this
-    // test is isolating whether the "../" entry becomes a G5 scan root,
-    // not re-testing G2's own containment rule.
+    // ("App\" => "app/") so source-location validation still passes for the node itself -- this
+    // test is isolating whether the "../" entry becomes a reference scan root,
+    // not re-testing source-location containment.
     $sandbox = sys_get_temp_dir().'/nodeflow-extract-node-n2sandbox-'.bin2hex(random_bytes(6));
     mkdir($sandbox, 0777, true);
     $sandbox = realpath($sandbox);
@@ -882,7 +882,7 @@ it('does not let a "../" PSR-4 value make G5 scan outside the host root (Importa
     $class = writeAppNode($hostRoot, 'ClimbOutNode', 'climb.out.node');
 
     // Planted directly inside the SANDBOX -- one level above the host root,
-    // exactly where "../" resolves to. If G5 ever treated that resolved
+    // exactly where "../" resolves to. If reference scan ever treated that resolved
     // path as a scan root, this reference would be found and extraction
     // would wrongly refuse.
     file_put_contents($sandbox.'/OutsideConsumer.php', <<<'PHP'
@@ -915,7 +915,7 @@ it('refuses a node under storage/, when composer.json maps a PSR-4 prefix to "ap
     // true and $hostRoot->contains() is true for it, so ONLY the
     // in_array('..', $segments, true) check refuses it; the containment
     // check alone would let it through, because the escape-and-return
-    // lands EXACTLY on legitimate ground. Every other Important N2 test
+    // lands EXACTLY on legitimate ground. Every other Root-containment regression test
     // uses a value where '..' is the FIRST (or only) segment; this is the
     // one shape a purely positional check ("is the last/first segment
     // '..'?") would miss, and only a scan of every segment catches it.
@@ -971,15 +971,15 @@ it('refuses a node under storage/, when composer.json maps a PSR-4 prefix to "ap
     expect(hostTreeHash($this->root))->toBe($before);
 });
 
-it('does not let a PSR-4 directory that is a SYMLINK escaping the host become a scan root (Important N2, symlink escape)', function () {
+it('does not let a PSR-4 directory that is a SYMLINK escaping the host become a scan root', function () {
     // The syntactic segment check (empty, or containing '..') cannot see
     // this one at all: "linked/" is a perfectly ordinary-looking value.
     // Only resolving it -- $hostRoot->contains($absolute), which
     // canonicalises through the symlink via HostPath's own realpath() --
     // reveals that it points OUTSIDE the host. A second, legitimate PSR-4
-    // entry ("App" => "app/") lets G2 pass normally for the node itself,
+    // entry ("App" => "app/") lets source-location validation pass normally for the node itself,
     // isolating what this test actually checks: whether the ESCAPING
-    // entry becomes a G5 scan root. If it does, G5 finds a reference
+    // entry becomes a reference scan root. If it does, reference scan finds a reference
     // planted only in the symlink's OUTSIDE target and wrongly refuses
     // citing a file that was never part of the host; if it does not
     // (the fix), extraction succeeds, because nothing outside the host is
@@ -1031,9 +1031,9 @@ it('does not let a PSR-4 directory that is a SYMLINK escaping the host become a 
     }
 });
 
-// --- Mutation survivors from the PSR-4 derivation itself --------------------
+// --- PSR-4 derivation regressions -------------------------------------------
 
-it('refuses cleanly, not with an uncaught exception, when the host has no composer.json at all (mutation survivor 1)', function () {
+it('refuses cleanly, not with an uncaught exception, when the host has no composer.json at all (regression case)', function () {
     unlink($this->root.'/composer.json');
 
     $class = writeAppNode($this->root, 'NoComposerJsonAtAllNode', 'no.composer.json.at.all');
@@ -1043,7 +1043,7 @@ it('refuses cleanly, not with an uncaught exception, when the host has no compos
     expect($exitCode)->toBe(1);
 });
 
-it('reads a PSR-4 mapping declared under autoload-dev, not just autoload (mutation survivor 2)', function () {
+it('reads a PSR-4 mapping declared under autoload-dev, not just autoload (regression case)', function () {
     file_put_contents($this->root.'/composer.json', json_encode([
         'require' => ['atram/laravel-nodeflow' => '^2.0'],
         'autoload-dev' => ['psr-4' => ['App\\' => 'app/']],
@@ -1055,7 +1055,7 @@ it('reads a PSR-4 mapping declared under autoload-dev, not just autoload (mutati
         ->assertExitCode(0);
 });
 
-it('reads the ARRAY form of a single PSR-4 mapping (mutation survivor 3)', function () {
+it('reads the ARRAY form of a single PSR-4 mapping (regression case)', function () {
     // Composer allows one namespace prefix to map to SEVERAL directories:
     // "App\\": ["app/", "app2/"]. Both must be accepted as candidate roots.
     file_put_contents($this->root.'/composer.json', json_encode([
@@ -1069,9 +1069,9 @@ it('reads the ARRAY form of a single PSR-4 mapping (mutation survivor 3)', funct
         ->assertExitCode(0);
 });
 
-it('drops a PSR-4 entry pointing at a directory that does not exist on disk, rather than crashing (mutation survivor 4)', function () {
+it('drops a PSR-4 entry pointing at a directory that does not exist on disk, rather than crashing (regression case)', function () {
     // A directory declared in composer.json but never created must never
-    // become a G5 scan root: NodeReferenceScanner::scan() calls
+    // become a reference scan root: NodeReferenceScanner::scan() calls
     // HostPath::root() on every root it is given, which throws
     // InvalidArgumentException for a non-existent path -- and gate5() only
     // catches RuntimeException, so an unfiltered entry here would crash the
@@ -1091,7 +1091,7 @@ it('drops a PSR-4 entry pointing at a directory that does not exist on disk, rat
     expect($exitCode)->toBe(0);
 });
 
-it('does not treat an ancestor directory literally named "vendor", ABOVE the host root, as containment (mutation survivor 5)', function () {
+it('does not treat an ancestor directory literally named "vendor", ABOVE the host root, as containment (regression case)', function () {
     // underVendorAtAnyDepth() only inspects the path SEGMENTS strictly
     // BELOW the host root (array_slice($fileSegments, count($rootSegments))).
     // Without that slice, a host root whose own ANCESTOR happens to be
@@ -1125,7 +1125,7 @@ it('does not treat an ancestor directory literally named "vendor", ABOVE the hos
     }
 });
 
-it('does not report the same survivor twice when a named scan root and a PSR-4 root are the same directory (mutation survivor 6)', function () {
+it('does not report the same survivor twice when a named scan root and a PSR-4 root are the same directory (regression case)', function () {
     // The default fixture maps App\ to app/, which is ALSO one of the seven
     // NAMED scan directories -- without array_unique() on gate5()'s merged
     // roots list, app/ would be scanned TWICE, and every unexempted
@@ -1168,7 +1168,7 @@ it('does not report the same survivor twice when a named scan root and a PSR-4 r
     expect(substr_count($output, 'UsesIt.php'))->toBe(1);
 });
 
-it('drops an empty-string PSR-4 mapping value (mutation survivor 7)', function () {
+it('drops an empty-string PSR-4 mapping value (regression case)', function () {
     file_put_contents($this->root.'/composer.json', json_encode([
         'require' => ['atram/laravel-nodeflow' => '^2.0'],
         'autoload' => ['psr-4' => ['App\\' => '', 'Real\\' => 'app/']],
@@ -1182,7 +1182,7 @@ it('drops an empty-string PSR-4 mapping value (mutation survivor 7)', function (
 
 
 it('refuses a node whose file also declares a trait, naming the trait', function () {
-    // E47. M2 rewrites the file's namespace, which moves EVERY declaration in it,
+    // single-symbol requirement. class move rewrites the file's namespace, which moves EVERY declaration in it,
     // while the scan only looks for references to the node. Without this gate the
     // node resolves, type() holds, verification passes, and a host class using the
     // trait dies with "Trait ... not found".
@@ -1242,7 +1242,7 @@ it('refuses a node whose file also declares a trait, naming the trait', function
     expect(hostTreeHash($this->root))->toBe($before);
 });
 
-it('refuses a node whose file also declares a top-level function, naming it (E47)', function () {
+it('refuses a node whose file also declares a top-level function, naming it', function () {
     $directory = $this->root.'/app/Nodeflow/Nodes';
     mkdir($directory, 0777, true);
     $path = $directory.'/CompanionFunctionNode.php';
@@ -1294,14 +1294,14 @@ it('refuses a node whose file also declares a top-level function, naming it (E47
     expect(hostTreeHash($this->root))->toBe($before);
 });
 
-it('refuses a node whose file also declares a top-level BY-REF function, naming it (C1)', function () {
-    // Critical 1. On PHP 8.1+, the '&' in `function &foo()` is NOT the bare
+it('refuses a node whose file also declares a top-level BY-REF function, naming it (regression case)', function () {
+    // Regression. On PHP 8.1+, the '&' in `function &foo()` is NOT the bare
     // string token nextFunctionName()'s old code checked for -- token_get_all()
     // emits T_AMPERSAND_NOT_FOLLOWED_BY_VAR_OR_VARARG, an ARRAY token, since the
     // '&' is followed by an identifier rather than a $variable or '...'. The old
     // check `! is_array($token) && $token === '&'` can never match that array
     // form, so a by-ref top-level function was read as having no name at all and
-    // silently passed G2. Counterfactual: change nextFunctionName()'s skip list
+    // silently passed source-location validation. Counterfactual: change nextFunctionName()'s skip list
     // back to the bare-string check and this test fails (exit 0, and the
     // function's own name never appears in the refusal at all because the loop
     // returns null for it instead of the function's real name).
@@ -1357,7 +1357,7 @@ it('refuses a node whose file also declares a top-level BY-REF function, naming 
     expect(hostTreeHash($this->root))->toBe($before);
 });
 
-it('refuses a node whose file also declares a top-level const, naming it (E47)', function () {
+it('refuses a node whose file also declares a top-level const, naming it', function () {
     $directory = $this->root.'/app/Nodeflow/Nodes';
     mkdir($directory, 0777, true);
     $path = $directory.'/CompanionConstNode.php';
@@ -1407,7 +1407,7 @@ it('refuses a node whose file also declares a top-level const, naming it (E47)',
     expect(hostTreeHash($this->root))->toBe($before);
 });
 
-it('does not refuse a node file that declares only itself, with an anonymous class expression inside a method (E47)', function () {
+it('does not refuse a node file that declares only itself, with an anonymous class expression inside a method', function () {
     // `new class { ... }` and a closure both introduce their own '{' without a
     // preceding class/interface/trait/enum/function/const keyword whose next
     // token is a name -- findCompanionSymbol() must not mistake either for a
@@ -1467,8 +1467,8 @@ it('does not refuse a node file that declares only itself, with an anonymous cla
     ])->assertExitCode(0);
 });
 
-it('refuses a node inside a BRACED namespace block that also declares a companion trait, naming it (C3)', function () {
-    // Critical 3. `namespace App\Nodeflow\Nodes { ... }` (the braced form) is
+it('refuses a node inside a BRACED namespace block that also declares a companion trait, naming it (regression case)', function () {
+    // Regression. `namespace App\Nodeflow\Nodes { ... }` (the braced form) is
     // valid PHP, and everything it contains sits at brace depth 1 under a
     // NAIVE depth counter -- so a plain '{'/'}' counter never sees the class
     // OR the trait at "depth 0" and the whole companion check finds nothing.
@@ -1535,13 +1535,13 @@ it('refuses a node inside a BRACED namespace block that also declares a companio
     expect(hostTreeHash($this->root))->toBe($before);
 });
 
-// --- G3: type() must be a proven literal (E36) ------------------------------
+// --- type consistency validation: type() must be a proven literal ------------------------------
 
 it('refuses a node whose type() is computed, and writes nothing', function () {
-    // E36/E10. The one failure re-running cannot repair: type() derived from the
+    // Re-running cannot repair a type derived from the
     // class name silently changes identity when the namespace moves, orphaning
     // every published version that references it.
-    // Counterfactual: skip G3 entirely and this passes while the extraction
+    // Counterfactual: skip type consistency validation entirely and this passes while the extraction
     // proceeds -- verify by commenting out the gate and re-running.
     $directory = $this->root.'/app/Nodeflow/Nodes';
     mkdir($directory, 0777, true);
@@ -1590,9 +1590,9 @@ it('refuses a node whose type() is computed, and writes nothing', function () {
     expect(hostTreeHash($this->root))->toBe($before);
 });
 
-// --- G4: a DIFFERENT owner refuses; unregistered does not ------------------
+// --- type-ownership validation: a DIFFERENT owner refuses; unregistered does not ------------------
 
-it('refuses when the proven type is already registered to a different class (G4)', function () {
+it('refuses when the proven type is already registered to a different class', function () {
     $owner = writeAppNode($this->root, 'GateFourOwner', 'gate4.shared');
     app(NodeRegistry::class)->register($owner);
 
@@ -1607,7 +1607,7 @@ it('refuses when the proven type is already registered to a different class (G4)
     expect(hostTreeHash($this->root))->toBe($before);
 });
 
-it('does not refuse when the proven type is registered to the class being extracted itself (G4)', function () {
+it('does not refuse when the proven type is registered to the class being extracted itself', function () {
     $class = writeAppNode($this->root, 'GateFourSelfOwned', 'gate4.self');
     app(NodeRegistry::class)->register($class);
 
@@ -1615,7 +1615,7 @@ it('does not refuse when the proven type is registered to the class being extrac
         ->assertExitCode(0);
 });
 
-it('does not refuse when the proven type is not registered at all (G4)', function () {
+it('does not refuse when the proven type is not registered at all', function () {
     // "Unregistered is NOT a refusal" -- a freshly generated node that has
     // never been wired into the host's provider is legitimately extractable.
     $class = writeAppNode($this->root, 'GateFourUnregistered', 'gate4.unregistered');
@@ -1626,11 +1626,11 @@ it('does not refuse when the proven type is not registered at all (G4)', functio
         ->assertExitCode(0);
 });
 
-// --- G5: NodeReferenceScanner minus rewritableSpans() (E45, E46) -----------
+// --- reference scan: NodeReferenceScanner minus rewritableSpans() (span-aware reference handling, scan-root coverage) -----------
 
 it('refuses a node still registered through a legacy Nodeflow::register() call', function () {
-    // E45, and the finding that falsified the first design draft. The provider is
-    // a file M5 rewrites, so a file-level exemption let this through; a span-level
+    // A file-level exemption fails here. The provider is
+    // a file host deregistration rewrites, so a file-level exemption let this through; a span-level
     // one refuses it. After the move, NodeRegistry::register() autoloads through
     // is_a(), so the surviving entry is a fatal in boot() on every request.
     // The fixture is the demo's real shape.
@@ -1675,7 +1675,7 @@ it('does not refuse when the host provider carries only the exempted use import 
     // The other half of the legacy-register test above: rewritableSpans() must
     // actually exempt the provider's own `use` import and `$nodes` entry, or
     // every host that registers its nodes the RECOMMENDED way (no legacy
-    // Nodeflow::register() call at all) would be refused by G5 regardless.
+    // Nodeflow::register() call at all) would be refused by reference scan regardless.
     $class = writeAppNode($this->root, 'GateFiveCleanNode', 'gate5.clean');
 
     $providerDirectory = $this->root.'/app/Providers';
@@ -1710,7 +1710,7 @@ it('refuses a same-named import sitting in a SIBLING provider file, not just the
     // to the real provider -- an AppServiceProvider, say -- is scanned too.
     // Its own `use` import of the class being extracted must NOT be folded
     // into the exemption set: AppServiceProvider.php is not one of the files
-    // Task 9 rewrites, so a reference living there is a genuine survivor, and
+    // the mutation phase rewrites, so a reference living there is a genuine survivor, and
     // exempting it here would silently certify a rewrite that never happens
     // to it. Counterfactual: drop the canonical same-file filter from
     // providerSpans() (fold every reference found anywhere in the directory
@@ -1851,7 +1851,7 @@ it('does not refuse a node file that names its own FQCN inside itself, not just 
     ])->assertExitCode(0);
 });
 
-it('does not claim a same-short-name test file that tests a DIFFERENT class (Important 3)', function () {
+it('does not claim a same-short-name test file that tests a DIFFERENT class', function () {
     // rewritableSpans() locates a candidate test file by SHORT CLASS NAME
     // alone (the only convention MakeNodeCommand::writeTest() gives it to go
     // by) -- but two classes in different namespaces can share a short name,
@@ -1859,7 +1859,7 @@ it('does not claim a same-short-name test file that tests a DIFFERENT class (Imp
     // candidate were trusted unconditionally, extracting App\Nodeflow\Nodes\
     // CollideNode would claim tests/Feature/Nodeflow/CollideNodeTest.php even
     // though that file actually tests the UNRELATED App\Other\CollideNode --
-    // handing Task 9's moves a file to move that does not belong to the class
+    // handing the mutation phase a file to move that does not belong to the class
     // being extracted at all. Counterfactual: drop the
     // fileReferencesClass() check from rewritableSpans() (trust the
     // conventional path unconditionally) and this test's assertion fails --
@@ -1909,12 +1909,9 @@ it('does not claim a same-short-name test file that tests a DIFFERENT class (Imp
     expect($matching)->toBeEmpty();
 });
 
-it('does not claim the conventional test file merely because a SIBLING file in the same directory references the target (Important B)', function () {
-    // fileReferencesClass()'s canonical same-file filter -- Finding 6's own
-    // filter, re-entering through this new helper -- was untested. Its
-    // sibling copy inside providerSpans() (Minor 1, Finding 9) already had
-    // a discriminating test; this one did not, even though the exact same
-    // hazard applies: NodeReferenceScanner::scan() is handed the candidate
+it('does not claim the conventional test file merely because a SIBLING file in the same directory references the target', function () {
+    // fileReferencesClass() needs its canonical same-file filter. The same
+    // hazard applies inside providerSpans(): NodeReferenceScanner::scan() is handed the candidate
     // FILE'S OWN DIRECTORY (it only accepts a directory), so every sibling
     // living alongside the conventional {Short}Test.php is scanned too.
     // Replacing the canonical filter with `return $references !== []`
@@ -1971,12 +1968,12 @@ it('does not claim the conventional test file merely because a SIBLING file in t
     expect($matching)->toBeEmpty();
 });
 
-it('refuses when the $nodes array also carries an element the writer cannot classify, rather than exempting the whole array (Important 2)', function () {
+it('refuses when the $nodes array also carries an element the writer cannot classify, rather than exempting the whole array', function () {
     // rewritableSpans() now reuses NodeRegistrationWriter::findClassEntrySpans(),
     // which returns [] whenever ANY element in the array is not a plain
     // `<name>::class` -- exactly mirroring removeFrom()'s own EntryUnsupported
     // refusal. A nested array literal sitting alongside the real entry means
-    // the LATER move can never safely touch this array at all, so G5 must NOT
+    // the LATER move can never safely touch this array at all, so reference scan must NOT
     // exempt the real entry either: exempting it here while removeFrom()
     // refuses to touch it later is precisely the "gate and moves disagree"
     // defect this method exists to prevent.
@@ -2014,7 +2011,7 @@ it('refuses when the $nodes array also carries an element the writer cannot clas
     expect(hostTreeHash($this->root))->toBe($before);
 });
 
-it('refuses a node whose FQCN appears only in config/, proving the widened scan roots reach it (G5, adversarial probe 4)', function () {
+it('refuses a node whose FQCN appears only in config/, proving the widened scan roots reach it', function () {
     $class = writeAppNode($this->root, 'ConfigOnlyNode', 'config.only');
 
     mkdir($this->root.'/config', 0777, true);
@@ -2035,10 +2032,10 @@ it('refuses a node whose FQCN appears only in config/, proving the widened scan 
     expect(hostTreeHash($this->root))->toBe($before);
 });
 
-it('refuses a node whose FQCN appears only in bootstrap/app.php, Laravel 11\'s own registration site (G5, Important 1)', function () {
+it('refuses a node whose FQCN appears only in bootstrap/app.php, Laravel 11\'s own registration site', function () {
     // Without bootstrap/ in the scanned roots, a reference sitting in exactly
     // the file Laravel 11 itself uses to register providers/bindings would go
-    // completely undetected -- the widened-roots probe (E46) only proved
+    // completely undetected -- the widened-roots probe only proved
     // config/ was reached, not this file specifically.
     $class = writeAppNode($this->root, 'BootstrapOnlyNode', 'bootstrap.only');
 
@@ -2060,11 +2057,11 @@ it('refuses a node whose FQCN appears only in bootstrap/app.php, Laravel 11\'s o
     expect(hostTreeHash($this->root))->toBe($before);
 });
 
-it('refuses a node whose FQCN appears only in tests/Unit/, proving the test suite itself is scanned (G5, Important 1)', function () {
+it('refuses a node whose FQCN appears only in tests/Unit/, proving the test suite itself is scanned', function () {
     // Symmetric with rewritableSpans() exempting the conventional TEST FILE
-    // (tests/Feature/Nodeflow/{Class}Test.php): if G5 never scans tests/ at
+    // (tests/Feature/Nodeflow/{Class}Test.php): if reference scan never scans tests/ at
     // all, a reference sitting in some OTHER test file under tests/Unit/ --
-    // one Task 9 will not move -- would silently survive undetected.
+    // one the mutation phase will not move -- would silently survive undetected.
     $class = writeAppNode($this->root, 'TestsOnlyNode', 'tests.only');
 
     mkdir($this->root.'/tests/Unit', 0777, true);
@@ -2093,7 +2090,7 @@ it('refuses a node whose FQCN appears only in tests/Unit/, proving the test suit
     expect(hostTreeHash($this->root))->toBe($before);
 });
 
-it('does not refuse when a different class merely shares the same short name in app/ (G5, adversarial probe 5)', function () {
+it('does not refuse when a different class merely shares the same short name in app/', function () {
     $class = writeAppNode($this->root, 'ProbeFiveNode', 'probe.five');
 
     // A DIFFERENT class, different namespace, same short name -- must not be
@@ -2116,7 +2113,7 @@ it('does not refuse when a different class merely shares the same short name in 
         ->assertExitCode(0);
 });
 
-it('refuses cleanly, naming the file, when a scanned host file declares more than one namespace (G5)', function () {
+it('refuses cleanly, naming the file, when a scanned host file declares more than one namespace', function () {
     $class = writeAppNode($this->root, 'MultiNsSiblingNode', 'multi.ns.sibling');
 
     file_put_contents($this->root.'/app/Weird.php', <<<'PHP'
@@ -2140,9 +2137,9 @@ it('refuses cleanly, naming the file, when a scanned host file declares more tha
     expect(hostTreeHash($this->root))->toBe($before);
 });
 
-// --- G6: composer.json parses, no naming conflict, no dont-discover cover (E49) ---
+// --- package configuration validation: composer.json parses, no naming conflict, no dont-discover cover ---
 
-it('refuses when --package is already required from a path repository pointing elsewhere (G6, adversarial probe 2)', function () {
+it('refuses when --package is already required from a path repository pointing elsewhere', function () {
     $class = writeAppNode($this->root, 'GateSixElsewhereNode', 'gate6.elsewhere');
 
     file_put_contents($this->root.'/composer.json', json_encode([
@@ -2228,8 +2225,8 @@ it('does not refuse when a Composer brace glob includes the matching path reposi
         ->assertExitCode(0);
 });
 
-it('refuses when a single-segment glob does not cross a "/" to cover a nested target (C2)', function () {
-    // Critical 2. "packages/*" is Composer's own idiomatic monorepo form and
+it('refuses when a single-segment glob does not cross a "/" to cover a nested target (regression case)', function () {
+    // Regression. "packages/*" is Composer's own idiomatic monorepo form and
     // covers exactly one path SEGMENT under packages/ (e.g. packages/foo) --
     // it does NOT cover packages/acme/widgets, a TWO-segment target, the same
     // way Composer's own path repository resolution would not treat it as a
@@ -2260,7 +2257,7 @@ it('refuses when a single-segment glob does not cross a "/" to cover a nested ta
     expect(hostTreeHash($this->root))->toBe($before);
 });
 
-it('refuses when extra.laravel.dont-discover covers the new package with a "*" entry (G6, adversarial probe 3)', function () {
+it('refuses when extra.laravel.dont-discover covers the new package with a "*" entry', function () {
     $class = writeAppNode($this->root, 'GateSixStarNode', 'gate6.star');
 
     file_put_contents($this->root.'/composer.json', json_encode([
@@ -2323,17 +2320,17 @@ it('does not refuse when dont-discover lists only unrelated packages', function 
         ->assertExitCode(0);
 });
 
-it('refuses when the host composer.json does not parse as JSON, now via G2 rather than G6 (Important A ripple)', function () {
-    // This refusal moved gates. Before Important A widened G2 to require
+it('refuses when the host composer.json does not parse as JSON, now via source-location validation rather than package configuration validation', function () {
+    // This refusal moved gates when source-location validation began requiring
     // the node's own file sit under a host PSR-4 root, an unparseable
-    // composer.json was only ever caught by G6's OWN existence/parse check
-    // below. Now G2's hostPsr4Directories() reads and decodes the SAME file
+    // composer.json was only ever caught by package configuration validation's OWN existence/parse check
+    // below. Now source-location validation's hostPsr4Directories() reads and decodes the SAME file
     // FIRST, gets [] (an unparseable file maps nothing), and refuses before
-    // G6 ever runs -- so G6's own "does not parse as JSON" message
+    // package configuration validation ever runs -- so package configuration validation's "does not parse as JSON" message
     // (deliberately left in place; see gate6()'s own docblock for why) is
     // provably unreachable through any valid call path today. This test
-    // asserts what ACTUALLY happens now -- refusal via G2's message, not
-    // G6's -- rather than keeping a stale assertion that would silently
+    // asserts what ACTUALLY happens now -- refusal via source-location validation's message, not
+    // package configuration validation's -- rather than keeping a stale assertion that would silently
     // start failing for the wrong reason.
     $class = writeAppNode($this->root, 'GateSixBadJsonNode', 'gate6.badjson');
 
@@ -2348,9 +2345,9 @@ it('refuses when the host composer.json does not parse as JSON, now via G2 rathe
     expect(hostTreeHash($this->root))->toBe($before);
 });
 
-// --- G7: target path absent, empty, or already this package (E43) ---------
+// --- target-path validation: target path absent, empty, or already this package ---------
 
-it('refuses an occupied target path that is not the package being extracted, and succeeds with --force (E43)', function () {
+it('refuses an occupied target path that is not the package being extracted, and succeeds with --force', function () {
     $class = writeAppNode($this->root, 'GateSevenNode', 'gate7.node');
 
     mkdir($this->root.'/packages/acme/widgets', 0777, true);
@@ -2359,13 +2356,13 @@ it('refuses an occupied target path that is not the package being extracted, and
     $before = hostTreeHash($this->root);
 
     $this->artisan('nodeflow:extract-node', ['class' => $class, '--package' => 'acme/widgets'])
-        ->expectsOutputToContain('E43')
+        ->expectsOutputToContain('is occupied by')
         ->assertFailed();
 
     expect(hostTreeHash($this->root))->toBe($before);
 
     // --force overrides the foreign occupant and lets extraction actually
-    // run (Task 9) -- the host tree is NOT byte-identical afterwards: the
+    // run the mutation phase -- the host tree is NOT byte-identical afterwards: the
     // foreign composer.json is gone, replaced by the scaffolded package's
     // own, and the original class file has moved. See
     // ExtractNodeMovesTest.php for the full "foreign directory under
@@ -2382,7 +2379,7 @@ it('refuses an occupied target path that is not the package being extracted, and
     expect($this->root.'/app/Nodeflow/Nodes/GateSevenNode.php')->not->toBeFile();
 });
 
-it('does not refuse an empty, pre-existing target directory (G7)', function () {
+it('does not refuse an empty, pre-existing target directory', function () {
     $class = writeAppNode($this->root, 'GateSevenEmptyDirNode', 'gate7.emptydir');
     mkdir($this->root.'/packages/acme/widgets', 0777, true);
 
@@ -2390,7 +2387,7 @@ it('does not refuse an empty, pre-existing target directory (G7)', function () {
         ->assertExitCode(0);
 });
 
-it('does not refuse when the target already holds exactly the package being extracted (G7)', function () {
+it('does not refuse when the target already holds exactly the package being extracted', function () {
     $class = writeAppNode($this->root, 'GateSevenMatchNode', 'gate7.match');
     mkdir($this->root.'/packages/acme/widgets', 0777, true);
     file_put_contents($this->root.'/packages/acme/widgets/composer.json', json_encode(['name' => 'acme/widgets']));
@@ -2399,7 +2396,7 @@ it('does not refuse when the target already holds exactly the package being extr
         ->assertExitCode(0);
 });
 
-it('refuses an occupied target with no composer.json at all, distinct from a foreign one (G7)', function () {
+it('refuses an occupied target with no composer.json at all, distinct from a foreign one', function () {
     $class = writeAppNode($this->root, 'GateSevenNoComposerJsonNode', 'gate7.nocomposerjson');
     mkdir($this->root.'/packages/acme/widgets', 0777, true);
     file_put_contents($this->root.'/packages/acme/widgets/.gitkeep', '');
@@ -2413,7 +2410,7 @@ it('refuses an occupied target with no composer.json at all, distinct from a for
     expect(hostTreeHash($this->root))->toBe($before);
 });
 
-it('resolves the target path from --path rather than the default when it is given (G7)', function () {
+it('resolves the target path from --path rather than the default when it is given', function () {
     $class = writeAppNode($this->root, 'GateSevenCustomPathNode', 'gate7.custompath');
     mkdir($this->root.'/custom/location', 0777, true);
     file_put_contents($this->root.'/custom/location/composer.json', json_encode(['name' => 'someone/else']));
@@ -2431,9 +2428,9 @@ it('resolves the target path from --path rather than the default when it is give
     expect(hostTreeHash($this->root))->toBe($before);
 });
 
-// --- G8: composer invocable; composer.lock existence recorded (E48) -------
+// --- Composer readiness validation: composer invocable; composer.lock existence recorded -------
 
-it('refuses when composer is not invocable (G8)', function () {
+it('refuses when composer is not invocable (Composer readiness validation)', function () {
     $class = writeAppNode($this->root, 'GateEightNode', 'gate8.node');
 
     $emptyPathDirectory = $this->root.'-emptypath';
@@ -2469,10 +2466,10 @@ it('refuses with no --package given, before ever touching composer.json or the t
     expect(hostTreeHash($this->root))->toBe($before);
 });
 
-it('refuses a --package that is not a valid Composer name, before ever reaching G6 or G7 (Important 4)', function () {
+it('refuses a --package that is not a valid Composer name, before ever reaching package configuration validation or target-path validation', function () {
     // Without this check, an invalid --package (bad characters, no vendor/name
     // separator, uppercase) flowed through all eight gates and reported
-    // success -- G6/G7 only ever compare the string as given, they never
+    // success -- package configuration validation/target-path validation only ever compare the string as given, they never
     // validate its SHAPE.
     $class = writeAppNode($this->root, 'InvalidPackageNameNode', 'invalid.package.name');
 
@@ -2499,15 +2496,15 @@ it('refuses a --package with no vendor/name separator', function () {
         ->assertFailed();
 });
 
-it('refuses an uppercase --package, closing a real G6 case-sensitivity bypass (Important 4)', function () {
+it('refuses an uppercase --package, closing a real package configuration validation case-sensitivity bypass', function () {
     // The exact reported repro: dont-discover: ["acme/widgets"] with
-    // --package=ACME/Widgets used to PASS G6, because that check compares
+    // --package=ACME/Widgets used to PASS package configuration validation, because that check compares
     // with an exact `===` and "ACME/Widgets" !== "acme/widgets" byte-for-byte
     // -- an uppercase spelling of the very same package silently defeated
-    // E49's own refusal. Composer's own package name pattern is
-    // lowercase-only, so validating --package against it BEFORE G6 ever runs
+    // discovery configuration's refusal. Composer's own package name pattern is
+    // lowercase-only, so validating --package against it BEFORE package configuration validation ever runs
     // closes this as a side effect of a single, reused check rather than a
-    // second, bespoke case-folding rule bolted onto G6 alone.
+    // second, bespoke case-folding rule bolted onto package configuration validation alone.
     $class = writeAppNode($this->root, 'UppercasePackageBypassNode', 'uppercase.package.bypass');
 
     file_put_contents($this->root.'/composer.json', json_encode([
@@ -2528,9 +2525,9 @@ it('refuses an uppercase --package, closing a real G6 case-sensitivity bypass (I
     expect(hostTreeHash($this->root))->toBe($before);
 });
 
-// --- F-3: reset instance-cached state at the top of handle() --------------
+// --- state reset: reset instance-cached state at the top of handle() --------------
 
-it('does not leak a stale provenType or composerLockExisted from an earlier successful call into a later refused one (F-3)', function () {
+it('does not leak a stale provenType or composerLockExisted from an earlier successful call into a later refused one', function () {
     // This exact bug shipped twice already in this codebase, against different
     // cached properties on different commands (MakeNodeCommand::nodeType(),
     // MakeNodePackageCommand::target()). Counterfactual: delete the two reset

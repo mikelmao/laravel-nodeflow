@@ -30,7 +30,7 @@ beforeEach(function () {
 });
 
 it('denies every flow ability when the host has defined no gates', function (string $ability) {
-    // Foundation spec §4: default deny unless a gate exists. Counterfactual:
+    // Authorization defaults to deny unless a gate exists. Counterfactual:
     // return true when Gate::has() is false and every one of these passes.
     expect(Gate::forUser($this->user)->allows($ability, $this->flow))->toBeFalse();
 })->with(['view', 'update', 'publish', 'runManually']);
@@ -95,7 +95,7 @@ it('passes the user and the model through to the hosts gate', function () {
 });
 
 it('maps viewing a flow to the viewAny gate rather than inventing a fifth', function () {
-    // The spec names exactly four gates. Counterfactual: add a nodeflow.view
+    // The public API defines exactly four gates. Counterfactual: add a nodeflow.view
     // gate and this fails, catching the drift.
     Gate::define('nodeflow.viewAny', fn ($user, $flow = null) => true);
 

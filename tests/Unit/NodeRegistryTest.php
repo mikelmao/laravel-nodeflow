@@ -46,7 +46,7 @@ it('builds a palette grouped for the editor', function () {
 });
 
 it('refuses to register a node implementing neither cardinality interface', function () {
-    // Spec section 5's example, written verbatim, used to register, validate,
+    // This canonical example, used to register, validate,
     // publish, start a run and only then throw at NodeRunner.php:66 the first
     // time a subject reached it. Failing here puts the error in front of the
     // author who can fix it.

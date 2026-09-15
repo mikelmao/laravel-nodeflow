@@ -22,26 +22,26 @@ use Throwable;
  * `nodeflow:extract-node {class} --package=vendor/name` — moves a node class
  * out of the host application into its own Composer package.
  *
- * `handle()` runs all eight gates (Task 8), in order, and returns
+ * `handle()` runs all eight read-only gates in order and returns
  * `self::FAILURE` the moment any one refuses — every gate is strictly
  * read-only, and a refusal test asserting the host tree is byte-identical
  * before and after is the point of gating before moving at all. Once every
- * gate passes, `performMoves()` (Task 9) runs M1 through M7 plus M6a: it
+ * gate passes, `performMoves()` runs the mutation sequence: it
  * scaffolds the package, moves the class and its test into it, edits both
- * providers and the host's own composer.json, re-scans the post-move tree
- * (M6a, E45), and only then deletes the originals (M7). M8 installs the new
- * path dependency without scripts, and M9 boots a fresh host process to prove
+ * providers and the host's own composer.json, re-scans the post-move tree,
+ * and only then deletes the originals. It installs the new path dependency
+ * without scripts and boots a fresh host process to prove
  * discovery registered the moved class. A failure at any point — including
- * M6a, M8, or M9 — restores the host to the bytes it had before
+ * post-move rescan, dependency installation, or fresh-host verification — restores the host to the bytes it had before
  * `performMoves()` ran (`ExtractJournal`).
  *
 
- * THE CROSS-TASK OBLIGATION THIS CLASS OWNS. G5 refuses any reference to the
+ * THE CROSS-PHASE OBLIGATION THIS CLASS OWNS. The reference scan refuses any reference to the
  * node class that the extraction will NOT itself rewrite. The set of spans
- * it WILL rewrite is defined by `rewritableSpans()` below — Task 9's moves
+ * it WILL rewrite is defined by `rewritableSpans()` below — the mutation phase
  * MUST call that exact method rather than re-derive the set. A gate and its
  * moves disagreeing about what counts as a rewritable span is precisely the
- * defect class (E45) this command exists to prevent: the first design draft
+ * defect class this command exists to prevent: an earlier implementation
  * exempted whole FILES, which silently let a legacy `Nodeflow::register()`
  * call living in the same file as an exempted `$nodes` entry survive
  * undetected. Exemption must be per byte SPAN, and there must be exactly one
@@ -64,7 +64,7 @@ class ExtractNodeCommand extends Command
 
     protected $description = 'Extract a node class into its own Composer package.';
 
-    /** The directory segment excluded from G2's containment rule at ANY depth below the host root — code already shipped as part of a Composer package, the host's own or a nested one, is not the host's own source (E51). */
+    /** The directory segment excluded from source-location validation at any depth below the host root: code already shipped in a Composer package is not host source. */
     private const VENDOR_DIR = 'vendor';
 
     /** Excluded from sharedScanRoots() the same way VENDOR_DIR is: a JS dependency tree is never the host's own source. */
@@ -73,16 +73,15 @@ class ExtractNodeCommand extends Command
     /**
      * Top-level directory NAME => the subdirectory NAMES sharedScanRoots()
      * excludes from it specifically (via NodeReferenceScanner's own
-     * $excludedTopLevelNames parameter), for a review-round finding: the
-     * gate that USED TO be a fixed, narrow allowlist (REFERENCE_SCAN_DIRS
-     * — app, bootstrap, config, database, resources, routes, tests) missed
+     * $excludedTopLevelNames parameter). The previous fixed, narrow allowlist
+     * (app, bootstrap, config, database, resources, routes, tests) missed
      * real references sitting in an ordinary top-level directory it never
      * scanned at all (scripts/, public/, a sibling local package under
-     * packages/), while M6a's own separately-derived wider scan admitted
+     * packages/), while post-move rescan's own separately-derived wider scan admitted
      * `storage/framework/` and `bootstrap/cache/` — COMPILED artifacts,
      * not source — and could abort a legitimate move over a stale cached
      * Blade view. sharedScanRoots() fixes both directions at once by
-     * scanning every top-level directory (which is what E46's own
+     * scanning every top-level directory (which is what complete scan-root coverage
      * bootstrap/app.php requirement always needed anyway) and excluding
      * only the two known-artifact subdirectories, by name, scoped to their
      * OWN parent only — never the whole storage/ or bootstrap/ tree, and
@@ -97,7 +96,7 @@ class ExtractNodeCommand extends Command
     private const TEST_DIR = 'tests/Feature/Nodeflow';
 
     /**
-     * A single PHP identifier segment (E52) — the same pattern
+     * A single PHP identifier segment — the same pattern
      * MakeNodePackageCommand::NAMESPACE_SEGMENT_PATTERN uses, kept as its own
      * private copy rather than made public there: this class already
      * derives its OWN namespace independently of that command (it accepts
@@ -108,22 +107,22 @@ class ExtractNodeCommand extends Command
     private const NAMESPACE_SEGMENT_PATTERN = '/^[A-Za-z_\x80-\xff][A-Za-z0-9_\x80-\xff]*$/';
 
     /**
-     * The `type()` literal G3 proved for the class under extraction, or null
-     * before G3 runs (or after handle()'s own F-3 reset). Task 9's M9 needs
+     * The `type()` literal type consistency validation proved for the class under extraction, or null
+     * before type consistency validation runs (or after handle() resets it). The fresh-boot proof needs
      * this exact, already-proven value rather than re-deriving it —
-     * `NodeTypeLiteral::resolve()` is not free, and G3 having already
+     * `NodeTypeLiteral::resolve()` is not free, and type consistency validation having already
      * refused every shape that cannot be proven statically is the whole
-     * reason M9 is allowed to trust it.
+     * reason fresh-host verification is allowed to trust it.
      */
     private ?string $provenType = null;
 
     /**
-     * Whether the host's composer.lock exists, recorded by G8 for E48, or
-     * null before G8 runs.
+     * Whether the host's composer.lock exists, recorded by Composer readiness validation for Composer state handling, or
+     * null before Composer readiness validation runs.
      */
     private ?bool $composerLockExisted = null;
 
-    /** @var array{packages: string, services: string}|null Exact read-only G8 observation frozen into M9. */
+    /** @var array{packages: string, services: string}|null Exact read-only Composer readiness validation observation frozen into fresh-host verification. */
     private ?array $laravelCachePaths = null;
 
     private ComposerRunner $composerRunner;
@@ -136,7 +135,7 @@ class ExtractNodeCommand extends Command
 
     public function handle(NodeRegistry $registry): int
     {
-        // F-3: this exact bug shipped twice already against a DIFFERENT
+        // state reset: this exact bug shipped twice already against a DIFFERENT
         // cached property on a different command (MakeNodeCommand's
         // nodeType(), MakeNodePackageCommand's target()) — a second
         // Artisan::call() of this same command instance, from a host script
@@ -158,9 +157,9 @@ class ExtractNodeCommand extends Command
             return $this->refuse($message);
         }
 
-        // G2 already proved this file exists, is inside the host, and
+        // source-location validation already proved this file exists, is inside the host, and
         // declares exactly one top-level named symbol — the target class
-        // itself — so reading it again here for G3 is safe.
+        // itself — so reading it again here for type consistency validation is safe.
         $source = file_get_contents((new ReflectionClass($class))->getFileName());
 
         if (($message = $this->gate3($class, $source)) !== null) {
@@ -181,15 +180,15 @@ class ExtractNodeCommand extends Command
             return $this->refuse(
                 'A --package name is required, e.g. --package=acme/widgets. Extraction needs to know '
                 .'which Composer package this class is moving into before it can check the host for a '
-                .'naming conflict (G6) or a target-path collision (G7).'
+                .'naming conflict or a target-path collision.'
             );
         }
 
         // Reuses MakeNodePackageCommand's own Composer-name pattern rather than
-        // inventing a second one. This also closes a real G6 bypass as a side
+        // inventing a second one. This also closes a real package configuration validation bypass as a side
         // effect, not by a separate case rule: the pattern is lowercase-only,
         // so `--package=ACME/Widgets` is refused HERE, before it can ever reach
-        // G6's exact `===` comparison against a lowercase dont-discover entry
+        // package configuration validation's exact `===` comparison against a lowercase dont-discover entry
         // (or a lowercase composer.json require key) and pass one check by
         // spelling alone.
         if (preg_match(MakeNodePackageCommand::COMPOSER_NAME_PATTERN, $packageName) !== 1) {
@@ -230,12 +229,12 @@ class ExtractNodeCommand extends Command
     }
 
     /**
-     * M1-M9 and M6a — the actual moves, run only once every one of the eight
+     * full mutation sequence and post-move rescan — the actual moves, run only once every one of the eight
      * gates above has passed. Everything here is journaled: any failure at
-     * ANY point, including M6a's own post-move rescan, restores the host to
+     * ANY point, including post-move rescan, restores the host to
      * exactly the bytes it had before this method ever ran (ExtractJournal's
-     * own docblock explains why the undo order matters). M7 deletes the
-     * ORIGINAL files last — after M6a has already proven nothing still
+     * own docblock explains why the undo order matters). the command deletes the
+     * ORIGINAL files last — after post-move rescan has already proven nothing still
      * names them by their old FQCN — because deleting first and discovering
      * a survivor after would make "restore" mean "resurrect a file", which
      * is a needless risk when refusing BEFORE the delete costs nothing.
@@ -272,10 +271,10 @@ class ExtractNodeCommand extends Command
             $this->deregisterFromHost($class, $shortName, $providerFile, $hostBasePath, $journal);
             $this->updateHostComposerJson($hostBasePath, $packageName, $targetRelativePath, $journal);
 
-            // M6a (E45): the same rescan G5 already ran, but over the tree AS
-            // IT NOW STANDS — including the package directory M1 only just
-            // created, ground G5 could never have scanned because it did not
-            // exist yet — and BEFORE M7 deletes anything, while restoring is
+            // post-move rescan: the same scan used during preflight, but over the tree AS
+            // IT NOW STANDS — including the package directory package scaffolding only just
+            // created, content the reference scan could not have covered because it did not
+            // exist yet — and BEFORE the command deletes anything, while restoring is
             // still cheap.
             $this->rescanPostMoveTree($class, $hostBasePath);
 
@@ -366,7 +365,7 @@ class ExtractNodeCommand extends Command
             );
         }
 
-        // M9 has verified the intended host, so rollback is no longer a
+        // fresh-host verification has verified the intended host, so rollback is no longer a
         // valid response. Snapshot cleanup is a one-way commit operation:
         // if it partially fails, report the retained private path without
         // replaying entries whose backing bytes may already be gone.
@@ -394,7 +393,7 @@ class ExtractNodeCommand extends Command
      * nodeflow:make-node-package — but derived from THIS command's own
      * --package/--namespace options rather than routed through that other
      * command's object, since the two commands' inputs differ ($packageName
-     * and $targetRelativePath are already validated by G6/G7 by the time
+     * and $targetRelativePath are already validated by package configuration validation/target-path validation by the time
      * this runs).
      *
      * Deliberately called BEFORE any journal exists: every refusal here
@@ -426,7 +425,7 @@ class ExtractNodeCommand extends Command
 
         if ($constraint === null) {
             throw new RuntimeException(
-                "The host's composer.json does not require atram/laravel-nodeflow (E33); extraction "
+                "The host's composer.json does not require atram/laravel-nodeflow; extraction "
                 .'cannot mirror a constraint that is not there. Run `composer require '
                 .'atram/laravel-nodeflow` first.'
             );
@@ -450,13 +449,13 @@ class ExtractNodeCommand extends Command
             if (preg_match(self::NAMESPACE_SEGMENT_PATTERN, $segment) !== 1) {
                 throw new RuntimeException(
                     "[{$segment}] is not a valid PHP identifier, so [{$fqcn}] is not a namespace PHP can "
-                    .'parse (E52). Pass --namespace to supply one explicitly.'
+                    .'parse. Pass --namespace to supply one explicitly.'
                 );
             }
         }
     }
 
-    /** The host's own `atram/laravel-nodeflow` require constraint (E33), or null when there is nothing to mirror. */
+    /** The host's own `atram/laravel-nodeflow` require constraint, or null when there is nothing to mirror. */
     private function hostNodeflowConstraint(string $hostBasePath): ?string
     {
         $decoded = json_decode($this->files->get($hostBasePath.'/composer.json'), true);
@@ -466,13 +465,13 @@ class ExtractNodeCommand extends Command
     }
 
     /**
-     * M1 — scaffolds the package, then journals exactly what changed on
+     * Scaffolds the package, then journals exactly what changed on
      * disk: every file PackageScaffolder overwrote that already EXISTED is
      * journaled as a write (captured BEFORE scaffold() runs, so the
      * original bytes are in hand); every path that did not exist before is
      * journaled as a create. Diffing the tree before and after, rather than
      * hard-coding the list of files PackageScaffolder happens to write today,
-     * is what keeps this correct across all three E43 target states — absent,
+     * is what keeps this correct across all three target states — absent,
      * a matching re-run, and a foreign --force overwrite — without this
      * class needing to know PackageScaffolder's own file list at all.
      */
@@ -499,13 +498,13 @@ class ExtractNodeCommand extends Command
         }
 
         // try/finally, not a plain sequential call, and this is the
-        // SECOND CRITICAL fix this exact method needed. scaffold() writes
+        // A second safety boundary this method needs: scaffold() writes
         // its own files one at a time (composer.json, README.md, the
         // provider, the example test) with no transaction of its own —
         // and, decisively, `Filesystem::put()` calls a BARE
         // `file_put_contents()` with no `@` suppression, so a write that
         // fails (a `src/` or `tests/` directory a foreign occupant, or an
-        // already-matching prior run, left read-only — E43's foreign/
+        // already-matching prior run, left read-only — target-state handling's foreign/
         // --force AND matching-existing target states both) does not
         // return false for scaffold() to notice: it raises a warning that
         // PHPUnit's own error handler (and plenty of production error
@@ -544,12 +543,12 @@ class ExtractNodeCommand extends Command
             }
         }
 
-        // E11: re-verify rather than trust. PackageScaffolder validates every
+        // post-write verification: re-verify rather than trust. PackageScaffolder validates every
         // rendered .php file parses BEFORE it writes anything, but does not
         // itself re-check that each write actually landed — file_put_contents()
         // returns false, rather than throwing, on a genuine disk failure (a
         // path component that collides with a plain file where a directory is
-        // expected, most concretely). The provider file is the one M4 depends
+        // expected, most concretely). The provider file is the one package registration depends
         // on next, so its absence is the cheapest, earliest signal that
         // something about this scaffold did not actually take.
         $providerPath = $target->absolutePath.'/src/'.$this->shortClassName($target->providerClass).'.php';
@@ -632,13 +631,13 @@ class ExtractNodeCommand extends Command
     }
 
     /**
-     * M2 — writes $class's own source into the package at
+     * class move — writes $class's own source into the package at
      * `src/Nodes/{ShortClass}.php` (mirroring the host's own
      * `app/Nodeflow/Nodes/` convention onto the package's PSR-4 root,
      * exactly the empty sibling directory PackageScaffolder already
      * prepared), rewriting ONLY the namespace declaration's own name and
      * every reference to $class found INSIDE the file itself — never a
-     * global str_replace of the old namespace text (F-1), which would just
+     * global str_replace of the old namespace text, which would just
      * as happily rewrite a docblock or a string literal that legitimately
      * still names the old location and is not, in fact, a live reference at
      * all.
@@ -702,7 +701,7 @@ class ExtractNodeCommand extends Command
     }
 
     /**
-     * M3 — moves the host's own test for $class (if the conventional path
+     * test move — moves the host's own test for $class (if the conventional path
      * holds one that genuinely references it — the same proof
      * `rewritableSpans()` requires) into the package at
      * `tests/{ShortClass}Test.php`, rewriting only its resolved `use`
@@ -744,7 +743,7 @@ class ExtractNodeCommand extends Command
             $replacements[] = [
                 'start' => $reference->byteStart,
                 'end' => $reference->byteEnd,
-                // CRITICAL review finding: stubs/node.test.stub declares NO
+                // Regression: stubs/node.test.stub declares NO
                 // namespace at all, so — unlike moveClassFile()'s own bare
                 // short name, which resolves correctly only because that
                 // file DOES declare $newNamespace — a bare name here has no
@@ -755,7 +754,7 @@ class ExtractNodeCommand extends Command
                 // might have deferred survives elsewhere in this same file.
                 // Rewriting EVERY recorded span — not the import alone — is
                 // what makes rewritableSpans()'s whole-file exemption for
-                // this file honest, rather than narrower than what G5
+                // this file honest, rather than narrower than what reference scan
                 // actually certified as covered.
                 'text' => $this->referenceReplacement($reference, $source, $class, $newFqcn, $shortName, false),
             ];
@@ -775,7 +774,7 @@ class ExtractNodeCommand extends Command
 
     /**
      * The replacement TEXT for one found self-reference to $class, shared
-     * by moveClassFile() (M2) and moveTestFile() (M3) so the two decide
+     * by moveClassFile() (class move) and moveTestFile() (test move) so the two decide
      * "what does this span become" by the SAME rule rather than two
      * independently maintained ones.
      *
@@ -784,13 +783,13 @@ class ExtractNodeCommand extends Command
      *   regardless of enclosing namespace).
      * - `string_literal`: delegated to stringLiteralReplacement() — a
      *   string's VALUE does not resolve through PHP's namespace rules the
-     *   way a name token does, and (Important 3) NOT every `string_literal`
+     *   way a name token does, and not every `string_literal`
      *   reference's span carries its own surrounding quotes.
      * - anything else (a bare self-reference such as `Foo::make()`, an
      *   `extends` clause, …): the bare short name when $preferShortName is
      *   true — correct ONLY inside a file that itself declares the new
-     *   namespace (M2's class file) — or the fully-qualified new FQCN
-     *   otherwise (M3's namespace-less test file), which resolves correctly
+     *   namespace (class move's class file) — or the fully-qualified new FQCN
+     *   otherwise (test move's namespace-less test file), which resolves correctly
      *   with or without whatever `use` import happens to survive.
      */
     private function referenceReplacement(
@@ -815,7 +814,7 @@ class ExtractNodeCommand extends Command
     }
 
     /**
-     * Important 3 (review round). `NodeReferenceScanner` finds a
+     * `NodeReferenceScanner` finds a
      * `string_literal` reference two structurally different ways, and
      * requote() alone is only correct for one of them:
      *
@@ -838,7 +837,7 @@ class ExtractNodeCommand extends Command
      * that actually differs: whether $original itself starts with a quote
      * character.
      *
-     * PROMOTED FINDING (review round 3). A bounded match inside a REAL
+     * A bounded match inside a real
      * heredoc (`<<<LABEL`, not a nowdoc) is NOT simply "preserve whatever
      * spelling matched" the way a nowdoc or Blade/inline-HTML match is.
      * A heredoc body processes escape sequences exactly like a
@@ -851,7 +850,7 @@ class ExtractNodeCommand extends Command
      * SYNTACTICALLY VALID file (`php -l` passes) whose heredoc silently
      * evaluates to a value containing a literal TAB where a backslash and
      * a letter belonged — corruption at exit 0, the same failure shape
-     * Important 3 already fixed, just one step further down the same
+     * This is one step further down the same boundary already handled above:
      * bounded-match path. The fix always doubles every backslash in the
      * REPLACEMENT when it lands inside a real heredoc, regardless of how
      * the ORIGINAL text was spelled — a doubled backslash always collapses
@@ -888,8 +887,8 @@ class ExtractNodeCommand extends Command
      * `T_ENCAPSED_AND_WHITESPACE` token id for the literal segments
      * BETWEEN interpolated `$variables` in an ordinary double-quoted
      * string or a backtick shell-exec string too, and those process
-     * escapes exactly the same way a real heredoc's body does (review
-     * round 4, Important N1) — `"App\Nodeflow\Nodes\X{$this->suffix}"`
+     * escapes exactly the same way a real heredoc's body does —
+     * `"App\Nodeflow\Nodes\X{$this->suffix}"`
      * with `--namespace=acme\things` is the identical `\t`-as-tab
      * corruption in an interpolated string, not merely in a heredoc. A
      * FIRST version of this method gated on `$isNowdoc === false`, which
@@ -910,7 +909,7 @@ class ExtractNodeCommand extends Command
      * state back to `null` so a LATER plain string chunk — reached after
      * a nowdoc has already closed, with no fresh `T_START_HEREDOC` of its
      * own before it — is not mistaken for still being inside that nowdoc
-     * (round 4, mutation survivor: deleting this reset left a stale
+     * (deleting this reset leaves a stale
      * nowdoc state bleeding into unrelated later content).
      *
      * Blade/inline-HTML markup (`T_INLINE_HTML`) processes no escapes at
@@ -947,10 +946,10 @@ class ExtractNodeCommand extends Command
     }
 
     /**
-     * M4 — registers $newFqcn into the PACKAGE's own freshly-scaffolded
+     * package registration — registers $newFqcn into the PACKAGE's own freshly-scaffolded
      * provider (never the host's). `AlreadyPresent` is treated the same as
      * `Appended`: a re-run of extraction against an already-matching
-     * package (E43's "matching existing" target state) must not refuse just
+     * package (target-state handling's "matching existing" target state) must not refuse just
      * because a previous run already got this far.
      */
     private function registerInPackage(string $newFqcn, PackageTarget $target, ExtractJournal $journal): void
@@ -978,7 +977,7 @@ class ExtractNodeCommand extends Command
     }
 
     /**
-     * M5 — removes $class from the HOST's own provider, then removes the
+     * host deregistration — removes $class from the HOST's own provider, then removes the
      * now-unused `use` import for it, but only when the short name appears
      * nowhere else in the file (identifierAppearsOutside()'s own docblock
      * explains why that check is structural, not a substring search).
@@ -987,9 +986,9 @@ class ExtractNodeCommand extends Command
      * `Removed`, `NotPresent`, `ProviderMissing`, `AnchorMissing`, and
      * `AnchorAmbiguous` all mean the SAME thing from this method's own point
      * of view — there is nothing left in the host naming $class that
-     * `removeFrom()` was able to (or needed to) touch, which G5 having
+     * `removeFrom()` was able to (or needed to) touch, which reference scan having
      * already passed guarantees is safe: if a REAL, resolvable reference to
-     * $class survived in an ambiguous or unsupported form, G5's own scan
+     * $class survived in an ambiguous or unsupported form, the reference scanner
      * would already have refused the whole extraction before this method
      * ever ran. `EntryUnsupported`, `EntryAmbiguous`, and `WriteFailed` are
      * genuine failures — the writer found something it would not safely
@@ -1164,16 +1163,16 @@ class ExtractNodeCommand extends Command
     }
 
     /**
-     * M6 (E29) — adds a path repository pointing at $targetRelativePath,
+     * Composer rewrite (Composer path-repository requirement) — adds a path repository pointing at $targetRelativePath,
      * ALWAYS relative, never resolved to an absolute path: an absolute path
      * breaks the moment the host is committed and rebuilt on another
-     * machine. Reuses `requiredFromMatchingPathRepository()` (G6's own
+     * machine. Reuses `requiredFromMatchingPathRepository()` (package configuration validation's
      * matching logic — literal or glob, via `fnmatch()`) to decide whether a
      * repository entry is already there, so a re-run against an
-     * already-wired host (E43's "matching existing" target state) does not
+     * already-wired host (target-state handling's "matching existing" target state) does not
      * duplicate anything. `require[$packageName]` is added only when the
      * package is not already required from EITHER `require` or
-     * `require-dev` — G6 already refused any OTHER kind of pre-existing
+     * `require-dev` — package configuration validation already refused any OTHER kind of pre-existing
      * requirement before this point was ever reached.
      */
     private function updateHostComposerJson(string $hostBasePath, string $packageName, string $targetRelativePath, ExtractJournal $journal): void
@@ -1249,7 +1248,7 @@ class ExtractNodeCommand extends Command
         $journal->recordWrite($path);
         $this->files->put($path, $encoded);
 
-        // E11: re-verify rather than trust, the same reason writeJournaled()
+        // post-write verification: re-verify rather than trust, the same reason writeJournaled()
         // checks its own write.
         if ($this->files->get($path) !== $encoded) {
             throw new RuntimeException("[{$path}] could not be updated; nothing further was moved.");
@@ -1257,15 +1256,15 @@ class ExtractNodeCommand extends Command
     }
 
     /**
-     * M6a (E45) — re-runs the SAME reference scan G5 already ran, over the
-     * SAME shared roots (scanSharedRoots(), G5's own docblock explains why
+     * post-move rescan — re-runs the same reference scan used during preflight, over the
+     * SAME shared roots (scanSharedRoots(), reference scan's docblock explains why
      * it is shared rather than derived twice), subtracting exactly the set
      * `rewritableSpans()` proves the extraction transforms — recomputed
      * fresh rather than reused from earlier in this same run, because the
-     * provider file's own content has since changed (M5 already edited
-     * it). Any survivor aborts BEFORE M7 deletes anything (E45): a
+     * provider file's own content has since changed (host deregistration already edited
+     * it). Any survivor aborts BEFORE the command deletes anything: a
      * reference the ORIGINAL gates could not see (this run's own moves had
-     * not created the package directory yet when G5 ran), caught here
+     * not created the package directory yet when reference scan ran), caught here
      * instead, while restoring is still cheap.
      *
      * @throws RuntimeException
@@ -1275,7 +1274,7 @@ class ExtractNodeCommand extends Command
         try {
             $found = $this->scanSharedRoots($class, $hostBasePath);
         } catch (RuntimeException $e) {
-            throw new RuntimeException('Post-move reference rescan (E45) failed: '.$e->getMessage());
+            throw new RuntimeException('Post-move reference rescan failed: '.$e->getMessage());
         }
 
         if ($found === []) {
@@ -1299,14 +1298,14 @@ class ExtractNodeCommand extends Command
         );
 
         throw new RuntimeException(
-            "Extraction would still leave [{$class}] referenced by its old FQCN after the move (E45) — ".
+            "Extraction would still leave [{$class}] referenced by its old FQCN after the move — ".
             "a reference the earlier gates could not see, at:\n".implode("\n", $locations)
         );
     }
 
     /**
      * Scans `sharedScanRoots()` for every reference to $class — the ONE
-     * scan both G5 (gate5()) and M6a (rescanPostMoveTree()) run, so the two
+     * scan both reference scan (gate5()) and post-move rescan (rescanPostMoveTree()) run, so the two
      * can never independently drift about what ground is worth checking.
      * `ARTIFACT_SUBDIRECTORIES` is applied per matching root here, not
      * baked into `sharedScanRoots()` itself, so that method can stay a
@@ -1347,37 +1346,35 @@ class ExtractNodeCommand extends Command
      * file directly under $hostBasePath — except `vendor/`,
      * `node_modules/`, and dot-prefixed directories (`.git` and similar;
      * a scannable root config file such as `.php-cs-fixer.php` remains) —
-     * unioned with the host's own PSR-4 directories (`hostPsr4Directories()`
-     * — the SAME set G2 requires the node's own file to sit under, for the
-     * same "must never admit ground the scan does not cover" reason that
-     * method's own docblock already gives).
+     * unioned with the host's own PSR-4 directories (`hostPsr4Directories()`),
+     * so every accepted node location is also covered by the reference scan.
      *
      * WIDER than the gate's own OLD, narrow REFERENCE_SCAN_DIRS allowlist
      * (app, bootstrap, config, database, resources, routes, tests) —
-     * deliberately, following a review-round finding: that allowlist
+     * deliberately, because that allowlist
      * missed a real reference sitting in an ordinary top-level directory
      * it never scanned (`scripts/`, `public/`, a sibling local package
      * under `packages/`), which is fatal the same way any other missed
-     * reference is (E46). `ARTIFACT_SUBDIRECTORIES` (applied by
+     * reference is. `ARTIFACT_SUBDIRECTORIES` (applied by
      * `scanSharedRoots()`, not here) is what keeps this width from ALSO
      * admitting a compiled cache artifact as if it were source.
      *
-     * TOP-LEVEL FILES (round 4 fix, formerly a documented residual): a
+     * TOP-LEVEL FILES (current behavior): a
      * loose `*.php` file sitting directly at the host root (`rector.php`,
      * confirmed reachable end to end) is now included as its own scan
      * root — `NodeReferenceScanner::scan()` accepts a FILE root directly,
      * not only a directory to walk. Before this fix, every entry this
      * method returned was a directory, so a reference in such a file was
-     * invisible to both G5 and M6a — a host-fatal path after an
+     * invisible to both reference scan and post-move rescan — a host-fatal path after an
      * irreversible delete, not merely a cosmetic gap, which is why it
      * graduated from "documented" to "fixed" rather than staying noted.
      *
      * A candidate TOP-LEVEL entry is dropped, not included, when it
-     * canonically escapes the host root through a symlink (E51's own
+     * canonically escapes the host root through a symlink (path containment's own
      * rule, checked here the same way `isUnderAnyMappedRoot()` checks it
-     * for G2's own scan roots): a top-level entry that is ITSELF a
-     * symlink pointing outside the host — exactly the shape Important
-     * N2's own PSR-4 guard exists to keep out of G5's roots — must not
+     * for source-location validation's scan roots): a top-level entry that is ITSELF a
+     * symlink pointing outside the host — exactly the shape the PSR-4
+     * containment guard keeps out of the scan roots — must not
      * become a scan root here either, or this scan would find, and
      * wrongly refuse or abort on, a reference planted only in whatever
      * the symlink happens to point at (an unrelated tree this command was
@@ -1386,15 +1383,14 @@ class ExtractNodeCommand extends Command
      *
      * THIS RULE APPLIES ONLY TO A TOP-LEVEL ENTRY BECOMING A ROOT — it is
      * NOT, and must never become, a general "skip anything reached via a
-     * symlink" filter applied INSIDE a scan (round 4 fix, replacing a
-     * round-1 design this method's own earlier revisions relied on).
-     * `NodeReferenceScanner::scan()` used to apply an equivalent
+     * symlink" filter applied INSIDE a scan. An earlier implementation of
+     * `NodeReferenceScanner::scan()` applied an equivalent
      * containment filter to every file it found, nested symlinks
      * included, and that was the CONVERSE cost this docblock did not
      * previously name: `app/Linked` symlinked to a directory outside the
      * host, declaring `App\Linked\Consumer` and referencing the node
      * under extraction, is genuinely autoloadable by the host (PSR-4:
-     * `App\` → `app/`) but was invisible to both G5 and M6a under that
+     * `App\` → `app/`) but was invisible to both reference scan and post-move rescan under that
      * filter — extraction would delete the original and leave the host
      * loading a class that no longer exists, the exact failure this whole
      * command exists to prevent. `NodeReferenceScanner` now follows a
@@ -1404,13 +1400,13 @@ class ExtractNodeCommand extends Command
      * but only for the narrower question of "should this TOP-LEVEL entry
      * become a root at all."
      *
-     * DOCUMENTED COST (round 3): this widening means a full non-vendor,
+     * DOCUMENTED COST: this widening means a full non-vendor,
      * non-node_modules tree walk now happens TWICE per extraction — once
-     * for G5, once more for M6a's post-move rescan, which is a superset
+     * for reference scan, once more for post-move rescan, which is a superset
      * of the same ground plus the newly-created package directory. Each
-     * gate used to be cheap (a handful of named directories); G5 alone is
-     * now the same cost M6a already was. Judged acceptable for the same
-     * reason M6a's own cost was: this command runs once, by a developer,
+     * scan used to be cheap (a handful of named directories); the reference scan alone is
+     * now the same cost as the post-move rescan. That cost is acceptable because
+     * this command runs once, by a developer,
      * not in a hot path.
      *
      * @return list<string>
@@ -1468,10 +1464,10 @@ class ExtractNodeCommand extends Command
     }
 
     /**
-     * M7 — deletes the original class file and, if M3 moved one, the
+     * original deletion — deletes the original class file and, if test move moved one, the
      * original test file, journaling each deletion (with the bytes read
      * BEFORE the delete) so a failure elsewhere in the SAME performMoves()
-     * call — unreachable today, since M7 is the last step, but kept for the
+     * call — unreachable today, since original deletion is the last step, but kept for the
      * same reason PackageScaffolder's own currently-unreachable guards are —
      * can still restore them.
      */
@@ -1484,7 +1480,7 @@ class ExtractNodeCommand extends Command
         }
     }
 
-    /** M8 (E48) — journal Composer state, install the package, then invalidate Laravel's stale package manifest. */
+    /** dependency installation — journal Composer state, install the package, then invalidate Laravel's stale package manifest. */
     private function installDependency(
         string $hostBasePath,
         string $packageName,
@@ -1496,7 +1492,7 @@ class ExtractNodeCommand extends Command
 
         if ($this->composerLockExisted !== null && $lockExistsNow !== $this->composerLockExisted) {
             throw new RuntimeException(
-                'The host composer.lock presence changed after G8 recorded it; M8 refuses to choose a '
+                'The host composer.lock presence changed after Composer readiness validation recorded it; dependency installation refuses to choose a '
                 .'different install/update operation from the state that passed the read-only gates.'
             );
         }
@@ -1520,7 +1516,7 @@ class ExtractNodeCommand extends Command
 
         if (! $this->composerRunner->install($hostBasePath, $packageName)) {
             throw new RuntimeException(
-                "Composer dependency installation failed for [{$packageName}] (M8, E48); "
+                "Composer dependency installation failed for [{$packageName}]; "
                 .'the extraction cannot be verified.'
             );
         }
@@ -1541,13 +1537,13 @@ class ExtractNodeCommand extends Command
 
             if (file_exists($packagesManifest) || is_link($packagesManifest)) {
                 throw new RuntimeException(
-                    "Laravel's cached package manifest [{$packagesManifest}] could not be invalidated before M9."
+                    "Laravel's cached package manifest [{$packagesManifest}] could not be invalidated before fresh-host verification."
                 );
             }
         }
     }
 
-    /** Resolves Composer's configured vendor directory inside the host so M8 journals the paths it will actually mutate. */
+    /** Resolves Composer's configured vendor directory inside the host so dependency installation journals the paths it will actually mutate. */
     private function composerVendorPath(string $hostBasePath): string
     {
         $composer = json_decode($this->files->get($hostBasePath.'/composer.json'), true);
@@ -1770,7 +1766,7 @@ class ExtractNodeCommand extends Command
     /**
      * Finds only symlinks in Composer's generated-output boundary. Ordinary
      * package roots under vendor are intentionally excluded: path packages
-     * are commonly links to their sources and M8 does not generate through
+     * are commonly links to their sources and dependency installation does not generate through
      * those objects. Composer does write vendor/autoload.php and the complete
      * vendor/composer subtree, so every link there needs its distinct target
      * contained and journaled in addition to the whole-vendor link object.
@@ -1785,7 +1781,7 @@ class ExtractNodeCommand extends Command
 
         if (is_link($autoload)) {
             // Validates containment now; callers then either journal it or
-            // use this method as G8's read-only preflight.
+            // use this method as Composer readiness validation's read-only preflight.
             $this->mutationSymlinkTarget($hostBasePath, $autoload);
             $symlinks[] = $autoload;
         }
@@ -1857,21 +1853,21 @@ class ExtractNodeCommand extends Command
         }
     }
 
-    /** M9 (E37, E49) — ask a genuinely fresh host process what package discovery registered. */
+    /** Ask a genuinely fresh host process what package discovery registered. */
     private function verifyFreshHost(string $hostBasePath, string $type, string $newFqcn): void
     {
         $resolved = $this->composerRunner->bootAndResolve($hostBasePath, $type);
 
         if ($resolved === null) {
             throw new RuntimeException(
-                "Fresh-host package discovery/type verification did not register [{$type}] (M9, E37/E49)."
+                "Fresh-host package discovery/type verification did not register [{$type}]."
             );
         }
 
         if ($resolved !== $newFqcn) {
             throw new RuntimeException(
                 "Fresh-host package discovery mapped [{$type}] to [{$resolved}], not the moved class "
-                ."[{$newFqcn}] (M9, E49)."
+                ."[{$newFqcn}]."
             );
         }
     }
@@ -1879,11 +1875,11 @@ class ExtractNodeCommand extends Command
     /**
      * Deletes $path, journaling its bytes first (read BEFORE the delete, the
      * same "capture before you mutate" rule every other journaled mutation
-     * in this class follows) and re-verifying afterwards (E11) that it is
+     * in this class follows) and re-verifying afterwards that it is
      * actually gone: `Filesystem::delete()` reports failure as a boolean
      * return, never an exception, so trusting it without checking would let
      * extraction report success while the original file it was supposed to
-     * remove — the entire reason G5's guarantee holds — is still sitting
+     * remove — the entire reason reference scan's guarantee holds — is still sitting
      * there under its old FQCN.
      */
     private function deleteJournaled(string $path, ExtractJournal $journal): void
@@ -1907,7 +1903,7 @@ class ExtractNodeCommand extends Command
      * already existed (a write, undone by restoring the original bytes) or
      * not (a create, undone by deleting it) — the same before/after
      * distinction scaffoldPackage() applies to the whole package directory,
-     * applied here to one file at a time for M2's and M3's own destination
+     * applied here to one file at a time for the class and test destinations
      * writes.
      */
     private function writeJournaled(string $path, string $contents, ExtractJournal $journal): void
@@ -1921,7 +1917,7 @@ class ExtractNodeCommand extends Command
         $this->files->ensureDirectoryExists(dirname($path));
         $this->files->put($path, $contents);
 
-        // E11: re-verify rather than trust — put() reports a genuine disk
+        // post-write verification: re-verify rather than trust — put() reports a genuine disk
         // failure (a path component colliding with a plain file where a
         // directory belongs, most concretely) by returning false, never by
         // throwing, so an unchecked call here would let extraction report
@@ -1978,13 +1974,13 @@ class ExtractNodeCommand extends Command
      * not the `namespace` keyword, not the terminating `;` — e.g. for
      * `namespace App\Nodeflow\Nodes;`, the span covering exactly
      * `App\Nodeflow\Nodes`. Substituting new text into THIS span, and this
-     * span alone, is what keeps M2's rewrite structural rather than a
-     * global find/replace of the old namespace string (F-1): a docblock or
+     * span alone, is what keeps class move's rewrite structural rather than a
+     * global find/replace of the old namespace string: a docblock or
      * string literal that happens to spell the same text is never touched,
      * because it is never part of this span.
      *
      * @return array{start: int, end: int}|null null when $source has no
-     *  namespace declaration at all — G2's own PSR-4 containment rule makes
+     *  namespace declaration at all — source-location validation's PSR-4 containment rule makes
      *  this unreachable through this command's own call sites, since a file
      *  with no namespace could never sit under a mapped PSR-4 directory and
      *  declare the class under extraction, but this is defensive rather than
@@ -2176,18 +2172,18 @@ class ExtractNodeCommand extends Command
     /**
      * The byte spans THIS extraction will itself transform: the node's own
      * file (in full — moving it rewrites its namespace, which moves every
-     * declaration the file has, which is exactly why G2 requires there be
+     * declaration the file has, which is exactly why source-location validation requires there be
      * only one), its test file if one exists at the conventional path (in
      * full, same reason), the host's own NodeflowServiceProvider `$nodes`
      * entry for this class, and that same provider's `use` import for this
      * class.
      *
-     * G5 subtracts exactly this set from what `NodeReferenceScanner::scan()`
-     * finds; any reference left over refuses. TASK 9'S MOVES MUST CALL THIS
+     * reference scan subtracts exactly this set from what `NodeReferenceScanner::scan()`
+     * finds; any reference left over refuses. THE MOVE PHASE MUST CALL THIS
      * EXACT METHOD RATHER THAN RE-DERIVE THE SET — see this class's own
      * docblock for why a gate and its moves disagreeing about what counts as
-     * a rewritable span is precisely the defect (E45) this command exists to
-     * prevent. Public, and not `static`, so Task 9's moves (added to this
+     * a rewritable span is precisely the defect this command exists to
+     * prevent. Public, and not `static`, so the mutation phase in this
      * same command) can call it directly on `$this`.
      *
      * @return list<RewritableSpan>
@@ -2206,7 +2202,7 @@ class ExtractNodeCommand extends Command
         // The conventional path is only a CANDIDATE, not proof: it is keyed
         // by short class name alone, so two classes sharing a short name in
         // different namespaces collide on the exact same test path. Claiming
-        // it regardless would hand Task 9's moves a file to move that may
+        // it regardless would hand the mutation phase a file to move that may
         // belong to a DIFFERENT class entirely — so the candidate is only
         // trusted once it is confirmed to actually reference $class.
         $testFile = $hostBasePath.'/'.self::TEST_DIR.'/'.$reflection->getShortName().'Test.php';
@@ -2252,11 +2248,11 @@ class ExtractNodeCommand extends Command
     }
 
     /**
-     * G1 — the same class-existence, `is_a(Node::class)`, and cardinality
+     * class eligibility validation — the same class-existence, `is_a(Node::class)`, and cardinality
      * rules `NodeRegistry::register()` enforces, with its own exception
      * messages reused verbatim rather than invented afresh here. Stops
      * short of calling `register()` itself: that method's last line calls
-     * `$class::type()`, and G3 (not G1) is this command's only sanctioned
+     * `$class::type()`, and type consistency validation (not class eligibility validation) is this command's only sanctioned
      * way to learn anything about `type()` — it does so by reading the
      * SOURCE, never by executing the method, which is exactly what
      * "read-only" rules out.
@@ -2279,27 +2275,28 @@ class ExtractNodeCommand extends Command
     }
 
     /**
-     * G2 — where the class lives, and what else its file declares.
+     * source-location validation — where the class lives, and what else its file declares.
      *
      * `ReflectionClass::getFileName()` first (false only for an internal or
-     * eval'd class — unreachable once G1 has already proven `$class`
+     * eval'd class — unreachable once class eligibility validation has already proven `$class`
      * extends the project's own, PHP-defined `Node`, but refused rather
-     * than trusted regardless). Then containment (E51), and this is the
+     * than trusted regardless). Then containment, and this is the
      * SECOND ruling this exact question has had:
      *
-     * ROUND 1 said "inside the host root, and not under vendor/ [at the
+     * An earlier rule said "inside the host root, and not under vendor/ [at the
      * top level]" — deliberately NOT reading the host's own PSR-4 map,
-     * reasoned as "more surface than this gate needs". ROUND 2 reverses
+     * reasoned as "more surface than this gate needs". The current rule reverses
      * that: widening containment to the whole host root, with only a
-     * single-level vendor/ exclusion, admits ground `hostPsr4Directories()`
-     * (G5) never scans — a node inside ANOTHER local path-repository
+     * single-level vendor/ exclusion, admits locations `hostPsr4Directories()`
+     * never scans — a node inside ANOTHER local path-repository
      * package (`packages/acme/other/src/...`), inside a NESTED vendor/
      * directory (`packages/foo/vendor/bar/pkg/src/...`), inside
      * `storage/framework/cache/...`, or already inside the extraction's own
-     * TARGET package all passed G2 and then went completely unvetted by
-     * G5, because none of those directories were ever roots G5 scans. The
+     * TARGET package all passed source-location validation and then went completely unvetted by
+     * reference scan, because none of those directories were ever reference-scan roots. The
      * invariant this gate must hold is not merely "inside the host, not
-     * vendor" — it is G2 MUST NOT ADMIT GROUND G5 CANNOT SCAN. A gate that
+     * vendor" — the source-location validation must not admit locations the reference
+     * scan cannot cover. A check that
      * passes on unvettable territory is worse than one that refuses too
      * much.
      *
@@ -2312,20 +2309,20 @@ class ExtractNodeCommand extends Command
      * broad root like `packages/` would otherwise treat a nested vendor/
      * as "contained" and therefore fine).
      *
-     * `hostPsr4Directories()` is the SAME method G5 unions into its own
+     * `hostPsr4Directories()` is the SAME method reference scan unions into its own
      * scan roots below — not two lists that happen to agree, but one
      * shared source of truth both gates consume, the identical reasoning
      * behind `rewritableSpans()` being the one thing both this class's own
-     * G5 and Task 9's moves are required to call. A host mapping its own
+     * reference scan and the mutation phase are required to call. A host mapping its own
      * root namespace onto `src/` (or anywhere else) still works: its own
      * composer.json says so, and this gate reads exactly that, rather than
      * assuming `app/` — reading the PSR-4 map is what makes both the DX
      * win (any legitimately mapped location works) and the safety
      * property (nothing else does) true at once.
      *
-     * Then E47: the file must declare exactly one top-level named symbol.
-     * M2 (Task 9) rewrites the file's namespace, which moves EVERY
-     * declaration the file contains, while NodeReferenceScanner (G5) only
+     * Then single-symbol requirement: the file must declare exactly one top-level named symbol.
+     * The mutation phase rewrites the file's namespace, which moves EVERY
+     * declaration the file contains, while NodeReferenceScanner only
      * ever looks for references to the NODE — so a companion trait,
      * interface, enum, function, or constant would move silently and break
      * any host code that still uses it under its old name.
@@ -2347,12 +2344,12 @@ class ExtractNodeCommand extends Command
         }
 
         if (! $hostRoot->contains($file)) {
-            return "[{$class}]'s file [{$file}] is not inside the host application's own root (E51). A "
+            return "[{$class}]'s file [{$file}] is not inside the host application's own root. A "
                 .'class outside the host cannot be extracted from it.';
         }
 
         if ($this->underVendorAtAnyDepth($file, $hostBasePath)) {
-            return "[{$class}]'s file [{$file}] lives under a [".self::VENDOR_DIR.'/] segment (E51), at '
+            return "[{$class}]'s file [{$file}] lives under a [".self::VENDOR_DIR.'/] segment, at '
                 .'some depth under the host root. A class already shipped as part of another Composer '
                 .'package — the host\'s own, or a nested one belonging to a different local package — is '
                 .'not the host\'s own source and cannot be extracted from it.';
@@ -2362,8 +2359,8 @@ class ExtractNodeCommand extends Command
 
         if (! $this->isUnderAnyMappedRoot($file, $psr4Directories)) {
             return "[{$class}]'s file [{$file}] is not inside any directory the host's own composer.json "
-                .'maps via autoload or autoload-dev PSR-4 (E51). A location the host itself does not claim '
-                .'as its own source is exactly the ground NodeReferenceScanner (G5) cannot be trusted to '
+                .'maps via autoload or autoload-dev PSR-4. A location the host itself does not claim '
+                .'as its own source is exactly the content NodeReferenceScanner cannot be trusted to '
                 .'scan — it would let extraction proceed over territory nothing has vetted.';
         }
 
@@ -2371,8 +2368,8 @@ class ExtractNodeCommand extends Command
         $companion = $this->findCompanionSymbol($source, $reflection->getShortName());
 
         if ($companion !== null) {
-            return "[{$file}] also declares [{$companion}] (E47). Extraction rewrites this file's own "
-                .'namespace, which moves EVERY declaration inside it, while the reference scan (G5) only '
+            return "[{$file}] also declares [{$companion}]. Extraction rewrites this file's own "
+                .'namespace, which moves EVERY declaration inside it, while the reference scan only '
                 ."looks for uses of [{$reflection->getShortName()}] itself — so [{$companion}] would move "
                 .'silently and any host code still using it under its old name would break. Move '
                 ."[{$companion}] into its own file before extracting.";
@@ -2419,19 +2416,19 @@ class ExtractNodeCommand extends Command
      * Every directory the host's own composer.json maps via
      * `autoload.psr-4` or `autoload-dev.psr-4`, resolved to an absolute
      * path and kept only if it actually exists on disk AND resolves
-     * canonically inside the host root — the SAME set both G2
-     * (containment) and G5 (scan roots) consume, so the two gates agree
+     * canonically inside the host root — the SAME set both source-location validation
+     * (containment) and reference scan (scan roots) consume, so the two gates agree
      * about what counts as "the host's own source" by construction rather
      * than by two independently-written lists happening to match.
      *
      * THE ROOT-CONTAINMENT CHECK (this method's own reason for existing in
      * its current shape) closes a case its own predecessor reopened: a
      * PSR-4 value of `"./"`, `"."`, or `"/"` maps the ENTIRE host root, at
-     * which point `storage/framework/cache/...` (Important A's case (c),
-     * supposedly closed) is "mapped" again, because it is a subdirectory
+     * which point `storage/framework/cache/...` is "mapped" again, because
+     * it is a subdirectory
      * of "the whole project". A value of `"../"` is worse: resolved
      * against `$hostBasePath` it points OUTSIDE the host entirely, which
-     * would hand G5 a scan root outside the tree it was ever told to
+     * would hand reference scan a scan root outside the tree it was ever told to
      * cover. Both are refused before ever becoming a candidate root:
      * `HostPath::segments()` deliberately KEEPS a `..` segment (its own
      * docblock explains why — a caller must be able to SEE a climb-out in
@@ -2444,9 +2441,9 @@ class ExtractNodeCommand extends Command
      *
      * A non-existent mapped directory (declared in composer.json but never
      * created) is silently dropped rather than refused: an absent
-     * directory contains nothing, so it can neither admit a node G2 should
-     * accept nor hide a reference G5 should have scanned. Dropping it here
-     * — rather than letting it become a G5 scan root — is also what keeps
+     * directory contains nothing, so it can neither admit a node source-location validation should
+     * accept nor hide a reference the scanner should have found. Dropping it here
+     * — rather than letting it become a reference scan root — is also what keeps
      * `NodeReferenceScanner::scan()` from receiving a root
      * `HostPath::root()` would throw `InvalidArgumentException` on; gate5()
      * only catches `RuntimeException`, so an unfiltered non-existent root
@@ -2460,7 +2457,7 @@ class ExtractNodeCommand extends Command
      * gap a future reader should not mistake for one):
      *   - Only `autoload`/`autoload-dev` PSR-4 entries are read. A host
      *     whose own node classes are reachable only through `classmap` or
-     *     the legacy PSR-0 style is refused outright by G2 (nothing it
+     *     the legacy PSR-0 style is refused outright by source-location validation (nothing it
      *     declares ever becomes a mapped root) — vanishingly rare for a
      *     modern Laravel application (Laravel's own skeleton, and every
      *     generator in this package, both use PSR-4).
@@ -2469,7 +2466,7 @@ class ExtractNodeCommand extends Command
      *     blank-after-trim value and dropped, never accepted as a mapped
      *     root. A host relying on that exact shorthand to map its node
      *     classes to its own project root is refused; mapping to `"./"`
-     *     is refused for an unrelated reason (Important N2: it would map
+     *     is refused for an unrelated reason (it would map
      *     the ENTIRE host, which this method must never allow), so there
      *     is no alternate spelling of "map the whole root" this method
      *     will ever accept, by design.
@@ -2486,7 +2483,7 @@ class ExtractNodeCommand extends Command
      * existence/parse checks: the dependency is on ANOTHER method
      * (`gate2()`) staying exactly as strict as it is today, and if this
      * method is ever called from a path that does not go through `gate2()`
-     * first — Task 9's moves, say — this keeps its own protection rather
+     * first — during a future direct call, say — this keeps its own protection rather
      * than letting an unresolvable host root reach `$hostRoot->contains()`
      * uncaught.
      *
@@ -2566,7 +2563,7 @@ class ExtractNodeCommand extends Command
     }
 
     /**
-     * G3 — proves `type()` is a fixed literal (E36), and records it (M9).
+     * type consistency validation — proves `type()` is a fixed literal, and records it (fresh-host verification).
      * The one gate whose absence a re-run cannot repair: a `type()` derived
      * from the class name (e.g. `strtolower(class_basename(static::class))`)
      * silently changes identity the moment the namespace moves, orphaning
@@ -2587,10 +2584,10 @@ class ExtractNodeCommand extends Command
     }
 
     /**
-     * G4 — refuses only when the type is already claimed by ANOTHER class.
+     * type-ownership validation — refuses only when the type is already claimed by ANOTHER class.
      * Unregistered is explicitly NOT a refusal: a freshly generated node,
      * never yet wired into the host's provider, is legitimately extractable
-     * — G4 exists to catch a COLLISION, not to require prior registration.
+     * — type-ownership validation exists to catch a COLLISION, not to require prior registration.
      */
     private function gate4(NodeRegistry $registry, string $class): ?string
     {
@@ -2612,15 +2609,15 @@ class ExtractNodeCommand extends Command
     }
 
     /**
-     * G5 — scans `sharedScanRoots()` (E46) for every reference to $class,
+     * reference scan — scans `sharedScanRoots()` for every reference to $class,
      * then subtracts exactly the spans `rewritableSpans()` proves the
-     * extraction will itself transform (E45). Any survivor refuses, named
+     * extraction will itself transform. Any survivor refuses, named
      * as `file:line`. `NodeReferenceScanner::scan()` throws a
      * `RuntimeException` naming a file with more than one `namespace` block
      * — allowed to propagate into a clean refusal here rather than caught
      * and re-wrapped, since it already names the file and the reason.
      *
-     * `sharedScanRoots()`/`scanSharedRoots()` are the SAME methods M6a's own
+     * `sharedScanRoots()`/`scanSharedRoots()` are the SAME methods post-move rescan's own
      * `rescanPostMoveTree()` calls — not two independently derived
      * root sets that happen to agree, the same reasoning
      * `rewritableSpans()`'s own docblock gives for why the gate and the
@@ -2656,7 +2653,7 @@ class ExtractNodeCommand extends Command
 
         return "Extraction would leave the host still naming [{$class}] by its old FQCN after the move, "
             .'because NodeRegistry::register() autoloads through is_a() and a stale reference is a fatal '
-            ."in the host's boot() on every request (E45), at:\n".implode("\n", $locations);
+            ."in the host's boot() on every request, at:\n".implode("\n", $locations);
     }
 
     private function isRewritten(NodeReference $reference, array $spans): bool
@@ -2671,19 +2668,19 @@ class ExtractNodeCommand extends Command
     }
 
     /**
-     * G6 — the host's composer.json must parse; $packageName must not
+     * package configuration validation — the host's composer.json must parse; $packageName must not
      * already be required from a DIFFERENT source (a path repository
      * pointing somewhere other than $targetRelativePath, or no path
      * repository at all — either way, extraction would create a second,
      * conflicting source for the same package name); and
-     * extra.laravel.dont-discover must not cover the new package (E49) — a
+     * extra.laravel.dont-discover must not cover the new package — a
      * "*" entry, or the package's own name, would silently stop the
      * extracted package's provider from ever being discovered, so the host
      * would lose its only registration of the node with no error anywhere.
      *
      * CURRENTLY UNREACHABLE, KEPT ANYWAY: the existence and parse checks
      * immediately below can no longer actually fire by the time this gate
-     * runs. G2's own `hostPsr4Directories()` already reads and decodes this
+     * runs. source-location validation's `hostPsr4Directories()` already reads and decodes this
      * SAME file, on this SAME `$hostBasePath`, through this SAME
      * `$this->files`, earlier in the SAME `handle()` call — and already
      * refuses (via "not inside any PSR-4-mapped directory") whenever that
@@ -2697,7 +2694,7 @@ class ExtractNodeCommand extends Command
      * two lines below trusted to always succeed — because the dependency
      * is on ANOTHER gate's OWN internal method staying exactly as strict
      * as it is today; if `hostPsr4Directories()` ever relaxes (an escape
-     * hatch added to G2, a recursive/internal call bypassing it), this
+     * hatch added to source-location validation, a recursive/internal call bypassing it), this
      * gate keeps its own, independent protection rather than silently
      * treating a missing or corrupt composer.json as "nothing required,
      * nothing discovered".
@@ -2731,8 +2728,8 @@ class ExtractNodeCommand extends Command
 
         foreach ($this->dontDiscoverEntries($decoded) as $entry) {
             if ($entry === '*' || $entry === $packageName) {
-                return "The host's composer.json lists [{$entry}] under extra.laravel.dont-discover "
-                    ."(E49), which would silently stop [{$packageName}]'s provider from ever being "
+                return "The host's composer.json lists [{$entry}] under extra.laravel.dont-discover, "
+                    ."which would silently stop [{$packageName}]'s provider from ever being "
                     .'discovered — the host would lose its only registration of this node with no error '
                     .'anywhere. Remove or narrow that entry before extracting.';
             }
@@ -2777,7 +2774,7 @@ class ExtractNodeCommand extends Command
      * as though it still existed after the code had already moved past
      * it, which is its own instance of the defect class this note exists
      * to warn against: a comment describing behaviour the code no longer
-     * has is what let a Critical ship here once already (C2). `*` cannot
+     * has is what allowed a defect here once already. `*` cannot
      * cross a `/` under `FNM_PATHNAME`, which is exactly what makes
      * Composer's own idiomatic monorepo form (`"packages/*"`, ONE wildcard
      * segment) fail to match a TWO-segment target
@@ -2884,7 +2881,7 @@ class ExtractNodeCommand extends Command
     }
 
     /**
-     * G7 (E43) — the target path must be absent, empty, or already hold
+     * target-path validation — the target path must be absent, empty, or already hold
      * exactly the package named by --package (a legitimate re-run of this
      * same extraction). --force overrides an otherwise-foreign occupant,
      * matching MakeNodePackageCommand's own targetIsAvailable() rule for
@@ -2926,18 +2923,18 @@ class ExtractNodeCommand extends Command
                 ? $decoded['name']
                 : '(a composer.json with no readable name)';
 
-            return "[{$targetRelativePath}] is occupied by [{$occupant}], not [{$packageName}] (E43). "
+            return "[{$targetRelativePath}] is occupied by [{$occupant}], not [{$packageName}]. "
                 .'Pass --force to overwrite it anyway.';
         }
 
-        return "[{$targetRelativePath}] is occupied (it holds files but no composer.json) (E43). Pass "
+        return "[{$targetRelativePath}] is occupied (it holds files but no composer.json). Pass "
             .'--force to overwrite it anyway.';
     }
 
     /**
-     * G8 — Composer must be invocable, its effective vendor directory must
+     * Composer readiness validation — Composer must be invocable, its effective vendor directory must
      * remain inside the host, and whether composer.lock exists is recorded
-     * (not acted on) for Task 10's E48.
+     * for post-move validation.
      */
     private function gate8(string $hostBasePath): ?string
     {
@@ -2993,7 +2990,7 @@ class ExtractNodeCommand extends Command
         if ($exitCode !== 0) {
             return 'The `composer` executable is not invocable (`composer --version` exited '
                 ."[{$exitCode}]). Extraction needs Composer to update the host's composer.json and "
-                ."regenerate the autoloader once Task 9's moves actually run, so it refuses now rather "
+                ."regenerate the autoloader once the mutation phase runs, so it refuses now rather "
                 .'than fail partway through a move later.';
         }
 
@@ -3009,7 +3006,7 @@ class ExtractNodeCommand extends Command
      * reusing `NodeRegistrationWriter::findClassEntrySpans()`'s own element
      * classification rather than exempting the array's whole body.
      *
-     * WHY REUSE RATHER THAN A LOCAL BRACKET RANGE (Important 2). An
+     * WHY REUSE RATHER THAN A LOCAL BRACKET RANGE. An
      * earlier version of this method exempted every byte between the
      * array's own brackets, kind-blind — which meant `protected array
      * $nodes = [ ...config('x', [Foo::class => 'alias']) ]` exempted a
@@ -3018,7 +3015,7 @@ class ExtractNodeCommand extends Command
      * because `removeFrom()` refuses a spread/nested-array element as
      * EntryUnsupported and leaves the WHOLE array alone. A too-wide
      * exemption silently certifying a rewrite that never happens is the
-     * same defect E45 already named once, in a different shape.
+     * same defect span-aware reference handling already named once, in a different shape.
      * `findClassEntrySpans()` returns [] whenever ANY element in the array
      * is not a plain `<name>::class` it can classify — so the gate and the
      * move now agree BY CONSTRUCTION: neither one certifies anything about
@@ -3031,11 +3028,11 @@ class ExtractNodeCommand extends Command
         try {
             $references = NodeReferenceScanner::scan($class, [dirname($providerFile)]);
         } catch (RuntimeException) {
-            // The main G5 scan (over app/, which contains this same file)
+            // The main reference scan (over app/, which contains this same file)
             // already ran successfully by the time rewritableSpans() is
             // ever reached from gate5 — a multi-namespace provider would
             // have refused there first. Reached defensively for a direct
-            // rewritableSpans() call outside that order (Task 9's own use);
+            // rewritableSpans() call outside that order;
             // no spans to report for a file this command cannot safely read.
             return [];
         }
@@ -3045,7 +3042,7 @@ class ExtractNodeCommand extends Command
         // own DIRECTORY, and every sibling file living alongside it (an
         // AppServiceProvider, say) is scanned too. A reference sitting in
         // a SIBLING file must never be folded into this provider's own
-        // exemption set — that sibling is not one of the files Task 9
+        // exemption set — that sibling is not one of the files the mutation phase
         // rewrites, and exempting it here would silently certify a rewrite
         // that will never happen to it either.
         $canonicalProvider = realpath($providerFile) ?: $providerFile;
@@ -3076,7 +3073,7 @@ class ExtractNodeCommand extends Command
     /**
      * Every top-level named symbol in $source OTHER than $ownShortName —
      * the target class's own declaration, always excluded — or null when
-     * there is none (E47).
+     * there is none.
      *
      * "Top-level" means: not nested inside any brace OTHER than a
      * namespace's own braced block. A method inside the class body, or a
@@ -3241,7 +3238,7 @@ class ExtractNodeCommand extends Command
      * companion function was read as having NO name at all (the array
      * form fell through to the "not an array we care about" — wait, IS an
      * array — branch and was treated as an ordinary, unrecognised token),
-     * silently passing G2 while the by-ref function moved with the file.
+     * silently passing source-location validation while the by-ref function moved with the file.
      */
     private function nextFunctionName(array $tokens, int $keywordIndex): ?string
     {

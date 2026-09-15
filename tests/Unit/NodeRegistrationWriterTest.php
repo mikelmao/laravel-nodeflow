@@ -218,14 +218,14 @@ it('does not add a second entry for a class already registered', function () {
 });
 
 it('appends rather than reporting AlreadyPresent when the namespace makes the written entry a different class', function () {
-    // E50. This test used to assert AlreadyPresent for this exact fixture, which
+    // scoped registration. This test used to assert AlreadyPresent for this exact fixture, which
     // was wrong: providerWithAnchor() declares `namespace App\Providers;`, so by
     // PHP's own name-resolution rule (verified by probe, and what PhpNameResolver
     // implements), the unqualified entry `App\Nodeflow\Nodes\SendSms::class`
     // resolves to `App\Providers\App\Nodeflow\Nodes\SendSms` — NOT
     // `App\Nodeflow\Nodes\SendSms`, the class actually being registered. Matching
     // must not diverge between appendTo() and removeFrom() (a divergence of
-    // exactly that kind produced execution-record C1), so this now expects
+    // exactly that kind produced execution-record regression case), so this now expects
     // Appended, and a second entry is added rather than the mismatched one being
     // mistaken for the target.
     $path = providerWithAnchor('        App\Nodeflow\Nodes\SendSms::class,');
@@ -270,7 +270,7 @@ it('recognises a class listed without a leading backslash when the file declares
 });
 
 it('does not read a mention outside the nodes array as already registered', function () {
-    // Pre-existing shipped defect, found by this plan's external review:
+    // Regression:
     // appendTo() ran str_contains over the WHOLE comment-stripped file, so any
     // mention anywhere read AlreadyPresent and the entry was never added.
     // Counterfactual: restore the whole-file str_contains and this fails.
@@ -679,7 +679,7 @@ it('inserts into the structural provider array without changing CRLF formatting'
 });
 
 it('appends after a docblock example that itself contains "return [", not into it', function () {
-    // C2. insertionPoint()'s method-body search used to be a plain substring
+    // regression case. insertionPoint()'s method-body search used to be a plain substring
     // match over the raw window, so a docblock example like this one — placed
     // before the REAL return statement, well within reach either way — matched
     // first and the entry landed inside the comment. Counterfactual: search the
@@ -718,7 +718,7 @@ it('appends after a docblock example that itself contains "return [", not into i
 });
 
 it('ignores a commented-out anchor and reports the real provider home missing', function () {
-    // C2 / E11. The `$nodes` home's own declaration line is commented out, so
+    // regression case / post-write verification. The `$nodes` home's own declaration line is commented out, so
     // ANCHOR still matches once, raw, and the insertion point still looks
     // valid right up until the result is read back — the array it appears to
     // open was never actually declared. Counterfactual: skip the post-write
@@ -793,7 +793,7 @@ it('treats a class hidden behind an unsupported element as already registered, r
 });
 
 it('does not let an earlier entry whose string argument contains "]" truncate the attribute return array', function () {
-    // Important finding: the same root cause (a `]` inside a string literal
+    // Regression: the same root cause (a `]` inside a string literal
     // ending the span early under a character-based scan) regressed
     // appendTo()'s attribute-presence branch too. The decoy entry's key
     // contains a literal `]` and sits BEFORE the real 'clicked' entry. Under
@@ -827,7 +827,7 @@ it('does not let an earlier entry whose string argument contains "]" truncate th
 });
 
 it('does not read a mention outside the attribute return array as already registered', function () {
-    // M8: isAlreadyPresent()'s non-::class branch must be scoped to the
+    // dependency installation: isAlreadyPresent()'s non-::class branch must be scoped to the
     // ATTRIBUTE_ANCHOR's own return array, not the whole file — mirroring
     // the whole-file str_contains defect Step 7 fixed for the ::class
     // branch, but for the substring branch instead. Counterfactual: revert
@@ -890,7 +890,7 @@ it('does not let a nested array argument in an earlier call truncate the attribu
 });
 
 it('does not treat a commented-out attribute registration as already present', function () {
-    // Important #3 (round 3). E22's whole point: a debugged-out entry must
+    // Regression. comment stripping's whole point: a debugged-out entry must
     // not read as live. isAlreadyPresent()'s substring branch builds its
     // search body by skipping T_COMMENT/T_DOC_COMMENT tokens specifically
     // so a commented-out `SubjectAttribute::make('clicked', ...)` cannot

@@ -3,9 +3,9 @@
 namespace Nodeflow\Console\Install;
 
 /**
- * Verifies resolve.dedupe lists react, react-dom and @xyflow/react (G-4).
+ * Verifies resolve.dedupe lists react, react-dom and @xyflow/react.
  *
- * Verify-only, never written (E20), for the same reason as ViteAliasStep: an
+ * Verify-only, never written, for the same reason as ViteAliasStep: an
  * arbitrary vite.config.ts needs a TypeScript AST to edit safely, and this
  * package does not have one.
  *

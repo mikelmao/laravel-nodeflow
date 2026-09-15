@@ -6,7 +6,7 @@ use Nodeflow\Nodes\Node;
 use Nodeflow\Schema\NodeDefinition;
 
 /**
- * Written exactly the way spec section 5's canonical example used to read: a
+ * A deliberately invalid node with no cardinality contract: a
  * forSubject() method and no `implements HandlesSubject`. It must be impossible
  * to register or publish, because the runtime dispatches on the interface and
  * not on the method name.

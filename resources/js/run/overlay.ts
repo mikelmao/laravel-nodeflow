@@ -84,7 +84,7 @@ export function overlayFor(snapshot: OverlaySnapshot, nodeId: string): NodeOverl
  * Never reached is dimmed with no badge; reached always carries at least one
  * number, falling back to an explicit 0. Deriving either from a count collapses
  * "released nobody" into "never touched", which is the misreading this whole
- * overlay exists to prevent — see the run-view spec's E13.
+ * overlay exists to prevent.
  */
 export function decorationsFor(nodeIds: string[], snapshot: OverlaySnapshot): NodeDecorationMap {
     const decorations: NodeDecorationMap = Object.create(null)
@@ -112,8 +112,8 @@ function decoration(overlay: NodeOverlay | undefined): NodeDecoration {
     }
 
     if (overlay.failed > 0) {
-        // Labelled "errors", not "failed" (a deliberate override of spec
-        // §4.2): a node can declare an output literally named "failed" (the
+        // Labelled "errors", not "failed": a node can declare an output
+        // literally named "failed" (the
         // demo's `demo.send` does), which gets its own `out:failed` badge
         // right alongside this one. Two badges both reading "failed" — one
         // meaning "1 subject took the output named failed" and the other "2

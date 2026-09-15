@@ -1,10 +1,10 @@
 # 7. Worked example — a flood-alert journey
 
-Everything before this document is domain-neutral. This one builds a complete, real journey to show how
-the pieces fit, using the first system nodeflow was designed for.
+Everything before this document is domain-neutral. This one builds a complete, illustrative journey to
+show how the pieces fit in a host application.
 
 **The setting.** Three systems: a flood-forecasting service that emits alerts scoped to towns, a
-messaging platform that delivers to people across channels, and an FSP-facing web application where
+messaging platform that delivers to people across channels, and a tenant-facing web application where
 each financial institution's staff build their own journeys. Institutions are tenants — the
 `Organization` model. Their customers are the subjects.
 
@@ -86,7 +86,7 @@ class FloodAlertFires extends Trigger
 {
     public static function type(): string
     {
-        return 'rada.alert_dispatched';
+        return 'weather.alert_dispatched';
     }
 
     public static function event(): string
@@ -280,7 +280,7 @@ use Nodeflow\Publishing\PublishFlow;
 
 $flow = Flow::create([
     'name' => 'Flood alert → loan offer',
-    'trigger_type' => 'rada.alert_dispatched',
+    'trigger_type' => 'weather.alert_dispatched',
     'trigger_config' => ['severity' => ['orange', 'red']],
     'status' => 'active',
 ]);
@@ -393,9 +393,9 @@ $run = app(StartRun::class)->forFlow($flow, 'user', ['42'], ['is_test' => true])
 Provided `SendMessage` honours `isTest()` — it does, above — this walks the whole journey, exercises the
 condition, and sends nothing.
 
-## What is left to build
+## Verify the complete journey
 
-This journey is expressible and executable today. What is not here yet: the editor that lets an
-institution's staff assemble the graph without writing the array above, and any verification that the
-interpreter behaves correctly against a real queue worker over a real multi-day wait. Do the latter
-before the first live alert.
+The package editor lets tenant staff assemble this graph without writing the array above. Before the
+first live alert, exercise the published journey in the host application's representative environment:
+use the real database, supervised queue workers, waits, retries, and the same node integrations that
+will handle production traffic.

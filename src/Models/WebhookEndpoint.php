@@ -12,7 +12,7 @@ class WebhookEndpoint extends Model
 
     protected $table = 'nodeflow_webhook_endpoints';
 
-    // Task 8 authors lowercase 64-character hex tokens. Their database
+    // Webhook registration authors lowercase 64-character hex tokens. Their database
     // collation's case semantics therefore cannot create token aliases.
     protected $fillable = [
         'flow_id',

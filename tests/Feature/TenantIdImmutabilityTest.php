@@ -2,8 +2,7 @@
 
 use Nodeflow\Models\Flow;
 
-// This file was planned to hold three tests (see task-14-brief.md). Two of them
-// duplicate coverage already in tests/Feature/TenancyTest.php:
+// Two related cases already live in tests/Feature/TenancyTest.php:
 //
 //   - "refuses a tenant_id change through the model" duplicates
 //     "refuses to move an existing row to another tenant on update" (line 157):
@@ -15,8 +14,7 @@ use Nodeflow\Models\Flow;
 //     the other field's change persisted.
 //
 // Adding second copies of those would only pad the count, so this file carries
-// only the one genuinely new case: the query-builder bypass. See
-// task-14-report.md for the duplication check.
+// only the one genuinely new case: the query-builder bypass.
 
 it('does NOT catch a tenant_id change made through the query builder', function () {
     // This test pins a documented limitation rather than a guarantee, which is

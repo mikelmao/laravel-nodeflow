@@ -142,12 +142,12 @@ it('cannot wire a missing or unparseable tsconfig', function () {
 });
 
 it('rejects a mapping that climbs one level out of the project', function () {
-    // Fix round 1, finding 1: ltrim($value, './') strips a RUN of "." and "/"
+    // Regression: ltrim($value, './') strips a RUN of "." and "/"
     // characters, not the literal two-character sequence "./", so
     // ltrim('../vendor/...', './') collapsed to the same string as
     // ltrim('./vendor/...', './'). That made check() return AlreadyPresent for
     // a mapping pointing one directory above the project root — a false accept
-    // in the direction the brief itself named as dangerous.
+    // in the unsafe direction.
     ($this->write)(json_encode(['compilerOptions' => ['paths' => [
         '@nodeflow/editor' => ['../vendor/atram/laravel-nodeflow/resources/js'],
         '@nodeflow/editor/*' => ['../vendor/atram/laravel-nodeflow/resources/js/*'],
@@ -166,7 +166,7 @@ it('rejects a mapping that climbs two levels out of the project', function () {
 });
 
 it('still accepts both real-world forms after the climb-out fix', function () {
-    // Regression guard for fix round 1: the segment-wise rewrite must not
+    // Regression guard: the segment-wise rewrite must not
     // disturb either of the two forms that are known to occur in practice —
     // the accepted host's "index.ts" form and the directory form the docs
     // print — even though both are now compared by segment rather than by
@@ -187,7 +187,7 @@ it('still accepts both real-world forms after the climb-out fix', function () {
 });
 
 it('rejects a mapping to a sibling directory whose name merely starts with js', function () {
-    // Fix round 1, finding 1 (second false accept, same line): str_starts_with()
+    // Regression (second false accept, same line): str_starts_with()
     // compares raw strings, so "resources/jsx" textually starts with
     // "resources/js" and used to pass. A segment-wise compare treats "jsx" and
     // "js" as distinct whole segments.
@@ -200,7 +200,7 @@ it('rejects a mapping to a sibling directory whose name merely starts with js', 
 });
 
 it('rejects a baseUrl that walks into resources/js and straight back out', function () {
-    // Fix round 2, finding 3: round 1 checked only the TARGET's segments for a
+    // Regression: checking only the TARGET's segments for a
     // literal "..", never baseUrl's. A baseUrl that walks in and back out via a
     // trailing ".." resolves outside the package, and any target passed the
     // check because the ".." was never inspected.
@@ -228,7 +228,7 @@ it('rejects a baseUrl that climbs out via a longer .. chain mid-path', function 
 });
 
 it('rejects an absolute target instead of reading it as project-relative', function () {
-    // Fix round 2, finding 4: segments() drops a leading "/" alongside ".",
+    // Regression: segments() drops a leading "/" alongside ".",
     // which used to let an absolute filesystem path be compared as though it
     // were relative to the project root.
     ($this->write)(json_encode(['compilerOptions' => ['paths' => [
@@ -252,7 +252,7 @@ it('rejects an absolute baseUrl', function () {
 });
 
 it('still accepts the real host\'s baseUrl of "." after the climb-out fix', function () {
-    // Regression guard for fix round 2: the merged-list ".." check and the
+    // Regression guard: the merged-list ".." check and the
     // leading-"/" check must not disturb the one real installed host, whose
     // baseUrl is the ordinary ".".
     ($this->write)(json_encode(['compilerOptions' => [
@@ -267,7 +267,7 @@ it('still accepts the real host\'s baseUrl of "." after the climb-out fix', func
 });
 
 it('still accepts a baseUrl that legitimately covers part of the prefix, with no ..', function () {
-    // Regression guard for fix round 2: a baseUrl genuinely inside the
+    // Regression guard: a baseUrl genuinely inside the
     // package's own tree, with no ".." anywhere, must still be accepted — the
     // fix targets the climb-out, not baseUrl-provided prefixes in general.
     ($this->write)(json_encode(['compilerOptions' => [
@@ -282,7 +282,7 @@ it('still accepts a baseUrl that legitimately covers part of the prefix, with no
 });
 
 it('never writes to the tsconfig', function () {
-    // E20: a JSON round-trip destroys the starter kit's ninety-line comment
+    // verify-only configuration: a JSON round-trip destroys the starter kit's ninety-line comment
     // block, which is documentation the host owns.
     ($this->write)(<<<'JSONC'
     {

@@ -22,7 +22,7 @@ afterEach(function () {
 });
 
 it('reports already present when the host published nothing', function () {
-    // E19's intended state. Counterfactual: report Writable here and every fresh
+    // migration ownership's intended state. Counterfactual: report Writable here and every fresh
     // install publishes a copy that then shadows the package's own file forever.
     $step = new MigrationStep(new Filesystem, $this->root);
 
@@ -49,7 +49,7 @@ it('reports already present when a published copy matches', function () {
 });
 
 it('cannot wire a published copy that has drifted, and names both paths', function () {
-    // The Plan 4 failure, reproduced. The package's copy gained a fourth index
+    // A migration-drift failure, reproduced. The package's copy gained a fourth index
     // column while the demo's published copy silently kept three, and no test
     // anywhere could see it: the index assertion lives in the package's suite
     // while the demo's tests run against the demo's copy.
@@ -69,7 +69,7 @@ it('cannot wire a published copy that has drifted, and names both paths', functi
 });
 
 it('treats --force-migrations as implying --publish-migrations, so apply() never hands back Writable', function () {
-    // Fix round 1, Finding 1. The brief asserted "--force-migrations implies
+    // Regression. Constructor semantics require "--force-migrations implies
     // --publish-migrations" and enforced it nowhere: apply() short-circuited on
     // `! $this->publish` and handed back check()'s own Writable, a value
     // InstallOutcome's docblock says apply() must never return.

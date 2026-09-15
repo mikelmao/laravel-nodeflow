@@ -39,7 +39,7 @@ describe('nextNodeId', () => {
 
     it('removes punctuation from the readable id segment', () => {
         // Keeping punctuation would make ids harder to read in publish diagnostics.
-        expect(nextNodeId('yaya.send-message', new Set())).toBe('sendmessage1')
+        expect(nextNodeId('notifications.send-message', new Set())).toBe('sendmessage1')
     })
 })
 

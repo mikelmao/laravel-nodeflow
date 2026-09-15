@@ -121,7 +121,7 @@ final class ProviderStep implements InstallStep
 
         $contents = $this->files->get($this->path());
 
-        // Comment-stripped (E22): a host who commented out one of the three
+        // Comment-stripped: a host who commented out one of the three
         // boot() registration calls while debugging must be told the truth
         // rather than told they are wired — the array anchors can be genuinely
         // present while nothing actually registers. Anchor counts just below

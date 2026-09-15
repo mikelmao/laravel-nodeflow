@@ -32,7 +32,7 @@ function rowsFrom(data: Record<string, unknown> | null): RunSubjectRow[] {
  *
  * "Right now" is the whole contract: the schema keeps no per-subject history
  * and nulls current_node_id on every terminal transition, so this can neither
- * list who passed through nor list a node's failures (spec E15). An empty
+ * list who passed through nor list a node's failures. An empty
  * result is ambiguous between two different facts unless `reached` disambiguates
  * it in words: a node the run visited and now has nobody on it, versus a node
  * the run never touched at all. The reached branch must not claim *how* the

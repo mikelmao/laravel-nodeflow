@@ -3,7 +3,7 @@
   "version": "0.0.0",
   "private": true,
   "type": "module",
-  "description": "Dev-only toolchain for the editor's TypeScript source. Never published; the host's Vite compiles resources/js directly (decision D2).",
+  "description": "Dev-only toolchain for the editor's TypeScript source. Never published; the host's Vite compiles resources/js directly.",
   "scripts": {
     "test": "vitest run",
     "test:watch": "vitest",

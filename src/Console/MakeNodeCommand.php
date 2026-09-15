@@ -161,7 +161,7 @@ class MakeNodeCommand extends GeneratorCommand
             ],
         };
 
-        // strtr for the same reason as buildClass(): see F-1 in paletteGroup().
+        // strtr for the same reason as buildClass(): see structural replacement in paletteGroup().
         $this->files->put($path, strtr(
             $this->files->get($this->resolveStubPath('/stubs/node.test.stub')),
             [
@@ -234,7 +234,7 @@ class MakeNodeCommand extends GeneratorCommand
 
         // strtr, not str_replace: str_replace with array arguments is sequential
         // and re-substitutes inside its own output, so a --group value containing
-        // a later placeholder rendered an unparseable file and exited 0 (F-1).
+        // a later placeholder rendered an unparseable file and exited 0.
         return strtr($stub, [
             '{{ type }}' => $this->nodeType(),
             '{{ label }}' => Str::headline(class_basename($this->getNameInput())),
@@ -247,7 +247,7 @@ class MakeNodeCommand extends GeneratorCommand
     /** Reserved for the package's own nodes: core.wait, core.condition, and so on. */
     private const RESERVED_PREFIX = 'core.';
 
-    /** Lowercase segments joined by dots or underscores: yaya.send_message, rada.read_severity. */
+    /** Lowercase segments joined by dots or underscores: notifications.send_message, weather.read_severity. */
     private const TYPE_PATTERN = '/^[a-z0-9]+(?:[._][a-z0-9]+)*$/';
 
     /**
@@ -282,7 +282,7 @@ class MakeNodeCommand extends GeneratorCommand
         if ($type === '' && $this->input->isInteractive() && ! $this->laravel->runningUnitTests()) {
             $type = trim(text(
                 label: 'Stable type identifier for this node',
-                placeholder: 'yaya.send_message',
+                placeholder: 'notifications.send_message',
                 default: $suggested,
                 hint: 'Published flow versions resolve through this string forever. Prefix it with your domain.',
             ));
@@ -310,7 +310,7 @@ class MakeNodeCommand extends GeneratorCommand
         if (preg_match(self::TYPE_PATTERN, $type) !== 1) {
             throw new \InvalidArgumentException(
                 "[{$type}] is not a valid node type. Use lowercase letters, digits, dots and ".
-                'underscores, e.g. yaya.send_message.'
+                'underscores, e.g. notifications.send_message.'
             );
         }
 
@@ -425,7 +425,7 @@ class MakeNodeCommand extends GeneratorCommand
     protected function getOptions(): array
     {
         return [
-            ['type', null, InputOption::VALUE_OPTIONAL, 'The stable type identifier, e.g. yaya.send_message'],
+            ['type', null, InputOption::VALUE_OPTIONAL, 'The stable type identifier, e.g. notifications.send_message'],
             ['cardinality', null, InputOption::VALUE_OPTIONAL, 'subject, audience, or both', 'subject'],
             ['outputs', null, InputOption::VALUE_OPTIONAL, 'Comma-separated output names', 'default'],
             ['group', null, InputOption::VALUE_OPTIONAL, 'Palette group shown in the editor', 'General'],

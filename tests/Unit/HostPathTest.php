@@ -46,12 +46,12 @@ it('treats a path under the root as inside it', function () {
 });
 
 it('refuses a path that climbs out of the root', function () {
-    // R12/R13's shape: ltrim($v, './') collapsed '../vendor/...' into a match.
+    // regression case/regression case's shape: ltrim($v, './') collapsed '../vendor/...' into a match.
     expect(HostPath::root($this->base)->contains($this->base.'/../elsewhere/Foo.php'))->toBeFalse();
 });
 
 it('refuses a symlink inside the root whose target escapes it', function () {
-    // E51. Counterfactual: compare raw segments without resolving, and this
+    // path containment. Counterfactual: compare raw segments without resolving, and this
     // passes as "contained" while a scaffold write lands outside the repository.
     $outside = sys_get_temp_dir().'/nodeflow-hostpath-outside-'.bin2hex(random_bytes(6));
     mkdir($outside, 0777, true);
@@ -101,7 +101,7 @@ it('fails closed when a symlink chain exceeds the resolver hop limit', function 
 });
 
 it('counts relative depth without stripping a repeated inner segment', function () {
-    // R15: str_replace($basePath, '', $entry) strips the basePath's text WHEREVER
+    // regression case: str_replace($basePath, '', $entry) strips the basePath's text WHEREVER
     // it occurs. Build a directory that repeats the project's own last segment.
     $project = sys_get_temp_dir().'/nodeflow-hostpath-project-'.bin2hex(random_bytes(6));
     mkdir($project.'/resources/'.basename($project).'/css', 0777, true);

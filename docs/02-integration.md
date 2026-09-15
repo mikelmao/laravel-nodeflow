@@ -612,7 +612,7 @@ towns — cannot have them baked into the node class, because one class serves e
 tenant. Declare a source instead:
 
 ```php
-Field::select('template')->optionsFrom(YayaTemplates::class)
+Field::select('template')->optionsFrom(MessageTemplates::class)
 ```
 
 and implement the contract:
@@ -620,7 +620,7 @@ and implement the contract:
 ```php
 use Nodeflow\Schema\OptionSource;
 
-class YayaTemplates implements OptionSource
+class MessageTemplates implements OptionSource
 {
     public function options(): array
     {
@@ -692,7 +692,7 @@ The one thing that *is* generated on every project, over and over, is the file y
 write most often — a node class:
 
 ```bash
-php artisan nodeflow:make-node SendSms --type=yaya.send_sms --outputs='sent, failed' --test
+php artisan nodeflow:make-node SendSms --type=notifications.send_sms --outputs='sent, failed' --test
 ```
 
 That writes a single class (optionally with a test), and appends it to

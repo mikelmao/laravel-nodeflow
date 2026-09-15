@@ -1,21 +1,20 @@
 <?php
 
 /**
- * M1-M7 and M6a -- the actual moves `nodeflow:extract-node` performs once
- * every one of Task 8's eight gates has passed. ExtractNodeGatesTest.php
+ * package scaffolding through original deletion and post-move rescan -- the actual moves `nodeflow:extract-node` performs once
+ * all eight read-only gates have passed. ExtractNodeGatesTest.php
  * covers the gates themselves; this file covers what happens after they
  * all pass: a package is scaffolded, the class and its test move into it,
  * the package's own provider gains the registration, the host's own
- * provider and composer.json are edited, a final rescan (M6a) proves
+ * provider and composer.json are edited, a final rescan (post-move rescan) proves
  * nothing still names the class by its old FQCN, and only then are the
- * originals deleted (M7).
+ * originals deleted (original deletion).
  *
  * Every failure-injection test in this file asserts BOTH that the host
  * tree is byte-identical to what it was before the run (movesTreeHash) AND,
  * where the package directory did not exist beforehand, that it is
- * genuinely ABSENT afterwards -- not merely that its tracked files match,
- * which a first draft of this coverage got wrong by assuming absence
- * applied to every target state. The three E43 target states (absent, a
+ * genuinely ABSENT afterwards -- not merely that its tracked files match.
+ * The three target states (absent, a
  * matching pre-existing package, and a foreign directory under --force)
  * are each covered by at least one failure-injection test.
  */
@@ -184,10 +183,10 @@ function movesWriteNode(string $root, string $shortClass, string $type, string $
 }
 
 /**
- * A node with NO namespace declaration at all -- G2 only requires the FILE
+ * A node with NO namespace declaration at all -- source-location validation only requires the FILE
  * sit under a mapped PSR-4 directory, never that the class's OWN namespace
  * matches the mapped prefix, so this legitimately passes every gate while
- * giving M2 nothing to rewrite.
+ * giving class move nothing to rewrite.
  */
 function movesWriteGlobalNamespaceNode(string $root, string $shortClass, string $type): string
 {
@@ -290,13 +289,13 @@ function movesWriteHostTest(string $root, string $shortClass, string $fqcn): voi
     PHP);
 }
 
-// --- M1-M4: the moves themselves, on the happy path -------------------------
+// --- package scaffolding-package registration: the moves themselves, on the happy path -------------------------
 
 it('moves the class and rewrites only its namespace declaration, leaving a docblock mentioning the old namespace unchanged', function () {
-    // F-1: a global str_replace() of the old namespace text would ALSO
+    // structural replacement: a global str_replace() of the old namespace text would ALSO
     // rewrite this docblock's own mention of it, since the raw text is
     // identical. NodeReferenceScanner's own comment-skipping rule is what
-    // keeps M2's structural rewrite from touching it.
+    // keeps class move's structural rewrite from touching it.
     $extraBody = <<<'PHP'
 
         /** @see \App\Nodeflow\Nodes\DocblockNode -- still the old location on purpose */
@@ -414,7 +413,7 @@ it('rewrites a self-referencing DOUBLE-quoted class-string literal to the new FQ
     expect((new \Acme\Widgets\Nodes\DoubleQuotedRefNode())->legacyAlias())->toBe('Acme\Widgets\Nodes\DoubleQuotedRefNode');
 });
 
-it('preserves the ESCAPED (doubled-backslash) spelling inside a NOWDOC, which processes no escapes at all (persisted probe, review round 3)', function () {
+it('preserves the ESCAPED (doubled-backslash) spelling inside a NOWDOC, which processes no escapes at all (regression)', function () {
     // A nowdoc (<<<'TEXT') is unlike EVERY other string form in this
     // file: it processes NO escapes whatsoever, not even the \\ -> \
     // collapse a single-quoted string does. NodeReferenceScanner's own
@@ -457,7 +456,7 @@ it('preserves the ESCAPED (doubled-backslash) spelling inside a NOWDOC, which pr
 });
 
 it('rewrites a self-referencing HEREDOC body to the new FQCN without splicing in literal quote characters', function () {
-    // IMPORTANT review finding. NodeReferenceScanner::scanBoundedText()
+    // Regression. NodeReferenceScanner::scanBoundedText()
     // matches a heredoc/nowdoc body (T_ENCAPSED_AND_WHITESPACE) as a
     // BOUNDED SUBSTRING -- its span covers ONLY the matched bytes, with NO
     // surrounding quotes at all, unlike a quoted T_CONSTANT_ENCAPSED_STRING
@@ -507,8 +506,8 @@ it('rewrites a self-referencing HEREDOC body to the new FQCN without splicing in
     expect((new \Acme\Widgets\Nodes\HeredocRefNode())->legacyAlias())->toBe('Acme\Widgets\Nodes\HeredocRefNode');
 });
 
-it('escapes the new FQCN for heredoc rules when a namespace segment would otherwise form a real escape sequence (promoted finding, review round 3)', function () {
-    // The exact failure the reviewer constructed: --namespace=acme\things
+it('escapes the new FQCN for heredoc rules when a namespace segment would otherwise form a real escape sequence (regression)', function () {
+    // A concrete regression case: --namespace=acme\things
     // is a VALID Composer/PHP identifier pair (assertValidNamespaceSegments()
     // only checks each segment is a legal PHP identifier; a lowercase
     // first letter is legal), so the new FQCN's own text contains the two
@@ -551,8 +550,8 @@ it('escapes the new FQCN for heredoc rules when a namespace segment would otherw
     expect($value)->not->toContain("\t");
 });
 
-it('escapes an INTERPOLATED double-quoted string reference too, not only a heredoc (Important N1, review round 4)', function () {
-    // The general class N1 named: EVERY T_ENCAPSED_AND_WHITESPACE chunk
+it('escapes an INTERPOLATED double-quoted string reference too, not only a heredoc (regression)', function () {
+    // The general class regression case named: EVERY T_ENCAPSED_AND_WHITESPACE chunk
     // except a nowdoc's processes escapes -- an ordinary double-quoted
     // string with a $variable interpolation is tokenised into exactly
     // such chunks around the interpolation point, and the literal chunk
@@ -621,7 +620,7 @@ it('BACKTICK shell-exec strings process escapes the same way and need the same p
     expect(bin2hex($value))->toContain('5c74')->not->toContain('09');
 });
 
-it('preserves the PLAIN spelling inside a NOWDOC when the original text was plain, never doubling it (mutation survivors 1 and 2, review round 4)', function () {
+it('preserves the PLAIN spelling inside a NOWDOC when the original text was plain, never doubling it (regression)', function () {
     // The committed nowdoc probe used the ESCAPED spelling, whose correct
     // output happens to COINCIDE with what "always escape" would also
     // produce -- so it could not tell "needsEscaping() always returns
@@ -656,7 +655,7 @@ it('preserves the PLAIN spelling inside a NOWDOC when the original text was plai
     expect(substr_count($value, '\\'))->toBe(3);
 });
 
-it('resets nowdoc state after T_END_HEREDOC, so an UNRELATED nowdoc earlier in the file cannot suppress escaping for a later interpolated string (mutation survivor 3, review round 4)', function () {
+it('resets nowdoc state after T_END_HEREDOC, so an UNRELATED nowdoc earlier in the file cannot suppress escaping for a later interpolated string (regression)', function () {
     // Deleting the T_END_HEREDOC reset survived the whole suite: nothing
     // exercised a file where a nowdoc closes and is FOLLOWED, with no
     // fresh T_START_HEREDOC in between, by a plain double-quoted string
@@ -699,7 +698,7 @@ it('resets nowdoc state after T_END_HEREDOC, so an UNRELATED nowdoc earlier in t
     expect($value)->not->toContain("\t");
 });
 
-it('never escapes a Blade/inline-HTML reference, even when the new namespace would form a dangerous escape sequence (mutation survivor 4, review round 4)', function () {
+it('never escapes a Blade/inline-HTML reference, even when the new namespace would form a dangerous escape sequence (regression)', function () {
     // T_INLINE_HTML processes NO escapes at all -- dropping the
     // "$id === T_ENCAPSED_AND_WHITESPACE" half of needsEscaping()'s own
     // check (checking only $isNowdoc, which defaults to null and would
@@ -790,7 +789,7 @@ it('registers the class in the package provider and removes it from the host pro
     expect($exit2)->toBe(0);
 });
 
-// --- M5: the host provider's own `use` import -------------------------------
+// --- host deregistration: the host provider's own `use` import -------------------------------
 
 it('removes the now-unused host import once its array entry is gone', function () {
     $class = movesWriteNode($this->root, 'ImportCleanupNode', 'import.cleanup.node');
@@ -840,7 +839,7 @@ it('preserves earlier registrations across successive extractions into the same 
 it('keeps the host import when its short name appears in a second place', function () {
     // A DIFFERENT, fully-qualified reference to a class that merely SHARES
     // ImportCleanupNode's own short name, elsewhere in the same provider --
-    // not a reference to $class at all (a different FQCN, so G5 does not
+    // not a reference to $class at all (a different FQCN, so reference scan does not
     // refuse), but identifierAppearsOutside() is deliberately a plain
     // identifier check, not a resolution check, so it errs toward keeping
     // an import rather than risk breaking something that still spells the
@@ -886,7 +885,7 @@ it('continues extraction under the default error handler when only the unused-im
     expect($this->root.'/app/Nodeflow/Nodes/DefaultHandlerImportNode.php')->not->toBeFile();
 });
 
-it('leaves the import in place, and the extraction still succeeds, when removeUnusedImportIfSafe() cannot write the host provider (review round 4, Minor N3)', function () {
+it('leaves the import in place, and the extraction still succeeds, when removeUnusedImportIfSafe() cannot write the host provider (regression)', function () {
     // A production error handler may swallow file_put_contents()'s warning
     // and let Filesystem::put() return false instead of throwing. Keep this
     // separate from the default-handler test above so both failure shapes
@@ -922,7 +921,7 @@ it('leaves the import in place, and the extraction still succeeds, when removeUn
     expect($this->root.'/app/Nodeflow/Nodes/UnwritableImportNode.php')->not->toBeFile();
 });
 
-// --- M6: the host composer.json -------------------------------------------
+// --- Composer rewrite: the host composer.json -------------------------------------------
 
 it('adds a RELATIVE path repository and require entry, never an absolute path', function () {
     $class = movesWriteNode($this->root, 'ComposerJsonNode', 'composerjson.node');
@@ -973,7 +972,7 @@ it('adds the stable version alias to an existing matching path repository withou
 
 // --- Building the package target: refusals before anything is touched -----
 
-it('refuses an invalid --namespace before touching anything (E52)', function () {
+it('refuses an invalid --namespace before touching anything', function () {
     $class = movesWriteNode($this->root, 'BadNamespaceNode', 'badnamespace.node');
 
     $before = movesTreeHash($this->root);
@@ -990,7 +989,7 @@ it('refuses an invalid --namespace before touching anything (E52)', function () 
     expect($this->root.'/packages')->not->toBeDirectory();
 });
 
-it("refuses when the host's own composer.json does not require atram/laravel-nodeflow (E33)", function () {
+it("refuses when the host's own composer.json does not require atram/laravel-nodeflow", function () {
     $class = movesWriteNode($this->root, 'MissingConstraintNode', 'missingconstraint.node');
 
     file_put_contents($this->root.'/composer.json', json_encode([
@@ -1000,24 +999,25 @@ it("refuses when the host's own composer.json does not require atram/laravel-nod
     $before = movesTreeHash($this->root);
 
     $this->artisan('nodeflow:extract-node', ['class' => $class, '--package' => 'acme/widgets'])
-        ->expectsOutputToContain('E33')
+        ->expectsOutputToContain('does not require atram/laravel-nodeflow')
         ->assertFailed();
 
     expect(movesTreeHash($this->root))->toBe($before);
     expect($this->root.'/packages')->not->toBeDirectory();
 });
 
-// --- G5 and M6a share ONE root set (Important 4, review round) -------------
+// --- reference scan and post-move rescan share ONE root set (regression) -------------
 
-it('G5 itself now refuses a reference sitting in an ordinary top-level directory, for free -- no moves attempted at all', function () {
-    // Review-round finding: G5 and M6a used to derive their own scan roots
-    // independently, and G5's OLD allowlist (REFERENCE_SCAN_DIRS) missed a
+it('refuses a reference in an ordinary top-level directory before attempting any moves', function () {
+    // Regression: reference scan and post-move rescan used to derive their own scan roots
+    // independently, and reference scan's OLD allowlist (REFERENCE_SCAN_DIRS) missed a
     // reference in an ordinary top-level directory like "scripts/" that
     // was neither a conventional name nor PSR-4-mapped. That meant a
     // refusal which should be FREE was instead paid for with six moves and
-    // a rollback (M6a caught it only after M1-M6 had already run). Now
+    // a rollback (the post-move rescan caught it only after package scaffolding
+    // through the Composer rewrite had already run). Now
     // that gate5() and rescanPostMoveTree() both call the SAME
-    // scanSharedRoots(), this refuses immediately, at G5, before
+    // scanSharedRoots(), this refuses immediately, at reference scan, before
     // buildPackageTarget() or performMoves() ever runs -- provably, by
     // asserting the package directory was never even attempted.
     $class = movesWriteNode($this->root, 'BlindSpotNode', 'blindspot.node');
@@ -1046,11 +1046,11 @@ it('G5 itself now refuses a reference sitting in an ordinary top-level directory
 });
 
 it('does not refuse over a reference sitting in storage/framework/ -- a compiled artifact, not source', function () {
-    // Review-round finding, second direction: a NAIVE widening of G5 to
+    // Regression, second direction: a NAIVE widening of reference scan to
     // "every top-level directory" would ALSO admit storage/ as a whole,
     // and storage/framework/ holds a COMPILED Blade view -- not source a
     // developer wrote. A stale compiled artifact naming the class must
-    // never be able to refuse (G5) or abort (M6a) a legitimate move.
+    // never be able to refuse or abort (post-move rescan) a legitimate move.
     // storage/ itself (e.g. storage/app/) is still real ground and stays
     // covered; only the framework/ subdirectory specifically is excluded.
     $class = movesWriteNode($this->root, 'CompiledViewNode', 'compiledview.node');
@@ -1069,7 +1069,7 @@ it('does not refuse over a reference sitting in storage/framework/ -- a compiled
 it('does not refuse over a reference sitting in bootstrap/cache/ -- a compiled artifact, not source', function () {
     // Same reasoning as storage/framework/, for bootstrap/cache/ (Laravel's
     // own compiled config/routes/services cache). bootstrap/ itself stays
-    // a real scan root (E46: bootstrap/app.php is Laravel 11's own
+    // a real scan root (scan-root coverage: bootstrap/app.php is Laravel 11's own
     // provider registration site) -- only cache/ is excluded.
     $class = movesWriteNode($this->root, 'CompiledConfigNode', 'compiledconfig.node');
 
@@ -1084,10 +1084,10 @@ it('does not refuse over a reference sitting in bootstrap/cache/ -- a compiled a
     expect($this->root.'/packages/acme/widgets/src/Nodes/CompiledConfigNode.php')->toBeFile();
 });
 
-it('DOES still refuse over a reference sitting in bootstrap/app.php -- E46, Laravel 11\'s own provider registration site', function () {
+it('DOES still refuse over a reference sitting in bootstrap/app.php -- scan-root coverage, Laravel 11\'s own provider registration site', function () {
     // The counterfactual proving the bootstrap/cache/ exclusion is scoped
     // correctly: bootstrap/ itself must still be scanned, or this would
-    // silently regress E46.
+    // silently regress scan-root coverage.
     $class = movesWriteNode($this->root, 'BootstrapAppNode', 'bootstrapapp.node');
 
     mkdir($this->root.'/bootstrap', 0777, true);
@@ -1105,7 +1105,7 @@ it('DOES still refuse over a reference sitting in bootstrap/app.php -- E46, Lara
 });
 
 it('does not scan a top-level vendor/ directory, so extraction succeeds even though a reference sits there', function () {
-    // A reference planted only inside vendor/ is exactly the ground E51
+    // A reference planted only inside vendor/ is exactly the content path containment
     // says is not the host's own source. postMoveScanRoots() deliberately
     // excludes it: without that exclusion, this fixture's own reference
     // would abort the run.
@@ -1130,7 +1130,7 @@ it('does not scan a top-level vendor/ directory, so extraction succeeds even tho
     expect($this->root.'/packages/acme/widgets/src/Nodes/VendorBlindNode.php')->toBeFile();
 });
 
-it('does not scan a top-level node_modules/ directory, so extraction succeeds even though a reference sits there (mutation survivor 3)', function () {
+it('does not scan a top-level node_modules/ directory, so extraction succeeds even though a reference sits there (regression case)', function () {
     // NODE_MODULES_DIR is a new constant with no dedicated test of its
     // own -- mirroring the vendor/ test above, since a JS dependency tree
     // is never the host's own source either.
@@ -1155,7 +1155,7 @@ it('does not scan a top-level node_modules/ directory, so extraction succeeds ev
     expect($this->root.'/packages/acme/widgets/src/Nodes/NodeModulesBlindNode.php')->toBeFile();
 });
 
-it('does not apply the storage/framework exclusion to a PSR-4 directory that merely happens to be BASENAMED "storage" (mutation survivor 2)', function () {
+it('does not apply the storage/framework exclusion to a PSR-4 directory that merely happens to be BASENAMED "storage" (regression case)', function () {
     // scanSharedRoots()'s own guard: $root !== $hostBasePath.'/'.basename($root).
     // A PSR-4 mapping onto a nested "storage/" directory produces a scan
     // root whose basename is "storage" but which is NOT the top-level
@@ -1199,11 +1199,11 @@ it('does not apply the storage/framework exclusion to a PSR-4 directory that mer
     expect(movesTreeHash($this->root))->toBe($before);
 });
 
-it('still scans a PSR-4 directory that is dot-prefixed, ground the top-level walk alone would skip (mutation survivor 6)', function () {
+it('still scans a dot-prefixed PSR-4 directory that the top-level walk would skip', function () {
     // hostPsr4Directories() unioned into sharedScanRoots() is not fully
     // redundant with the top-level walk: a host mapping its own
     // namespace onto a dot-prefixed directory (unusual, but nothing in
-    // Composer forbids it) is exactly the ground the top-level walk
+    // Composer forbids it) is exactly the content the top-level walk
     // itself excludes (".git and similar") -- so only the PSR-4 union
     // reaches it.
     $class = movesWriteNode($this->root, 'DotPsr4Node', 'dotpsr4.node');
@@ -1240,11 +1240,11 @@ it('still scans a PSR-4 directory that is dot-prefixed, ground the top-level wal
     expect(movesTreeHash($this->root))->toBe($before);
 });
 
-it('refuses over a reference in a loose root-level .php file, end to end (review round 4, item A)', function () {
-    // rector.php was the reviewer's own example: a loose *.php file
+it('refuses over a reference in a loose root-level .php file, end to end', function () {
+    // rector.php was a representative example: a loose *.php file
     // sitting directly at the host root, with no containing directory of
     // its own. Before this fix, sharedScanRoots() returned directories
-    // only, so nothing here was ever scanned by G5 or M6a — extraction
+    // only, so nothing here was ever scanned by reference scan or post-move rescan — extraction
     // would delete the original and leave this file's own reference
     // pointing at a class that no longer exists.
     $class = movesWriteNode($this->root, 'RootFileNode', 'rootfile.node');
@@ -1346,16 +1346,16 @@ it('continues to exclude an ordinary root-level dot-directory from the shared sc
     expect($this->root.'/app/Nodeflow/Nodes/HiddenDirectoryNode.php')->not->toBeFile();
 });
 
-it('refuses over a reference reached through a symlink NESTED inside a scan root, rather than silently deleting the original (review round 4, item B)', function () {
+it('refuses over a reference reached through a symlink NESTED inside a scan root, rather than silently deleting the original', function () {
     // The sharper of the two: app/Linked symlinked to a directory OUTSIDE
     // the host, declaring App\Linked\Consumer and referencing the node.
     // PSR-4 (App\ -> app/) makes this genuinely autoloadable by the host
     // at runtime -- the old HostPath::contains() filter INSIDE
-    // NodeReferenceScanner made it invisible to both G5 and M6a, so
+    // NodeReferenceScanner made it invisible to both reference scan and post-move rescan, so
     // extraction would delete the original and leave the host loading a
     // class that no longer exists: the exact failure this whole command
     // exists to prevent. A top-level scan root that IS an escaping
-    // symlink is still refused upstream (Important N2's own test covers
+    // symlink is still refused upstream (Root-containment regression's own test covers
     // that); this is about a symlink NESTED inside an otherwise
     // legitimate root, which the scanner must now follow.
     $class = movesWriteNode($this->root, 'SymlinkedConsumerNode', 'symlinkedconsumer.node');
@@ -1462,7 +1462,7 @@ it('refuses a nested symlink to the host parent before traversing sibling projec
 
 // --- Restores byte-identically on failure injected at each step ------------
 
-it('restores byte-identically when M1 (scaffold) fails, leaving no package directory (target ABSENT)', function () {
+it('restores byte-identically when package scaffolding (scaffold) fails, leaving no package directory (target ABSENT)', function () {
     $class = movesWriteNode($this->root, 'M1FailNode', 'm1.fail.node');
 
     // A host stub override that is not valid PHP -- PackageScaffolder
@@ -1480,8 +1480,8 @@ it('restores byte-identically when M1 (scaffold) fails, leaving no package direc
     expect($this->root.'/packages/acme/widgets')->not->toBeDirectory();
 });
 
-it('restores byte-identically when M1 fails partway through its own write loop (target ABSENT)', function () {
-    // CRITICAL review finding: PackageScaffolder::scaffold() writes its
+it('restores byte-identically when package scaffolding fails partway through its own write loop (target ABSENT)', function () {
+    // Regression: PackageScaffolder::scaffold() writes its
     // files one at a time via a BARE file_put_contents() (Filesystem::put()
     // applies no `@` suppression), so a write that fails does not return
     // false for scaffold() to notice -- it throws straight out of
@@ -1509,9 +1509,9 @@ it('restores byte-identically when M1 fails partway through its own write loop (
     expect($this->root.'/packages/acme/widgets')->not->toBeDirectory();
 });
 
-it('restores byte-identically when M1 writes composer.json and README.md but the provider write fails, over a FOREIGN directory under --force', function () {
-    // The reviewer's own constructed counterexample: a foreign occupant
-    // (E43, --force) whose own src/ is read-only. src/Nodes/ is
+it('restores byte-identically when package scaffolding writes composer.json and README.md but the provider write fails, over a FOREIGN directory under --force', function () {
+    // A concrete counterexample: a foreign occupant
+    // (target-state handling, --force) whose own src/ is read-only. src/Nodes/ is
     // pre-created so ensureDirectoryExists('src/Nodes') is a no-op (it
     // never needs to WRITE into the read-only src/ at all) -- so
     // scaffold()'s write loop successfully writes composer.json and
@@ -1549,10 +1549,10 @@ it('restores byte-identically when M1 writes composer.json and README.md but the
     expect($this->root.'/packages/acme/widgets/src/NOTES.txt')->toBeFile();
 });
 
-it('restores byte-identically when M2 (moving the class) fails, leaving no package directory (target ABSENT)', function () {
-    // A node with NO namespace declaration at all passes every gate (G2
+it('restores byte-identically when class move (moving the class) fails, leaving no package directory (target ABSENT)', function () {
+    // A node with NO namespace declaration at all passes every gate (source-location validation
     // only requires the FILE sit under a mapped PSR-4 directory) but gives
-    // M2 nothing to rewrite -- M1 has already scaffolded the package by the
+    // class move nothing to rewrite -- package scaffolding has already scaffolded the package by the
     // time this is discovered, so restoring it is the whole point.
     $class = movesWriteGlobalNamespaceNode($this->root, 'M2FailNode', 'm2.fail.node');
 
@@ -1566,13 +1566,13 @@ it('restores byte-identically when M2 (moving the class) fails, leaving no packa
 });
 
 it("moves a test that references the class only by a FULLY QUALIFIED name, with no `use` import at all", function () {
-    // CRITICAL review finding: rewritableSpans() exempts this test file
-    // WHOLE, but the first draft of M3 only ever rewrote the import span
+    // Regression: rewritableSpans() exempts this test file
+    // WHOLE, but an import-only rewrite would miss the fully qualified span
     // -- leaving a fully-qualified reference (or any reference not routed
     // through an import) stale under the old FQCN, caught only later by
-    // M6a, which refused otherwise-valid work with no workaround but
-    // hand-editing. M3 must rewrite EVERY recorded reference span, mirror-
-    // ing M2, which is exactly what makes this file — with no `use`
+    // post-move rescan, which refused otherwise-valid work with no workaround but
+    // hand-editing. The test move must rewrite EVERY recorded reference span,
+    // mirroring the class move, which is exactly what makes this file — with no `use`
     // import to rewrite at all — still move successfully.
     $class = movesWriteNode($this->root, 'NoImportRefNode', 'noimportref.node');
 
@@ -1600,11 +1600,11 @@ it("moves a test that references the class only by a FULLY QUALIFIED name, with 
     expect($exit)->toBe(0);
 });
 
-it("moves a test with BOTH a `use` import and a fully-qualified reference, rewriting every span (M6a never needs to catch a leftover)", function () {
-    // The reviewer's own constructed counterexample: an ordinary host test
+it("moves a test with BOTH a `use` import and a fully-qualified reference, rewriting every span (post-move rescan never needs to catch a leftover)", function () {
+    // A concrete counterexample: an ordinary host test
     // containing both `use App\Nodeflow\Nodes\...;` AND a fully-qualified
-    // `\App\Nodeflow\Nodes\...::type()` call. Before this fix, M3 rewrote
-    // only the import, M6a found the untouched fully-qualified reference
+    // `\App\Nodeflow\Nodes\...::type()` call. Before this fix, test move rewrote
+    // only the import, post-move rescan found the untouched fully-qualified reference
     // in the copy it had just written, and refused valid work.
     $class = movesWriteNode($this->root, 'BothFormsNode', 'bothforms.node');
 
@@ -1635,11 +1635,11 @@ it("moves a test with BOTH a `use` import and a fully-qualified reference, rewri
     expect($exit)->toBe(0);
 });
 
-it('restores byte-identically when M3 (moving the test) fails, over an ALREADY-MATCHING pre-existing package', function () {
-    // A pre-existing package (E43's "matching existing" target state)
-    // whose OWN tests/ directory is read-only: M1's scaffold() writes
+it('restores byte-identically when test move (moving the test) fails, over an ALREADY-MATCHING pre-existing package', function () {
+    // A pre-existing package (target-state handling's "matching existing" target state)
+    // whose OWN tests/ directory is read-only: package scaffolding's scaffold() writes
     // tests/ExampleTest.php successfully (that directory already exists,
-    // so no mkdir is even attempted), M2 succeeds, but M3's own write into
+    // so no mkdir is even attempted), class move succeeds, but test move's own write into
     // the SAME read-only tests/ directory fails.
     $class = movesWriteNode($this->root, 'M3FailNode', 'm3.fail.node');
 
@@ -1674,19 +1674,19 @@ it('restores byte-identically when M3 (moving the test) fails, over an ALREADY-M
     expect($this->root.'/packages/acme/widgets/tests/DUMMY.txt')->toBeFile();
 });
 
-it('restores byte-identically when M4 (registering in the package provider) fails, over a FOREIGN directory taken with --force', function () {
+it('restores byte-identically when package registration (registering in the package provider) fails, over a FOREIGN directory taken with --force', function () {
     $class = movesWriteNode($this->root, 'M4FailNode', 'm4.fail.node');
 
-    // Foreign occupant (E43): a directory that already exists, holds a
+    // Foreign occupant: a directory that already exists, holds a
     // composer.json naming a DIFFERENT package, and is only usable at all
     // because --force is passed.
     mkdir($this->root.'/packages/acme/widgets', 0777, true);
     file_put_contents($this->root.'/packages/acme/widgets/composer.json', json_encode(['name' => 'someone/else']));
     file_put_contents($this->root.'/packages/acme/widgets/NOTES.txt', 'do not touch');
 
-    // Valid PHP, so M1's own scaffold succeeds and OVERWRITES the foreign
+    // Valid PHP, so package scaffolding's own scaffold succeeds and OVERWRITES the foreign
     // composer.json -- but with no `protected array $nodes = [` anchor at
-    // all, so M4's register() call reports AnchorMissing.
+    // all, so package registration's register() call reports AnchorMissing.
     mkdir($this->root.'/stubs/package', 0777, true);
     file_put_contents($this->root.'/stubs/package/provider.stub', <<<'PHP'
     <?php
@@ -1719,11 +1719,11 @@ it('restores byte-identically when M4 (registering in the package provider) fail
     expect($this->root.'/packages/acme/widgets/NOTES.txt')->toBeFile();
 });
 
-it('restores byte-identically when M5 (deregistering from the host) fails, over an ALREADY-MATCHING pre-existing package', function () {
+it('restores byte-identically when host deregistration (deregistering from the host) fails, over an ALREADY-MATCHING pre-existing package', function () {
     $class = movesWriteNode($this->root, 'M5FailNode', 'm5.fail.node');
 
     // A pre-existing package the host already required from a matching
-    // path repository -- E43's "matching existing" target state, standing
+    // path repository -- target-state handling's "matching existing" target state, standing
     // in for a legitimate re-run of a PREVIOUS extraction.
     mkdir($this->root.'/packages/acme/widgets', 0777, true);
     file_put_contents($this->root.'/packages/acme/widgets/composer.json', json_encode(['name' => 'acme/widgets']));
@@ -1735,11 +1735,11 @@ it('restores byte-identically when M5 (deregistering from the host) fails, over 
         'repositories' => [['type' => 'path', 'url' => 'packages/acme/widgets']],
     ]));
 
-    // EntryAmbiguous (E39): the target shares its own physical line with a
+    // EntryAmbiguous (shared-line registration outcome): the target shares its own physical line with a
     // sibling entry, so removeFrom() cannot delete it without touching that
-    // sibling's own content. G5 already accepted this exact array (every
+    // sibling's own content. reference scan already accepted this exact array (every
     // element classifies as a plain `<name>::class`), so this is a genuine
-    // M5-time failure, not one the gates should have caught first.
+    // host deregistration-time failure, not one the gates should have caught first.
     movesWriteProvider(
         $this->root,
         '        \App\Nodeflow\Nodes\M5FailNode::class, \App\Nodeflow\Nodes\M5FailNodeSibling::class,',
@@ -1758,14 +1758,14 @@ it('restores byte-identically when M5 (deregistering from the host) fails, over 
     expect($decoded['name'])->toBe('acme/widgets');
 });
 
-it('treats M5 EntryUnsupported as a failure, never as "nothing to do"', function () {
+it('treats host deregistration EntryUnsupported as a failure, never as "nothing to do"', function () {
     // EntryUnsupported can fire even when $class is NOT itself present in
     // the array at all: removeFrom() refuses the moment it finds ANY
     // element it cannot classify (a spread here), before it ever checks
-    // whether $class resolves to anything in the elements it CAN read. G4
+    // whether $class resolves to anything in the elements it CAN read. type-ownership validation
     // already allows an unregistered class through ("unregistered is
-    // explicitly NOT a refusal"), and G5 finds no reference to $class in
-    // this file at all (it genuinely is not there) -- so this reaches M5
+    // explicitly NOT a refusal"), and reference scan finds no reference to $class in
+    // this file at all (it genuinely is not there) -- so this reaches host deregistration
     // clean, and removeFrom() reporting EntryUnsupported must still abort
     // the whole extraction rather than be read as "nothing registered,
     // nothing to remove".
@@ -1782,7 +1782,7 @@ it('treats M5 EntryUnsupported as a failure, never as "nothing to do"', function
     expect($this->root.'/packages/acme/widgets')->not->toBeDirectory();
 });
 
-it('restores byte-identically when M6 (composer.json update) fails, leaving no package directory (target ABSENT)', function () {
+it('restores byte-identically when Composer rewrite (composer.json update) fails, leaving no package directory (target ABSENT)', function () {
     $class = movesWriteNode($this->root, 'M6FailNode', 'm6.fail.node');
 
     $before = movesTreeHash($this->root);
@@ -1809,7 +1809,7 @@ it('restores byte-identically when M6 (composer.json update) fails, leaving no p
     expect($this->root.'/packages/acme/widgets')->not->toBeDirectory();
 });
 
-it('restores byte-identically when M7 (deleting the originals) fails, leaving no package directory (target ABSENT)', function () {
+it('restores byte-identically when original deletion (deleting the originals) fails, leaving no package directory (target ABSENT)', function () {
     $class = movesWriteNode($this->root, 'M7FailNode', 'm7.fail.node');
 
     $before = movesTreeHash($this->root);

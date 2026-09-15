@@ -5,13 +5,11 @@ namespace Nodeflow\Console;
 /**
  * The one place path arithmetic lives.
  *
- * WHY. Two of Plan 5's fix-round defects (R13, R15) were path bugs in separate
- * install steps whose logic was copy-pasted rather than shared (G-6), and the
- * characteristic bug of this codebase is a substring test standing in for real
- * path handling — it has now appeared eight times. Every comparison here is
- * segment-wise, and containment is CANONICAL (E51): an in-host symlink whose
- * target escapes the root is not "inside" it, because E29 requires a scaffolded
- * package to be committed with the host.
+ * Path arithmetic is centralized because duplicated install-step logic once
+ * allowed substring checks to stand in for real path handling. Every comparison
+ * here is segment-wise and containment is canonical: an in-host symlink whose
+ * target escapes the root is not "inside" it, because a scaffolded package must
+ * remain committed with the host.
  */
 final class HostPath
 {
@@ -34,8 +32,7 @@ final class HostPath
      *
      * Keeping '..' is deliberate and matches TsconfigPathsStep's rule rather
      * than TailwindSourceStep's: a caller must be able to see a climb-out in
-     * order to refuse it. Dropping it is how R12 turned '../vendor/…' into a
-     * match.
+     * order to refuse it. Dropping it would turn '../vendor/…' into a match.
      *
      * @return list<string>
      */

@@ -13,7 +13,7 @@ use Nodeflow\Models\Run;
  * with the status. So this cannot list who *passed through* a node, and it
  * cannot list a node's failures either — their current_node_id is gone by the
  * time they are failed. The overlay still counts those failures, from the
- * execution rows. Countable, not listable; spec E15.
+ * execution rows. Countable, not listable.
  *
  * Reaches data only through $run->subjects(), for the reason RunOverlay
  * documents at length.

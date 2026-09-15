@@ -8,8 +8,7 @@ use Nodeflow\Console\NodeRegistrationWriter;
 use Nodeflow\Console\SourceText;
 
 /**
- * The sixth wiring requirement, and the one the editor spec's list of five never
- * had — because it is not a client requirement.
+ * Client wiring is not enough: the provider must also be registered with Laravel.
  *
  * Laravel 12 discovers application providers from bootstrap/providers.php alone.
  * A NodeflowServiceProvider that nobody lists there does nothing at all: no nodes
@@ -104,7 +103,7 @@ final class ProviderRegistrationStep implements InstallStep
      * installed host: it imports and lists the short form, so a needle that
      * only recognises the fully-qualified string reports it as unwired.
      *
-     * Comment-stripped first (E22), so a host who commented either form out
+     * Comment-stripped first, so a host who commented either form out
      * while debugging is told the truth rather than told they are wired.
      *
      * The short form is matched with a BOUNDED pattern, not plain

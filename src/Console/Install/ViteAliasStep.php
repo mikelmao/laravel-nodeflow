@@ -5,8 +5,8 @@ namespace Nodeflow\Console\Install;
 /**
  * Verifies the Vite alias mapping @nodeflow/editor into the package source.
  *
- * Verify-only, never written (E20). Editing an arbitrary vite.config.ts needs a
- * TypeScript AST, which PHP does not have, and E11 permits only an edit whose
+ * Verify-only, never written. Editing an arbitrary vite.config.ts needs a
+ * TypeScript AST, which PHP does not have, and post-write verification permits only an edit whose
  * success can be re-verified.
  *
  * KNOWN LIMIT, stated rather than implied away: this binds the path to one
@@ -16,10 +16,10 @@ namespace Nodeflow\Console\Install;
  */
 final class ViteAliasStep extends ViteConfigStep
 {
-    // Corrected E41: the FULL vendor/... form, not just the atram/... tail. The
+    // Use the full vendor/... form, not just the package-name tail. The
     // full string already tolerates a './vendor/…' prefix, because
     // str_contains('./vendor/x', 'vendor/x') is true — so the shorter constant
-    // bought no tolerance and only matched paths like '/tmp/packages/atram/…'
+    // bought no tolerance and only matched paths like '/tmp/packages/vendor/…'
     // that the full form correctly rejects.
     private const PACKAGE_SOURCE = 'vendor/atram/laravel-nodeflow/resources/js';
 

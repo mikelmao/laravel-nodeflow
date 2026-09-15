@@ -199,7 +199,7 @@ beforeEach(() => {
 afterEach(() => vi.unstubAllGlobals())
 
 describe('FlowEditor', () => {
-    it('accepts the exact Task 11 trigger source, webhook, and URL wire shapes', () => {
+    it('accepts the integration contract trigger source, webhook, and URL wire shapes', () => {
         const props = {
             flow,
             graph,

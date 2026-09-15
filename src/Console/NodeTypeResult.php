@@ -6,7 +6,7 @@ namespace Nodeflow\Console;
  * What NodeTypeLiteral could prove about a node's type() method.
  *
  * A result object rather than a nullable string because the refusal message is
- * the product: E36 refuses several distinct shapes and each must name itself, so
+ * the product: literal type requirement refuses several distinct shapes and each must name itself, so
  * an author can see which rule they hit and what to change.
  */
 final class NodeTypeResult

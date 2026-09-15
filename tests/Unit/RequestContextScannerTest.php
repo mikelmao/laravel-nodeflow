@@ -72,10 +72,10 @@ it('ignores a ::class reference used as a relation target', function () {
 });
 
 it('detects a raw table query that bypasses the model entirely', function () {
-    // The gap a reviewer walked straight through: this exact file passed the
+    // This direct-query gap: this exact file passed the
     // architecture test. AudienceMaterialiser already writes
     // DB::table('nodeflow_run_subjects')->insert(...), so the raw-table form is
-    // the idiom a future author copies — and Plan 4's
+    // the idiom a future author copies — and the run view's
     // runs/{run}/nodes/{node}/subjects drill-down is where they will copy it.
     //
     // Counterfactual: drop the DB::table branch from the pattern and this
@@ -90,7 +90,7 @@ it('detects a raw table query that bypasses the model entirely', function () {
 });
 
 it('detects a raw table query against node executions too', function () {
-    // Both untenanted tables, not just the one the reviewer probed. Single
+    // Both untenanted tables, across both affected tables. Single
     // quotes here, double quotes in the test above: the pattern accepts either.
     //
     // Counterfactual: drop the DB::table branch from the pattern and this
@@ -184,7 +184,7 @@ it('reports one violation per file even when both forms appear', function () {
 });
 
 it('catches an aliased raw table name, which the method-anchored pattern missed', function () {
-    // G-1's first evasion. Counterfactual: keep the exact-string pattern
+    // class eligibility validation's first evasion. Counterfactual: keep the exact-string pattern
     // DB::table('nodeflow_run_subjects') and this returns [].
     file_put_contents(
         $this->root.'/Http/AliasController.php',
@@ -196,7 +196,7 @@ it('catches an aliased raw table name, which the method-anchored pattern missed'
 });
 
 it('catches a joined table name', function () {
-    // G-1's second evasion.
+    // class eligibility validation's second evasion.
     file_put_contents(
         $this->root.'/Http/JoinController.php',
         "<?php DB::table('nodeflow_runs')->join('nodeflow_node_executions', 'a', '=', 'b')->get();"
@@ -207,7 +207,7 @@ it('catches a joined table name', function () {
 });
 
 it('catches a from() table name', function () {
-    // G-1's third evasion.
+    // class eligibility validation's third evasion.
     file_put_contents(
         $this->root.'/Http/FromController.php',
         "<?php DB::query()->from('nodeflow_run_subjects')->count();"
@@ -219,7 +219,7 @@ it('catches a from() table name', function () {
 
 it('catches a table named only inside raw sql', function () {
     // The evasion no list of builder method names can ever cover, which is why
-    // E18 stopped listing method names. Counterfactual: anchor the pattern to
+    // raw table access restriction stopped listing method names. Counterfactual: anchor the pattern to
     // table()/join()/from() and this returns [].
     file_put_contents(
         $this->root.'/Http/RawController.php',

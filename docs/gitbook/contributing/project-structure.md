@@ -32,7 +32,7 @@ You can identify whether a change belongs to a public integration surface, an in
 | `config` | Package configuration defaults. |
 | `database` | Package migrations loaded by the provider and Testbench suite. |
 | `docs/gitbook` | Canonical GitBook documentation. |
-| `docs` | Legacy numbered guides and documentation-planning material; the numbered guides are references, not the canonical path. |
+| `docs` | Legacy numbered reference guides; GitBook remains the canonical documentation path. |
 
 ## Public surface and internals
 

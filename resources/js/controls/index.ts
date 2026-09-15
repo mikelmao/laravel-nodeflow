@@ -14,7 +14,7 @@ import { Unregistered } from './Unregistered'
  * types are the extension path - Field::custom() plus an entry on the `controls`
  * prop - because FieldType is a PHP enum a host cannot add a case to.
  *
- * A plain object, not a registry: E5. A module-level registry populated by
+ * A plain object, not a registry: safety invariant. A module-level registry populated by
  * import side-effects is order-dependent and does not survive Inertia SSR.
  */
 export const defaultControls: ControlMap = Object.freeze({

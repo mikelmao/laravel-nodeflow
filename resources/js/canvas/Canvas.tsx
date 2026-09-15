@@ -182,7 +182,7 @@ export function canvasBehavior(
 }
 
 /**
- * Canvas owns no graph state, so the editor and Plan 4 run view can share it.
+ * Canvas owns no graph state, so the editor and read-only run view can share it.
  * The default class supplies a real parent height because xyflow cannot lay out
  * inside a heightless container. Its stylesheet is imported at this boundary.
  */

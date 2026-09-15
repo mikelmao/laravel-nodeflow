@@ -7,7 +7,7 @@ import { useFieldControlId } from './FieldControlId'
  *
  * Only Tailwind utility classes, and only tokens a host's theme defines -
  * text-foreground, text-muted-foreground, text-destructive, border-input,
- * bg-background, ring-ring - because D2's entire point is that this renders
+ * bg-background, ring-ring - so this renders
  * inside the host's design system rather than looking like an iframe that isn't
  * one. No colour is hardcoded and no CSS file is shipped.
  */

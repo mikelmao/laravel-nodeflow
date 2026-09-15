@@ -21,9 +21,8 @@ use Nodeflow\Console\SourceText;
  * it splits the mapped path and baseUrl into path segments, drops empty and "."
  * segments, and asks whether the resulting sequence starts with this package's
  * own vendor/atram/laravel-nodeflow/resources/js segments. Comparing segments
- * (not the raw string, and not a naive ltrim()/str_starts_with() pair — both
- * were tried and both silently accepted a broken host; see the fix-round 1 note
- * in the project's task-9 report) is what stops "resources/jsx" from passing as
+ * (not the raw string, and not a naive ltrim()/str_starts_with() pair) is what
+ * stops "resources/jsx" from passing as
  * a prefix of "resources/js", and what stops a leading "../" from being read as
  * an ordinary "./" instead of an instruction to climb out of the project.
  *
@@ -32,17 +31,16 @@ use Nodeflow\Console\SourceText;
  * mapping that points above the project root, which is worse than reporting it
  * unwired.
  *
- * FIX ROUND 1 → 2, RECORDED SO THE NEXT READER DOES NOT REPEAT EITHER MISTAKE.
- * Round 1 fixed a false accept from ltrim()/str_starts_with() by checking the
- * TARGET's own segments for a literal "..". That moved the defect rather than
- * closing it: baseUrl and paths are both attacker-or-typo-controlled fields of
+ * WHY BOTH BASE AND TARGET ARE CHECKED. Checking only the target's own segments
+ * for a literal ".." moves the defect rather than closing it: baseUrl and paths
+ * are both attacker-or-typo-controlled fields of
  * the same tsconfig.json, and a baseUrl of
  * "vendor/atram/laravel-nodeflow/resources/js/.." — which walks into
  * resources/js and straight back out — was never inspected, because the ".."
  * lived in baseUrl's segments, not the target's. check() now runs the ".."
  * refusal on the MERGED list (baseUrl segments followed by target segments),
  * which closes both the original climb-out and this variant with one rule.
- * Round 1 also let a leading "/" through: HostPath::segments() drops empty and "."
+ * A leading "/" needs its own check: HostPath::segments() drops empty and "."
  * segments, and an absolute path's leading "/" produces an empty first
  * segment, so "/vendor/atram/laravel-nodeflow/resources/js" was silently
  * compared as though it were project-relative. An absolute path — on the RAW
@@ -54,10 +52,9 @@ use Nodeflow\Console\SourceText;
  * a subdirectory and legitimately backs out of it again (e.g.
  * "resources/js/foo/..", which really does resolve to resources/js) is refused
  * too, even though it is harmless. Over-rejecting a theoretical case is the
- * safe direction; under-rejecting a real one is the bug both rounds exist to
- * close.
+ * safe direction; under-rejecting a real one is the bug this validation prevents.
  *
- * VERIFY-ONLY (E20). A JSON round-trip would write the file back without those
+ * VERIFY-ONLY. A JSON round-trip would write the file back without those
  * ninety lines of comments, which are documentation the host owns.
  *
  * KNOWN LIMIT: baseUrl is honoured only as a literal segment prefix. A tsconfig
@@ -131,8 +128,8 @@ final class TsconfigPathsStep implements InstallStep
             // Checked on the MERGED list, not the target's segments alone: a
             // baseUrl of "vendor/atram/laravel-nodeflow/resources/js/.." walks
             // into resources/js and straight back out, resolving outside the
-            // package, and checking only the target's own segments (as round 1
-            // did) never inspects it.
+            // package, and checking only the target's own segments never
+            // inspects it.
             if (in_array('..', $resolved, true)) {
                 return InstallOutcome::CannotWire;
             }

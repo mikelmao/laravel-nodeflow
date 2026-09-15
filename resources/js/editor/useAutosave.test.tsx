@@ -460,7 +460,7 @@ describe('useAutosave', () => {
         expect(result.current.revision).toBe(1)
     })
 
-    // Counterfactual: true would let Task 8 publish through an unresolved conflict.
+    // Counterfactual: true would let publication continue through an unresolved conflict.
     it('preparePublish returns false when draft saving halts on a conflict', async () => {
         vi.stubGlobal('fetch', vi.fn().mockResolvedValue(Response.json({ message: 'Conflict', graph: graph('theirs'), draft_revision: 9 }, { status: 409 })))
         const { result, rerender } = renderHook(

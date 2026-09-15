@@ -7,7 +7,7 @@ use Nodeflow\Models\Flow;
 /**
  * Persists an editor draft, last-write-wins with stale detection.
  *
- * A draft is deliberately not a version (spec E3): versions are immutable and
+ * A draft is deliberately not a version: versions are immutable and
  * numbered, and a graph mid-edit is neither. So this writes columns on the
  * flow and does no validation at all — a half-connected graph is the normal
  * state of a canvas someone is working on, and refusing to store it would
