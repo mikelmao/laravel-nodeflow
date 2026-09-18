@@ -5,6 +5,8 @@ import type { FieldOptionsSource } from '../controls/useFieldOptions'
 import { cloneGraphConfig } from '../graph/json'
 import type { GraphComponentPayload, NodeCardData, NodeErrorEntry, TriggerSourcePayload, TriggerSourcesPayload, WebhookMetadata } from '../graph/types'
 import { triggerSourceOptionsTemplate } from '../http'
+import { AvailableData } from './AvailableData'
+import type { NodeDataContext } from './nodeData'
 import { ConfigPanel } from './ConfigPanel'
 import { WebhookDetails } from './WebhookDetails'
 
@@ -30,6 +32,7 @@ export type NodeInspectorProps = {
     webhookRotationError?: string | null
     onAcknowledgeWebhookSecret?: () => void
     onRotateWebhookSecret?: () => void
+    data?: NodeDataContext
     onDelete: () => void
 }
 
@@ -65,6 +68,7 @@ export function NodeInspector({
     onAcknowledgeWebhookSecret = () => {},
     onRotateWebhookSecret = () => {},
     onDelete,
+    data,
 }: NodeInspectorProps) {
     const generatedId = useId().replace(/:/g, '')
     const [activeTab, setActiveTab] = useState<InspectorTab>('configure')
@@ -244,7 +248,8 @@ export function NodeInspector({
                     {def?.kind === 'trigger' && compatibleSources.length === 0 && (
                         <p className="rounded-md border border-border bg-muted p-3 text-sm text-muted-foreground">Register a compatible trigger source in the host application before this trigger can be published.</p>
                     )}
-                    <ConfigPanel node={node} def={composedDef} controls={controls} errors={localErrors} onConfigChange={changeConfig} onFieldBlur={onConfigBlur} fieldOptionsSources={fieldOptionsSources} />
+                    <ConfigPanel node={node} def={composedDef} controls={controls} errors={localErrors} onConfigChange={changeConfig} onFieldBlur={onConfigBlur} fieldOptionsSources={fieldOptionsSources} data={data} />
+                    {data && <AvailableData data={data} />}
                     {def?.kind === 'trigger' && def.driver === 'webhook' && (
                         <WebhookDetails
                             metadata={webhook}

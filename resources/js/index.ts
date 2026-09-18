@@ -64,3 +64,5 @@ export { categoryPresentation, nodeSummary } from './presentation/node'
 export type { CategoryPresentation } from './presentation/node'
 export { NodeflowIcon } from './presentation/icons'
 export type { NodeIconName } from './presentation/icons'
+
+export type { NodeDataField, NodeDataContext, NodeDataResolver } from './editor/nodeData'

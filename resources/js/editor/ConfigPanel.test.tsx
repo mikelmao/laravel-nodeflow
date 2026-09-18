@@ -167,3 +167,19 @@ describe('ConfigPanel', () => {
         expect(screen.queryByRole('button', { name: /delete|start/i })).toBeNull()
     })
 })
+
+it('opts only declared fields into autocomplete and refreshes warnings with the context', () => {
+    const data = {
+        summary: 'From the connected alert',
+        fields: [{ key: 'order_name', label: 'Order name', origin: 'Order created', type: 'text', description: 'Title', example: 'Garden supplies', availability: 'available' as const }],
+        templateFields: ['template'],
+        multilineFields: ['template'],
+    }
+    const props = { node: { ...node, config: { template: '{{ order_name }}' } }, def: definition({ fields: [field(), field({ key: 'other', label: 'Other' })] }), controls: mergeControls(), errors: [], onConfigChange: vi.fn() }
+    const { rerender } = render(<ConfigPanel {...props} data={data} />)
+    expect(screen.getByLabelText('Template').tagName).toBe('TEXTAREA')
+    expect(screen.getByLabelText('Other').tagName).toBe('INPUT')
+    expect(screen.queryByRole('alert')).toBeNull()
+    rerender(<ConfigPanel {...props} data={{ ...data, fields: [] }} />)
+    expect(screen.getByRole('alert')).toHaveTextContent('order_name')
+})

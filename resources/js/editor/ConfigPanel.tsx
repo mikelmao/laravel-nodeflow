@@ -1,3 +1,6 @@
+import { FieldShell } from '../controls/Field'
+import { TemplateText } from './TemplateText'
+import type { NodeDataContext } from './nodeData'
 import { controlFor } from '../controls'
 import type { ControlMap } from '../controls'
 import { FieldControlIdProvider } from '../controls/FieldControlId'
@@ -15,10 +18,11 @@ type FieldRowProps = {
     errors: string[]
     onChange: (value: unknown) => void
     onFieldBlur?: () => void
+    data?: NodeDataContext
     optionsSource?: FieldOptionsSource
 }
 
-function FieldRowContent({ id, nodeType, field, value, controls, errors, onChange, onFieldBlur }: Omit<FieldRowProps, 'optionsSource'>) {
+function FieldRowContent({ id, nodeType, field, value, controls, errors, onChange, onFieldBlur, data }: Omit<FieldRowProps, 'optionsSource'>) {
     const controlId = `nf-${useId().replace(/:/g, '')}`
     // Host controls are allowed to use mutable UI models. Give each mounted
     // field a private, stable JSON copy so an in-place edit cannot mutate the
@@ -44,14 +48,18 @@ function FieldRowContent({ id, nodeType, field, value, controls, errors, onChang
             }}
         >
             <FieldControlIdProvider id={controlId}>
-                <Control
+                {data?.templateFields?.includes(field.key) && field.type === 'text' ? (
+                    <FieldShell field={controlField} errors={fieldErrors}>{(id) => (
+                        <TemplateText id={id} label={field.label} value={typeof controlValue === 'string' ? controlValue : ''} onChange={onChange} fields={data.fields} multiline={data.multilineFields?.includes(field.key)} />
+                    )}</FieldShell>
+                ) : <Control
                     field={controlField}
                     value={controlValue}
                     onChange={onChange}
                     errors={fieldErrors}
                     options={loaded.options}
                     optionsLoading={loaded.loading}
-                />
+                />}
             </FieldControlIdProvider>
         </div>
     )
@@ -98,11 +106,12 @@ export type ConfigPanelProps = {
     errors: NodeErrorEntry[]
     onConfigChange: (key: string, value: unknown) => void
     onFieldBlur?: () => void
+    data?: NodeDataContext
     fieldOptionsSources?: Record<string, FieldOptionsSource>
 }
 
 /** Field content only: metadata and node-level actions belong to NodeInspector. */
-export function ConfigPanel({ node, def, controls, errors, onConfigChange, onFieldBlur, fieldOptionsSources = {} }: ConfigPanelProps) {
+export function ConfigPanel({ node, def, controls, errors, onConfigChange, onFieldBlur, fieldOptionsSources = {}, data }: ConfigPanelProps) {
     const instanceId = useId().replace(/:/g, '')
     const nodeErrors = errors.filter((entry) => entry.field === null)
     const fieldRowProps = (definitionField: FieldPayload): FieldRowProps => {
@@ -121,6 +130,7 @@ export function ConfigPanel({ node, def, controls, errors, onConfigChange, onFie
             errors: fieldErrors,
             onChange: (next) => onConfigChange(definitionField.key, next),
             onFieldBlur,
+            data,
             optionsSource: Object.prototype.hasOwnProperty.call(fieldOptionsSources, definitionField.key)
                 ? fieldOptionsSources[definitionField.key]
                 : undefined,
