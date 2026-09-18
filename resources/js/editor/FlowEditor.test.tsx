@@ -1558,3 +1558,19 @@ describe('FlowEditor', () => {
         expect((await screen.findAllByText(/Published v4/)).length).toBeGreaterThan(0)
     })
 })
+
+it('provides the live graph to host data guidance and keeps inserted values in the draft', async () => {
+    const resolver = vi.fn(({ graph: current }) => ({
+        summary: `Data from ${current.start}`,
+        fields: [{ key: 'name', label: 'Full name', origin: 'Audience', type: 'text', description: 'Recipient name', example: 'Amina Otieno', availability: 'available' as const }],
+        templateFields: ['template'],
+    }))
+    renderEditor({ resolveNodeData: resolver })
+    fireEvent.click(canvasNode('send1'))
+    expect(screen.getByText('Available data')).toBeInTheDocument()
+    fireEvent.change(screen.getByLabelText('Template'), { target: { value: '{{ name }}' } })
+    expect(resolver).toHaveBeenLastCalledWith(expect.objectContaining({
+        node: expect.objectContaining({ id: 'send1' }),
+        graph: expect.objectContaining({ nodes: expect.arrayContaining([expect.objectContaining({ id: 'send1', config: { template: '{{ name }}' } })]) }),
+    }))
+})

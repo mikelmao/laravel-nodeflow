@@ -1,4 +1,5 @@
 import { useEffect, useLayoutEffect, useRef } from 'react'
+import type { NodeDataResolver } from './nodeData'
 import { Canvas } from '../canvas/Canvas'
 import type { NodeRendererMap } from '../canvas/context'
 import type { ControlMap } from '../controls/types'
@@ -73,6 +74,7 @@ export type FlowEditorProps = {
     mode?: EditorMode
     toolbarSlots?: ToolbarSlots
     facts?: FactsConfig
+    resolveNodeData?: NodeDataResolver
 }
 
 function sessionKey({ flow, urls }: FlowEditorProps): string {
@@ -96,7 +98,7 @@ function interactiveTarget(target: EventTarget | null): boolean {
     return target.closest('button, a, input, textarea, select, [contenteditable]:not([contenteditable="false"]), [role="button"], [tabindex]:not([tabindex="-1"])') !== null
 }
 
-function FlowEditorSession({ mode = 'workspace', toolbarSlots, className, facts, ...options }: FlowEditorProps) {
+function FlowEditorSession({ mode = 'workspace', toolbarSlots, className, facts, resolveNodeData, ...options }: FlowEditorProps) {
     const controller = useEditorController(options)
     const librarySearchRef = useRef<HTMLInputElement>(null)
     const shortcutToken = useRef(Symbol('nodeflow-shortcuts'))
@@ -184,9 +186,14 @@ function FlowEditorSession({ mode = 'workspace', toolbarSlots, className, facts,
         <CanvasHud {...controller.canvasHudProps} />
         {controller.document.nodes.length === 0 && <div className="pointer-events-none absolute inset-0 z-10 grid place-items-center"><button type="button" onClick={openLibraryAndFocus} className="pointer-events-auto rounded-md border border-border bg-background px-4 py-2 shadow-sm">Add a node</button></div>}
     </>
+    const dataGraph: Graph = {
+        start: controller.document.startId,
+        nodes: controller.document.nodes.map(({ data }) => ({ id: data.id, type: data.type, config: data.config })),
+        edges: controller.document.edges.map((edge) => ({ from: edge.source, to: edge.target, output: edge.sourceHandle })),
+    }
     const inspector = controller.nodeInspectorProps === null
         ? <FlowOverview {...controller.flowOverviewProps} />
-        : <NodeInspector {...controller.nodeInspectorProps} />
+        : <NodeInspector {...controller.nodeInspectorProps} data={resolveNodeData?.({ node: controller.nodeInspectorProps.node, graph: dataGraph })} />
 
     return <FactCataloguesProvider config={facts}><FieldOptionsContext.Provider value={controller.optionsSource}>
         <div ref={rootRef} tabIndex={-1} className="contents" onPointerDownCapture={claimShortcuts} onClickCapture={claimShortcuts} onFocusCapture={claimShortcuts}>
