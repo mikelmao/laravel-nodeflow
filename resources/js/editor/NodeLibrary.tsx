@@ -96,7 +96,7 @@ function visibleCharacters(text: string): string[] | null {
 
 function conciseDescription(description: string | null): string {
     const text = description?.trim()
-    if (!text) return 'No description provided.'
+    if (!text) return ''
     const characters = visibleCharacters(text)
     if (characters === null) return text
     return characters.length > conciseDescriptionLimit
@@ -191,16 +191,16 @@ export function NodeLibrary({
     }
 
     return (
-        <aside aria-label="Node Library" className="flex min-h-0 w-full flex-col gap-4 rounded-md border border-border bg-card p-4 text-card-foreground sm:max-w-sm">
-            <div className="flex items-center justify-between gap-3">
-                <h2 className="font-semibold">Node Library</h2>
+        <aside aria-label="Node Library" className="flex min-h-0 w-full flex-col gap-3 px-3 pb-4 pt-3 text-card-foreground">
+            <div className="hidden items-center justify-between gap-3 pl-1 lg:flex">
+                <h2 className="text-sm font-semibold">Node Library</h2>
                 {onRequestClose !== undefined && (
                     <button
                         type="button"
                         aria-label="Close node library"
                         title="Close node library"
                         onClick={onRequestClose}
-                        className="rounded p-1 text-muted-foreground hover:bg-muted hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                        className="inline-flex size-8 items-center justify-center rounded-md text-muted-foreground hover:bg-muted hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
                     >
                         <NodeflowIcon name="close" className="size-4" />
                     </button>
@@ -208,7 +208,7 @@ export function NodeLibrary({
             </div>
 
             <div className="space-y-1.5">
-                <label htmlFor={searchId} className="text-sm font-medium">Search nodes</label>
+                <label htmlFor={searchId} className="sr-only">Search nodes</label>
                 <div className="relative">
                     <NodeflowIcon name="search" className="pointer-events-none absolute left-2.5 top-1/2 size-4 -translate-y-1/2 text-muted-foreground" />
                     <input
@@ -218,49 +218,51 @@ export function NodeLibrary({
                         value={query}
                         onChange={(event) => setQuery(event.target.value)}
                         placeholder="Search node types"
-                        className="w-full rounded-md border border-input bg-background py-2 pl-8 pr-3 text-sm outline-none placeholder:text-muted-foreground focus-visible:ring-2 focus-visible:ring-ring"
+                        className="h-9 w-full rounded-md border border-input bg-background pl-8 pr-3 text-sm text-foreground shadow-xs outline-none placeholder:text-muted-foreground focus-visible:border-ring focus-visible:ring-2 focus-visible:ring-ring/25"
                     />
                 </div>
-                <p aria-live="polite" className="text-xs text-muted-foreground">{resultLabel}</p>
+                <p aria-live="polite" className={query.trim() === '' ? 'sr-only' : 'px-1 text-xs text-muted-foreground'}>{resultLabel}</p>
             </div>
 
             {palette.length + triggers.length === 0 ? (
-                <p className="text-sm text-muted-foreground">
+                <p className="px-1 text-sm text-muted-foreground">
                     No node types are registered. Register definitions with <code>Nodeflow::register([...])</code>.
                 </p>
             ) : resultCount === 0 ? (
-                <p className="text-sm text-muted-foreground">No nodes match “{query.trim()}”.</p>
+                <p className="px-1 text-sm text-muted-foreground">No nodes match “{query.trim()}”.</p>
             ) : (
-                <div className="min-h-0 space-y-4 overflow-y-auto">
+                <div className="min-h-0 space-y-4">
                     {[...groups.entries()].map(([groupKey, group]) => {
                         const presentation = categoryPresentation(group.label)
                         return (
-                            <section key={groupKey} className="space-y-2" aria-label={group.label}>
-                                <h3 className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">{group.label}</h3>
-                                <div className="space-y-1.5">
+                            <section key={groupKey} className="space-y-1" aria-label={group.label}>
+                                <h3 className="px-1 text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">{group.label}</h3>
+                                <div className="space-y-0.5">
                                     {group.definitions.map((definition) => {
                                         const unavailable = definition.kind === 'trigger' && !hasCompatibleSource(definition, triggerSources)
                                         const disabled = unavailable || (definition.kind === 'trigger' && onAddTrigger === undefined)
+                                        const description = conciseDescription(definition.description)
+                                        const draggable = !disabled && !(definition.kind === 'trigger' && hasTrigger)
                                         return (
                                             <button
                                                 key={definition.type}
                                                 type="button"
-                                                draggable={!disabled && !(definition.kind === 'trigger' && hasTrigger)}
+                                                draggable={draggable}
                                                 disabled={disabled}
                                                 aria-label={`Add ${definition.label}`}
-                                                title={unavailable ? 'No compatible trigger source is registered.' : definition.description ?? undefined}
+                                                title={unavailable ? 'No compatible trigger source is registered.' : definition.type}
                                                 onClick={(event) => choose(definition, event.currentTarget)}
                                                 onDragStart={(event) => startDrag(event, definition)}
-                                                className="flex w-full items-start gap-3 rounded-md border border-border bg-background p-3 text-left transition-colors hover:bg-muted disabled:cursor-not-allowed disabled:opacity-60 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                                                className={`flex w-full items-start gap-2.5 rounded-md px-2 py-2 text-left transition-colors hover:bg-muted disabled:cursor-not-allowed disabled:opacity-60 disabled:hover:bg-transparent focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring ${draggable ? 'cursor-grab active:cursor-grabbing' : ''}`}
                                             >
-                                                <span className={`mt-0.5 inline-flex size-7 shrink-0 items-center justify-center rounded ${categoryClasses[presentation.accent]}`} aria-hidden="true">
+                                                <span className={`inline-flex size-7 shrink-0 items-center justify-center rounded-md ${categoryClasses[presentation.accent]}`} aria-hidden="true">
                                                     {definition.icon ? <span className="text-sm leading-none">{definition.icon}</span> : <NodeflowIcon name={presentation.icon} className="size-4" />}
                                                 </span>
-                                                <span className="min-w-0 space-y-0.5">
-                                                    <span className="block truncate text-sm font-medium">{definition.label}</span>
-                                                    <span className="block text-xs leading-5 text-muted-foreground">{conciseDescription(definition.description)}</span>
-                                                    <span className="block truncate font-mono text-[11px] text-muted-foreground">{definition.type}</span>
-                                                    {unavailable && <span className="block text-[11px] font-medium text-destructive">No compatible trigger source is registered.</span>}
+                                                <span className="min-w-0 flex-1">
+                                                    <span className="block truncate text-sm font-medium leading-5 text-foreground">{definition.label}</span>
+                                                    {description !== '' && <span className="line-clamp-2 block text-xs leading-4 text-muted-foreground">{description}</span>}
+                                                    <span className="sr-only">{definition.type}</span>
+                                                    {unavailable && <span className="block text-xs leading-4 text-muted-foreground">No compatible trigger source is registered.</span>}
                                                 </span>
                                             </button>
                                         )

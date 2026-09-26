@@ -1,4 +1,4 @@
-import { render, screen, within } from '@testing-library/react'
+import { fireEvent, render, screen, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { describe, expect, it, vi } from 'vitest'
 import { CanvasHud } from './CanvasHud'
@@ -62,6 +62,12 @@ describe('EditorToolbar', () => {
         expect(props.onDeleteSelected).toHaveBeenCalledOnce()
     })
 
+    // An edit waiting for its debounce is not saved yet; saying so hid unsaved work.
+    it('reports an idle draft with pending edits as unsaved', () => {
+        toolbar({ save: { status: 'idle', unsaved: true } })
+        expect(screen.getByRole('status', { name: 'Save status: Unsaved changes' })).toHaveTextContent('Unsaved changes')
+    })
+
     it.each([
         ['idle', 'Save status: Changes saved'],
         ['saving', 'Save status: Saving changes'],
@@ -122,6 +128,46 @@ describe('EditorToolbar', () => {
         const menu = details?.querySelector(':scope > div')
         expect(details).toHaveClass('relative')
         expect(menu).toHaveClass('absolute', 'right-0', 'top-full', 'mt-1', 'z-20')
+    })
+})
+
+describe('EditorToolbar overflow menu', () => {
+    function openMenu() {
+        const overflow = screen.getByRole('group', { name: 'More workflow actions' })
+        const details = overflow.querySelector('details')!
+        fireEvent.click(details.querySelector('summary')!)
+        expect(details.open).toBe(true)
+        return details
+    }
+
+    // A native details menu stayed open after an action and on outside clicks.
+    it('closes after choosing an action', async () => {
+        const user = userEvent.setup()
+        const { props } = toolbar()
+        const details = openMenu()
+        await user.click(within(details).getByRole('button', { name: 'Auto layout (more actions)' }))
+        expect(props.onAutoLayout).toHaveBeenCalledOnce()
+        expect(details.open).toBe(false)
+    })
+
+    it('closes on an outside pointer press and on Escape, returning focus to its button', () => {
+        toolbar()
+        const details = openMenu()
+        fireEvent.pointerDown(document.body)
+        expect(details.open).toBe(false)
+
+        openMenu()
+        const summary = details.querySelector('summary')!
+        fireEvent.keyDown(within(details).getByRole('button', { name: 'Undo (more actions)' }), { key: 'Escape' })
+        expect(details.open).toBe(false)
+        expect(summary).toHaveFocus()
+    })
+
+    it('stays open for a press inside the menu', () => {
+        toolbar()
+        const details = openMenu()
+        fireEvent.pointerDown(within(details).getByRole('button', { name: 'Redo (more actions)' }))
+        expect(details.open).toBe(true)
     })
 })
 

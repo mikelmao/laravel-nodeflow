@@ -8,6 +8,8 @@ import { triggerSourceOptionsTemplate } from '../http'
 import { AvailableData } from './AvailableData'
 import type { NodeDataContext } from './nodeData'
 import { ConfigPanel } from './ConfigPanel'
+import { NodeflowIcon } from '../presentation/icons'
+import { categoryClasses, categoryPresentation } from '../presentation/node'
 import { WebhookDetails } from './WebhookDetails'
 
 type InspectorTab = 'configure' | 'advanced'
@@ -77,6 +79,7 @@ export function NodeInspector({
     const advancedRef = useRef<HTMLButtonElement>(null)
     const configureTabId = `node-inspector-${generatedId}-configure-tab`
     const advancedTabId = `node-inspector-${generatedId}-advanced-tab`
+    const presentation = categoryPresentation(def?.kind === 'executable' ? def.group : 'Trigger')
     const selectedIssue = issueToFocus?.node === node.id && issueToFocus.field !== null ? issueToFocus : null
     const optionCaches = useRef(new Map<string, Map<string, Record<string, string>>>())
     const compatibleSources = useMemo(() => {
@@ -205,14 +208,19 @@ export function NodeInspector({
     }
 
     return (
-        <aside ref={rootRef} aria-label="Node inspector" className="flex min-h-0 flex-col gap-4 rounded-lg border border-border bg-card p-4 text-card-foreground">
-            <header className="space-y-1">
-                <h2 className="text-base font-semibold">{def?.label ?? 'Unregistered node'}</h2>
-                <p className="text-sm text-muted-foreground">{def === undefined ? 'Unregistered node type' : def.kind === 'trigger' ? 'Trigger' : def.group || 'Unregistered node type'}</p>
-                {def?.description && <p className="text-sm text-muted-foreground">{def.description}</p>}
+        <aside ref={rootRef} aria-label="Node inspector" className="flex min-h-0 flex-col gap-4 p-4 text-card-foreground">
+            <header className="flex items-start gap-3">
+                <span aria-hidden="true" className={`mt-0.5 flex size-8 shrink-0 items-center justify-center rounded-md ${categoryClasses[presentation.accent]}`}>
+                    {def?.icon ? <span className="text-sm leading-none">{def.icon}</span> : <NodeflowIcon name={def === undefined ? 'alert' : presentation.icon} className="size-4" />}
+                </span>
+                <div className="min-w-0 space-y-0.5">
+                    <h2 className="break-words text-[15px] font-semibold leading-5">{def?.label ?? 'Unregistered node'}</h2>
+                    <p className="text-xs font-medium text-muted-foreground">{def === undefined ? 'Unregistered node type' : def.kind === 'trigger' ? 'Trigger' : def.group || 'Unregistered node type'}</p>
+                    {def?.description && <p className="pt-1 text-xs leading-relaxed text-muted-foreground">{def.description}</p>}
+                </div>
             </header>
 
-            <div role="tablist" aria-label="Node inspector sections" className="flex border-b border-border">
+            <div role="tablist" aria-label="Node inspector sections" className="-mx-4 flex gap-1 border-b border-border px-3">
                 <button
                     ref={configureRef}
                     id={configureTabId}
@@ -223,7 +231,7 @@ export function NodeInspector({
                     tabIndex={activeTab === 'configure' ? 0 : -1}
                     onClick={() => setActiveTab('configure')}
                     onKeyDown={onTabKeyDown}
-                    className="border-b-2 border-transparent px-3 py-2 text-sm font-medium aria-selected:border-primary aria-selected:text-foreground"
+                    className="-mb-px border-b-2 border-transparent px-2 pb-2 pt-1 text-sm font-medium text-muted-foreground transition-colors hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring aria-selected:border-primary aria-selected:text-foreground"
                 >
                     Configure
                 </button>
@@ -237,7 +245,7 @@ export function NodeInspector({
                     tabIndex={activeTab === 'advanced' ? 0 : -1}
                     onClick={() => setActiveTab('advanced')}
                     onKeyDown={onTabKeyDown}
-                    className="border-b-2 border-transparent px-3 py-2 text-sm font-medium aria-selected:border-primary aria-selected:text-foreground"
+                    className="-mb-px border-b-2 border-transparent px-2 pb-2 pt-1 text-sm font-medium text-muted-foreground transition-colors hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring aria-selected:border-primary aria-selected:text-foreground"
                 >
                     Advanced
                 </button>
@@ -246,7 +254,7 @@ export function NodeInspector({
             <div id={tabPanelId(generatedId, 'configure')} role="tabpanel" aria-labelledby={configureTabId} hidden={activeTab !== 'configure'} className="min-h-0 overflow-y-auto">
                 <div className="space-y-5">
                     {def?.kind === 'trigger' && compatibleSources.length === 0 && (
-                        <p className="rounded-md border border-border bg-muted p-3 text-sm text-muted-foreground">Register a compatible trigger source in the host application before this trigger can be published.</p>
+                        <p className="rounded-md border border-border bg-muted px-3 py-2 text-xs text-foreground">Register a compatible trigger source in the host application before this trigger can be published.</p>
                     )}
                     <ConfigPanel node={node} def={composedDef} controls={controls} errors={localErrors} onConfigChange={changeConfig} onFieldBlur={onConfigBlur} fieldOptionsSources={fieldOptionsSources} data={data} />
                     {data && <AvailableData data={data} />}
@@ -265,14 +273,15 @@ export function NodeInspector({
             </div>
             <div id={tabPanelId(generatedId, 'advanced')} role="tabpanel" aria-labelledby={advancedTabId} hidden={activeTab !== 'advanced'} className="space-y-5">
                 <dl className="space-y-3 text-sm">
-                    <div><dt className="font-medium text-muted-foreground">Node ID</dt><dd className="break-all font-mono">{node.id}</dd></div>
-                    <div><dt className="font-medium text-muted-foreground">Registered type</dt><dd className="break-all font-mono">{node.type}</dd></div>
-                    <div><dt className="font-medium text-muted-foreground">Group</dt><dd>{def?.kind === 'executable' ? def.group || 'None' : def?.kind === 'trigger' ? 'Trigger' : 'None'}</dd></div>
-                    <div><dt className="font-medium text-muted-foreground">Cardinality</dt><dd>{empty(def?.kind === 'executable' ? def.cardinality : [])}</dd></div>
-                    <div><dt className="font-medium text-muted-foreground">Declared outputs</dt><dd>{empty(def?.outputs ?? [])}</dd></div>
+                    <div className="space-y-0.5"><dt className="text-xs font-medium text-muted-foreground">Node ID</dt><dd className="break-all font-mono text-xs">{node.id}</dd></div>
+                    <div className="space-y-0.5"><dt className="text-xs font-medium text-muted-foreground">Registered type</dt><dd className="break-all font-mono text-xs">{node.type}</dd></div>
+                    <div className="space-y-0.5"><dt className="text-xs font-medium text-muted-foreground">Group</dt><dd>{def?.kind === 'executable' ? def.group || 'None' : def?.kind === 'trigger' ? 'Trigger' : 'None'}</dd></div>
+                    <div className="space-y-0.5"><dt className="text-xs font-medium text-muted-foreground">Cardinality</dt><dd>{empty(def?.kind === 'executable' ? def.cardinality : [])}</dd></div>
+                    <div className="space-y-0.5"><dt className="text-xs font-medium text-muted-foreground">Declared outputs</dt><dd>{empty(def?.outputs ?? [])}</dd></div>
                 </dl>
                 <div className="space-y-2 border-t border-border pt-4">
-                    <button type="button" onClick={onDelete} className="w-full rounded-md border border-destructive bg-destructive px-3 py-2 text-sm text-destructive-foreground hover:opacity-90">
+                    <button type="button" onClick={onDelete} className="inline-flex h-9 w-full items-center justify-center gap-2 rounded-md border border-destructive/40 bg-card px-3 text-sm font-medium text-destructive transition-colors hover:bg-destructive/10 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-destructive">
+                        <NodeflowIcon name="trash" className="size-4" />
                         Delete node
                     </button>
                 </div>

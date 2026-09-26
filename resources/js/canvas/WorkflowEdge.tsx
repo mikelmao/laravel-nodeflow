@@ -34,14 +34,14 @@ export function WorkflowEdge({
                 style={style}
                 markerStart={markerStart}
                 markerEnd={markerEnd}
-                className={selected ? 'react-flow__edge-path stroke-primary' : 'react-flow__edge-path'}
+                className="react-flow__edge-path"
             />
             {labelText !== '' && (
                 <EdgeLabelRenderer>
                     <div
                         aria-label={`Connection output: ${labelText}`}
-                        className="pointer-events-none nodrag nopan rounded border border-border bg-background px-1.5 py-0.5 text-[10px] font-medium text-muted-foreground shadow-sm"
-                        style={{ position: 'absolute', transform: `translate(-50%, -100%) translate(${labelX}px,${labelY - 10}px)` }}
+                        className={`pointer-events-none nodrag nopan rounded border bg-card px-1.5 py-px text-[11px] font-medium leading-4 shadow-xs ${selected ? 'border-primary text-foreground' : 'border-border text-muted-foreground'}`}
+                        style={{ position: 'absolute', transform: `translate(-50%, -100%) translate(${labelX}px,${labelY - 6}px)` }}
                     >
                         {labelText}
                     </div>

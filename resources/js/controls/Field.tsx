@@ -46,7 +46,7 @@ export function FieldShell({
 
     if (grouped) {
         return (
-            <fieldset className="space-y-1">
+            <fieldset className="min-w-0 space-y-1.5">
                 <legend className="block text-xs font-medium text-foreground">{label}</legend>
 
                 {fieldControl}
@@ -56,7 +56,7 @@ export function FieldShell({
     }
 
     return (
-        <div className="space-y-1">
+        <div className="space-y-1.5">
             <label className="block text-xs font-medium text-foreground" htmlFor={controlId}>
                 {label}
             </label>
@@ -68,4 +68,4 @@ export function FieldShell({
 }
 
 export const inputClass =
-    'w-full rounded-md border border-input bg-background px-2 py-1 text-xs text-foreground focus:outline-none focus:ring-1 focus:ring-ring disabled:opacity-50'
+    'block min-h-8 w-full min-w-0 rounded-md border border-input bg-background px-2.5 py-1.5 text-xs text-foreground shadow-xs outline-none transition-colors placeholder:text-muted-foreground focus-visible:border-ring focus-visible:ring-2 focus-visible:ring-ring/25 disabled:cursor-not-allowed disabled:opacity-50'

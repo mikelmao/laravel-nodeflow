@@ -7,7 +7,7 @@ export function AvailableData({ data }: { data: NodeDataContext }) {
     const origins = [...new Set(fields.map(field => field.origin))]
     return <details className="group rounded-lg border border-border bg-muted/20">
         <summary className="cursor-pointer rounded-lg px-3 py-3 text-sm font-medium text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring">
-            Available data <span className="ml-1 rounded-full bg-muted px-2 py-0.5 text-[11px] font-normal text-muted-foreground">{data.fields.length}</span>
+            Available data <span className="ml-1 rounded-full bg-muted px-2 py-0.5 text-[11px] font-normal text-foreground">{data.fields.length}</span>
         </summary>
         <div className="space-y-3 border-t border-border px-3 pb-3 pt-3">
             <p className="text-xs leading-relaxed text-muted-foreground">{data.summary}</p>

@@ -12,6 +12,8 @@ export type Autosave = {
     message: string | null
     conflict: DraftConflict | null
     lastSavedAt: number | null
+    /** The current graph differs from the one the server is known to hold. */
+    unsaved: boolean
     /** Serialize publish after every accepted draft PUT; false means conflict/error halted saving. */
     preparePublish(): Promise<number | false>
     /** Release the PUT barrier; a revision means success, while a 409 payload enters conflict state. */
@@ -615,5 +617,5 @@ export function useAutosave({
         return revision.current
     }, [finishPublish, finishLease, run, serialised, ownerEpoch])
 
-    return { ...state, preparePublish, finishPublish, resolveConflict }
+    return { ...state, unsaved: serialised !== baseline.current, preparePublish, finishPublish, resolveConflict }
 }

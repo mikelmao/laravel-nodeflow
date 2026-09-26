@@ -7,12 +7,12 @@ export type CategoryPresentation = {
 }
 
 export const categoryClasses = {
-    sky: 'border-sky-500/40 bg-sky-500/10 text-sky-700 dark:text-sky-300',
-    emerald: 'border-emerald-500/40 bg-emerald-500/10 text-emerald-700 dark:text-emerald-300',
-    amber: 'border-amber-500/40 bg-amber-500/10 text-amber-800 dark:text-amber-300',
-    violet: 'border-violet-500/40 bg-violet-500/10 text-violet-700 dark:text-violet-300',
-    rose: 'border-rose-500/40 bg-rose-500/10 text-rose-700 dark:text-rose-300',
-    slate: 'border-slate-500/40 bg-slate-500/10 text-slate-700 dark:text-slate-300',
+    sky: 'bg-sky-500/12 text-sky-700 dark:text-sky-300',
+    emerald: 'bg-emerald-500/12 text-emerald-700 dark:text-emerald-300',
+    amber: 'bg-amber-500/15 text-amber-800 dark:text-amber-300',
+    violet: 'bg-violet-500/12 text-violet-700 dark:text-violet-300',
+    rose: 'bg-rose-500/12 text-rose-700 dark:text-rose-300',
+    slate: 'bg-slate-500/12 text-slate-700 dark:text-slate-300',
 } as const
 
 const accents: CategoryPresentation['accent'][] = ['sky', 'emerald', 'amber', 'violet', 'rose', 'slate']

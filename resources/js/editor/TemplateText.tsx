@@ -132,8 +132,8 @@ export function TemplateText({ id, label, value, onChange, fields, multiline = f
             </div>
             {matches.length === 0 && <p role="status" className="px-3 py-3 text-xs text-muted-foreground">{available.length ? 'No matching placeholders. Try a different name.' : 'No placeholders available. Check the upstream trigger and source.'}</p>}
         </div>}
-        <p id={`${listId}-hint`} className="text-[11px] text-muted-foreground">Type <code className="rounded bg-muted px-1">{'{{'}</code> to insert data. Examples are illustrative.</p>
+        <p id={`${listId}-hint`} className="text-[11px] text-muted-foreground">Type <code className="rounded bg-muted px-1 text-foreground">{'{{'}</code> to insert data.</p>
         {conditional.length > 0 && <p id={`${listId}-context`} className="rounded-md border border-border bg-muted/40 px-3 py-2 text-xs text-muted-foreground">{conditional.map((field) => `${field.key}: ${field.availabilityNote ?? 'Requires upstream context'}`).join(' · ')}</p>}
-        {unavailable.length > 0 && <p id={`${listId}-warning`} role="alert" className="rounded-md border border-destructive/30 bg-destructive/5 px-3 py-2 text-xs text-destructive">Check these placeholders for the current source: {unavailable.map((key) => `{{ ${key} }}`).join(', ')}. See Available data below.</p>}
+        {unavailable.length > 0 && <p id={`${listId}-warning`} role="alert" className="rounded-md border border-destructive/40 bg-destructive/5 px-3 py-2 text-xs text-foreground">Check these placeholders for the current source: {unavailable.map((key) => `{{ ${key} }}`).join(', ')}. See Available data below.</p>}
     </div>
 }

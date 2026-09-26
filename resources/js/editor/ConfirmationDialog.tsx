@@ -168,13 +168,13 @@ export function ConfirmationDialog({ open, title, description, confirmLabel, ope
     }
 
     return createPortal(
-        <div ref={rootRef} data-nodeflow-modal-root role="dialog" aria-modal="true" aria-labelledby={titleId} aria-describedby={descriptionId} onKeyDown={handleKeyDown} className="fixed inset-0 z-50 grid place-items-center bg-background/70 p-4">
-            <div className="w-full max-w-md space-y-4 rounded-lg border border-border bg-card p-5 shadow-lg">
+        <div ref={rootRef} data-nodeflow-modal-root role="dialog" aria-modal="true" aria-labelledby={titleId} aria-describedby={descriptionId} onKeyDown={handleKeyDown} className="fixed inset-0 z-50 grid place-items-center bg-foreground/30 p-4 backdrop-blur-[1px]">
+            <div className="w-full max-w-md space-y-3 rounded-lg border border-border bg-card p-5 text-card-foreground shadow-lg">
                 <h3 id={titleId} className="text-base font-semibold">{title}</h3>
                 <p id={descriptionId} className="text-sm text-muted-foreground">{description}</p>
-                <div className="flex justify-end gap-2">
-                    <button type="button" onClick={onCancel} className="rounded-md border border-border px-3 py-2 text-sm">Cancel</button>
-                    <button type="button" autoFocus data-nodeflow-dialog-initial-focus onClick={onConfirm} className={`rounded-md px-3 py-2 text-sm ${destructive ? 'bg-destructive text-destructive-foreground' : 'bg-primary text-primary-foreground'}`}>{confirmLabel}</button>
+                <div className="flex justify-end gap-2 pt-2">
+                    <button type="button" onClick={onCancel} className="inline-flex h-9 items-center rounded-md border border-border bg-card px-3 text-sm font-medium text-foreground hover:bg-muted focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring">Cancel</button>
+                    <button type="button" autoFocus data-nodeflow-dialog-initial-focus onClick={onConfirm} className={`inline-flex h-9 items-center rounded-md px-3 text-sm font-medium focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-offset-2 focus-visible:ring-offset-card ${destructive ? 'border border-destructive/40 bg-destructive/10 text-destructive hover:bg-destructive/15 focus-visible:ring-destructive' : 'bg-primary text-primary-foreground hover:bg-primary/90 focus-visible:ring-ring'}`}>{confirmLabel}</button>
                 </div>
             </div>
         </div>,

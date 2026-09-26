@@ -3,6 +3,8 @@ import {
     Controls,
     MiniMap,
     ReactFlow,
+    useReactFlow,
+    useStore,
     type Connection,
     type Edge,
     type EdgeTypes,
@@ -15,7 +17,7 @@ import {
     type ReactFlowProps,
 } from '@xyflow/react'
 import '@xyflow/react/dist/style.css'
-import { useCallback, useEffect, useMemo, useRef, useState, type DragEvent, type MouseEvent } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties, type DragEvent, type MouseEvent } from 'react'
 import type { CanvasEdge, CanvasNode, GraphComponentPayload, NodeCardData } from '../graph/types'
 import { CanvasContext, type NodeDecorationMap, type NodeRendererMap } from './context'
 import { CANVAS_ORIGIN, NODE_MIN_HEIGHT, NODE_WIDTH } from './layout'
@@ -67,6 +69,107 @@ const EMPTY_RENDERERS: NodeRendererMap = Object.freeze({})
 const EMPTY_NODE_ERRORS: Record<string, string[]> = Object.freeze({})
 const EMPTY_DECORATIONS: NodeDecorationMap = Object.freeze({})
 const NODE_TYPE_MIME = 'application/x-nodeflow-node-type'
+/** React Flow's default floor (0.5) cannot frame a flow wider than twice the viewport. */
+export const CANVAS_MIN_ZOOM = 0.2
+export const CANVAS_MAX_ZOOM = 2
+const FIT_PADDING = 0.22
+
+/**
+ * A host semantic token as a CSS color. Tailwind 4 themes expose it either as
+ * --color-<name> or, with `@theme inline` (shadcn style), only as --<name>.
+ * The package ships no stylesheet, so these are the only values it assumes.
+ */
+function token(name: string): string {
+    return `var(--color-${name}, var(--${name}))`
+}
+
+function tint(name: string, percent: number): string {
+    return `color-mix(in oklab, ${token(name)} ${percent}%, transparent)`
+}
+
+/**
+ * Maps React Flow's own theming variables onto the host tokens so edges,
+ * controls, minimap and selection follow the host theme in light and dark.
+ * Each value can be overridden through a --nodeflow-* variable.
+ */
+export const canvasThemeStyle = {
+    '--xy-edge-stroke': `var(--nodeflow-edge, ${tint('muted-foreground', 80)})`,
+    '--xy-edge-stroke-selected': `var(--nodeflow-edge-selected, ${token('primary')})`,
+    '--xy-edge-stroke-width': 'var(--nodeflow-edge-width, 1.5)',
+    '--xy-connectionline-stroke': `var(--nodeflow-edge-selected, ${token('primary')})`,
+    '--xy-connectionline-stroke-width': 'var(--nodeflow-edge-width, 1.5)',
+    '--xy-handle-background-color': token('muted-foreground'),
+    '--xy-handle-border-color': token('card'),
+    '--xy-selection-background-color': tint('primary', 8),
+    '--xy-selection-border': `1px dashed ${token('primary')}`,
+    '--xy-controls-button-background-color': token('card'),
+    '--xy-controls-button-background-color-hover': token('muted'),
+    '--xy-controls-button-color': token('foreground'),
+    '--xy-controls-button-color-hover': token('foreground'),
+    '--xy-controls-button-border-color': token('border'),
+    '--xy-controls-box-shadow': 'none',
+    '--xy-minimap-background-color': token('card'),
+    '--xy-minimap-mask-background-color': tint('foreground', 8),
+    '--xy-minimap-mask-stroke-color': token('border'),
+    '--xy-minimap-node-background-color': tint('muted-foreground', 35),
+    '--xy-minimap-node-stroke-color': 'transparent',
+    '--xy-edge-label-background-color': token('card'),
+    '--xy-edge-label-color': token('muted-foreground'),
+} as CSSProperties
+const DOT_COLOR = `var(--nodeflow-canvas-dots, ${tint('muted-foreground', 28)})`
+const MINIMAP_NODE_COLOR = `var(--nodeflow-minimap-node, ${tint('muted-foreground', 45)})`
+const CONNECTION_LINE_STYLE = { strokeWidth: 1.5 } satisfies CSSProperties
+/** Below this zoom node text is unreadable, so the first view pans instead of shrinking further. */
+export const READABLE_ZOOM = 0.6
+const VIEWPORT_MARGIN = 56
+
+export type ViewportSize = { width: number; height: number }
+export type Bounds = { x: number; y: number; width: number; height: number }
+
+/**
+ * The first view of a flow: the whole graph when it fits at a readable zoom
+ * (never above 1:1), otherwise a readable zoom anchored on the flow's left
+ * edge, where its trigger sits. Explicit Fit still frames everything.
+ */
+export function initialViewport(bounds: Bounds, size: ViewportSize): { x: number; y: number; zoom: number } {
+    const usableWidth = Math.max(1, size.width - VIEWPORT_MARGIN * 2)
+    const usableHeight = Math.max(1, size.height - VIEWPORT_MARGIN * 2)
+    const fitZoom = Math.min(usableWidth / Math.max(1, bounds.width), usableHeight / Math.max(1, bounds.height), 1)
+    const zoom = Math.max(fitZoom, READABLE_ZOOM)
+    const graphWidth = bounds.width * zoom
+    const graphHeight = bounds.height * zoom
+    const x = graphWidth <= usableWidth ? (size.width - graphWidth) / 2 - bounds.x * zoom : VIEWPORT_MARGIN - bounds.x * zoom
+    const y = graphHeight <= usableHeight ? (size.height - graphHeight) / 2 - bounds.y * zoom : VIEWPORT_MARGIN - bounds.y * zoom
+    return { x, y, zoom }
+}
+
+/** Applies initialViewport once, after React Flow has measured the nodes and the pane. */
+function InitialViewport() {
+    // React Flow's own nodesInitialized flag only updates when the host feeds
+    // measured nodes back, which read-only canvases never do; the measured
+    // internals are the reliable signal.
+    const initialized = useStore((state) => {
+        if (state.nodeLookup.size === 0) return false
+        for (const node of state.nodeLookup.values()) {
+            if (node.internals.handleBounds === undefined || !node.measured.width || !node.measured.height) return false
+        }
+        return true
+    })
+    const width = useStore((state) => state.width)
+    const height = useStore((state) => state.height)
+    const { getNodes, getNodesBounds, setViewport } = useReactFlow<NodeflowNode, NodeflowEdge>()
+    const applied = useRef(false)
+
+    useEffect(() => {
+        if (applied.current || !initialized || width === 0 || height === 0) return
+        const nodes = getNodes()
+        if (nodes.length === 0) return
+        applied.current = true
+        void setViewport(initialViewport(getNodesBounds(nodes), { width, height }))
+    }, [getNodes, getNodesBounds, height, initialized, setViewport, width])
+
+    return null
+}
 
 export function prefersReducedMotion(): boolean {
     return typeof window !== 'undefined'
@@ -82,7 +185,7 @@ export function canvasActions(
     const duration = reducedMotion ? 0 : 220
 
     return {
-        fit: () => void instance.fitView({ padding: 0.22, duration }),
+        fit: () => void instance.fitView({ padding: FIT_PADDING, duration, minZoom: CANVAS_MIN_ZOOM }),
         centerNode: (id) => {
             const node = instance.getNode(id)
 
@@ -271,7 +374,7 @@ export function Canvas({
 
     return (
         <CanvasContext.Provider value={context}>
-            <div ref={wrapperRef} className={className}>
+            <div ref={wrapperRef} className={className} style={canvasThemeStyle}>
                 <ReactFlow<NodeflowNode, NodeflowEdge>
                     nodes={behavior.nodes}
                     edges={behavior.edges}
@@ -287,17 +390,23 @@ export function Canvas({
                     onDragOver={handleDragOver}
                     onDrop={handleDrop}
                     {...interactions}
-                    fitView
+                    minZoom={CANVAS_MIN_ZOOM}
+                    maxZoom={CANVAS_MAX_ZOOM}
+                    connectionLineStyle={CONNECTION_LINE_STYLE}
                     proOptions={{ hideAttribution: true }}
                 >
-                    <Background color="hsl(var(--border))" />
-                    <Controls showInteractive={false} className="border border-border bg-background text-foreground shadow-sm" />
+                    <InitialViewport />
+                    <Background color={DOT_COLOR} gap={20} size={1.2} />
+                    <Controls showInteractive={false} className="overflow-hidden rounded-md border border-border shadow-sm" />
                     {showMinimap && (
                         <MiniMap
                             pannable
                             zoomable
-                            className="border border-border bg-background"
-                            style={{ background: 'hsl(var(--background))' }}
+                            ariaLabel="Flow minimap"
+                            nodeColor={MINIMAP_NODE_COLOR}
+                            nodeBorderRadius={6}
+                            className="overflow-hidden rounded-md border border-border shadow-sm max-sm:hidden"
+                            style={{ width: 176, height: 120 }}
                         />
                     )}
                 </ReactFlow>

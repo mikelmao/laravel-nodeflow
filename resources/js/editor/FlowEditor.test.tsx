@@ -306,9 +306,9 @@ describe('FlowEditor', () => {
     it('keeps the narrow inspector drawer closed after pane deselection but opens it for node selection', async () => {
         installMediaQuery(true)
         renderEditor()
-        await waitFor(() => expect(screen.getByRole('dialog', { name: 'Inspector' })).toBeInTheDocument())
-
-        fireEvent.keyDown(document, { key: 'Escape' })
+        // A phone-width editor starts on the canvas; a drawer open on load covered it entirely.
+        expect(screen.queryByRole('dialog', { name: 'Inspector' })).toBeNull()
+        expect(screen.queryByRole('dialog', { name: 'Node Library' })).toBeNull()
         expect(screen.getByRole('button', { name: 'Open Inspector' })).toBeInTheDocument()
         fireEvent.click(canvasNode('send1'))
         const dialog = await screen.findByRole('dialog', { name: 'Inspector' })
@@ -322,6 +322,50 @@ describe('FlowEditor', () => {
         fireEvent.click(pane)
         expect(screen.queryByRole('dialog', { name: 'Inspector' })).toBeNull()
         expect(screen.getByRole('button', { name: 'Open Inspector' })).toBeInTheDocument()
+    })
+
+    // The shortcut root is display: contents, which browsers cannot focus. Focus
+    // must land on the shell box, or every shortcut dies after a pane click or
+    // after the focused edge or node is deleted.
+    it('keeps keyboard shortcuts reachable after a pane click and after deleting the focused element', () => {
+        renderEditor()
+        const shell = screen.getByTestId('editor-shell')
+        const pane = document.querySelector('.react-flow__pane')
+        if (!(pane instanceof HTMLElement)) throw new Error('Could not find the React Flow pane.')
+        fireEvent.pointerDown(pane)
+        expect(shell).toHaveFocus()
+
+        const node = canvasNode('send1')
+        fireEvent.click(node)
+        node.focus()
+        fireEvent.keyDown(node, { key: 'Delete' })
+        expect(document.querySelector('.react-flow__node[data-id="send1"]')).toBeNull()
+        expect(shell).toHaveFocus()
+        fireEvent.keyDown(shell, { key: 'z', ctrlKey: true })
+        expect(document.querySelector('.react-flow__node[data-id="send1"]')).not.toBeNull()
+    })
+
+    // Taking focus from a pressed summary stopped the overflow menu receiving Escape.
+    it('leaves focus on a pressed disclosure summary', () => {
+        renderEditor()
+        const summary = screen.getByRole('group', { name: 'More workflow actions' }).querySelector('summary')!
+        summary.focus()
+        fireEvent.pointerDown(summary)
+        expect(summary).toHaveFocus()
+        fireEvent.pointerDown(summary.querySelector('svg')!)
+        expect(summary).toHaveFocus()
+    })
+
+    it('ignores Delete and Backspace pressed on an inspector control', () => {
+        renderEditor()
+        fireEvent.click(canvasNode('send1'))
+        const tab = screen.getByRole('tab', { name: 'Advanced' })
+        tab.focus()
+        fireEvent.keyDown(tab, { key: 'Delete' })
+        fireEvent.keyDown(tab, { key: 'Backspace' })
+        expect(document.querySelector('.react-flow__node[data-id="send1"]')).not.toBeNull()
+        fireEvent.keyDown(canvasNode('send1'), { key: 'Delete' })
+        expect(document.querySelector('.react-flow__node[data-id="send1"]')).toBeNull()
     })
 
     // Trigger metadata is server-authored and read-only; counterfactual showing only the key hides author guidance.
@@ -719,12 +763,13 @@ describe('FlowEditor', () => {
             {second && <FlowEditor flow={{ ...flow, id: 82, name: 'Second editor' }} graph={graph} palette={palette} trigger_nodes={triggerNodes} trigger_sources={{ event: [] }} webhook={null} urls={urls} autosaveDebounceMs={5} />}
         </>
         const view = render(<First second />)
-        const roots = view.container.querySelectorAll<HTMLElement>('.contents[tabindex="-1"]')
-        roots[1]!.focus()
-        expect(document.activeElement).toBe(roots[1])
+        // Focus lives on each editor's shell box: the display: contents root cannot hold it in a browser.
+        const shells = view.getAllByTestId('editor-shell')
+        shells[1]!.focus()
+        expect(document.activeElement).toBe(shells[1])
 
         view.rerender(<First second={false} />)
-        expect(document.activeElement).toBe(roots[0])
+        expect(document.activeElement).toBe(shells[0])
     })
 
     // Panel deletion owns graph invariants; counterfactual deleting only the node leaves start and dangling edges.
@@ -1104,7 +1149,6 @@ describe('FlowEditor', () => {
         const user = userEvent.setup()
         installMediaQuery(true)
         renderEditor({ graph: triggeredGraph, trigger_nodes: [webhookTrigger, eventTrigger], trigger_sources: authorableSources })
-        await waitFor(() => expect(screen.getByRole('dialog', { name: 'Inspector' })).toBeInTheDocument())
         await user.click(screen.getByRole('button', { name: 'Open Node Library' }))
         const drawer = await screen.findByRole('dialog', { name: 'Node Library' })
         const opener = within(drawer).getByRole('button', { name: 'Add Laravel event' })
@@ -1489,8 +1533,8 @@ describe('FlowEditor', () => {
             trigger_sources: authorableSources,
             webhook: { endpoint_url: 'https://example.test/hooks/token', active: true, secret_rotated_at: null },
         })
-        const drawer = await screen.findByRole('dialog', { name: 'Inspector' })
         fireEvent.click(canvasNode('trigger'))
+        const drawer = await screen.findByRole('dialog', { name: 'Inspector' })
         const opener = await within(drawer).findByRole('button', { name: 'Rotate webhook secret' })
         await user.click(opener)
         const confirm = screen.getByRole('button', { name: 'Confirm rotation' })

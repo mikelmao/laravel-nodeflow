@@ -3,7 +3,7 @@ import { fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { useLayoutEffect, useRef } from 'react'
 import { describe, expect, it, vi } from 'vitest'
 import type { CanvasEdge, CanvasNode, NodeCardData, NodeTypePayload, TriggerNodeTypePayload } from '../graph/types'
-import { Canvas, canvasActions, canvasBehavior, edgeTypes, interactionProps, prefersReducedMotion, type NodeflowEdge, type NodeflowNode } from './Canvas'
+import { Canvas, canvasActions, canvasBehavior, edgeTypes, initialViewport, interactionProps, prefersReducedMotion, READABLE_ZOOM, type NodeflowEdge, type NodeflowNode } from './Canvas'
 import { CanvasContext } from './context'
 import { defaultNodeRenderer, NodeCard, rendererFor } from './NodeCard'
 import { WorkflowEdge } from './WorkflowEdge'
@@ -421,6 +421,25 @@ describe('WorkflowEdge', () => {
     })
 })
 
+describe('initialViewport', () => {
+    const size = { width: 1000, height: 700 }
+
+    it('frames a flow that fits at a readable zoom without magnifying past 1:1', () => {
+        const small = initialViewport({ x: 0, y: 0, width: 256, height: 112 }, size)
+        expect(small.zoom).toBe(1)
+        expect(small.x).toBe((1000 - 256) / 2)
+        expect(small.y).toBe((700 - 112) / 2)
+    })
+
+    // A wide flow used to be shrunk until card text was unreadable or clipped at both ends.
+    it('keeps a wide flow readable and anchored on its left edge where the trigger sits', () => {
+        const wide = initialViewport({ x: 72, y: 80, width: 3000, height: 400 }, size)
+        expect(wide.zoom).toBe(READABLE_ZOOM)
+        expect(wide.x).toBe(56 - 72 * READABLE_ZOOM)
+        expect(wide.y).toBeCloseTo((700 - 400 * READABLE_ZOOM) / 2 - 80 * READABLE_ZOOM)
+    })
+})
+
 describe('interactionProps', () => {
     // Global false flags alone leave keyboard/select/delete. Counterfactual
     // omit any and the run graph acts editable or retains transient editor state.
@@ -751,7 +770,7 @@ describe('Canvas', () => {
         actions.centerNode('partial')
         actions.centerNode('missing')
 
-        expect(fitView).toHaveBeenCalledWith({ padding: 0.22, duration: 220 })
+        expect(fitView).toHaveBeenCalledWith({ padding: 0.22, duration: 220, minZoom: 0.2 })
         expect(getNode).toHaveBeenNthCalledWith(1, 'n1')
         expect(getNodesBounds).toHaveBeenCalledWith([{ id: 'n1', position: { x: 40, y: 80 } }])
         expect(setCenter).toHaveBeenCalledWith(168, 136, { zoom: 0.85, duration: 220 })
@@ -786,7 +805,7 @@ describe('Canvas', () => {
         const fitView = vi.fn()
         canvasActions({ fitView } as unknown as ReactFlowInstance<NodeflowNode, NodeflowEdge>, true).fit()
 
-        expect(fitView).toHaveBeenCalledWith({ padding: 0.22, duration: 0 })
+        expect(fitView).toHaveBeenCalledWith({ padding: 0.22, duration: 0, minZoom: 0.2 })
     })
 
     it('detects reduced motion without requiring browser globals during SSR', () => {
@@ -806,10 +825,19 @@ describe('Canvas', () => {
 
         const visible = render(<Canvas nodes={[canvasNode]} edges={[]} defs={{ 'app.send': def() }} showMinimap />)
         expect(visible.container.querySelector('.react-flow__minimap')).not.toBeNull()
-        expect(visible.container.querySelector('.react-flow__minimap')).toHaveClass('border', 'border-border', 'bg-background')
-        expect(visible.container.querySelector('.react-flow__minimap')).toHaveStyle({
-            background: 'hsl(var(--background))',
-        })
+        expect(visible.container.querySelector('.react-flow__minimap')).toHaveClass('border', 'border-border')
+        expect(visible.container.querySelector('.react-flow__minimap')?.getAttribute('style') ?? '').not.toContain('hsl(')
+    })
+
+    // Host tokens are full colors (hex/oklch), so hsl(var(--token)) was invalid
+    // CSS: black canvas dots, a transparent minimap and white controls in dark mode.
+    it('themes React Flow through host tokens without assuming an HSL token format', () => {
+        const { container } = render(<Canvas nodes={[canvasNode]} edges={[]} defs={{ 'app.send': def() }} />)
+        const wrapper = container.firstElementChild as HTMLElement
+        const style = wrapper.getAttribute('style') ?? ''
+        expect(style).toContain('--xy-edge-stroke-selected: var(--nodeflow-edge-selected, var(--color-primary, var(--primary)))')
+        expect(style).toContain('--xy-controls-button-background-color: var(--color-card, var(--card))')
+        expect(container.innerHTML).not.toContain('hsl(var(')
     })
 
     it('registers the workflow edge renderer at module scope', () => {

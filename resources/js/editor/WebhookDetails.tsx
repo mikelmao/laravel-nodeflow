@@ -123,7 +123,7 @@ export function WebhookDetails({
                                 ? <span>Endpoint URL unavailable</span>
                                 : <>
                                     <span aria-label="Webhook endpoint" className="min-w-0 truncate font-mono text-xs">{metadata.endpoint_url}</span>
-                                    <button type="button" aria-label="Copy webhook endpoint" onClick={() => { void copyEndpoint() }} className="rounded border border-border p-1"><NodeflowIcon name="copy" className="size-3.5" /></button>
+                                    <button type="button" aria-label="Copy webhook endpoint" onClick={() => { void copyEndpoint() }} title="Copy webhook endpoint" className="inline-flex size-7 shrink-0 items-center justify-center rounded-md border border-border bg-card text-foreground hover:bg-muted focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"><NodeflowIcon name="copy" className="size-3.5" /></button>
                                 </>}
                         </dd>
                     </div>
@@ -134,19 +134,19 @@ export function WebhookDetails({
             {endpointCopy === 'copied' && <p role="status">Endpoint copied.</p>}
             {endpointCopy === 'failed' && <p role="alert" aria-label="Webhook endpoint copy status">Could not copy the webhook endpoint. Copy it manually.</p>}
             {oneTimeSecret !== null && (
-                <div role="alert" className="space-y-2 rounded-md border border-amber-500/50 bg-amber-500/10 p-3">
+                <div role="alert" className="space-y-2 rounded-md border border-amber-500/50 bg-amber-500/10 p-3 text-foreground">
                     <p className="font-semibold">Save this signing secret now. It is shown only once.</p>
                     <code className="block break-all select-all rounded bg-background p-2">{oneTimeSecret}</code>
                     <div className="flex flex-wrap gap-2">
-                        <button type="button" aria-label="Copy webhook secret" onClick={() => { void copySecret() }} className="rounded-md border border-border px-2 py-1">Copy</button>
-                        <button type="button" aria-label="Acknowledge webhook secret" onClick={acknowledgeSecret} className="rounded-md bg-primary px-2 py-1 text-primary-foreground">Acknowledge</button>
+                        <button type="button" aria-label="Copy webhook secret" onClick={() => { void copySecret() }} className="inline-flex h-8 items-center rounded-md border border-border bg-card px-3 text-sm font-medium text-foreground hover:bg-muted focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring">Copy</button>
+                        <button type="button" aria-label="Acknowledge webhook secret" onClick={acknowledgeSecret} className="inline-flex h-8 items-center rounded-md bg-primary px-3 text-sm font-medium text-primary-foreground hover:bg-primary/90 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring">Acknowledge</button>
                     </div>
                     {secretCopy === 'copied' && <p role="status">Secret copied.</p>}
                     {secretCopy === 'failed' && <p role="alert" aria-label="Webhook secret copy status">Could not copy the webhook secret. Copy it manually.</p>}
                 </div>
             )}
             {metadata !== null && (
-                <button ref={rotateButton} type="button" aria-label="Rotate webhook secret" aria-describedby={rotationDescriptionId} aria-busy={rotating || publishing} disabled={rotating || publishing} onClick={() => setConfirming(true)} className="w-full rounded-md border border-border px-3 py-2 font-medium disabled:opacity-50">
+                <button ref={rotateButton} type="button" aria-label="Rotate webhook secret" aria-describedby={rotationDescriptionId} aria-busy={rotating || publishing} disabled={rotating || publishing} onClick={() => setConfirming(true)} className="inline-flex h-9 w-full items-center justify-center rounded-md border border-border bg-card px-3 text-sm font-medium text-foreground hover:bg-muted disabled:cursor-not-allowed disabled:opacity-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring">
                     {rotating ? 'Rotating secret' : 'Rotate secret'}
                 </button>
             )}

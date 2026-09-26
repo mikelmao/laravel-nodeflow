@@ -25,7 +25,7 @@ export function FactPredicatesControl({ field, value, onChange, errors }: FieldC
         <legend className="text-xs font-medium">{field.label}{field.required ? ' *' : ''}</legend>
         {state.loading && <p className="text-xs text-muted-foreground">Loading values…</p>}
         {state.error !== null && <div role="alert" className="flex items-center gap-2 text-xs text-destructive">
-            <span>{state.error}</span><button type="button" onClick={state.retry}>Retry</button>
+            <span>{state.error}</span><button type="button" onClick={state.retry} className="rounded-sm font-medium underline underline-offset-2 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring">Retry</button>
         </div>}
         {predicates.map((predicate, index) => <div key={`${predicate.provider}:${predicate.key}:${predicate.version}:${index}`} className="space-y-1">
             <FactPredicateFields
@@ -34,10 +34,10 @@ export function FactPredicatesControl({ field, value, onChange, errors }: FieldC
                 capability={capability} predicate={predicate} disabled={disabled}
                 onChange={(next) => { if (next !== null) update(predicates.map((current, candidate) => candidate === index ? next : current)) }}
             />
-            <button type="button" className="text-xs text-destructive" disabled={disabled} onClick={() => update(predicates.filter((_, candidate) => candidate !== index))}>Remove filter</button>
+            <button type="button" className="rounded-sm text-xs font-medium text-destructive hover:underline disabled:opacity-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring" disabled={disabled} onClick={() => update(predicates.filter((_, candidate) => candidate !== index))}>Remove filter</button>
         </div>)}
         <button
-            type="button" className="rounded border border-input bg-background px-2 py-1 text-xs"
+            type="button" className="inline-flex h-8 items-center rounded-md border border-border bg-card px-2.5 text-xs font-medium text-foreground shadow-xs hover:bg-muted disabled:cursor-not-allowed disabled:opacity-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
             disabled={disabled || predicates.length >= maximum || unselectedFacts.length === 0}
             onClick={() => { if (unselectedFacts[0] !== undefined) update([...predicates, newFactPredicate(unselectedFacts[0], capability)]) }}
         >Add filter</button>

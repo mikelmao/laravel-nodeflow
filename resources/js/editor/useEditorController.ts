@@ -38,6 +38,9 @@ import type { EditorToolbarProps, PublishIndicator, ValidationIndicator } from '
 import type { FlowOverviewIssue, FlowOverviewProps } from './FlowOverview'
 import type { NodeInspectorProps } from './NodeInspector'
 
+/** Mirrors EditorShell's drawer breakpoint. */
+const NARROW_QUERY = '(max-width: 1023px)'
+
 export type EditorDocument = { nodes: NodeflowNode[]; edges: NodeflowEdge[]; startId: string }
 export type EditorSelection = { nodeId: string | null; edgeId: string | null }
 export type EditorView = { libraryOpen: boolean; inspectorOpen: boolean; selectedEdgeId: string | null }
@@ -126,14 +129,23 @@ function copiedTriggerConfig(definition: TriggerNodeTypePayload, sources: Trigge
     return nodeConfig
 }
 
-function snapshotDocument(document: EditorDocument): EditorDocument {
+/**
+ * History snapshots are immutable, so an element the previous snapshot already
+ * owns is shared rather than copied. Structural sharing is what keeps React
+ * Flow's per-node internals (measured size, handle bounds) alive through a
+ * drag: a fresh object for every node on every pointer move made React Flow
+ * treat each one as new and hide it until it was measured again.
+ */
+function snapshotDocument(document: EditorDocument, previous?: EditorDocument): EditorDocument {
+    const ownedNodes = new Set(previous?.nodes)
+    const ownedEdges = new Set(previous?.edges)
     return {
-        nodes: document.nodes.map((node) => ({
+        nodes: document.nodes.map((node) => ownedNodes.has(node) ? node : {
             ...node,
             position: { ...node.position },
             data: { ...node.data, config: cloneGraphConfig(node.data.config) },
-        })),
-        edges: document.edges.map((edge) => ({ ...edge })),
+        }),
+        edges: document.edges.map((edge) => ownedEdges.has(edge) ? edge : { ...edge }),
         startId: document.startId,
     }
 }
@@ -147,13 +159,26 @@ function defaultDocument(graph: Graph, defs: Record<string, GraphComponentPayloa
     return { nodes: stripNodeSelection(canvas.nodes as NodeflowNode[]), edges: stripEdgeSelection(canvas.edges as NodeflowEdge[]), startId: graph.start ?? '' }
 }
 
+/** Selection and measurement are view state; an element without them keeps its identity. */
 function stripNodeSelection(nodes: NodeflowNode[]): NodeflowNode[] {
-    return nodes.map(({ selected: _selected, ...node }) => node)
+    return nodes.map((node) => {
+        if (!('selected' in node) && !('measured' in node)) return node
+        const { selected: _selected, measured: _measured, ...rest } = node
+        return rest
+    })
 }
 
 function stripEdgeSelection(edges: NodeflowEdge[]): NodeflowEdge[] {
-    return edges.map(({ selected: _selected, ...edge }) => edge)
+    return edges.map((edge) => {
+        if (!('selected' in edge)) return edge
+        const { selected: _selected, ...rest } = edge
+        return rest
+    })
 }
+
+type Measured = { width: number; height: number }
+type CanvasNodeEntry = { source: NodeflowNode; selected: boolean; isStart: boolean; node: NodeflowNode }
+type CanvasEdgeEntry = { source: NodeflowEdge; selected: boolean; edge: NodeflowEdge }
 
 function overlap(left: { x: number; y: number }, right: { x: number; y: number }): boolean {
     return Math.abs(left.x - right.x) < NODE_WIDTH && Math.abs(left.y - right.y) < NODE_MIN_HEIGHT
@@ -329,7 +354,29 @@ export function useEditorController(options: UseEditorControllerOptions): UseEdi
     const historyRef = useRef(history)
     historyRef.current = history
     const [selected, setSelected] = useState<EditorSelection>({ nodeId: null, edgeId: null })
-    const [view, setView] = useState<EditorView>({ libraryOpen: true, inspectorOpen: true, selectedEdgeId: null })
+    // Panels start open on a desktop shell; below the drawer breakpoint they
+    // would cover the canvas on load, so a narrow session starts on the canvas.
+    const [view, setView] = useState<EditorView>(() => {
+        const narrow = typeof window !== 'undefined' && typeof window.matchMedia === 'function' && window.matchMedia(NARROW_QUERY).matches
+        return { libraryOpen: !narrow, inspectorOpen: !narrow, selectedEdgeId: null }
+    })
+    // Panels the author has not toggled follow the layout: a session that
+    // started narrow gets its desktop panels back when the viewport widens.
+    const panelsToggled = useRef({ library: false, inspector: false })
+    useEffect(() => {
+        if (typeof window === 'undefined' || typeof window.matchMedia !== 'function') return
+        const media = window.matchMedia(NARROW_QUERY)
+        const onChange = (event: { matches: boolean }) => {
+            if (event.matches) return
+            setView((current) => ({
+                ...current,
+                libraryOpen: panelsToggled.current.library ? current.libraryOpen : true,
+                inspectorOpen: panelsToggled.current.inspector ? current.inspectorOpen : true,
+            }))
+        }
+        media.addEventListener?.('change', onChange)
+        return () => media.removeEventListener?.('change', onChange)
+    }, [])
     const [validation, setValidation] = useState<ValidationOutcome | null>(null)
     const [publishOutcome, setPublishOutcome] = useState<PublishOutcome | null>(null)
     const [validationState, setValidationState] = useState<ValidationIndicator>({ status: 'unchecked' })
@@ -358,6 +405,9 @@ export function useEditorController(options: UseEditorControllerOptions): UseEdi
     const publishUrl = useRef(options.urls.publish)
     const rotationUrl = useRef(options.urls.rotate_webhook_secret)
     const canvas = useRef<CanvasActions | null>(null)
+    const measuredRef = useRef(new Map<string, Measured>())
+    const canvasNodeCache = useRef(new Map<string, CanvasNodeEntry>())
+    const canvasEdgeCache = useRef(new Map<string, CanvasEdgeEntry>())
     const optionsCache = useRef(new Map<string, Record<string, string>>())
     const controls = useMemo(() => mergeControls(options.controls), [options.controls])
     const optionsSource = useMemo(() => ({ template: options.urls.options, cache: optionsCache.current }), [options.urls.options])
@@ -444,7 +494,7 @@ export function useEditorController(options: UseEditorControllerOptions): UseEdi
     const commit = useCallback((next: EditorDocument, transaction: string | null = null) => {
         const current = historyRef.current
         if (sameDocument(current.present, next)) return false
-        const snapshot = snapshotDocument(next)
+        const snapshot = snapshotDocument(next, current.present)
         const nextHistory = commitHistory(current, snapshot, transaction)
         historyRef.current = nextHistory
         documentRef.current = snapshot
@@ -594,10 +644,16 @@ export function useEditorController(options: UseEditorControllerOptions): UseEdi
         // enforced. React Flow change batches are only authoritative for
         // controlled-state updates such as movement, dimensions and removal.
         if (graphChanges.some((change) => change.type === 'add' || change.type === 'replace')) return
+        // Measured size is React Flow's view state. It is remembered so a node
+        // object rebuilt later still carries it, but it never becomes a graph
+        // edit, a history entry or an autosave.
+        for (const change of graphChanges) {
+            if (change.type === 'dimensions' && change.dimensions !== undefined) measuredRef.current.set(change.id, { width: change.dimensions.width, height: change.dimensions.height })
+        }
         const removed = new Set(graphChanges.filter((change) => change.type === 'remove').map((change) => change.id))
         if (graphChanges.every((change) => change.type === 'dimensions')) return
         const current = documentRef.current
-        const nodes = stripNodeSelection(applyNodeChanges(graphChanges, current.nodes))
+        const nodes = stripNodeSelection(applyNodeChanges(graphChanges.filter((change) => change.type !== 'dimensions'), current.nodes))
         const removesTrigger = current.nodes.some((node) => removed.has(node.id) && defs[node.data.type]?.kind === 'trigger')
         const position = graphChanges.find((change) => change.type === 'position')
         const transaction = position?.type === 'position' ? `move:${position.id}` : null
@@ -948,8 +1004,40 @@ export function useEditorController(options: UseEditorControllerOptions): UseEdi
     const nodeErrors = useMemo(() => activeOutcome?.kind === 'invalid' || activeOutcome?.kind === 'semantic'
         ? Object.fromEntries(Object.entries(activeOutcome.byNode).map(([id, entries]) => [id, entries.map((entry) => entry.field === null ? entry.message : `${entry.field}: ${entry.message}`)]))
         : {}, [activeOutcome])
-    const canvasNodes = useMemo(() => document.nodes.map((node) => ({ ...node, selected: node.id === selected.nodeId, data: { ...node.data, isStart: node.id === document.startId } })), [document.nodes, document.startId, selected.nodeId])
-    const canvasEdges = useMemo(() => document.edges.map((edge) => ({ ...edge, selected: edge.id === selected.edgeId })), [document.edges, selected.edgeId])
+    // One canvas object per document node, reused until that node, its
+    // selection or its start flag changes. A rebuilt object carries the last
+    // measured size so React Flow keeps it visible and its edges attached.
+    const canvasNodes = useMemo(() => {
+        const previous = canvasNodeCache.current
+        const next = new Map<string, CanvasNodeEntry>()
+        const nodes = document.nodes.map((source) => {
+            const isSelected = source.id === selected.nodeId
+            const isStart = source.id === document.startId
+            const cached = previous.get(source.id)
+            const entry = cached !== undefined && cached.source === source && cached.selected === isSelected && cached.isStart === isStart
+                ? cached
+                : { source, selected: isSelected, isStart, node: { ...source, selected: isSelected, data: { ...source.data, isStart }, ...(measuredRef.current.has(source.id) ? { measured: { ...measuredRef.current.get(source.id)! } } : {}) } }
+            next.set(source.id, entry)
+            return entry.node
+        })
+        canvasNodeCache.current = next
+        return nodes
+    }, [document.nodes, document.startId, selected.nodeId])
+    const canvasEdges = useMemo(() => {
+        const previous = canvasEdgeCache.current
+        const next = new Map<string, CanvasEdgeEntry>()
+        const edges = document.edges.map((source) => {
+            const isSelected = source.id === selected.edgeId
+            const cached = previous.get(source.id)
+            const entry = cached !== undefined && cached.source === source && cached.selected === isSelected
+                ? cached
+                : { source, selected: isSelected, edge: { ...source, selected: isSelected } }
+            next.set(source.id, entry)
+            return entry.edge
+        })
+        canvasEdgeCache.current = next
+        return edges
+    }, [document.edges, selected.edgeId])
     const unknownTypes = document.nodes.filter((node) => !Object.prototype.hasOwnProperty.call(defs, node.data.type)).map((node) => ({ nodeId: node.id, type: node.data.type }))
     const triggerNode = document.nodes.find((node) => defs[node.data.type]?.kind === 'trigger')
     const trigger = triggerNode === undefined ? null : defs[triggerNode.data.type] ?? null
@@ -980,7 +1068,7 @@ export function useEditorController(options: UseEditorControllerOptions): UseEdi
         ? 'Webhook secret rotation is in progress.'
         : triggerPublishDisabledReason
     const message = outcomeMessages(activeOutcome)
-    const save = { status: autosave.status, message: autosave.message ?? undefined } as EditorToolbarProps['save']
+    const save = { status: autosave.status, message: autosave.message ?? undefined, unsaved: autosave.unsaved } as EditorToolbarProps['save']
     const publishIndicator: PublishIndicator = publishOutcome?.kind === 'published'
         ? { status: 'published', version: publishOutcome.version }
         : publishing ? { status: 'publishing' }
@@ -991,8 +1079,8 @@ export function useEditorController(options: UseEditorControllerOptions): UseEdi
         addNode, addAtViewportCenter, addTrigger, replaceTrigger, nodesChange, edgesChange, connect, selectNode, selectEdge, configure, configureTriggerSource, closeConfigTransaction,
         deleteNode, deleteSelection, undo: () => moveHistory('undo'), redo: () => moveHistory('redo'), autoLayout,
         validate, publish, resolveConflict, registerCanvas: (next) => { canvas.current = next }, focusIssue,
-        setLibraryOpen: (open) => setView((current) => ({ ...current, libraryOpen: open })),
-        setInspectorOpen: (open) => setView((current) => ({ ...current, inspectorOpen: open })),
+        setLibraryOpen: (open) => { panelsToggled.current.library = true; setView((current) => ({ ...current, libraryOpen: open })) },
+        setInspectorOpen: (open) => { panelsToggled.current.inspector = true; setView((current) => ({ ...current, inspectorOpen: open })) },
     }), [addAtViewportCenter, addNode, addTrigger, autoLayout, closeConfigTransaction, configure, configureTriggerSource, connect, deleteNode, deleteSelection, edgesChange, focusIssue, moveHistory, nodesChange, publish, replaceTrigger, resolveConflict, selectEdge, selectNode, validate])
 
     return {

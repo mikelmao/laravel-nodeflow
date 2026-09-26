@@ -3,7 +3,7 @@ import { FactCataloguesContext } from '../facts/FactCataloguesContext'
 import { projectFactPredicate, type FactDefinition, type FactPredicate, type FactScalar } from '../facts/types'
 import type { FieldControlProps } from './types'
 
-const inputClass = 'w-full rounded-md border border-input bg-background px-2 py-1.5 text-xs text-foreground focus:outline-none focus:ring-1 focus:ring-ring disabled:opacity-50'
+const inputClass = 'block min-h-8 w-full min-w-0 rounded-md border border-input bg-background px-2.5 py-1.5 text-xs text-foreground shadow-xs outline-none transition-colors focus-visible:border-ring focus-visible:ring-2 focus-visible:ring-ring/25 disabled:cursor-not-allowed disabled:opacity-50'
 const encodedFact = (fact: FactDefinition): string => `${fact.provider}:${fact.key}:${fact.version}`
 const sameValue = (left: FactScalar, right: FactScalar): boolean => typeof left === typeof right && left === right
 
@@ -140,7 +140,7 @@ export function FactPredicateControl({ field, value, onChange, errors }: FieldCo
         <legend className="text-xs font-medium">{field.label}{field.required ? ' *' : ''}</legend>
         {state.loading && <p className="text-xs text-muted-foreground">Loading values…</p>}
         {state.error !== null && <div role="alert" className="flex items-center gap-2 text-xs text-destructive">
-            <span>{state.error}</span><button type="button" onClick={state.retry}>Retry</button>
+            <span>{state.error}</span><button type="button" onClick={state.retry} className="rounded-sm font-medium underline underline-offset-2 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring">Retry</button>
         </div>}
         <FactPredicateFields facts={facts} capability={capability} predicate={projectFactPredicate(value)} onChange={onChange} disabled={state.loading || state.error !== null} />
         {field.help && <p className="text-[11px] text-muted-foreground">{field.help}</p>}

@@ -14,6 +14,7 @@ import type {
     TriggerSourcesPayload,
     WebhookMetadata,
 } from '../graph/types'
+import { NodeflowIcon } from '../presentation/icons'
 import { CanvasHud } from './CanvasHud'
 import { EditorNotices } from './EditorNotices'
 import { EditorShell, type EditorMode } from './EditorShell'
@@ -24,6 +25,14 @@ import { NodeLibrary } from './NodeLibrary'
 import { useEditorController, type ToolbarSlots } from './useEditorController'
 
 type ShortcutEntry = { token: symbol; root: HTMLElement }
+
+/**
+ * The shortcut root is display: contents so it never affects host layout, and
+ * browsers cannot focus such an element. Focus goes to the shell box instead.
+ */
+function focusEditor(root: HTMLElement): void {
+    ;(root.querySelector<HTMLElement>('[data-nodeflow-editor-root]') ?? root).focus({ preventScroll: true })
+}
 type ShortcutRegistry = { active: symbol | null; entries: ShortcutEntry[] }
 const shortcutRegistries = new WeakMap<Document, ShortcutRegistry>()
 const useShortcutLayoutEffect = typeof window === 'undefined' ? useEffect : useLayoutEffect
@@ -52,7 +61,7 @@ function removeShortcut(document: Document, token: symbol, root: HTMLElement): v
     if (wasActive) {
         const fallback = registry.entries.at(-1)
         registry.active = fallback?.token ?? null
-        if (hadFocus) fallback?.root.focus({ preventScroll: true })
+        if (hadFocus && fallback !== undefined) focusEditor(fallback.root)
     }
     if (registry.entries.length === 0) shortcutRegistries.delete(document)
 }
@@ -86,16 +95,18 @@ export function FlowEditor(props: FlowEditorProps) {
     return <FlowEditorSession key={sessionKey(props)} {...props} />
 }
 
+// Element, not HTMLElement: a press on an icon lands on its SVG, which must
+// still count as its button.
 function editableTarget(target: EventTarget | null): boolean {
-    if (!(target instanceof HTMLElement)) return false
+    if (!(target instanceof Element)) return false
     return target.matches('input, textarea, select, [contenteditable]:not([contenteditable="false"]), [data-nodeflow-shortcuts="off"]')
         || target.closest('[contenteditable]:not([contenteditable="false"]), [data-nodeflow-shortcuts="off"]') !== null
 }
 
 function interactiveTarget(target: EventTarget | null): boolean {
-    if (!(target instanceof HTMLElement)) return false
-    if (target.closest('.react-flow__node, .react-flow__pane') !== null) return false
-    return target.closest('button, a, input, textarea, select, [contenteditable]:not([contenteditable="false"]), [role="button"], [tabindex]:not([tabindex="-1"])') !== null
+    if (!(target instanceof Element)) return false
+    if (target.closest('.react-flow__node, .react-flow__edge, .react-flow__pane') !== null) return false
+    return target.closest('button, a, summary, input, textarea, select, [contenteditable]:not([contenteditable="false"]), [role="button"], [tabindex]:not([tabindex="-1"])') !== null
 }
 
 function FlowEditorSession({ mode = 'workspace', toolbarSlots, className, facts, resolveNodeData, ...options }: FlowEditorProps) {
@@ -108,7 +119,7 @@ function FlowEditorSession({ mode = 'workspace', toolbarSlots, className, facts,
         if (root === null) return
         claimShortcut(root.ownerDocument, shortcutToken.current)
         if ((event?.type === 'pointerdown' || event?.type === 'click') && !interactiveTarget(event.target) && !editableTarget(event.target)) {
-            root.focus({ preventScroll: true })
+            focusEditor(root)
         }
     }
 
@@ -158,9 +169,14 @@ function FlowEditorSession({ mode = 'workspace', toolbarSlots, className, facts,
             } else if (plain && !event.shiftKey && event.key.toLowerCase() === 'f') {
                 event.preventDefault()
                 controller.toolbarProps.onFit()
-            } else if ((event.key === 'Delete' || event.key === 'Backspace') && (controller.selected !== undefined || controller.view.selectedEdgeId !== null)) {
+            } else if ((event.key === 'Delete' || event.key === 'Backspace') && !interactiveTarget(event.target) && (controller.selected !== undefined || controller.view.selectedEdgeId !== null)) {
+                // A focused button or link (an inspector tab, a library entry)
+                // keeps its own keys: deleting the canvas selection from there
+                // removed a node the author was only configuring.
                 event.preventDefault()
                 controller.actions.deleteSelection()
+                // The deleted node or edge may have held focus; keep shortcuts alive.
+                focusEditor(root)
             }
         }
         const document = rootRef.current?.ownerDocument ?? globalThis.document
@@ -184,7 +200,7 @@ function FlowEditorSession({ mode = 'workspace', toolbarSlots, className, facts,
     const canvas = <>
         <Canvas {...controller.canvasProps} showMinimap />
         <CanvasHud {...controller.canvasHudProps} />
-        {controller.document.nodes.length === 0 && <div className="pointer-events-none absolute inset-0 z-10 grid place-items-center"><button type="button" onClick={openLibraryAndFocus} className="pointer-events-auto rounded-md border border-border bg-background px-4 py-2 shadow-sm">Add a node</button></div>}
+        {controller.document.nodes.length === 0 && <div className="pointer-events-none absolute inset-0 z-10 grid place-items-center"><button type="button" onClick={openLibraryAndFocus} className="pointer-events-auto inline-flex h-9 items-center gap-2 rounded-md bg-primary px-4 text-sm font-medium text-primary-foreground shadow-sm transition-colors hover:bg-primary/90 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background"><NodeflowIcon name="plus" className="size-4" />Add a node</button></div>}
     </>
     const dataGraph: Graph = {
         start: controller.document.startId,

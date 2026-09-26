@@ -1397,3 +1397,118 @@ describe('useEditorController', () => {
         expect(fetchMock.mock.calls.filter(([url]) => url === urls.rotate_webhook_secret)).toHaveLength(2)
     })
 })
+
+describe('canvas node identity during a drag', () => {
+    const twoNodes: Graph = {
+        start: 'send1',
+        nodes: [
+            { id: 'send1', type: 'app.send', config: {}, position: { x: 0, y: 0 } },
+            { id: 'exit1', type: 'core.exit', config: {}, position: { x: 400, y: 0 } },
+        ],
+        edges: [{ from: 'send1', to: 'exit1', output: 'sent' }],
+    }
+
+    // React Flow rebuilds a node's internals, hides it (visibility: hidden) and
+    // drops its handle bounds (so its edges vanish) whenever it receives a new
+    // node object without `measured`. Unchanged nodes must therefore keep their
+    // identity, and a moved node must carry its last measured size.
+    it('keeps untouched nodes identical and re-supplies measured size to the moved node', () => {
+        const { result } = controller({ graph: twoNodes })
+        act(() => result.current.actions.nodesChange([
+            { id: 'send1', type: 'dimensions', dimensions: { width: 256, height: 112 } },
+            { id: 'exit1', type: 'dimensions', dimensions: { width: 256, height: 96 } },
+        ]))
+        const before = result.current.canvasProps.nodes
+        const edgeBefore = result.current.canvasProps.edges[0]
+        expect(result.current.toolbarProps.canUndo).toBe(false)
+
+        act(() => result.current.actions.nodesChange([{ id: 'send1', type: 'position', position: { x: 12, y: 8 }, dragging: true }]))
+        const during = result.current.canvasProps.nodes
+        expect(during.find((node) => node.id === 'exit1')).toBe(before.find((node) => node.id === 'exit1'))
+        expect(during.find((node) => node.id === 'send1')).toMatchObject({ position: { x: 12, y: 8 }, measured: { width: 256, height: 112 } })
+
+        act(() => result.current.actions.nodesChange([{ id: 'send1', type: 'position', position: { x: 20, y: 10 }, dragging: false }]))
+        const after = result.current.canvasProps.nodes
+        expect(after.find((node) => node.id === 'exit1')).toBe(before.find((node) => node.id === 'exit1'))
+        expect(after.find((node) => node.id === 'send1')?.measured).toEqual({ width: 256, height: 112 })
+        expect(result.current.canvasProps.edges[0]).toBe(edgeBefore)
+    })
+
+    it('keeps measured size out of history, autosave and validation state', () => {
+        const { result } = controller({ graph: twoNodes })
+        const graphBefore = JSON.stringify(result.current.document)
+        act(() => result.current.actions.nodesChange([{ id: 'send1', type: 'dimensions', dimensions: { width: 256, height: 112 } }]))
+        expect(result.current.toolbarProps.canUndo).toBe(false)
+        expect(JSON.stringify(result.current.document)).toBe(graphBefore)
+    })
+
+    it('keeps node identity across an unrelated selection change', () => {
+        const { result } = controller({ graph: twoNodes })
+        const before = result.current.canvasProps.nodes
+        act(() => result.current.actions.selectNode('send1'))
+        const after = result.current.canvasProps.nodes
+        expect(after.find((node) => node.id === 'exit1')).toBe(before.find((node) => node.id === 'exit1'))
+        expect(after.find((node) => node.id === 'send1')?.selected).toBe(true)
+    })
+})
+
+describe('save indicator', () => {
+    it('marks the draft unsaved from the first edit until its save is accepted', async () => {
+        let release!: () => void
+        const gate = new Promise<void>((resolve) => { release = resolve })
+        vi.stubGlobal('fetch', vi.fn(async () => { await gate; return Response.json({ draft_revision: 8 }) }))
+        const { result } = controller({ autosaveDebounceMs: 1 })
+        expect(result.current.toolbarProps.save).toMatchObject({ status: 'idle', unsaved: false })
+        act(() => result.current.actions.nodesChange([{ id: 'send1', type: 'position', position: { x: 40, y: 0 }, dragging: false }]))
+        expect(result.current.toolbarProps.save).toMatchObject({ status: 'idle', unsaved: true })
+        await waitFor(() => expect(result.current.toolbarProps.save.status).toBe('saving'))
+        act(() => release())
+        await waitFor(() => expect(result.current.toolbarProps.save).toMatchObject({ status: 'saved', unsaved: false }))
+    })
+})
+
+describe('panel defaults across the drawer breakpoint', () => {
+    function media(initiallyNarrow: boolean) {
+        const listeners = new Set<(event: { matches: boolean }) => void>()
+        const query = {
+            matches: initiallyNarrow,
+            media: '(max-width: 1023px)',
+            addEventListener: (_type: string, listener: (event: { matches: boolean }) => void) => listeners.add(listener),
+            removeEventListener: (_type: string, listener: (event: { matches: boolean }) => void) => listeners.delete(listener),
+            addListener: vi.fn(),
+            removeListener: vi.fn(),
+        }
+        vi.stubGlobal('matchMedia', vi.fn(() => query))
+        return {
+            change(narrow: boolean) {
+                query.matches = narrow
+                act(() => { for (const listener of listeners) listener({ matches: narrow }) })
+            },
+        }
+    }
+
+    // Opening narrow then widening left both desktop panels collapsed.
+    it('restores desktop panels when a narrow session widens', () => {
+        const viewport = media(true)
+        const { result } = controller()
+        expect(result.current.view).toMatchObject({ libraryOpen: false, inspectorOpen: false })
+        viewport.change(false)
+        expect(result.current.view).toMatchObject({ libraryOpen: true, inspectorOpen: true })
+    })
+
+    it('keeps a panel the author toggled', () => {
+        const viewport = media(true)
+        const { result } = controller()
+        act(() => result.current.actions.setLibraryOpen(true))
+        act(() => result.current.actions.setLibraryOpen(false))
+        viewport.change(false)
+        expect(result.current.view).toMatchObject({ libraryOpen: false, inspectorOpen: true })
+    })
+
+    it('leaves desktop panels alone when the viewport narrows', () => {
+        const viewport = media(false)
+        const { result } = controller()
+        viewport.change(true)
+        expect(result.current.view).toMatchObject({ libraryOpen: true, inspectorOpen: true })
+    })
+})

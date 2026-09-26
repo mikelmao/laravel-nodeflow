@@ -52,9 +52,9 @@ function plural(count: number, noun: string): string {
 
 function DiagnosticList({ title, children }: { title: string; children: React.ReactNode }) {
     return (
-        <section className="space-y-1" aria-label={title}>
-            <h3 className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">{title}</h3>
-            <ul className="space-y-1 text-sm">{children}</ul>
+        <section className="space-y-1.5" aria-label={title}>
+            <h3 className="text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">{title}</h3>
+            <ul className="space-y-1 text-sm leading-5">{children}</ul>
         </section>
     )
 }
@@ -77,9 +77,9 @@ export function FlowOverview({
     onIssueSelect,
 }: FlowOverviewProps) {
     return (
-        <aside aria-label="Flow overview" className="space-y-5 rounded-lg border border-border bg-card p-4 text-card-foreground">
+        <aside aria-label="Flow overview" className="space-y-5 p-4 text-card-foreground">
             <header className="space-y-1">
-                <h2 className="text-base font-semibold">{flow.name}</h2>
+                <h2 className="break-words text-[15px] font-semibold leading-5">{flow.name}</h2>
                 {trigger === null ? (
                     <p className="text-sm text-muted-foreground">No trigger selected</p>
                 ) : (
@@ -90,14 +90,14 @@ export function FlowOverview({
                 )}
             </header>
 
-            <dl className="grid grid-cols-2 gap-x-4 gap-y-2 text-sm">
-                <div><dt className="text-muted-foreground">Published</dt><dd>{publishedVersion === null ? 'Not published' : `Published version ${publishedVersion}`}</dd></div>
-                <div><dt className="text-muted-foreground">Start</dt><dd>Start node: {startNodeId ?? 'None'}</dd></div>
-                <div><dt className="text-muted-foreground">Nodes</dt><dd>{plural(nodeCount, 'node')}</dd></div>
-                <div><dt className="text-muted-foreground">Connections</dt><dd>{plural(connectionCount, 'connection')}</dd></div>
+            <dl className="grid grid-cols-2 gap-x-4 gap-y-3 text-sm">
+                <div className="min-w-0 space-y-0.5"><dt className="text-xs font-medium text-muted-foreground">Published</dt><dd>{publishedVersion === null ? 'Not published' : `Published version ${publishedVersion}`}</dd></div>
+                <div className="min-w-0 space-y-0.5"><dt className="text-xs font-medium text-muted-foreground">Start</dt><dd className="break-words">Start node: {startNodeId ?? 'None'}</dd></div>
+                <div className="min-w-0 space-y-0.5"><dt className="text-xs font-medium text-muted-foreground">Nodes</dt><dd>{plural(nodeCount, 'node')}</dd></div>
+                <div className="min-w-0 space-y-0.5"><dt className="text-xs font-medium text-muted-foreground">Connections</dt><dd>{plural(connectionCount, 'connection')}</dd></div>
             </dl>
 
-            <section role="status" aria-live="polite" aria-label="Flow readiness" className="rounded-md bg-muted p-3 text-sm">
+            <section role="status" aria-live="polite" aria-label="Flow readiness" className={`rounded-md border px-3 py-2.5 text-sm ${triggerReadiness !== null || validation.status === 'invalid' || validation.status === 'failed' ? 'border-destructive/40 bg-destructive/5' : 'border-border bg-muted'}`}>
                 <p className={`font-medium${triggerReadiness === null ? '' : ' text-destructive'}`}>
                     {triggerReadiness ?? readinessCopy[validation.status]}
                 </p>
@@ -130,7 +130,7 @@ export function FlowOverview({
                             {issue.placeable && issue.node !== null && onIssueSelect !== undefined ? (
                                 <button
                                     type="button"
-                                    className="text-left underline decoration-muted-foreground underline-offset-2 hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                                    className="rounded-sm text-left text-destructive underline decoration-destructive/40 underline-offset-2 hover:decoration-destructive focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
                                     onClick={() => onIssueSelect(issue)}
                                 >
                                     {issue.message}
